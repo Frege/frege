@@ -1,0 +1,156 @@
+// enable UTF-8: «««««••••••••••••»»»»»»
+/**
+ * This package implements the first compiler pass after lexical analysis.
+ * It fixes the list of definitions by incorporating document comments into
+ * definitions, and joining separate equations of functions that come out as
+ * separate 'FunDcl' definitions from parsing.
+
+ * The function 'fixdefs' will also be used from other modules for fixing
+ * sub definitions.
+ */
+
+/*
+ * $Author: ingo $
+ * $Revision: 162 $
+ * $Date: 2011-02-14 14:56:07 +0100 (Mo, 14 Feb 2011) $
+ * $Id: Fixdefs.fr 162 2011-02-14 13:56:07Z ingo $
+ */
+
+package frege.compiler.Fixdefs where
+
+/// This is $Revision: 162 $
+public version = v "$Revision: 162 $" where
+    v (m ~ #(\d+)#) | Just g <- m.group 1 = g.atoi
+    v _ = 0
+
+import frege.IO(`<<`)
+import frege.List(joinStr Tree Nil)
+/// import all from data
+import frege.compiler.Data as D
+import frege.compiler.Utilities() as U
+
+/**
+ *  Post condition for import pass
+ *  - no DocDcls anymore
+ *  - no 2 FunDcl with same name
+ */
+post :: StG Bool
+post = do
+            g <- getST
+            stio (null (docs g) && null (diff g))
+        where
+          docs g  = [ pos  | DocDcl {pos}  <- Global.definitions g ]
+          funs g  = sort [ name | FunDcl {name} <- Global.definitions g, name != "let" ]
+          diff g  = dropWhile (\(a,b) -> a == b) (zip fs (uniq fs)) where fs = funs g
+          tracecond g = if null (docs g)
+              then if null (diff g)
+                then stio true
+                else do
+                    doio $ g.stderr.append "function list diff: " << head (diff g) << "\n"
+                    stio false
+              else do
+                doio $ g.stderr.append "document at line " << head (docs g) << "\n"
+                stio false
+
+pass :: StG (String, Int)
+pass = do
+        g <- getST
+        newdefs <- fixdefs g.definitions
+        changeST Global.{sub <- SubSt.{definitions = newdefs}}
+        stio ("definitions", length g.definitions)
+
+
+
+
+/**
+ * transform definitions by first 'unDoc'ing, then 'funJoin'ing
+ */
+fixdefs :: [DefinitionS] -> StG [DefinitionS]
+fixdefs defs = do
+    ds <- unDoc defs
+    fs <- funJoin ds
+    checkUniq [ (name,pos) | FunDcl {name,pos} <- fs, name != "let" ]
+    stio fs
+
+checkUniq [] = stio ()
+checkUniq ((name,pos):as) = do
+    let other = [ pos | (same,pos) <- as, same == name ]
+    unless (null other) (U.error (head other) ("redefinition of function `"
+                                                ++ name
+                                                ++ "` introduced in line " ++ show pos))
+    checkUniq as
+
+
+/**
+ * apply a series of docs to a subsequent definition
+ */
+unDoc :: [DefinitionS] -> StG [DefinitionS]
+unDoc [] = stio []
+unDoc (defs@(d:ds))
+    | DocDcl {pos} <- d      = do r <- apply doc rest; unDoc r
+    | d.{defs?}              = do ndefs <- fixdefs d.defs
+                                  liftM2 (:) (stio d.{defs=ndefs}) (unDoc ds)
+    | otherwise              = liftM2 (:) (stio d) (unDoc ds)
+    where
+        pos  = d.pos
+        docs = takeWhile isDoc defs
+        rest = dropWhile isDoc defs
+        isDoc (DocDcl {pos}) = true
+        isDoc _              = false
+        doc  = joinStr "\n\n" (map Definition.text docs)
+        apply :: String -> [DefinitionS] -> StG [DefinitionS]
+        apply str []     = do U.warn pos "documentation at end of file"; stio []
+        apply str (d:ds) = case d of
+            ImpDcl {pos=p} -> do
+                U.warn p ("there is no point in documenting an import, documentation from line "
+                    ++ show pos ++ " ignored.")
+                stio (d:ds)
+            FixDcl {pos=p} -> do
+                U.warn p ("there is no point in documenting a fixity declaration, documentation from line "
+                    ++ show pos ++ " ignored.")
+                stio (d:ds)
+            def | Just s <- def.doc = stio (def.{doc = Just (str ++ "\n\n" ++ s)}  : ds)
+                | otherwise         = stio (def.{doc = Just str} : ds)
+
+/**
+ * look for adjacent function definitions with same name and join them
+ */
+funJoin :: [DefinitionS] -> StG [DefinitionS]
+funJoin [] = stio []
+funJoin (defs@(d:ds))
+    | FunDcl {pos,name} <- d, name != "let" = liftM2 (:) (joinFuns funs) (funJoin next)
+    | otherwise                             = liftM2 (:) (stio d)        (funJoin ds)
+    where
+        pos  = d.pos
+        name = d.name
+        funs = takeWhile sameFun defs
+        next = dropWhile sameFun defs
+        sameFun (FunDcl {name=n}) = n == name
+        sameFun _                 = false
+        joinFuns :: [DefinitionS] -> StG DefinitionS
+        joinFuns [f] = do U.debugST TRACE1 ("single function " ++ f.name); stio f
+        joinFuns (fs@(f:_))
+            | null f.pats = do
+                    U.error f.pos ("function binding without patterns must have only one equation")
+                    stio f
+            | (g:_) <- filter (\x -> Definition.vis x != f.vis) fs = do
+                    U.error g.pos ("the visibility of " ++ g.name ++
+                                    " must match that of the equation in line " ++ show f.pos)
+                    stio f
+            | (g:_) <- filter (\x -> length (Definition.pats x) != length f.pats) fs = do
+                    U.error g.pos ("number of patterns (" ++ show (length g.pats) ++
+                                   ") must be the same as in previous equations (" ++
+                                   show (length f.pats))
+                    stio f
+            | otherwise = stio result  // all equations have same # of patterns and visibility
+            where
+                arity  = length f.pats
+                result = f.{pats = newpats, expr = newexpr, doc = newdoc}
+                newvars = [ Vbl  f.pos ("_" ++ i) Nothing | i <- take arity U.allBinders]
+                newpats = [ PVar f.pos ("_" ++ i)         | i <- take arity U.allBinders]
+                newexpr = Case CNormal (U.mkTuple Con f.pos newvars) alts Nothing
+                alts    = [ CAlt {pos=g.pos, env=Nil, pat=U.mkpTuple g.pos g.pats, ex = g.expr} |
+                             (g::DefinitionS) <- fs ]
+                olddoc  = [ s | Just s <- map Definition.doc fs ]
+                newdoc  = if null olddoc then Nothing else Just (joinStr "\n\n" olddoc)
+        joinFuns [] = error "fatal compiler error: joinFuns []"

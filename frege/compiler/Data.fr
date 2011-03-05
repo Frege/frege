@@ -1,0 +1,894 @@
+// enable UTF-8: «««««••••••••••••»»»»»»
+/**
+ * This package defines most data structures used in the compiler.
+ * Anything else is only used locally.
+ */
+/*
+ * $Author: ingo $
+ * $Revision: 254 $
+ * $Date: 2011-03-03 22:54:29 +0100 (Do, 03 Mrz 2011) $
+ * $Id: Data.fr 254 2011-03-03 21:54:29Z ingo $
+ */
+
+package frege.compiler.Data where
+
+/// This is $Revision: 254 $
+public version = v "$Revision: 254 $" where
+    v (m ~ #(\d+)#) | Just g <- m.group 1 = g.atoi
+    v _ = 0
+
+import frege.List (Tree each joinStr)
+import frege.IO(PrintWriter OutputStreamWriter `<<`)
+import frege.compiler.Classtools()      as CT
+
+// some handsome aliases
+
+/**
+ * The tokens for the frege language.
+ */
+
+data TokenID =
+    CHAR
+    | QUALIFIER | VARID | CONID
+    | INTCONST  | STRCONST  | CHRCONST | BIGCONST
+    | FLTCONST  | LONGCONST  | DBLCONST  | REGEXP
+    | DCOLON  | ARROW  | GETS | DOCUMENTATION | EARROW | TARROW
+    | PACKAGE   | IMPORT  | NATIVE
+    | IF  | THEN  | ELSE  | CLASS  | WHERE
+    | INSTANCE
+    | DATA  | EXTENDS  | CASE  | OF  | DERIVE
+    | LET  | IN  | TYPE  | TRUE  | FALSE | PURE
+    | PROTECTED  | PRIVATE  | PUBLIC  | ABSTRACT | DO  | FORALL
+    | CONTINUE  | BREAK  | WHILE
+    | INFIX  | INFIXL  | INFIXR
+    // left, right and non associative operators with precedence order 1 to 16
+    | LOP0
+    | LOP1   | LOP2   | LOP3   | LOP4
+    | LOP5   | LOP6   | LOP7   | LOP8
+    | LOP9   | LOP10  | LOP11  | LOP12
+    | LOP13  | LOP14  | LOP15  | LOP16
+    | ROP0
+    | ROP1   | ROP2   | ROP3   | ROP4
+    | ROP5   | ROP6   | ROP7   | ROP8
+    | ROP9   | ROP10  | ROP11  | ROP12
+    | ROP13  | ROP14  | ROP15  | ROP16
+    | NOP0
+    | NOP1   | NOP2   | NOP3   | NOP4
+    | NOP5   | NOP6   | NOP7   | NOP8
+    | NOP9   | NOP10  | NOP11  | NOP12
+    | NOP13  | NOP14  | NOP15  | NOP16
+    | SOMEOP                // pseudo operator token
+
+
+derive Show TokenID
+derive Ord TokenID
+derive Enum TokenID
+
+//* line numbers
+type Line = Int
+
+//* numbers that tell on which column a token started
+type Indent = Int
+
+//* bit set for 'Flag's
+type Flags = Int
+
+//* the data structure for tokens along with string, line and columen info
+data Token = native { tokid :: TokenID, value :: String, line :: Line, col :: Indent }
+instance Show Token where
+    show (Token x y z _) = Show.show (x,y,z)
+
+//* the compiler flags
+data Flag =
+    HINTS | VERBOSE | WARNINGS | WITHCP | RUNJAVAC | OPTIMIZE | MAKE
+    // trace options
+    | TRACE1 | TRACE2 | TRACE3 | TRACE4 | TRACE5 | TRACE6 | TRACE7 | TRACE8 | TRACE9 | TRACE10
+    | TRACET | TRACEX | TRACEM | TRACEO | TRACES | TRACEG | EXPLAIN | TRACEZ
+
+
+derive Show Flag
+derive Enum Flag
+
+/// compiler options
+data Options = Options {
+    source :: String,   // our source file
+    sourcePath :: [String], // path names where source files can be found
+    flags :: Flags,     // some 'Flag's
+    dir::String,        // value of the -d option or "."
+    path::[String],     // value of the -fp option plus classpath depending on WITHCP
+    prefix::String,     // value of the -prefix option or ""
+    encoding :: Maybe String,   // used for construction of input file
+    tRanges :: [(Int, Int)]     // ranges for trace output
+}
+
+/// items that are created early and never changed so that copying them all the time is costly
+data SubSt = Sub {
+    cache       :: IORef (Tree String CT.FregePackage),
+                                        // cache of packages where we know the class file is
+                                        // up to date, used/set in Main.fr and Import.fr
+    optab       :: Tree String TokenID, // operator table
+    packageDoc  :: Maybe String,        // documentation for this package
+    definitions :: [DefinitionS],       // package definitions
+    stderr      :: PrintWriter          // printer for error messages, UTF-8 encoded
+}
+
+/// items that are set and used during code generation
+data GenSt = Gen {
+    printer :: PrintWriter,             // for generating output
+    tunique :: Int,                     // unique numbers for taus
+    runique :: Int,                     // unique numbers for rhos
+    sunique :: Int,                     // unique numbers for sigmas
+    tTree   :: Tree TauA Int,           // tau table
+    rTree   :: Tree RhoA Int,           // rho table
+    sTree   :: Tree SigmaA Int,         // sigma table
+    genEnv  :: [Symbol]                 // symbol of function that is being generated
+}
+
+/// compiler state, appears like it was global, but threaded through 'StIO' monad
+data Global = Global {
+    options  :: Options,                 // compiler options
+    sub      :: SubSt,                   // seldom changed items
+    gen      :: GenSt,                   // things used in code generation
+    errors   :: Int,                     // number of errors found so far
+    unique   :: Int,                     // source for uniq integers
+    thisPack :: Pack,                    // current package
+    packages :: Tree Pack Symtab,        // package -> symbol table
+    namespaces :: Tree NSName Pack,      // namespace -> package
+    env :: [Symtab]                      // current local environments
+} where
+    toplevel (g::Global)    = null g.env
+    // make it look like all the items live in Global
+    optab (g::Global)       = g.sub.optab
+    tRanges (g::Global)     = g.options.tRanges
+    sourcePath (g::Global)  = g.options.sourcePath
+    packageDoc (g::Global)  = g.sub.packageDoc
+    definitions (g::Global) = g.sub.definitions
+    cache       (g::Global) = g.sub.cache
+    stderr  (g::Global)     = g.sub.stderr
+    printer (g::Global)     = g.gen.printer
+    tunique (g::Global)     = g.gen.tunique
+    runique (g::Global)     = g.gen.runique
+    sunique (g::Global)     = g.gen.sunique
+    tTree (g::Global)       = g.gen.tTree
+    rTree (g::Global)       = g.gen.rTree
+    sTree (g::Global)       = g.gen.sTree
+    genEnv (g::Global)      = g.gen.genEnv
+    thisTab :: Global -> Symtab
+    thisTab g = case g.packages.lookup g.thisPack of
+        Just st -> st
+        Nothing -> error ("no symtab for package " ++ show (g.thisPack.unpack g))
+
+/// the symbol table
+type Symtab = Tree String Symbol
+//* an environment - a list of symbol tables - take care when a symtab is changed!
+// type Env = [Symtab]
+
+/**
+ * A package name can not be read without resort to the global state,
+ * because it includes the prefix given on the command line.
+ * However, one can compare them, i.e. @p == P "frege.Prelude"@
+ */
+abstract data Pack = P String where
+    new s = P s
+    un (P s) = s
+    unpack :: Pack -> Global -> String
+    unpack (P s) g = g.options.prefix ++ s
+    /// make a namespace name from a package name by taking the trailing word characters
+    nsName (P (m~#(\w+)$#)) = NSX (unJust (m.group 1))
+    /// convert to JName
+    className p g
+        | m~#^((\S+)\.)?(\w+)$# <- unpack p g
+        = JName (maybe "" id (m.group 2)) (maybe "Hä?" id (m.group 3))
+        | otherwise = error ("bad package name " ++ un p)
+    nice p g
+        | p == pPrelude   = "Prelude"
+        | p == Global.thisPack g = ""
+        | otherwise = case filter ((p==) <~ snd) ((Global.namespaces g).each) of
+                ((NSX s, _):_) -> s
+                _              -> (nsName p).unNS
+    (P a) ==  (P b) = a String.==  b
+    (P a) <=> (P b) = a String.<=> b
+
+instance Eq   Pack
+instance Ord  Pack
+derive   Show Pack
+
+/// a prominent package
+pPrelude = Pack.new "frege.Prelude"
+
+/// namespace name
+data NSName = NSX { unNS :: String }
+derive Eq   NSName
+derive Ord  NSName
+derive Show NSName
+
+// copied over from Utilities, sorry
+/**
+ * determine 'QName' of type given in an instance definition
+ */
+private instTSym (ForAll _ (RhoTau _ tau)) g = instTauSym tau g
+private instTSym _ g = Nothing
+/// return type symbol for constructor of tau, if any
+private instTauSym tau g = case tau of
+        TCon {name} -> QName.findit name g
+        TApp a _    -> instTauSym a g
+        _           -> Nothing
+/// qualified name
+data QName =
+        TName   { pack :: Pack,  base :: String }
+        | VName { pack :: Pack,  base :: String }
+        | MName { tynm :: QName, base :: String }
+        | Local { base :: String }
+    where
+        getpack (TName p _) = p
+        getpack (VName p _) = p
+        getpack (MName (TName p _) _) = p
+        getpack (Local _) = Pack.new ""
+        find :: QName -> Global -> Maybe Symbol
+        find (Local s)  g =  loop s g.env where
+            loop s []     = Nothing
+            loop s (e:es) = case Tree.lookup e s of
+                Nothing -> loop s es
+                // Just d | (MName _ _) <- Symbol.name d = Nothing   // guard against confusion with members
+                just    -> just
+        find (TName p s) g = case g.packages.lookup p of
+            Just env -> env.lookup ("ty "++s)
+            Nothing  -> Nothing
+        find (VName p s) g = case g.packages.lookup p of
+            Just env -> env.lookup s
+            Nothing  -> Nothing
+        find (MName t s) g = case findit t g of
+            Just sy | sy.{env?} = sy.env.lookup s
+            Just (SymA {typ}) = case instTSym typ g of
+                Just (sym::Symbol) -> find (MName sym.name s) g
+                Nothing  -> Nothing
+            _ -> Nothing
+        /// like 'find', but follow aliases
+        findit :: QName -> Global -> Maybe Symbol
+        findit t g = do sy <- find t g; sy.follow g
+        istuple s   = QName.base s ~ #^\(,+\)$#
+        our     (TName p  _) g = p.== (Global.thisPack g)
+        our     (VName p  _) g = p.== (Global.thisPack g)
+        our     (MName t  _) g = our t g
+        our     (Local _)    g = true
+        javaq   (TName p  _) g = p.unpack g ++ "."
+        javaq   (VName p  _) g = p.unpack g ++ "."
+        javaq   (MName t  _) g = javaq t  g ++ "." ++ mangled t.base ++ "."
+        javaq   (Local _)    _ = ""
+        qual    (TName p  _)   = TName p
+        qual    (VName p  _)   = VName p
+        qual    (MName t  _)   = MName t
+        qual    (Local _)      = Local
+        nice    (TName p s)  g
+            | p.== pPrelude, Nothing <- g.thisTab.lookup ("ty " ++ s)  = s
+            | p.== pPrelude,
+              Just (SymL {alias = TName ap _}) <- g.thisTab.lookup ("ty " ++ s),
+              ap.== pPrelude  = s
+            | p.== (Global.thisPack g) = s
+            | otherwise = p.nice g ++ "." ++ s
+        nice    (VName p s)  g
+            | p.== pPrelude, Nothing <- g.thisTab.lookup s  = s
+            | p.== pPrelude,
+              Just (SymL {alias = VName ap _}) <- g.thisTab.lookup s,
+              ap.== pPrelude  = s
+            | p.== (Global.thisPack g) = s
+            | otherwise = p.nice g ++ "." ++ s
+        nice    (MName t s)  g = t.nice g ++ "." ++ s
+        nice    (Local s)    g = s
+
+derive Eq   QName
+derive Ord  QName
+derive Show QName
+
+data JName = JName {qual :: String, base :: String} where
+        show (JName "" x) = x
+        show (JName p  x) = p ++ "." ++ x
+
+instance Show JName
+
+/**
+ * symbol state (for 'Symbol.SymV' symbols)
+ */
+data SymState = Unchecked | Typechecking | Recursive | Typechecked | StrictChecked
+derive Eq SymState
+derive Ord SymState
+derive Show SymState
+derive Enum SymState
+
+/**
+ * The information stored in the 'Symtab' nodes.
+ *
+ * Here are the fields and their meaning:
+ *
+ [sid::'Int']           unique symbol id
+ [pos::'Line']          tells where this symbol has been defined
+ [vis::'Visibility']    whether it is private, public or protected or whatever
+ [doc::'Maybe' 'String']    documentation, if any
+ [name::'QName']        the qualified name of the item
+ [typ::'Sigma']         type information
+ [env::'Symtab']        symbol table for symbols that are namespaces
+ [nativ::'Maybe' 'String'] java code (i.e. class name, method name or the like)
+ [alias::'QName']       the name of the symbol this symbol links to
+ [cid::'Int']           constructor number for data constructors
+ [flds::\[('Maybe' 'String', 'Sigma')\]] field/type list of a constructor
+ [tau::'Tau']           the class type variable
+ [supers::\[QName\]]    list of qualified names of superclasses
+ [insts::\[('QName', 'QName')\]] list of instances, i.e. @(Int, Int_Eq)@ in @Eq@
+ [clas::'QName']        name of the class this is an instance for
+ [expr::'Maybe' 'Expr'] expression that defines this item, if any.
+ [pur::Bool]            tells if the native method is considered pure
+ [anno::Bool]           tells if the 'Symbol.sig' field comes from a user annotation
+ [vars::\[Tau\]]        type variables for a type alias
+ */
+data Symbol =
+        SymT    {sid::Int, pos::Line, vis::Visibility, doc::Maybe String, name::QName,
+                 typ::Sigma, env::Symtab, nativ::Maybe String,
+                 product::Bool, enum::Bool, pur::Bool, newt::Bool}     /// data type
+        | SymL  {sid::Int, pos::Line, vis::Visibility, doc::Maybe String, name::QName,
+                 alias::QName}                                      /// alias name
+        | SymD  {sid::Int, pos::Line, vis::Visibility, doc::Maybe String, name::QName,
+                 cid::Int,                                          // constructor number
+                 typ::Sigma, flds::[(Maybe String, Sigma)],
+                 strsig :: Strictness }                           /// data constructor
+        | SymC  {sid::Int, pos::Line, vis::Visibility, doc::Maybe String, name::QName,
+                 tau::Tau, supers::[QName], insts::[(QName, QName)],
+                 env::Symtab, vkind :: Int}                                       /// class
+        | SymI  {sid::Int, pos::Line, vis::Visibility, doc::Maybe String, name ::QName,
+                 clas::QName, typ::Sigma, env::Symtab}              /// instance
+        | SymV  {sid::Int, pos::Line, vis::Visibility, doc::Maybe String, name ::QName,
+                 typ::Sigma, expr::Maybe Expr, nativ::Maybe String,
+                 pur::Bool, anno::Bool, state::SymState,
+                 strsig :: Strictness, depth :: Int, rkind :: Int } /// variable or function
+        | SymA  {sid::Int, pos::Line, vis::Visibility, doc::Maybe String, name ::QName,
+                 typ::Sigma, vars::[Tau]}                           /// type alias
+    where
+        follow (ali@SymL {alias}) = alias.find
+        follow sym = const (Just sym)
+        kind (SymT {name}) g = "data type"
+        kind (SymD {name}) g = "constructor"
+        kind (SymC {name}) g = "class"
+        kind (SymI {name}) g = "instance"
+        kind (SymV {name,nativ, expr}) g = if isJust nativ then "native " ++ fun else fun
+            where fun | MName t b <- name, Just sym <- t.find g
+                                          = sym.kind g ++ " member " ++ funval
+                      | MName _ _ <- name = "member " ++ funval
+                      | otherwise         = funval
+                  funval | isJust nativ = "function"
+                         | Just (Lam {env}) <- expr = "function"
+                         | otherwise = "value"
+        kind (SymA {name}) g = "type alias"
+        kind (SymL {alias}) g = case alias.find g of
+            Just sym -> "alias for " ++ sym.kind g
+            Nothing  -> "alias"
+        nice (sym@SymL {alias}) g = kind sym g ++ " `" ++ alias.nice g ++ "`"
+        nice sym g = kind sym g ++ " `" ++ sym.name.nice g ++ "`"
+        /// Symbols are ordered *only* by the @sid@ field, which is a unique number
+        sym1 <=> sym2 = Symbol.sid sym1 Int.<=> Symbol.sid sym2
+        our sy g = (Symbol.name sy).our g
+
+instance Ord Symbol
+
+/// Strictness information for function arguments
+/// This is stored in 'SymD' and 'SymV' symbols.
+data Strictness = U                 /// lazy argument
+                | S [Strictness]    /** strict argument, for product types
+                                     *  there may be additional information for the
+                                     *  subcomponts
+                                     */
+                where
+                    isStrict U = false
+                    isStrict _ = true
+instance Eq Strictness where
+    U == U = true
+    S x == S y = length x Int.== length y `and` all id (zipWith (Strictness.==) x y)
+    _ == _ = false
+
+allLazy   = repeat U
+allStrict = repeat (S [])
+
+instance Show Strictness where
+    show U = "u"
+    show (S []) = "s"
+    show (S xs) = "s(" ++ joinStr "" (map show xs) ++ ")"
+
+/**
+ * [usage] @decodeS string@
+ * [returns] the decoded strictness value
+ * [requires] the string must have been constructed with 'Strictness.show'
+ * [ensures]  @forAll Strictness.arbitrary { s | s == decodeS (show s) }@
+ */
+decodeS :: String -> Strictness
+decodeS s = fst (decode s) where
+    decode     (s @ #^u#)  = (U; strtail s 1)
+    decode     (s @ #^s#)  = (S list; rest) where (list,rest) = decodeList (strtail s 1)
+    decodeList (s @ #^\(#) = listElems (strtail s 1)
+    decodeList  s          = ([], s)
+    listElems  (s @ #^\)#) = ([], strtail s 1)
+    listElems   s          = (e:elems,rest) where
+                                                (e,rs)       = decode s
+                                                (elems,rest) = listElems rs
+
+
+/**
+ * type to model type variables in type checking
+ */
+data MetaTvT s =
+          Flexi {uid::Int, ref :: (IORef (Maybe (TauT s))), hint::String}
+        | Rigid {uid::Int, hint::String}
+        where
+            /// tell if the 'MetaTv' is bound
+            bound (Flexi _ r _) = StIO.lift (r.get)
+            bound (Rigid _ _)   = stio Nothing
+            /// tell if the 'MetaTv' is flexible
+            isFlexi (Flexi _ _ _) = true
+            isFlexi _             = false
+
+instance Eq MetaTvT s where
+    Flexi u1 _ _ == Flexi u2 _ _  = u1.== u2
+    Rigid u1 _   == Rigid u2 _    = u1.== u2
+    _            == _             = false
+
+
+instance Ord MetaTvT s where
+    Flexi _  _  _ <=> Rigid _  _      = Lt
+    Rigid _  _    <=> Flexi _  _  _   = Gt
+    Flexi u1 _ _  <=> Flexi u2 _  _   = u1.<=> u2
+    Rigid u1 _    <=> Rigid u2 _      = u1.<=> u2
+
+type MetaTv = MetaTvT QName
+
+/**
+ * The type for modelling tau-types.
+ */
+data TauT s =
+      TApp (TauT s) (TauT s)
+    | TFun (TauT s) (TauT s)
+    // TAli pos::Line name::s (SigmaT s)
+    | TCon {pos::Line, name::s}
+    | TVar {pos::Line, var::String, classes::[s]}
+    | Meta (MetaTvT s)
+    where
+        /**
+         * Convert a flat type application to a 'TApp'
+         * obeying the law
+         > flat (mkapp con ts) == con:ts
+         */
+        mkapp a xs = fold TApp a xs
+        /*** a nonempty list where the head element is the type constructor and the tail are the args */
+        flat (TApp a b) = flatapp a [b] where
+            flatapp (TApp a b) ts = flatapp a (b:ts)
+            flatapp t ts          = t:ts
+        // flat (TFun a b) = [TCon 0 (TName pPrelude "->"), a, b]
+        flat t = [t]
+
+// flat form of types, used in "GenMeta"
+data TauA = TauA {kind::Int, tcon::Maybe QName, suba::Int, subb::Int, tvar::String}
+data RhoA = RhoA {rhofun::Bool, cont::[ContextA], sigma::Int, rhotau::Int}
+data ContextA = CtxA {clas::QName, tau::Int}
+data SigmaA = SigmaA {bound::[String], rho::Int}
+derive Ord TauA
+derive Ord ContextA
+derive Ord RhoA
+derive Ord SigmaA
+
+
+
+nApp a b = App a b Nothing
+
+infixl 16 `App` `nApp`  `TApp`
+infixr 16 `TFun`
+
+//* tau types as created by parser
+type TauS = TauT String
+//* tau types use in TC
+type Tau = TauT QName
+
+/**
+ * The type for modelling sigma types
+ */
+data SigmaT s = ForAll { bound :: [String], rho :: (RhoT s) }
+
+//* sigmas as returned from parsing
+type SigmaS = SigmaT String
+//* sigmas as used in typecheck
+type Sigma =  SigmaT QName
+
+/**
+ * The type for modelling class assertions
+ */
+data ContextT s = Ctx {pos :: Line, cname :: s, tau :: TauT s, checked :: Bool }
+type Context    = ContextT QName
+type ContextS   = ContextT String
+
+/**
+ * The type for modelling rho types
+ */
+data RhoT s =
+      RhoFun {context::[ContextT s], sigma::SigmaT s, rho::RhoT s}
+    | RhoTau {context::[ContextT s], tau::TauT s}
+
+//* rho as returned from parsing
+type RhoS = RhoT String
+//* rho as used in typechecker
+type Rho  = RhoT QName
+
+//* cross module visibility of items
+data Visibility = Private | Public | Protected | Abstract
+
+instance Show Visibility where
+    show Private   = "private"
+    show Public    = "public"
+    show Protected = "protected"
+    show Abstract  = "abstract"
+
+derive Eq   Visibility
+derive Ord  Visibility
+
+/// an item together with a line number
+type Pos s = (s, Line)
+
+/**
+ * Java keywords (along with substitutions)
+ * as specified in the Java Language Specification, Version 3.0, page 21
+ * and, in addition, "true", "false", and "null"
+ *
+ * It is, for instance, possible to name a frege item /int/, though
+ * in the generated java code, this will appear as /_int/.
+ *
+ */
+javakeywords = Tree.insertlist Tree.Nil [(kw, "_"++kw) | kw <- [
+    "abstract",     "continue",     "for",          "new",          "switch",
+    "assert",       "default",      "if",           "package",      "synchronized",
+    "boolean",      "do",           "goto",         "private",      "this",
+    "break",        "double",       "implements",   "protected",    "then",
+    "byte",         "else",         "import",       "public",       "throws",
+    "case",         "enum",         "instanceof",   "return",       "transient",
+    "catch",        "extends",      "int",          "short",        "try",
+    "char",         "final",        "interface",    "static",       "void",
+    "class",        "finally",      "long",         "strictfp",     "volatile",
+    "const",        "float",        "native",       "super",        "while",
+    // also the literals, as variables cannot be named like so
+    "true",         "false",        "null",
+    // likewise assert and main, in order to avoid confusion
+    "assert",       "main",
+    // forgot throw
+    "throw"
+    ]]
+
+/**
+ * definitions
+ */
+data DefinitionT =
+      ImpDcl    {pos::Line, pack::String, as::Maybe String,
+                    items::Maybe [Pos String]}
+    | FixDcl    {pos::Line, opid::TokenID, ops::[String]}
+    | DocDcl    {pos::Line, text::String}
+    | TypDcl    {pos::Line, vis::Visibility, name::String,
+                    vars::[TauS], rho::RhoS, doc::Maybe String}
+    | ClaDcl    {pos::Line, vis::Visibility, name::String,
+                    clvar::TauS, supers::[String],
+                    defs::[DefinitionT], doc::Maybe String}
+    | InsDcl    {pos::Line, vis::Visibility,
+                    clas::String, typ::SigmaS,
+                    defs::[DefinitionT], doc::Maybe String}
+    | DrvDcl    {pos::Line, vis::Visibility,
+                    clas::String, typ::SigmaS,
+                    doc::Maybe String}
+    | AnnDcl    {pos::Line, vis::Visibility, name::String, typ::SigmaS, doc::Maybe String}
+    | NatDcl    {pos::Line, vis::Visibility, name::String, typ::SigmaS,
+                    meth::String, isPure::Bool, doc::Maybe String}
+    | FunDcl    {pos::Line, vis::Visibility, name::String,
+                    pats::[PatternS], expr::ExprS,
+                    doc::Maybe String}
+    | DatDcl    {pos::Line, vis::Visibility, name::String,
+                    vars::[TauS], ctrs::[DCon], defs::[DefinitionT],
+                    doc::Maybe String}
+    | JavDcl    {pos::Line, vis::Visibility, name::String, isPure::Bool,
+                    clas::String, vars::[TauS], defs::[DefinitionT],
+                    doc::Maybe String}
+
+type DefinitionS = DefinitionT
+type Definition  = DefinitionT
+
+/**
+ * alternatives (constructors) in a data declaration
+ */
+data DCon = DCon {pos::Line, vis::Visibility, name::String,
+                        flds::[(Maybe String, SigmaS)], doc::Maybe String}
+type DConS = DCon
+
+/**
+ * Literals
+ */
+data Literalkind =
+      LBool
+    | LChar
+    | LString
+    | LInt
+    | LBig
+    | LLong
+    | LFloat
+    | LDouble
+    | LRegex
+
+derive Enum Literalkind
+derive Show Literalkind
+
+/**
+ * expressions
+ */
+data ExprT q =
+      Vbl     { pos::Line, name::q, typ::Maybe (SigmaT q) }
+    | Con     { pos::Line, name::q, typ::Maybe (SigmaT q) }
+    | ConFS   { pos::Line, name::q, fields::[(String, ExprT q)],  typ::Maybe (SigmaT q) }
+    | App     { fun::ExprT q, arg::ExprT q,  typ::Maybe (SigmaT q)}
+    | Lit     { pos::Line, kind::Literalkind, value::String,  typ::Maybe (SigmaT q)}
+    | Let     { env::Tree String Symbol, defs::[Definition], ex::ExprT q, typ::Maybe (SigmaT q)}
+    | Lam     { env::Tree String Symbol, pat:: PatternT q,   ex::ExprT q, typ::Maybe (SigmaT q)}
+    | Ifte    { cnd::ExprT q, thn::ExprT q, els::ExprT q, typ::Maybe (SigmaT q)}
+    | Mem     { ex::ExprT q, member::String, typ::Maybe (SigmaT q)}
+    | Case    { ckind::CKind, ex::ExprT q, alts::[CAltT q], typ::Maybe (SigmaT q)}
+    | Ann     { ex::ExprT q,  typ::Maybe (SigmaT q)}
+
+
+type Expr  = ExprT QName
+type ExprS = ExprT String
+/**
+ * case alternative
+ */
+data CAltT q = CAlt {pos::Line, env::Tree String Symbol, pat::PatternT q, ex::ExprT q}
+type CAltS = CAltT String
+type CAlt  = CAltT QName
+
+/**
+ * case kind
+ */
+data CKind =
+      CNormal       /// normal case
+    | CWhen         /// case that falls through
+    | CNoWarn       /// compiler generated, do not emit warnings
+
+derive Eq CKind
+/**
+ * patterns
+ */
+data PatternT q =
+      PVar    { pos::Line, var::String }                                    // x
+    | PCon    { pos::Line, qname::q, pats :: [PatternT q] }                                        // Con
+    | PConFS  { pos::Line, qname::q, fields::[(String, PatternT q)] }      // Con { field, ... }
+    | PAt     { pos::Line, var::String, pat::PatternT q}                 // a@pat
+    | PStrict { pat :: PatternT q}                                    // strict pattern !pat
+    | PLit    { pos::Line, kind::Literalkind, value::String}            // 42 #foo#
+    | PAnn    { pat::PatternT q, typ::SigmaT q}                       // pat::forall a.Eq a => a -> a
+    | PMat    { pos::Line, var::String, value::String}                      // m~#foo#
+
+type PatternS = PatternT String
+type Pattern  = PatternT QName
+
+/**
+ * formatting for 'Char'
+ */
+/**
+ * encode certain special characters so that the result is a
+ * valid java identifier
+ * 
+ */
+protected native formatchar java.lang.String.format :: String -> Int -> String
+
+repljavakws s = case Tree.lookup javakeywords s of
+    Just k  -> k
+    Nothing -> s
+;
+
+/// replacement for know operators
+knownops = Tree.insertlist Tree.Nil [
+       ("()", "Unit"),
+       ("[]", "Nil"),
+       (":",  "Cons"),
+       ("$",  "_dollar"),
+    ]
+
+/// replacement for certain graphic characters ∀
+graphReplacements = Tree.insertlist Tree.Nil [
+    ('°', "_deg"),  ('^', "_caret"),    ('!', "_excl"), ('²', "_two"),  ('³', "_three"),
+    ('§', "_par"),  ('%', "_pct"),      ('&', "_amp"),  ('/', "_div"),  ('=', "_eq"),
+    ('?', "_qm"),   ('\\', "_back"),     ('*', "_star"), ('+', "_plus"), ('~', "_tilde"),
+    ('\'', "_tick"),('#', "_num"),      ('-', "_minus"),('.', "_dot"),  (':', "_colon"),
+    (',', "_comma"),(';', "_semi"),     ('@', "_at"),   ('|', "_bar"),  ('<', "_lt"),
+    ('>', "_gt"),   ('•', "_bullet"),   ('«', "_lang"), ('»', "_rang"), ('¦', "_bar2"),
+    ('¿', "_iqm"),  ('€', "_euro"),     ('£', "_pound"),('¥', "_yen"),  ('¢', "_cent"),
+    ('¬', "_not"),  ('±', "_plusminus"),('¡', "_iexcl"),('¤', "_money"),('©', "_copy"),
+    ('®', "_trade"),('¹', "_one"),      ('$', "_dollar"),
+    ('[', "_lbrack"), (']', "_rbrack"), ('(', "_lpar"), (')', "_rpar")]
+
+/// look in 'graphReplacements' for character translation, if not there, use ordinal number
+replaceGraphic c = case graphReplacements.lookup c of
+    Just s ->  s
+    Nothing -> formatchar "_%d" (ord c)
+
+
+/**
+ * encode certain special characters so that the result is a
+ * valid java identifier
+ * 
+ */
+mangled :: String -> String
+mangled (s@#^\(,+\)$#) = "Tuple" ++ show (length s - 2 + 1)
+mangled "()" = "Unit"
+mangled "[]" = "List"
+mangled "->" = "Function"
+mangled s | Just o <- Tree.lookup knownops s = o                    // other know operator
+mangled s = loop s  (s =~ nokchars) where                           // s contains a strange char
+        loop :: String -> Maybe Matcher -> String
+        loop s'  Nothing  = repljavakws s'                          // string is clean
+        loop _  (Just m) =                                          // string contains special characters
+            let
+                x  = unJust (m.group 0)                             // the matched string
+                c  = x.charAt 0                                     // the offending character
+                xc = replaceGraphic c                               // ... translated
+                r  = m.replaceFirst xc.quoteReplacement             // replace it
+            in loop r (r =~ nokchars)
+/// pattern that matches any string that contains special characters
+nokchars = #[^\p{L}\d_$]#
+
+/* --------------------- monad stuff --------------- */
+/** a monad that manages state and can perform IO */
+data StIO s a = StIO { run :: (s -> IO (a, s)) } where
+    get      = StIO (\!s -> IO.return (s;s))
+    put !s   = StIO (\_ -> IO.return (();s))
+    change f = StIO (\!s -> IO.return ((); f s))
+    lift !c  = StIO (\!s -> c IO.>>= (\!x -> IO.return (x;s)))
+    performUnsafe !(StIO r) !s = IO.performUnsafe (r s)
+
+instance Monad (StIO s) where
+    return !a = StIO (\!s -> IO.return (a,s))
+    return2 _ a = StIO.return a
+    !ma >> !mb = ma >>= const mb
+    !(StIO !x) >>= !f = StIO ( \!s -> do
+                (!v, !s') <- x s
+                StIO.run (f v) s'
+            )
+
+/** Convenience function for injecting an @a@ into ('StIO' 'Global').
+    This is just 'StIO.return' typed as @a -> StIO Global a@ */
+stio :: a -> StIO Global a
+stio !a = StIO.return a
+
+/** Convenience function for doing IO in a ('StIO' 'Global') action */
+doio :: IO a -> StIO Global a
+doio = StIO.lift
+
+/**
+    Convenience function for getting the state.
+    This replaces the ugly:
+    > (s::Global) <- StIO.get
+*/
+getST :: StIO Global Global
+getST = StIO.get
+
+/**
+    Convenience function for putting the state back.
+    This is just 'StIO.put' retyped.
+    */
+putST :: Global -> StIO Global ()
+putST = StIO.put
+
+/**
+    Convenience function for changing the state.
+    This is just 'StIO.change' retyped.
+    */
+changeST :: (Global -> Global) -> StIO Global ()
+changeST = StIO.change
+
+
+/// absurd true message aborts the compiler with "message"
+absurd :: Bool -> String -> StG ()
+absurd c msg = if c then error msg else stio ()
+
+/// do an action with an extended environment
+with :: Symtab -> StG a -> StG a
+with e action = do
+    // g <- getST
+    changeST Global.{env <- (e:)}   // extend env with e
+    envDump
+    r <- action                     // perform action
+    //e <- getTop
+    changeST Global.{env <- tail}   // drop e' again
+    envDump
+    stio r
+
+/// like 'with', but work with void action and return changed environment in the 'StIO' monad
+nested :: Symtab -> StG () -> StG Symtab
+nested e action = do
+        changeST Global.{env <- (e:)}   // extend env with e
+        () <- action                    // perform action
+        e  <- getTop                    // get top env
+        changeST Global.{env <- tail}   // drop it again
+        stio e                          // and return possible changed e
+
+/// do an action while saving the top env
+without :: StG a -> StG a
+without action = do
+    top <- getTop
+    changeST Global.{env <- tail}
+    // envDump
+    r <- action
+    changeST Global.{env <- (top:)}
+    // envDump
+    stio r
+
+/// dump the environment if TRACE3 is on
+envDump = do
+    g <- getST
+    let
+        cond = (1 `bshl` ord TRACEX) `band` g.options.flags
+        levels = reverse (1..g.env.length)
+        frame (n, st) = do
+            let nmid = [ (nm, Symbol.sid sym) | (nm, sym) <- each st ]
+            g.stderr.append (show n) << " " << nmid << "\n"
+            IO.return ()
+    when (cond != 0) do
+        doio $ sequence_ IO.return (map frame (zip levels g.env))
+        doio $ g.stderr.append "end-of-env-stack\n"
+        stio ()
+
+
+/// @within expr action@
+/// do an action with the expression that is surrounded by 0 or more lambdas
+/// > within (\x\y -> z) f  ==> with x (with y (f z))
+within :: Expr -> (Expr -> StG a) -> StG a
+within (Lam {env,ex}) f = with env (within ex f)
+within x f = f x
+
+///
+/// get the top level
+getTop = do
+    g <- getST
+    absurd (null g.env) "FATAL: no top level environment, i.e. getTop outside with"
+    stio (head g.env)
+
+/// apply a change to the top level env
+changeTop f = do
+    g <- getST
+    absurd (null g.env) "FATAL: no top level environment, i.e. changeTop outside with"
+    let top  = head g.env
+        rest = tail g.env
+    changeST Global.{env = f top:rest}
+
+/** do a 'StG' action for each element of a list */
+foreach :: [a] -> (a -> StG b) -> StG ()
+foreach list f = foldr (>>) (stio ()) (map f list)
+/** map a 'StIO' function over each element of a list */
+mapSt :: (a -> StG b) -> [a] -> StG [b]
+mapSt f [] = stio []
+mapSt f (a:as) = do
+    a <- f a
+    as <- mapSt f as
+    stio (a:as)
+/** fold a 'StIO' function */
+foldSt :: (a -> b -> StG a) -> a -> [b] -> StG a
+foldSt f a [] = stio a
+foldSt f a (b:bs) = do
+        a <- f a b
+        foldSt f a bs
+
+/// avoid writing 'StIO' 'Global' all the time
+type StG a = StIO Global a
+
+/// things that need the environment to print nicely
+class Nice a where
+    nice :: a -> Global -> String
+    nicer :: a -> Global -> String
+    nicer a g = nice a g        // default
+
+/// things that know where they were introduced and what they are
+class Position a where
+    getpos  :: a -> Int
+    is      :: a -> String       // pattern, expr, ....
+    untyped :: a -> a
+
+instance Nice String where
+    nice s _ = s
+
+instance Nice QName
+instance Nice Symbol    

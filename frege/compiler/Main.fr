@@ -1,0 +1,693 @@
+// enable UTF-8: «««««••••••••••••»»»»»»»¦¦¦¦¦¦¦¦¦¦¦¦
+/**
+ * This is the main program of the frege compiler.
+ *
+ Compilation of a frege source program is a sequence of transformations.
+ Here is a coarse overview.
+
+ 1. a sequence of characters is transformed to a sequence of tokens
+   (lexical analysis in "frege.compiler.Scanner")
+ 2. a sequence of tokens is transformed to a sequence of definitions
+   (parser in "frege.compiler.Grammar")
+ 3. documentaion comments are joined with associated definitions,
+    multiple equations of a function are consolidated in a single function definition.
+ 4. import definitions are transformed to namespaces
+ 5. the definitions (except instance and derive definitions)
+    are transformed into a symbol table. Each globally visible
+    name defined in the progam
+    gets a symbol table entry. This pass makes only provisional entries.
+ 6. Type definitions are checked so that expansion may not lead to infinite regress.
+ 7. Derive definitions are transformed to instance definitions with appropriate
+    subdefinitions (i.e. functions implementing the derived class' behaviour) and are
+    entered in the symbol table along with instance definitions.
+ 8. All names in the program are resolved to their appropriate symbol table entries.
+    This step detects undefined (e.g. misspelled) names.
+    This completes the construction of the symbol table.
+ 9. Classes and class methods are verified.
+ 10. Instance definitions are verified.
+ 11. Let definitions are unrolled so that each let binds only variables that depend on each
+    other. If no cyclic dependencies are involved, only a single variable is bound in a
+    single let. By the way, some nonrecursive pattern bindings are transformed to case
+    expressions.
+ 12. Lambda expressions that do not reference local variables are transformed to
+     global function definitions. This avoids generating inner java classes later.
+ 13. The program is type checked. Every function, variable and (sub)expression gets a
+     type assigned.
+ 14. The data collected in the symbol table is compiled to a set of java annotations and
+     written to the intermediate java file.
+ 20. The java compiler is invoked.
+ *
+ * Milestones
+ * [3.6.020] syntax check for all sources ok
+ *
+ * [3.8.020] UTF-8 encoding is standard
+ *
+ * [3.8.022] 'Data.StIO' used everywhere
+ *
+ * [3.11.021] transdef Prelude
+ *
+ * [3.12.022] class checking done
+ *
+ * [3.6.000] change to SVN (new revision numbering)
+ *
+ * [3.14.21] pass 7 (unrollLet) done (again revision numbering adapted)
+ * [3.14.34] typecheck is almost working
+ * [3.15.33] example from putting.ps works, can annotate just f or local variable
+ * [3.17.85] parsed and typechecked whole compiler
+ */
+/*
+ * $Author: ingo $
+ * $Revision: 175 $
+ * $Date: 2011-02-17 12:13:50 +0100 (Do, 17 Feb 2011) $
+ * $Id: Main.fr 175 2011-02-17 11:13:50Z ingo $
+ */
+
+package frege.compiler.Main where
+
+/// This is $Revision: 175 $
+public version = v "$Revision: 175 $" where
+    v (m ~ #(\d+)#) | Just g <- m.group 1 = g.atoi
+    v _ = 0
+
+/// a function to print 'Float's
+protected native formatLocale java.lang.String.format :: Maybe JLocale -> String -> Float -> String
+data JLocale = native java.util.Locale
+public format s f = formatLocale Nothing s f
+
+import frege.List (Tree joinStr)
+import frege.IO(`<<` stdout stderr File OutputStreamWriter PrintWriter)
+
+import frege.compiler.Classtools(FregePackage)  as CT
+import frege.compiler.Data
+import frege.compiler.Utilities()   as U
+import frege.compiler.Scanner()     as Lex
+import frege.compiler.Grammar()     as Parse
+import frege.compiler.Fixdefs()     as P1
+import frege.compiler.Import()      as P2
+import frege.compiler.Enter()       as P3
+import frege.compiler.TAlias()      as P4
+import frege.compiler.Transdef()    as P5
+import frege.compiler.Classes()     as P6
+import frege.compiler.Transform()   as P7
+import frege.compiler.TCUtil()      as TCU
+import frege.compiler.Typecheck()   as TC
+import frege.compiler.GenMeta()     as GM
+import frege.compiler.GenJava()     as GJ
+
+
+//* the standard options with filename
+stdOptions = Options {
+      source = "-",       // read from standard input
+      sourcePath = ["."],
+      flags = fold U.setFlag 0 [WARNINGS, WITHCP, RUNJAVAC],     // obviously
+      dir = ".",          // work in current directory
+      path = [],          // same as java classpath
+      prefix = "",        // no prefix
+      encoding = Just "UTF-8",  // use UTF8 by default
+      tRanges = []
+    }
+
+stdSubSt = Sub {
+    cache = undefined,
+    optab = undefined,
+    definitions = [],
+    packageDoc = Nothing,
+    stderr = undefined
+}
+
+stdGenSt = Gen {
+    printer = undefined,
+    tunique = 0,
+    runique = 0,
+    sunique = 0,
+    tTree = Nil,
+    rTree = Nil,
+    sTree = Nil,
+    genEnv = []
+}
+
+//* the standard global state
+stdGlobal = Global {
+        options = stdOptions,
+        sub = stdSubSt,
+        gen = stdGenSt,
+        errors  = 0,
+        unique = 1,
+        thisPack = Pack.new "",
+        packages = Nil,
+        namespaces = Nil,
+        env = []
+}
+
+stdoutPrinter = stdPrinter stdout
+stdPrinter out = do
+    out <- out
+    eos <- OutputStreamWriter.new out "UTF-8"
+    either exception fromOSW eos
+  where
+    fromOSW :: OutputStreamWriter -> IO PrintWriter
+    fromOSW osw = PrintWriter.fromWriterAf osw.toWriter true
+    exception exc = do
+        stderr << "Can't make OutputStreamWriter: " << JException.getMessage exc << "\n"
+        throw exc
+//* here it starts all
+main args = IO.performUnsafe (mainIO args)
+
+
+versionId = "3." ++ show n ++ "." ++ show avgv where
+    n = length values
+    !avgv = fold (+) 0 values `div` n
+    values = [version, Data.version, U.version, Lex.version, CT.version,
+                        Parse.version, P1.version, P2.version, P3.version, P4.version,
+                        P5.version, P6.version, P7.version, TCU.version, TC.version,
+                        GM.version, GJ.version]
+
+
+//* the main function of the compiler
+mainIO ["-help"] = do
+    stderr  << "usage:\n"
+    stderr  << "    java frege.compiler.Main [flags] [xy.fr] compile xy.fr or stdin\n"
+    stderr  << "    java frege.compiler.Main -help           print this message\n"
+    stderr  << "    java frege.compiler.Main -version        print version information\n\n"
+    usage
+    IO.return ()
+
+mainIO ["-version"] = do { stderr << versionId << "\n"; void }
+
+// mainIO [] = mainIO ["-help"]
+
+mainIO args = do
+    now   <- IO.currentTimeMillis()
+    mbopt <- scanOpts stdOptions args
+    case mbopt of
+        Nothing -> IO.exit 1
+        Just (opt, fs) -> do
+            when (U.isOn opt.flags VERBOSE) (printopts opt)
+            // p <- stdoutPrinter
+            cache <- IORef.new Nil      // start out with empty cache
+            eprinter <- stdPrinter stderr
+            let global0 = stdGlobal.{sub <- SubSt.{cache=cache}}
+                global  =   global0.{sub <- SubSt.{stderr=eprinter}}
+            (_, g) <- files fs global.{options = opt}
+            when (g.errors > 0) (IO.exit 1)
+            void
+
+
+native getOpArr frege.compiler.JavaUtils.getOperators
+            :: IO.URLClassLoader -> String -> IO (Exception (Maybe CT.OpArr))
+
+getOperators :: Global -> String -> IO (Exception (Maybe CT.OpArr))
+getOperators g packstr
+    | U.isOff g.options.flags MAKE = do
+            let cl = U.ourClassLoader g.options
+            case cl of
+                Left x -> IO.return (Left x)
+                Right cl -> getOpArr cl packstr
+    | otherwise                    = do
+        made <- make g packstr
+        case made of
+            Left x -> IO.return (Left x)
+            Right (_, Nothing) ->    IO.return (Right Nothing)
+            Right (_, Just fp) ->    IO.return (Right (Just fp.ops))
+
+
+make :: Global -> String -> IO (Exception (Bool, Maybe FregePackage))
+make g packstr = do
+        StIO.run (U.logmsg TRACEM "make" packstr) g
+        cache <- g.cache.get
+        case cache.lookup packstr of
+            Just fp -> IO.return (Right (false, Just fp))
+            Nothing -> do
+                let cl = U.ourClassLoader g.options
+                case cl of
+                    Left x -> IO.return (Left x)
+                    Right cl -> do
+                        fp <- CT.getFrege cl packstr
+                        either missing currentP fp
+    where
+        filename1 = ((#\.#.matcher packstr).replaceAll "/") ++ ".fr"
+        filename  = (("^" ++ g.options.prefix).compile.matcher filename1).replaceFirst ""
+        findFile [] f = IO.return Nothing
+        findFile (d:ds) f = do
+            let fname = d ++ "/" ++ f
+                file = File.new fname
+            exists   <- file.exists
+            regular  <- file.isFile
+            readable <- file.canRead
+            if exists && regular && readable
+                then IO.return (Just file)
+                else findFile ds f
+        missing exc = do
+            StIO.run (U.logmsg TRACEM "missing" (packstr ++ " " ++ show exc)) g
+            fn <- findFile g.sourcePath filename
+            maybe (cantFind Nothing filename) makeNow fn
+        currentP Nothing = IO.return (Left (Undefined.new "no frege class").toException)
+        currentP (Just fp) = do
+            let time = FregePackage.time fp
+            StIO.run (U.logmsg TRACEM "classfile" (packstr
+                        ++ " time:" ++ show time)) g
+            fn <- findFile g.sourcePath filename
+            maybe (cantFind (Just fp) filename) (makeIfModified fp time) fn
+        cantFind Nothing fstr = IO.return (Left (
+            Undefined.new ("can't make " ++ packstr
+                ++ ", source file " ++ fstr ++ " missing")).toException)
+        cantFind jfp fstr = do
+            StIO.run (U.logmsg TRACEM "no source" (fstr ++ " not found, can't remake")) g
+            IO.return (Right (false, jfp))
+        makeNow (fn::File) = do
+            StIO.run (U.logmsg TRACEM "compiling" fn.getPath) g
+            (_,gr) <- files [fn.getPath] g.{errors = 0}    // with fresh env
+            if (gr.errors > 0) then let
+                        exc = (Undefined.new "compilation failed").toException
+                    in IO.return (Left exc)
+                else do
+                    fp  <- getFrege (U.ourClassLoader g.options) packstr
+                    case fp of
+                        Left x ->  IO.return (Left x)
+                        Right (Just y) -> do
+                            cache <- g.cache.get
+                            g.cache.put (cache.insert packstr y)
+                            IO.return (Right (true, Just y))
+                        Right Nothing ->
+                            IO.return (Right (true, Nothing))
+        getFrege (Left x) pack = IO.return (Left x)
+        getFrege (Right cl) pack = CT.getFrege cl pack
+        makeIfModified (fp::FregePackage) time (fn::File) = do
+            mod <- fn.lastModified
+            StIO.run (U.logmsg TRACEM "modified" (fn.getPath ++ " " ++ show mod)) g
+            if mod > time then makeNow fn
+                else do
+                    let imp1 = [ (Pack.new s).unpack g | i <- 0..fp.imps.length-1, s <- fp.imps.[i].toList ]
+                        imps | packstr == pPrelude.unpack g = imp1
+                             | otherwise = pPrelude.unpack g:imp1
+                    StIO.run (U.logmsg TRACEM "dependencies" (show imps)) g
+                    deps <-  makeDeps time Nothing imps
+                    case deps of
+                        Left x -> IO. return (Left x)
+                        Right Nothing -> do
+                            StIO.run (U.logmsg TRACEM "up to date" "no need to make it") g
+                            cache <- g.cache.get
+                            g.cache.put (cache.insert packstr fp)
+                            IO.return (Right (false, Just fp))
+                        Right (Just sub) -> do
+                            StIO.run (U.logmsg TRACEM "out of date" ("with respect to " ++ sub)) g
+                            makeNow fn
+        makeDeps time b [] = IO.return (Right b)
+        makeDeps time b (sp:sps) = do
+            made <- make g.{options <- Options.{source=packstr}} sp
+            case made of
+                Left x -> IO.return (Left x)
+                Right (true, _) -> makeDeps time (Just sp) sps
+                Right (_, Nothing) -> IO.return (Left ((Undefined.new "what is wrong?").toException))
+                Right (_, Just subfp) -> if subfp.time > time
+                    then makeDeps time (Just sp) sps
+                    else makeDeps time b         sps
+
+
+/**
+ *  run the compiler for each file
+ */
+files :: [String] -> Global -> IO ((), Global)
+files [] g = IO.return ((), g)
+files (src:srcs) g = do
+        let isMake = U.isOn g.options.flags MAKE
+        if isMake then do
+            regular <- (File.new src).isFile
+            if regular then doFile (src:srcs)
+                else do
+                    res <- make g ((Pack.new src).unpack g)
+                    case res of
+                        Left x -> do
+                            g.stderr.append "Couldn't make " << src << ": " << x
+                            g.stderr.println
+                            IO.return ((), g.{errors = 1})
+                        Right (false, _) -> do
+                            g.stderr.append src << " is up to date"
+                            g.stderr.println
+                            files srcs g
+                        Right (true, _) -> files srcs g
+          else doFile (src:srcs)
+    where
+        doFile (src:srcs) = do
+            (x, gnew) <- StG.run run g.{options <- Options.{source=src}}
+            if gnew.errors > 0
+                then  IO.return (x, gnew)
+                else  files srcs g // reuse original
+
+/**
+ * 'run' all passes, one after another
+ * until one of them returns an error
+ */
+run = do
+    p <- doio $ stdoutPrinter
+    changeST Global.{gen <- GenSt.{printer=p}}    // just to have no undefined value there
+    foreach passes runpass
+  where
+    runpass (pass,description,post) = do
+        state <- getST
+        when (state.errors == 0) do
+            now   <- doio $ IO.currentTimeMillis()
+            (itemnm, items) <- pass
+            state <- getST
+            postconditionHolds <- if state.errors == 0 then post else stio true
+            later <- doio $ IO.currentTimeMillis()
+            when (length description > 0 && U.isOn state.options.flags VERBOSE) do
+                doio $ do  state.stderr.append description << " took "
+                              << format "%.3f" ((later-now+1L).float / 1e3f) << "s, "
+                              << items << " " << itemnm
+                           when (items > 1) do
+                                state.stderr.append " ("
+                                       << (Int.long items*1000L) `div` (later-now+1L) << " "
+                                       << itemnm << "/s)"
+                                void
+                           state.stderr.println
+                stio ()
+            unless (postconditionHolds) do
+                doio (state.stderr.append "FATAL: post condition violated" IO.>> state.stderr.println)
+                changeST Global.{errors <- (1+)}
+            stio ()
+    passes = [
+        // function       description                            post condition
+        (lexicalAnalysis, "parser (including lexical analysis)   ", postParse),
+        (P1.pass,         "collecting definitions                ", P1.post),
+        (P2.pass,         "symbol table initialization and import", P2.post),
+        (P6.passI true,   "verify imported instances             ", P6.post),
+        (P3.pass,         "enter definitions                     ", P3.post),
+        (P4.pass,         "check type aliases                    ", P4.post),
+        (P3.pass2,        "make field definitions                ", P3.post),
+        (P3.pass3,        "enter (derived) instances             ", P3.post),
+        (P5.pass,         "translate names in exprs and types    ", P5.post),
+        (P6.passC,        "verify class definitions              ", P6.post),   // TRACE6
+        (P6.passI false,  "verify own instances                  ", P6.post),   // TRACE6
+        (P7.pass7,        "simplify lets                         ", P7.post),   // TRACE7
+        (TC.pass,         "type check                            ", TC.post),   // TRACET, TRACEO
+        (P7.pass8,        "globalize anonymous lambdas           ", P7.post),   // TRACE8
+        (P7.pass9,        "simplify expressions                  ", P7.post),   // TRACE9
+        (P7.pass10,       "strictness analysis                   ", P7.post),   // TRACES
+        (openPrinter,     "open file                             ", postTrue),
+        (GM.pass,         "generate meta data                    ", GM.post),   // none
+        (GJ.pass,         "generate java code                    ", GJ.post),   // none
+        (javac,           "run java compiler                     ", postTrue),
+        ]
+    postTrue = stio true
+    postParse :: StG Bool
+    postParse = do
+            state <- getST
+            stio ((not • null) state.definitions)
+
+
+
+
+noClassLoader :: JException -> IO ()
+noClassLoader x = do
+        stderr << "Can't make class loader due to " << JException.catched x << ": "
+               << JException.getMessage x << "\n"
+        void
+
+openPrinter = do
+    g <- getST
+    case g.options.source of
+        "-" -> do
+            GM.banner versionId
+            stio ("standard output", 1)
+        _   -> do
+            openFilePrinter ".java"
+            GM.banner versionId
+            stio ("file", 1)
+
+///  make filename from package name  @x.y.z.Packet@ =>  @dest\/x\/y\/z/Packet.java@
+targetPath suffix = do
+    g <- getST
+    let target = g.options.dir ++ "/"
+                    ++ (#\.#.matcher (g.thisPack.unpack g)).replaceAll("/")
+                    ++ suffix
+    stio target
+
+openFilePrinter suffix = do
+    g <- getST
+    target <- targetPath suffix
+    let
+        file = File.new target
+        opw  = doio $ PrintWriter.encoded file "UTF-8"
+        mkpw  = do
+            case file.getParentFile of
+                Just dir -> do
+                    doio dir.mkdirs    // make sure all directories are there
+                    opw
+                Nothing -> opw
+    epw <- mkpw
+    case epw of
+        Left exc -> do
+            U.error "" ("Can't write to " ++ target ++ " (" ++ exc.catched ++ ")")
+            stio ()
+        Right pw -> do
+            // pw <- doio $ PrintWriter.fromWriterAf (pw.toWriter) true
+            changeST Global.{gen <- GenSt.{printer=pw}}
+            stio ()
+
+/// utility function to run a command.
+/// takes a command line and produces an exit code
+native runJavac frege.compiler.JavaUtils.runJavac :: String -> IO Int
+
+/// run the java compiler
+javac = do
+    g <- getST
+    doio g.printer.close        // flush output before compiling
+    target <- targetPath ".java"
+    let cmdline = "javac -J-Xmx200m"
+                    ++ " -cp " ++ joinStr U.pathSep g.options.path
+                    ++ " -d "  ++ g.options.dir
+                    ++ " -encoding UTF-8"
+                    ++ " " ++ target
+    rc <- doio (runJavac cmdline)
+    when (rc != 0)
+        (U.error "" ("java compiler errors are most likely caused by erronous native definitions"))
+    // from now on, we are printing to stdout again
+    printer <- doio stdoutPrinter
+    changeST Global.{gen <- GenSt.{printer=printer}}
+    stio ("source file", 1)
+
+lexicalAnalysis = do
+        g <- getST
+        now   <- doio $ IO.currentTimeMillis()
+        tokens <- Lex.pass (getOperators g)
+        let !nts = length tokens
+        later <- doio $ IO.currentTimeMillis()
+        global <- getST
+
+        when (U.isOn global.options.flags VERBOSE) do
+            doio do
+                global.stderr.append " lexical analysis took "
+                   << (later-now).double / 1000.0 << "s, "
+                   << nts << " tokens, " << (nts.long  * 1000L) `div` (later-now)
+                   << " tokens/s\n"
+            stio ()
+
+        case (global.errors == 0) of
+            true -> do
+                result <- Parse.pass tokens
+                case result of
+                    Just (packname, defs, doc) -> do
+                        changeST Global.{thisPack = Pack.new packname}
+                        changeST Global.{sub <- (SubSt.{definitions = defs}
+                                                 • SubSt.{packageDoc = doc})}
+                        stio ("tokens", nts)
+                    Nothing -> stio ("tokens", nts)
+            false -> stio ("tokens", nts)
+
+//* print options
+printopts opts = do
+    stderr << "You have selected the following options:\n"
+    stderr << "Source file:          " << Options.source opts << "\n"
+    stderr << "Frege path:           " << U.ourPath opts << "\n"
+    stderr << "Destination directory " << opts.dir << "\n"
+    unless (Nothing == opts.encoding) (stderr << "Source file encoding: " << unJust opts.encoding << "\n" >> void)
+    stderr << "Flags:                "
+        << (joinStr " " <~ map show <~ filter (U.isOn opts.flags)) (HINTS .. TRACEZ)
+        << "\n"
+    void
+
+//* print usage information common to many tools
+usage = stderr
+            << "    flags:\n"
+            << "       -d directory    target directory for *.java and *.class files\n"
+            << "       -fp classpath   classpath used to find imported frege packages\n"
+            << "       -enc charset    charset for source code files, standard is UTF-8\n"
+            << "       -enc DEFAULT    platform default charset for source code files\n"
+            << "       -nocp           exclude java classpath from -fp\n"
+            << "       -hints          print hints\n"
+            << "       -explain i[-j]  print more detailed output from type inference\n"
+            << "                       regarding line(s) i (to j). Can be useful if compiler\n"
+            << "                       emitted inexplicable type errors before.\n"
+            << "       -nowarn         don't print warnings (not recommended)\n"
+            << "       -v              verbose mode on\n"
+            << "       -make           build outdated or missing imports\n"
+            << "       -sp srcpath     look for source files in srcpath, default is .\n"
+            << "       -O              perform certain optimizations\n"
+            << "       -prefix stage   prefix for package names, used in compiler development\n"
+            << "       -xN             debugging output from pass N, where N elem (1..10)\n"
+            << "       -xt             debugging output from type checker\n"
+            << "       -xo             debugging output from optimizer\n"
+            << "       -xs             debugging output from strictness analysis\n"
+            << "       -xg             debugging output from code generation\n"
+            << "       -xr i[-j]       confine tracing to range of line numbers or just a line\n"
+            << "                       multiple ranges can be specified\n"
+            << "\n"
+            << "A classpath is a list of jar files, zip-Files or directories separated by "
+            << U.pathSep << "\n"
+            << "A srcpath is a list of directories separated by "
+            << U.pathSep << "\n"
+            << "To get parser debugging output, set YYDEBUG environment variable to 1\n"
+
+//* used to look up flag values
+flagtree = Tree.fromList [
+    ("-nocp",   (U.clrFlag, WITHCP)),
+    ("-hints",  (U.setFlag, HINTS)),
+    ("-nowarn", (U.clrFlag, WARNINGS)),
+    ("-make",   (U.setFlag, MAKE)),
+    ("-v",      (U.setFlag, VERBOSE)),
+    ("-j",      (U.clrFlag, RUNJAVAC)),
+    ("-O",      (U.setFlag, OPTIMIZE)),
+    ("-x1",     (U.setFlag, TRACE1)),
+    ("-x2",     (U.setFlag, TRACE2)),
+    ("-x3",     (U.setFlag, TRACE3)),           // symbol table operations
+    ("-x4",     (U.setFlag, TRACE4)),
+    ("-x5",     (U.setFlag, TRACE5)),
+    ("-x6",     (U.setFlag, TRACE6)),
+    ("-x7",     (U.setFlag, TRACE7)),
+    ("-x8",     (U.setFlag, TRACE8)),
+    ("-x9",     (U.setFlag, TRACE9)),
+    ("-xt",     (U.setFlag, TRACET)),           // type checker
+    ("-xx",     (U.setFlag, TRACEX)),           // env operations, lots of output
+    ("-xm",     (U.setFlag, TRACEM)),           // male operations
+    ("-xo",     (U.setFlag, TRACEO)),           // optimizer
+    ("-xs",     (U.setFlag, TRACES)),           // strictness
+    ("-xg",     (U.setFlag, TRACEG)),           // code generator
+    ]
+
+//* scan command line with some sanity checks, return indication of success
+scanOpts :: Options -> [String] -> IO (Maybe (Options, [String]))
+scanOpts opts [] = IO.return (Just (opts, []))
+scanOpts opts ("-d":xs)  | null xs `or` head xs ~ #^-# = do
+    stderr << "option -d must be followed by a directory name\n"
+    IO.return Nothing
+scanOpts opts ("-d":dir:args) = do
+    let f = File.new dir
+    isdir <- f.isDirectory
+    // unless isdir (stderr << dir << " is not a directory" << "\n" >> void)
+    if isdir then do
+            canRead <- f.canRead
+            if canRead then do
+                    canWrite <- f.canWrite
+                    if canWrite then scanOpts opts.{dir} args
+                        else do
+                            stderr << "directory " << dir << " is not writable.\n"
+                            IO.return Nothing
+                else do
+                    stderr << "directory " << dir << " is not readable.\n"
+                    IO.return Nothing
+        else do
+            stderr << dir << " is not a directory\n"
+            IO.return Nothing
+scanOpts opts ("-sp":xs) | null xs `or` head xs ~ #^-# = do
+    stderr << "option -sp must be followed by source path\n"
+    IO.return Nothing
+scanOpts opts ("-sp":path:args) = do
+    let ps = U.pathRE.splitToList path
+    let pschecked = map peCheck ps
+        peCheck pe = do
+            let f = File.new pe
+            exists <- f.exists
+            readable <- f.canRead
+            isdir  <- f.isDirectory
+            if exists
+              then if readable
+                then if isdir
+                  then IO.return true
+                  else do
+                        stderr << pe << " should be a directory\n"
+                        IO.return false
+                else do
+                    stderr << pe << " is not readable\n"
+                    IO.return false
+              else do
+                stderr << pe << " does not exist\n"
+                IO.return false
+    bits <- sequence IO.return pschecked
+    rest <- scanOpts opts.{path = ps} args
+    if fold (&&) true bits then IO.return rest else IO.return Nothing
+scanOpts opts ("-fp":xs) | null xs `or` head xs ~ #^-# = do
+    stderr << "option -fp must be followed by classpath\n"
+    IO.return Nothing
+scanOpts opts ("-fp":path:args) = do
+    let ps = U.pathRE.splitToList path
+    let pschecked = map peCheck ps
+        peCheck pe = do
+            let f = File.new pe
+            let isjar = pe ~ #\.(jar|zip|ZIP|JAR)$#
+            exists <- f.exists
+            readable <- f.canRead
+            isdir  <- f.isDirectory
+            if exists
+              then if readable
+                then if isdir
+                  then IO.return true
+                  else if isjar then IO.return true
+                    else do
+                        stderr << pe << " should be a jar or zip archive or a directory\n"
+                        IO.return false
+                else do
+                    stderr << pe << " is not readable\n"
+                    IO.return false
+              else do
+                stderr << pe << " does not exist\n"
+                IO.return false
+    bits <- sequence IO.return pschecked
+    rest <- scanOpts opts.{path = ps} args
+    if fold (&&) true bits then IO.return rest else IO.return Nothing
+scanOpts opts (#^-enc(oding)?$#:xs) | null xs `or` head xs ~ #^-# = do
+    stderr << "option -enc must be followed by code name\n"
+    IO.return Nothing
+scanOpts opts (#^-enc(oding)?$#:enc:args) = scanOpts opts.{encoding = mbEncoding} args
+    where mbEncoding = if enc == "DEFAULT" then Nothing else Just enc
+scanOpts opts ("-prefix":xs) | null xs `or` head xs ~ #^-# = do
+    stderr << "option -prefix must be followed by prefix string\n"
+    IO.return Nothing
+scanOpts opts ("-prefix":pre:args) = scanOpts opts.{prefix = pre} args
+scanOpts opts ("-xr":xs) | null xs `or` head xs !~ #^\d+(\D\d+)?$# = do
+    stderr << "option -xr must be followed by number range\n"
+    IO.return Nothing
+scanOpts opts ("-xr" : m~#^(\d+)(\D(\d+))?$# : args) =
+    if a <= b then scanOpts opts.{tRanges <- ((a,b):)} args
+    else do stderr << "Did you mean \"-xr " << b << "," << a
+                    << "\"? Line specific tracing will be off.\n"
+            scanOpts opts.{tRanges <- ((a,b):)} args    // do what he said, not what he meant
+    where (a,b) = case m.group 1 of
+            Just s1 -> case m.group 3 of
+                Just s2 ->  (s1.atoi, s2.atoi)
+                Nothing ->  (s1.atoi, s1.atoi)
+            Nothing -> (0, Int.maxBound)                 // just to make warning go away
+scanOpts opts ("-explain":xs) | null xs `or` head xs !~ #^\d+(\D\d+)?$# = do
+    stderr << "option -explain must be followed by number range\n"
+    IO.return Nothing
+scanOpts opts ("-explain" : m~#^(\d+)(\D(\d+))?$# : args) =
+    if a <= b then scanOpts opts.{tRanges <- ((a,b):), flags = U.setFlag opts.flags EXPLAIN} args
+    else do stderr << "Did you mean \"-explain " << b << "-" << a
+                    << "\"? This way, explaining will be off.\n"
+            scanOpts opts.{tRanges <- ((a,b):)} args    // do what he said, not what he meant
+    where (a,b) = case m.group 1 of
+            Just s1 -> case m.group 3 of
+                Just s2 ->  (s1.atoi, s2.atoi)
+                Nothing ->  (s1.atoi, s1.atoi)
+            Nothing -> (0, Int.maxBound)                 // just to make warning go away
+scanOpts opts ((flag@#^-#):args) = case flagtree.lookup flag of
+    Just (f, flag) -> scanOpts opts.{flags = f opts.flags flag} args
+    Nothing -> do
+        stderr << "invalid flag " << flag << ", use -help for command line syntax\n"
+        scanOpts opts args
+        IO.return Nothing
+scanOpts opts filenames | head filenames !~ #^-# = IO.return (Just (opts, filenames))
+scanOpts opts (wrong:args)  = do
+        stderr << "invalid argument `" << wrong << "`,  use -help for command syntax\n"
+        scanOpts opts args
+        IO.return Nothing

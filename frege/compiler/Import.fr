@@ -1,0 +1,443 @@
+// enable UTF-8: «««««••••••••••••»»»»»»
+/**
+ * This package implements the second compiler pass after lexical analysis.
+ * It sets up the symbol table and performs the imports.
+ */
+
+/*
+ * $Author: ingo $
+ * $Revision: 254 $
+ * $Date: 2011-03-03 22:54:29 +0100 (Do, 03 Mrz 2011) $
+ * $Id: Import.fr 254 2011-03-03 21:54:29Z ingo $
+ */
+
+package frege.compiler.Import where
+
+/// This is $Revision: 254 $
+public version = v "$Revision: 254 $" where
+    v (m ~ #(\d+)#) | Just g <- m.group 1 = g.atoi
+    v _ = 0
+
+import frege.IO(stderr `<<`)
+import frege.Tuples()
+import frege.List(joinStr Tree Nil isEmpty keys insertkv each values lookup insert)
+// import all from data
+import frege.compiler.Data          as D
+import frege.compiler.Classtools()  as CT
+import frege.compiler.Utilities()   as U
+// import frege.compiler.Enter()       as E
+
+/**
+ *  Post condition for import pass
+ */
+post :: StG Bool
+post = do
+        global <- getST
+        stio ( cond global )
+    where
+        cond :: Global -> Bool
+        cond global = !(isEmpty global.packages)       // there is at least 1 package
+            `and` !(isEmpty global.namespaces)     // and a namespace
+                                                // and we can find our own symbol table
+            `and` isJust (global.packages.lookup global.thisPack)
+            `and` isJust (global.packages.lookup pPrelude) // and the non empty prelude
+            // `and` (not • isEmpty • unJust • global.packages.lookup) pPrelude
+
+/// import pass, set up environment and do imports
+pass :: StG (String, Int)
+pass = do
+            (g::Global) <- getST
+            initenv g.thisPack
+            (g::Global) <- getST
+            U.debugST TRACE2 (show g.namespaces.each)
+            stio ("packages", length (keys g.packages))
+    where
+        initenv p
+            | p == pPrelude = do mkSymtabs; preludeBasics
+            | otherwise     = do mkSymtabs; doImports
+            where
+                // make sure we find our own symtab
+                mkSymtabs = do
+                    (g::Global) <- getST
+                    let
+                        newn = (Nil).insert g.thisPack.nsName g.thisPack
+                        newp = (Nil).insert g.thisPack        Nil
+                    putST (g.{namespaces = newn}.{packages = newp})
+                    /*
+                linkback sym = do
+                    sid <- U.uniqid
+                    let name = Symbol.name sym
+                    U.enterSym (SymL {name =
+                    */
+
+/**
+ * check definitions for Prelude import.
+ * if not there, prepend an automatic @import frege.Prelude@
+ */
+doImports = do
+    (g::Global) <- getST
+    let imports0 = [ imp | imp@ImpDcl {pos} <- g.definitions]
+        prelimp  = any (isPimport) imports0
+        isPimport (ImpDcl {pack}) = Pack.new pack == pPrelude
+        isPimport _               = false
+        preldef  = ImpDcl {pos=1, pack="frege.Prelude", as=Nothing, items=Nothing}
+        imports = if prelimp then imports0 else preldef : imports0
+    foreach imports importHere
+    stio ()
+
+importHere (imp@ImpDcl {pos}) = do
+        g <- getST
+        let pack = Pack.new imp.pack
+            as   = maybe pack.nsName NSX imp.as
+            exists = g.namespaces.lookup as
+        maybe (newns imp pack as) (oldns imp pack as) exists
+    where
+        newns imp pack as = do
+                importClass pos pack        // make sure g.packages pack exists when no error
+                g <- getST
+                case g.packages.lookup pack of
+                    Just env -> do
+                        changeST Global.{namespaces <- insertkv as pack}
+                        importEnv env as (Definition.items imp)
+                    Nothing -> stio ()      // importClass did the error logging
+        oldns imp pack as oldp = do
+                old <- U.inState (Pack.unpack oldp)
+                when (pack != oldp) (U.error pos ("namespace `"
+                                        ++ NSName.unNS as ++ "` previously opend for `"
+                                        ++ old ++ "`"))
+                when (pack == oldp) do
+                    g <- getST
+                    case g.packages.lookup pack of
+                        Just env -> importEnv env as (Definition.items imp)
+                        Nothing -> U.fatal pos ("package " ++ Pack.unpack pack g ++ " should be here?")
+                stio ()
+importHere d = U.fatal d.pos ("must be an import definition, not " ++ show (constructor d))
+
+importEnv :: Symtab -> NSName -> Maybe [Pos String] -> StG ()
+importEnv env ns Nothing = foreach (values env) linkHere
+importEnv env ns (Just []) = stio ()
+importEnv env ns (Just list) = do
+        let qlist = [ (ns.unNS ++ "." ++ e, pos) | (e,pos) <- list ]
+        foreach qlist lookupThenLinkHere
+
+linkHere (sym@SymL {alias}) = do
+    g <- getST
+    case alias.findit g of
+        Just sym -> linkHere sym
+        Nothing -> U.fatal sym.pos (sym.name.nice g ++ " points to non-existing " ++ sym.alias.nice g)
+linkHere sym = do
+    g <- getST
+    case sym.name of
+        TName _ b -> U.linkq (TName g.thisPack b) sym
+        _         -> U.linkq (VName g.thisPack sym.name.base) sym
+
+lookupThenLinkHere (e,pos) = do
+    g <- getST
+    res <- U.resolve (VName g.thisPack) pos e
+    case res of
+        [] -> stio ()       // got error message from resolve
+        [x] -> case x.findit g of
+            Just sym -> do
+                linkHere sym
+                case sym of
+                    SymT {env} -> do        // link constructors also
+                        let cons = [ sym | sym@SymD {pos} <- values env ]
+                        foreach cons linkHere
+                    SymC {env} -> do        // link class methods
+                        let meth = [ sym | sym@SymV {pos} <- values env ]
+                        foreach meth linkHere
+                    _ -> stio ()
+            Nothing  -> U.fatal pos (x.nice g ++ " resolved, but not found")
+        xs -> do
+            tname   = head [ x | x@TName _ _ <- xs ]    // there should be a TName, right
+            xsym    = unJust (tname.findit g)
+            canmean = [ sym.nice g | x <- xs, Just sym <- [QName.findit x g]]
+            U.warn pos ("`" ++ e ++ "` could mean the "
+                ++ joinStr " or the " canmean
+                ++ ", but we are importing the " ++ xsym.kind g)
+            linkHere xsym
+
+
+
+importClass :: Int -> Pack -> StG ()
+importClass pos pack = do
+    g <- getST
+    maybe (importClassData pos pack >> stio ()) (const (stio ())) (g.packages.lookup pack)
+
+/**
+ * Reconstruct symbol table of imported package from annotation class 'CT.FregePackage'
+ *
+ * Only the most obvious logical errors are recognized, however, they will cause the
+ * compiler to crash.
+ *
+ * We rely on the following:
+ * - java annotations contain no null values
+ * - all indexes into the 'CT.Tau', 'CT.Rho' and 'CT.Sigma' arrays are valid.
+ *
+ * Should the assumptions fail to hold then the import will crash with an ArrayOutOfBounds
+ * or a NullPointer exception.
+ *
+ * On the other hand, if the code in "GenMeta.fr" is correct and the annotations have
+ * not been hacked (for example by editing intermediate java files), then the import is
+ * guaranteed not to crash.
+ *
+ * This uses and updates the cache of frege packages from class files which are up to date
+ * whether or not the 'MAKE' option is set. This avoids construction of a class loader
+ * also in cases when multiple source files are compiled.
+ */
+importClassData pos pack = do
+    g <- getST
+    let clname = Pack.unpack pack g
+    U.logmsg TRACE2 pos ("importing " ++ clname)
+    let getFP = do
+            cache <- doio g.cache.get
+            case cache.lookup clname of
+                Nothing -> do
+                                exmb <- doio (getFrege (U.ourClassLoader g.options) clname)
+                                case exmb of
+                                    Right (Just fp) -> do
+                                            doio (g.cache.put (cache.insert clname fp)) // remember me
+                                            stio exmb
+                                    _  ->   stio exmb
+                just    -> stio (Right just)
+        getFrege (Left x) clname   = IO.return (Left x)
+        getFrege (Right cl) clname = CT.getFrege cl clname
+    anno <- getFP
+    case anno of
+        Left exc -> do
+            U.error pos ("import error " ++ show exc)
+            stio Nothing
+        Right Nothing -> do
+            U.error pos ("`" ++ clname ++ "` is not a frege package")
+            stio Nothing
+        Right (Just fp) -> do
+            let packs = [ Pack.new p | Just p <- map fp.imps.getAt (0..fp.imps.length-1) ]
+            foreach packs (importClass pos)
+            // now everything is in place for making the new symtab
+            changeST Global.{packages <- insertkv pack Nil}
+            let itree = fold rebuildTau Nil (0..fp.taus.length-1)
+                // Relies on the property that there may be no forward references.
+                // The function that builds it must guarantee this. see GenMeta.tauIndex
+                rebuildTau t n = case tau.kind of
+                        0 -> insert t n tapp
+                        1 -> insert t n tfun
+                        2 -> insert t n (TCon pos (rebuildQN (tau.tcon.getAt 0)))
+                        3 -> insert t n (TVar pos tau.tvar [])
+                        k -> error ("illegal tau kind " ++ show k ++ " in tau# " ++ show n)
+                    where
+                        bad = error ("illegal subreferences in tau# " ++ show n)
+                        tau = fp.taus.getAt n
+                        ab = do
+                            a <- lookup t tau.suba
+                            b <- lookup t tau.subb
+                            Just (a,b)
+                        tapp = maybe bad (curry TApp) ab
+                        tfun = maybe bad (curry TFun) ab
+                nTau i = maybe abort id (itree.lookup i)
+                    where abort = error ("unknown tau index " ++ show i)
+                rtree = fold rebuildRho Nil (0..fp.rhos.length-1)
+                rebuildCtx (ctx::CT.Context) = Ctx pos (rebuildQN ctx.clas) (nTau ctx.tau) false
+                rebuildRho t n = case rho.rhofun of
+                        false -> insert t n (RhoTau ctx (nTau rho.rhotau))
+                        true  -> case lookup t sig.rho of
+                            Just r1 -> case lookup t rho.rhotau of
+                                Just r2 -> insert t n (RhoFun ctx (ForAll sig.bound.toList r1) r2)
+                                Nothing -> error ("illegal rhoref " ++ show rho.rhotau
+                                            ++ " in rho# " ++ show n)
+                            Nothing -> error ("illegal rhoref " ++ show sig.rho
+                                            ++ " in sigma# " ++ show rho.sigma
+                                            ++ " referenced in rho# " ++ show n)
+                    where
+                        rho = fp.rhos.getAt n
+                        ctx = [ rebuildCtx (rho.cont.getAt n) | n <- 0..rho.cont.length-1 ]
+                        sig = fp.sigmas.getAt rho.sigma
+                nRho i = maybe abort id (rtree.lookup i)
+                    where abort = error ("unknown rho index " ++ show i)
+                nSigma i = ForAll sig.bound.toList (nRho sig.rho)
+                    where sig = fp.sigmas.getAt i
+            U.logmsg TRACE2 pos ("reconstructed " ++ show fp.taus.length ++ " tau types")
+            U.logmsg TRACE2 pos ("reconstructed " ++ show fp.rhos.length ++ " rho types")
+            let strMB "" = Nothing
+                strMB s  = Just s
+            let rbSymA n = SymA {sid=0, pos, vis=Public, doc=strMB sym.doc,
+                    name = rebuildQN sym.name,
+                    typ = nSigma sym.typ,
+                    vars = [ nTau (sym.vars.getAt i) | i <- 0..sym.vars.length-1 ]}
+                  where sym = fp.symas.getAt n
+                rbSymV :: CT.SymVArr -> Int -> Symbol
+                rbSymV arr n = SymV {sid=0, pos, vis=v, doc=strMB sym.doc,
+                    name = rebuildQN sym.name, typ = nSigma sym.sig, pur = sym.pur,
+                    nativ = if sym.nativ == "" then Nothing else Just sym.nativ,
+                    expr = Nothing, anno = true, state = StrictChecked,
+                    strsig = decodeS sym.stri,
+                    depth = sym.depth, rkind = sym.rkind }
+                  where sym = arr.getAt n
+                        v = if sym.abst then Abstract else Public
+                rbSymD :: CT.SymDArr -> Int -> Symbol
+                rbSymD arr n = SymD {sid=0, pos, vis=Public, doc=strMB sym.doc,
+                    name = rebuildQN sym.name, cid = sym.cid,
+                    typ = nSigma sym.typ,
+                    flds = zip names types,
+                    strsig = decodeS sym.stri }
+                  where sym = arr.getAt n
+                        types = [ nSigma t | i <- 0..sym.ftys.length-1, t=sym.ftys.getAt i]
+                        names | sym.fnms.length == 0 = repeat Nothing
+                              | otherwise = [ if mbs == Just "" then Nothing else mbs |
+                                                i <- 0..sym.fnms.length-1,
+                                                mbs = sym.fnms.getAt i]
+                rbSymL :: CT.SymLArr -> Int -> Symbol
+                rbSymL arr n = SymL {sid=0, pos, vis=Public, doc=strMB sym.doc,
+                    name = rebuildQN sym.name, alias = rebuildQN sym.alias}
+                  where sym = arr.getAt n
+                rbSymC :: CT.SymC -> Symbol
+                rbSymC sym = SymC {sid=0, pos, vis=Public, doc=strMB sym.doc,
+                    name = rebuildQN sym.name,
+                    tau  = nTau sym.tau, vkind = sym.vkind,
+                    supers = sups,
+                    insts = zip ins1 ins2,
+                    env = Nil}
+                  where
+                    ins1 = mapqs sym.ins1
+                    ins2 = mapqs sym.ins2
+                    sups = mapqs sym.sups
+                rebuildClass n = do
+                    let sym = fp.symcs.getAt n
+                    U.enter (rbSymC sym)
+                    foreach (0..sym.funs.length-1) (U.enter • rbSymV sym.funs)
+                    foreach (0..sym.lnks.length-1) (U.enter • rbSymL sym.lnks)
+                rbSymI :: CT.SymI -> Symbol
+                rbSymI sym = SymI {sid=0, pos, vis=Public, doc=strMB sym.doc,
+                    name = rebuildQN sym.name,
+                    clas = rebuildQN sym.clas,
+                    typ  = nSigma sym.typ,
+                    env  = Nil}
+                rebuildInst n = do
+                    let sym = fp.symis.getAt n
+                    U.enter (rbSymI sym)
+                    foreach (0..sym.funs.length-1) (U.enter • rbSymV sym.funs)
+                    foreach (0..sym.lnks.length-1) (U.enter • rbSymL sym.lnks)
+                rbSymT :: CT.SymT -> Symbol
+                rbSymT sym = SymT {sid=0, pos, vis=Public, doc=strMB sym.doc,
+                    name = rebuildQN sym.name,
+                    typ  = nSigma sym.typ, product = sym.prod, enum = sym.isEnum,
+                    nativ = if sym.nativ == "" then Nothing else Just sym.nativ,
+                    pur = sym.pur, newt = sym.newt,
+                    env  = Nil}
+                rebuildTyp n = do
+                    let sym = fp.symts.getAt n
+                    U.enter (rbSymT sym)
+                    foreach (0..sym.cons.length-1) (U.enter • rbSymD sym.cons)
+                    foreach (0..sym.funs.length-1) (U.enter • rbSymV sym.funs)
+                    foreach (0..sym.lnks.length-1) (U.enter • rbSymL sym.lnks)
+
+
+            foreach (0..fp.symas.length-1) (U.enter • rbSymA)
+            foreach (0..fp.symcs.length-1) rebuildClass
+            foreach (0..fp.symis.length-1) rebuildInst
+            foreach (0..fp.symts.length-1) rebuildTyp
+            foreach (0..fp.symvs.length-1) (U.enter • rbSymV fp.symvs)
+            foreach (0..fp.symls.length-1) (U.enter • rbSymL fp.symls)
+            stio (Just fp)
+
+rebuildQN :: CT.QName -> QName
+rebuildQN qn = case qn.kind of
+    0 -> tname
+    1 -> VName (Pack.new qn.pack) qn.base
+    2 -> MName tname qn.member
+    k -> error ("illegal QName kind in CT:QName " ++ show (k, qn.pack, qn.base, qn.member))
+  where
+    tname = TName (Pack.new qn.pack) qn.base
+
+mapqs :: CT.QNameArr -> [QName]
+mapqs xs = [ rebuildQN qn | i <- 0..xs.length-1, qn = xs.getAt i ]
+
+/**
+ * These are the basic definitions that we can't write in sourcecode:
+ *   data () = ();
+ *   data [] a = [] | a `:` [a];
+ *   data (,) a b = (a,b)     # tuples 2 to 26
+ *   data (->) a b;
+ *   data while a b = continue a | break b
+ * preludedefs is a symbol table containing those
+ * It must be used as base for prelude compilation
+ *
+ */
+preludeBasics = do
+    // ()
+    let unitT  = TName pPrelude "()"
+        unitC  = MName unitT "()"
+        unitCA = VName pPrelude "()"
+        unitTy = ForAll [] (RhoTau [] (TCon 1 unitT))
+        sigmaRhoTau xs t = ForAll xs (RhoTau [] t)
+    U.enter (SymT {name = unitT, typ=unitTy, env = Nil, nativ = Nothing,
+                product = true, enum = true, pur = false, newt = false,
+                sid=0, pos=1, vis=Public, doc=Just "Unit type"})
+    U.enter (SymD {name = unitC, typ=unitTy, flds = [], cid = 0,
+                sid=0, pos=1, vis=Public, doc=Just "Unit value",
+                strsig = S[]})
+    U.enter (SymL {name = unitCA, alias = unitC,
+                sid=0, pos=1, vis=Public, doc=Just "Unit value"})
+    // [], a:as
+    let listT    = TName pPrelude "[]"
+        listNil  = MName listT "[]"
+        listCons = MName listT ":"
+        va       = TVar 1 "a" []
+        vb       = TVar 1 "b" []
+        listRho  = RhoTau [] (TApp (TCon 1 listT) va)
+        listTy   = ForAll ["a"] listRho
+        consTy   = ForAll ["a"] (RhoFun []
+                                    (ForAll [] (RhoTau [] va))
+                                    (RhoFun []
+                                        (ForAll [] listRho)
+                                        listRho))
+    // tuples
+    U.enter (SymT {name = listT, typ = listTy, env = Nil, nativ = Nothing,
+                product = false, enum = false, pur = false, newt = false,
+                sid=0, pos=1, vis=Public, doc=Just "list type"})
+    U.enter (SymD {name = listNil, typ = listTy, flds = [], cid=0,
+                sid=0, pos=1, vis=Public, doc=Just "empty list",
+                strsig = S[]})
+    U.enter (SymD {name = listCons, typ = consTy, cid=1,
+                   flds = [(Nothing, ForAll [] (RhoTau [] va)), (Nothing, listTy)],
+                   sid=0, pos=1, vis=Public, doc=Just "list construction",
+                   strsig = S[U,U]})
+    U.enter (SymL {name = VName pPrelude "[]", alias = listNil,
+                   sid=0, pos=1, vis=Public, doc=Just "empty list"})
+    U.enter (SymL {name = VName pPrelude ":", alias = listCons,
+                   sid=0, pos=1, vis=Public, doc=Just "list construction"})
+    foreach (2..26) tupletype
+
+    // ->
+    let funTy = ForAll ["a", "b"] (RhoTau [] (TFun va vb))
+        funT  = TName pPrelude "->"
+    U.enter (SymT {name = funT, typ = funTy, env = Nil, nativ = Nothing,
+                    product = false, enum = false,
+                    pur = false, newt = false, sid=0, pos=1, vis=Public, doc=Just "function"})
+  where
+    mvar :: Tau
+    mvar = TVar 1 "" []
+    vars  = map ctos ('a' .. 'z')
+    tvars = map (mvar.{var=}) vars
+    commas = repeat ','
+    tuple n = "(" ++ cstos (take (n-1) commas) ++ ")"
+    tupletype n = do
+        let name = tuple n                          // "(,)"
+            tvs  = take n tvars                     // TVar 1 "a", TVar 1 "b", ...
+            vs   = take n vars                      // "a", "b", ...
+            sigmas = map (ForAll [] • RhoTau []) tvs   // ForAll (RhoTau (TVar 1 "a")), ...
+            flds   = map ((,) Nothing) sigmas       // (Nothing, a), (Nothing, b)
+            tupleT   = TName pPrelude name          // Prelude.(,)
+            tupleC   = MName tupleT   name          // Prelude.(,).(,)
+            tupleRho = RhoTau [] (Tau.mkapp (TCon 1 tupleT) tvs)   // (a,b,...)
+            tupleSig = ForAll vs tupleRho              // forall a b....(a,b, ...)
+            conRho   = foldr (RhoFun []) tupleRho sigmas      // a -> b -> ... -> (a,b, ...)
+        U.enter (SymT {name = tupleT, typ = tupleSig, env = Nil, nativ = Nothing,
+                        product = true, enum = false,
+                        sid=0, pos=1, vis=Public, doc=Just (show n ++ "-tuple"),
+                        pur = false, newt = false})
+        U.enter (SymD {name = tupleC, typ = ForAll vs conRho, flds = flds, cid=0,
+                        sid=0, pos=1, vis=Public, doc=Just (show n ++ "-tuple constructor"),
+                        strsig = S (take n allLazy)})
+        U.enter (SymL {name = VName pPrelude name, alias = tupleC,
+                        sid=0, pos=1, vis=Public, doc=Just (show n ++ "-tuple constructor")})
+

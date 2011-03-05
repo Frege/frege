@@ -1,0 +1,391 @@
+// enable UTF-8 ««««««««««««««•••••••••••••»»»»»»»»»»»»¦¦¦¦¦¦¦¦
+/**
+ * Translate definitions, expressions and types to internal form with internal names
+ */
+/*
+ * $Author: ingo $
+ * $Revision: 256 $
+ * $Date: 2011-03-03 23:42:07 +0100 (Do, 03 Mrz 2011) $
+ * $Id: Transdef.fr 256 2011-03-03 22:42:07Z ingo $
+ */
+
+package frege.compiler.Transdef where
+
+/// This is $Revision: 256 $
+public version = v "$Revision: 256 $" where
+    v (m ~ #(\d+)#) | Just g <- m.group 1 = g.atoi
+    v _ = 0
+
+
+import frege.List (joinStr insert lookup values keys Tree)
+import frege.IO(`<<` stdout stderr)
+
+import frege.compiler.Data
+import frege.compiler.Utilities(resolveVName resolveXName transSigma validSigma defaultXName)
+                                  as U
+import frege.compiler.Fixdefs()   as F
+import frege.compiler.Enter()     as E
+
+
+post = stio true
+
+pass = do
+    g <- getST
+    foreach g.definitions (transdef (VName g.thisPack))
+    stio ("definitions", length g.definitions)
+
+transdef fname (ImpDcl {pos}) = stio () // Nothing
+transdef fname (FixDcl {pos}) = stio () // Nothing
+/*ClaDcl    {pos::Line, vis::Visibility, name::String,
+                    clvar::TauT t, supers::[t],
+                    defs::[Definition q t s], doc::Maybe String}*/
+transdef fname (d@ClaDcl {pos}) = do
+        g <- getST
+        let tname = TName g.thisPack d.name
+        case tname.findit g of
+            Nothing -> do U.error pos ("Cannot happen, class "
+                                    ++ tname.nice g ++ " missing.")
+                          // stio Nothing
+            Just sym
+                | SymC {pos} <- sym = do transclass d sym // ; stio (Just d)
+                | otherwise = do
+                    U.error pos ("expected class, found " ++ sym.nice g)
+                    // stio Nothing
+/*
+    AnnDcl    {pos::Line, vis::Visibility, name::String, typ::SigmaT t, doc::Maybe String}
+    SymV  {pos::Line, vis::Visibility, doc::Maybe String, name ::QName,
+                 typ::Sigma, expr::Maybe Expr, nativ::Maybe String,
+                 pur::Bool, anno::Bool} /// variable
+*/
+transdef fname (d@AnnDcl {pos}) = do
+        g <- getST
+        let aname = if null g.env then fname d.name else Local d.name
+        case QName.findit aname g of
+            Nothing -> do U.error pos ("Cannot happen, function " ++ aname.nice g ++ " missing")
+            Just sym
+                | SymV {pos} <- sym = do
+                    t <- transSigma d.typ
+                    U.changeSym sym.{typ = t, anno=true}
+                    U.logmsg TRACE5 pos ("function " ++ aname.nice g ++ " = " ++ t.nice g)
+                | otherwise = U.error pos ("expected function, found " ++ sym.nice g)
+transdef fname (d@NatDcl {pos}) = do
+        g <- getST
+        let aname = fname d.name
+        case QName.findit aname g of
+            Nothing -> do U.error pos ("Cannot happen, function " ++ aname.nice g ++ " missing")
+            Just sym
+                | SymV {pos} <- sym = do
+                    t <- transSigma d.typ
+                    U.changeSym sym.{typ = t}
+                | otherwise = U.error pos ("expected function, found " ++ sym.nice g)
+
+transdef fname (d@FunDcl {pos,name="let"}) = do
+        g <- getST
+        u <- U.uniqid
+        let xname = if null g.env then fname else Local
+            nm = xname ("let$" ++ show u)
+            patnames = (map xname • keys • U.patNames • head) d.pats
+            var = Vbl {pos, name=nm.base, typ=Nothing}
+            vnm = Vbl {pos, name=nm, typ=Nothing}
+        /* on top level, transform conservatively */
+        case g.env  of
+            [] = do
+                    // let$u = x
+                    x <- transExpr fname d.expr
+                    U.logmsg TRACE5 pos (nm.nice g ++ " = " ++ x.nice g)
+                    U.enter (sym nm x)
+                    // foreach a in patnames let a = case let$u of (a,b) -> a
+                    foreach patnames (caseex var (head d.pats))
+            _  = do
+                    // let$u = \(a,b) -> x, so we can recover it later
+                    x <- transExpr fname (Lam Nil (head d.pats) d.expr Nothing)
+                    U.logmsg TRACE5 pos (nm.nice g ++ " = " ++ x.nice g)
+                    U.enter (sym nm x)
+                    // provisionally  a = let$u, b = let$u
+                    foreach patnames (provisional vnm)
+    where
+        sym nm x = (U.vSym pos nm).{vis=d.vis, doc=d.doc, expr=Just x}
+        provisional x nm = do
+            g <- getST
+            sym <- U.findV nm
+            U.logmsg TRACE5 sym.pos (sym.nice g ++ " = " ++ x.nice g)
+            U.changeSym sym.{expr = Just x}
+        caseex var pat nm = do
+            g <- getST
+            sym <- U.findV nm
+            let cas = Case CNormal var [alt] Nothing
+                alt = CAlt {pos=sym.pos, env=Nil, pat, ex=Vbl sym.pos sym.name.base Nothing}
+            x <- transExpr fname cas
+            U.logmsg TRACE5 sym.pos (sym.nice g ++ " = " ++ x.nice g)
+            U.changeSym sym.{expr = Just x}
+
+transdef fname (d@FunDcl {pos}) = do
+        g <- getST
+        let aname = if null g.env then fname d.name else Local d.name
+        case QName.findit aname g of
+            Just sym
+                | SymV {pos} <- sym = do
+                    let funex = foldr lamNil d.expr d.pats
+                        lamNil p e = Lam Nil p e Nothing
+                    x <- transExpr fname funex
+                    // U.logmsg TRACE5 pos ("function " ++ aname.nice g ++ " = " ++ Expr.nice x g)
+                    U.changeSym sym.{expr = Just x}
+                | otherwise = U.fatal pos ("expected function, found " ++ sym.nice g)
+            nothing -> do U.fatal pos ("Cannot happen, function " ++ aname.nice g ++ " missing")
+
+transdef fname (d@InsDcl {pos}) = do
+        g <- getST
+        let iname = TName g.thisPack (U.insName d)
+        case iname.findit g of
+            Just sym
+                | SymI {pos} <- sym = do
+                    clas <- defaultXName pos (TName pPrelude "Eq") d.clas
+                    typ  <- U.transSigmaP true d.typ
+                    U.logmsg TRACE5 pos ("instance " ++ QName.nice clas g ++ " (" ++ Sigma.nice typ g ++ ")")
+                    U.changeSym sym.{clas,typ}
+                    foreach d.defs (transdef (MName iname))
+            nothing -> do U.fatal pos ("Cannot happen, instance " ++ iname.nice g ++ " missing")
+/*
+transdef fname (d@DrvDcl {pos}) = do    // fake a InsDcl with definitions
+            g <- getST
+            clas <- defaultXName pos (TName pPrelude "Eq") d.clas
+            typ  <- transSigma d.typ
+            let ForAll _ (RhoTau tau) = typ     // guaranteed by syntax
+                tsym tau = case tau of
+                    TCon {name} -> QName.findit name g
+                    TApp ts     -> tsym (head ts)
+                    _           -> Nothing
+            case tsym tau of
+                Just (sym@SymT {env}) | ctrs <- U.envConstructors env,
+                                        not (null ctrs) -> do
+                    dcls <- deriveDcls pos clas sym ctrs
+                    transdef fname (InsDcl {pos=d.pos, vis=d.vis, clas=d.clas,
+                                            typ=d.typ, doc=d.doc, defs=dcls})
+                Just sym -> U.error pos ("Can't derive " ++  clas.nice g
+                                        ++ " (" ++ typ.nice g ++ "), type has no constructors")
+                Nothing ->  U.error pos ("Can't derive " ++  clas.nice g
+                                        ++ " (" ++ typ.nice g ++ ")")
+*/
+
+transdef fname (d@DatDcl {pos}) = do
+        g <- getST
+        let tname = TName g.thisPack d.name
+        case tname.findit g of
+            Just sym | SymT {pos} <- sym = do
+                foreach d.ctrs (transCon sym.typ (MName tname))
+                foreach d.defs (transdef (MName tname))
+            other -> do U.fatal pos ("Cannot happen, data " ++ tname.nice g ++ " missing")
+    where
+        // DCon {pos::Line, vis::Visibility, name::String,
+        //                flds::[(Maybe String, SigmaT t)], doc::Maybe String}
+        transCon (ForAll bndrs rho) mname (d@DCon {pos}) = do
+            g <- getST
+            let cname = mname d.name
+            case QName.findit cname g of
+                Just (con@SymD {pos}) = do
+                    let transSigma1 s = do      // field types cannot really be sigmas
+                            ForAll _ r <- transSigma s
+                            stio (ForAll [] r)
+                    sigmas <- mapSt (transSigma1 • snd) d.flds
+                    let nfs = zip (map fst con.flds) sigmas
+                        typ = ForAll bndrs (foldr (RhoFun []) rho sigmas)
+                    U.logmsg TRACE5 con.pos (con.nice g ++ " :: " ++ typ.nice g)
+                    sig <- validSigma typ
+                    U.changeSym con.{typ=sig}.{flds=nfs}
+                _ -> U.fatal pos ("constructor `" ++ cname.nice g ++ "` vanished.")
+
+transdef fname (d@JavDcl {pos}) = do
+        g <- getST
+        let tname = TName g.thisPack d.name
+        case tname.findit g of
+            Just sym | SymT {pos} <- sym = do
+                let purity = d.isPure `or` (unJust sym.nativ `elem` pureTypes)
+                when (not purity `and` length sym.typ.bound < 1) do
+                    U.error pos ("mutable native type " ++ sym.name.nice g ++ " needs a state phantom type")
+                    U.hint  pos ("declaration should read:  data "
+                        ++ d.name ++ " state = native " ++ unJust (sym.nativ))
+                U.changeSym sym.{pur = purity}
+                foreach d.defs (transdef (MName tname))
+            nothing -> do U.fatal pos ("Cannot happen, data " ++ tname.nice g ++ " missing")
+
+
+transdef fname (d@TypDcl {pos}) = do
+        g <- getST
+        let tname = TName g.thisPack d.name
+        case tname.findit g of
+            Just sym | SymA {pos} <- sym = do
+                // type aliases may be incomplete
+                sigma <- U.transSigmaP true (ForAll (map Tau.var d.vars) d.rho)
+                U.changeSym sym.{typ=sigma}
+            nothing -> do U.fatal pos ("Cannot happen, type alias " ++ tname.nice g ++ " missing")
+
+transdef fname d = do
+        U.error d.pos ("can't transdef definition with constructor "
+            ++ show (constructor d))
+        // stio Nothing
+
+/// java types where we know for sure that they are pure
+pureTypes = ["byte", "short", "boolean", "char", "int", "long", "float", "double",
+            "java.lang.String", "java.math.BigInteger", "java.util.regex.Pattern",
+            "java.lang.Boolean", "java.lang.Byte", "java.lang.Character", "java.lang.Short",
+            "java.lang.Integer", "java.lang.Long", "java.lang.Float", "java.lang.Double"]
+
+/// transPat may assume that the correct environment is on top
+transPat  :: (String -> QName) -> PatternS -> StG Pattern
+transPat fname pat = do
+    g <- getST
+    U.logmsg TRACE5 (getpos pat) ("transPat: " ++ nice pat g )
+    case pat of
+        PVar {pos,var} -> do U.enter (U.patLocal pos var); stio (PVar {pos,var})
+        PCon {pos,qname,pats} -> do
+                            qname <- resolveVName fname pos qname
+                            pats <- sequence stio (map (transPat fname) pats)
+                            checkCon pos qname pats
+                            stio (PCon {pos,qname,pats})
+        PStrict p       -> liftM PStrict (transPat fname p)
+        PLit p k v      -> stio (PLit p k v)
+        PAnn p s        -> liftM2 PAnn (transPat fname p) (transSigma s)
+        PAt {pos,var,pat} -> do
+                            U.enter (U.patLocal pos var);
+                            pat <- transPat fname pat
+                            stio (PAt {pos,var,pat})
+        PMat {pos,var,value} -> do
+                            U.enter (U.patLocal pos var).{
+                                typ = ForAll [] (RhoTau [] (TCon pos (TName pPrelude "Matcher")))}
+                            stio (PMat {pos,var,value})
+        PConFS {pos,qname,fields} -> do
+                            qname <- resolveVName fname pos qname
+                            pats <- mapSt (transPat fname • snd) fields
+                            let pfs = map fst fields
+                                ft = Tree.fromList (zip pfs pats)
+                                fpat x = case ft.lookup x of
+                                    Just p -> stio p
+                                    Nothing -> do
+                                        u <- U.uniqid
+                                        transPat fname (PVar {pos, var="_" ++ show u})
+                            case qname.findit g of
+                                Just (SymD {flds}) -> do
+                                    let fs = [ f | (Just f, _) <- flds ]
+                                        badfs = filter (`notElem` fs) pfs
+                                    pats <- mapSt fpat fs
+                                    if null badfs then stio (PCon {pos,qname,pats})
+                                      else do
+                                        U.error pos ("constructor " ++ qname.nice g ++ " has no "
+                                            ++ (if length badfs == 1 then "field " else "fields ")
+                                            ++ joinStr ", " badfs)
+                                        stio (PCon {pos,qname,pats})
+                                _ -> do
+                                    checkCon pos qname pats
+                                    stio (PCon {pos,qname,pats})
+  where
+        checkCon pos qcon ps = do
+                g <- getST
+                case QName.findit qcon g of
+                    Just (SymD {flds})
+                                | length flds == length ps = stio ()
+                                | otherwise = U.error pos ("constructor " ++ qcon.nice g
+                                                ++ " demands " ++ show (length flds)
+                                                ++ " arguments, but you gave "
+                                                ++ show (length ps))
+                    nothing -> when (g.errors == 0)
+                        (U.error pos (qcon.nice g ++ " is not a data constructor"))
+
+transMbSigma (Just s) = liftM Just (transSigma s)
+transMbSigma Nothing  = stio Nothing
+
+transExpr :: (String -> QName) -> ExprS -> StG Expr
+transExpr fname ex = do
+    g <- getST
+    U.logmsg TRACE5 (getpos ex) ("transExpr: " ++ ex.nice g)
+    case ex of
+        Vbl {pos,name,typ} -> do
+                        name <- resolveVName fname pos name
+                        typ  <- transMbSigma typ
+                        stio (Vbl {pos, name,typ})
+        Con {pos,name,typ} -> do
+                        name <- resolveVName fname pos name
+                        typ  <- transMbSigma typ
+                        stio (Con {pos, name, typ})
+        Mem x s t    -> do
+                            x <- transExpr fname x
+                            t <- transMbSigma t
+                            stio (Mem x s t)
+        App a b t    -> do
+                            a  <- transExpr fname a
+                            b  <- transExpr fname b
+                            t  <- transMbSigma t
+                            stio (App a b t)
+        Lit p k v t  -> liftM (Lit p k v) (transMbSigma t)
+        Case {ckind,ex,alts,typ} -> do
+                    ex   <- transExpr fname ex
+                    alts <- mapSt (transAlt fname) alts
+                    typ  <- transMbSigma typ
+                    stio (Case {ckind, ex, alts, typ})
+                where
+                        transAlt fname (CAlt {pos,pat, ex}) = with Nil (do
+                                pat <- transPat  fname pat
+                                ex  <- transExpr fname ex
+                                env <- getTop
+                                stio (CAlt {pos, pat, env, ex})
+                              )
+        Ifte c a b t -> do
+                        c <- transExpr fname c
+                        a <- transExpr fname a
+                        b <- transExpr fname b
+                        t <- transMbSigma t
+                        stio (Ifte c a b t)
+        Let {defs,ex,typ} -> with Nil do
+                        defs <- F.fixdefs defs
+                        E.enter Local defs
+                        foreach defs (transdef fname)
+                        ex   <- transExpr fname ex
+                        env  <- getTop
+                        typ  <- transMbSigma typ
+                        stio (Let {env,defs=[],ex,typ})
+        Lam {pat,ex,typ} -> with Nil do
+                        pat <- transPat  fname pat
+                        ex  <- transExpr fname ex
+                        env <- getTop
+                        typ <- transMbSigma typ
+                        stio (Lam {env,pat,ex,typ})
+        Ann {ex,typ} -> do
+                        ex  <- transExpr fname ex
+                        typ <- transMbSigma typ
+                        stio (Ann {ex,typ})
+        ConFS {pos,name,fields,typ} -> do
+                        name <- resolveVName fname pos name
+                        exs  <- mapSt (transExpr fname) (map snd fields)
+                        typ  <- transMbSigma typ
+                        symd <- U.findD name
+                        let xnms = map fst fields
+                            flds = [ f | (Just f, _) <- symd.flds ]
+                            badf = filter (`notElem` flds) xnms
+                            miss = filter (`notElem` xnms) flds
+                            tree = Tree.fromList (zip xnms exs)
+                            mapx s = case tree.lookup s of
+                                Just x -> x
+                                Nothing -> Vbl pos (VName pPrelude "undefined") Nothing
+                            oexs = map mapx flds
+                            res  = fold nApp (Con {pos,name,typ}) oexs
+                            f1s  = if length badf == 1 then "field " else "fields "
+                            f2s  = if length miss == 1 then "field " else "fields "
+                        unless (null badf) do
+                            g <- getST
+                            U.error pos (nice symd g ++ " has no " ++ f1s ++ joinStr ", " badf)
+                        unless (null miss) do
+                            g <- getST
+                            U.error pos (f2s ++ joinStr ", " miss ++ " missing in construction of "
+                                            ++ symd.name.nice g)
+                        stio res
+
+        // _ -> do U.error (U.getepos ex) ("can't translate expr: " ++ U.showex ex g)
+        //        stio (Vbl 0 (VName pPrelude "undefined"))
+
+transclass :: DefinitionS -> Symbol -> StG ()
+transclass def sym = do
+        supers <- liftM (map unJust • filter isJust)
+                        (sequence stio (map (resolveXName def.pos sym) def.supers))
+        U.changeSym sym.{supers = unique supers}
+        g <- getST
+        foreach def.defs  (transdef (MName sym.name))
+
