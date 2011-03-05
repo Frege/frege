@@ -8,7 +8,7 @@ import java.net.URLClassLoader;
 import java.lang.annotation.*;
 
 /*
- * $Revision: 3 $
+ * $Revision$
  * $Header: E:/iwcvs/fc3/frege/compiler/JUtils.java,v 3.10 2009/04/30 13:41:12 iw Exp $
  * $Log: JUtils.java,v $
  * Revision 3.10  2009/04/30 13:41:12  iw

@@ -8,9 +8,9 @@ import java.net.URLClassLoader;
 import java.lang.annotation.*;
 
 /*
- * $Revision: 77 $
- * $Id: JavaUtils.java 77 2011-01-08 16:57:11Z ingo $
- * $Author: ingo $
+ * $Revision$
+ * $Id$
+ * $Author$
  */
 
 public class JavaUtils {

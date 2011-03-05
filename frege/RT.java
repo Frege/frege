@@ -3,10 +3,10 @@ package frege;
 import frege.rt.*;
 
 /*
- * $Author: ingo $
- * $Date: 2011-02-27 17:49:38 +0100 (So, 27 Feb 2011) $
- * $Revision: 233 $
- * $Id: RT.java 233 2011-02-27 16:49:38Z ingo $
+ * $Author$
+ * $Date$
+ * $Revision$
+ * $Id$
  */
 /**
  *  <p> Utility functions for frege code. </p>

@@ -1,8 +1,8 @@
 /*
- * $Author: ingo $
- * $Revision: 254 $
- * $Id: MD.java 254 2011-03-03 21:54:29Z ingo $
- * $Date: 2011-03-03 22:54:29 +0100 (Do, 03 Mrz 2011) $
+ * $Author$
+ * $Revision$
+ * $Id$
+ * $Date$
  */
 
 package frege;

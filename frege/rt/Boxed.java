@@ -1,10 +1,10 @@
 package frege.rt;
 
 
-// $Author: ingo $
-// $Date: 2011-03-03 22:54:29 +0100 (Do, 03 Mrz 2011) $
-// $Rev: 254 $
-// $Id: Boxed.java 254 2011-03-03 21:54:29Z ingo $
+// $Author$
+// $Date$
+// $Rev$
+// $Id$
 
 /**
  * <p> Container for arbitrary java reference values. </p>

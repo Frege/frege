@@ -1,9 +1,9 @@
 package frege.rt;
 
-// $Author: ingo $
-// $Date: 2011-02-08 20:20:43 +0100 (Di, 08 Feb 2011) $
-// $Rev: 144 $
-// $Id: Unknown.java 144 2011-02-08 19:20:43Z ingo $
+// $Author$
+// $Date$
+// $Rev$
+// $Id$
 
 /**
  * <p> Base class for lazy values.</p>

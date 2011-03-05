@@ -2,10 +2,10 @@ package frege;
 import java.lang.annotation.*;
 
 /*
- * $Author: ingo $
- * $Revision: 38 $
- * $Id: Run.java 38 2010-12-23 16:14:43Z ingo $
- * $Date: 2010-12-23 17:14:43 +0100 (Do, 23 Dez 2010) $
+ * $Author$
+ * $Revision$
+ * $Id$
+ * $Date$
  */
 
 public class Run {

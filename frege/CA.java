@@ -1,5 +1,5 @@
 /*
- * $Revision: 3 $
+ * $Revision$
  * $Header: E:/iwcvs/fc3/frege/CA.java,v 3.2 2010/02/18 12:31:19 iw Exp $
  * $Log: CA.java,v $
  * Revision 3.2  2010/02/18 12:31:19  iw

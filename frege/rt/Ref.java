@@ -1,10 +1,10 @@
 package frege.rt;
 
 
-// $Author: ingo $
-// $Date: 2011-03-03 23:42:07 +0100 (Do, 03 Mrz 2011) $
-// $Rev: 256 $
-// $Id: Ref.java 256 2011-03-03 22:42:07Z ingo $
+// $Author$
+// $Date$
+// $Rev$
+// $Id$
 
 /**
  * <p> Mutable references. </p>

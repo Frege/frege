@@ -1,9 +1,9 @@
 # Makefile for the frege compiler distribution
 
-# $Author: ingo $
-# $Revision: 267 $
-# $Id: Makefile 267 2011-03-05 14:57:38Z ingo $
-# $Date: 2011-03-05 15:57:38 +0100 (Sa, 05 Mrz 2011) $
+# $Author$
+# $Revision$
+# $Id$
+# $Date$
 
 JAVAC5 = C:\opt\java5\bin\javac
 JAVAC = javac

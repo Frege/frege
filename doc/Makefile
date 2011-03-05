@@ -1,5 +1,5 @@
 # makefile for frege docu
-# $Revision: 3 $
+# $Revision$
 # $Header: E:/iwcvs/fc/doc/Makefile,v 1.4 2010/10/21 14:28:00 ingo Exp $
 # $Log: Makefile,v $
 # Revision 1.4  2010/10/21 14:28:00  ingo

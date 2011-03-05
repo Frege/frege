@@ -26,10 +26,10 @@ while ($n < 27) {
     my $crpargs = join(",", @rpargs);
     print J "package frege.rt;\r\n";
     print J <<'TEXT';
-// $Author:  $
-// $Date:  $
-// $Rev:  $
-// $Id:  $
+// $Author$
+// $Date$
+// $Rev$
+// $Id$
 TEXT
     print J <<"TEXT";
 /**

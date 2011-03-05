@@ -1,8 +1,8 @@
 package frege.rt;
-// $Author: ingo $
-// $Date: 2011-02-18 13:44:14 +0100 (Fr, 18 Feb 2011) $
-// $Rev: 179 $
-// $Id: Product24.java 179 2011-02-18 12:44:14Z ingo $
+// $Author$
+// $Date$
+// $Rev$
+// $Id$
 /**
  * <p> Base class for values constructed with 24-ary constructors. </p>
  *

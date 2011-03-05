@@ -1,9 +1,9 @@
 package frege.rt;
 
-// $Author: ingo $
-// $Date: 2011-02-26 13:52:01 +0100 (Sa, 26 Feb 2011) $
-// $Rev: 218 $
-// $Id: Fun1.java 218 2011-02-26 12:52:01Z ingo $
+// $Author$
+// $Date$
+// $Rev$
+// $Id$
 
 /**
  * <p> Frege functions with arity 1. </p>

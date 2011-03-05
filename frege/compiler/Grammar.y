@@ -1,7 +1,7 @@
 %{
 // enable UTF-8: «««««••••••••••••»»»»»»
 /**
-*   This is the grammar for the Frege language ($Revision: 256 $).
+*   This is the grammar for the Frege language ($Revision$).
 */
 package frege.compiler.Grammar where
 
@@ -10,10 +10,10 @@ package frege.compiler.Grammar where
      */
 
 /*
- * $Author: ingo $
- * $Revision: 256 $
- * $Date: 2011-03-03 23:42:07 +0100 (Do, 03 Mrz 2011) $
- * $Id: Grammar.y 256 2011-03-03 22:42:07Z ingo $
+ * $Author$
+ * $Revision$
+ * $Date$
+ * $Id$
  */
 
 import frege.IO(stdout stderr << BufferedReader)
@@ -24,7 +24,7 @@ import frege.compiler.Utilities
           tuple)
                                                 as U
 
-version = v "$Revision: 256 $" where
+version = v "$Revision$" where
     v (m ~ #(\d+)#) | Just g <- m.group 1 = g.atoi
     v _ = 0
 
