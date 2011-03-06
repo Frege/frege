@@ -338,7 +338,7 @@ quantifyWith f nms = do
         g <- getST
         when (U.isOn g.options.flags TRACET) do
             U.logmsg TRACET 0 ("quantify " ++ joinStr ", " (map (flip QName.nice g) nms))
-            foreach syms logty
+            // foreach syms logty
         let qsyms = [ (name, rho) | (sy@SymV {name, expr  = Just _,
                                      nativ = Nothing,
                                      anno  = false,
@@ -353,10 +353,6 @@ quantifyWith f nms = do
         foreach (zip qnms sigs) changeSig
         foreach asyms changeSig
     where
-        logty sym = do
-            g <- getST
-            let sig = Symbol.typ sym
-            U.logmsg TRACET (Symbol.pos sym) ("qfy: " ++ sym.nice g ++ " :: " ++ sig.nicer g)
         changeSig (qnm, sigma) = do
             sym@SymV {expr = Just x} <- findV qnm
             zex <- zonkExpr x           // from here on no bound Meta anywhere
@@ -364,24 +360,54 @@ quantifyWith f nms = do
             sigma <- substRigidSigma (Sigma.bound sigma) sigma
             changeSym sym.{typ = sigma, expr = Just zex, anno = true}
             g <- getST
-            when (U.isOn g.options.flags TRACET) do
-                sym <- findV qnm
-                logty sym
+            U.logmsg TRACET (Symbol.pos sym) ("qfy: " ++ sym.nice g ++ " :: " ++ sigma.nicer g)
+            U.explain (Symbol.pos sym) (sym.nice g ++ " :: " ++ sigma.nicer g)
+
 
 zonkRigid []    ex = stio ex
-zonkRigid bound ex = mapEx false zonk ex
+zonkRigid bound ex = do
+        // g <- getST
+        // U.logmsg TRACEZ (getpos ex) ("zonkRigid " ++ show bound ++ " " ++ nice ex g)
+        mapEx false zonk ex
     where
+        symWork (symv@ SymV {pos, expr, typ = sig}) = do
+                        rho   <- substRigidRho (bound ++ sig.bound) sig.rho
+                        expr  <- case expr of
+                            Just x  -> do
+                                x <- zonkRigid (bound ++ sig.bound) x
+                                stio (Just x)
+                            Nothing -> stio Nothing
+                        changeSym symv.{expr, typ = ForAll sig.bound rho}
+
         zonk (x@Let {env,ex,typ = Just sig}) = do
                 sig <- substRigidSigma bound sig
                 env <- nested env do
                         foreach [ sy | sy@SymV {expr=Just _} <- values env ] symWork
                 ex  <- with env do zonkRigid bound ex
                 stio (Right x.{env,ex,typ = Just sig})
-            where
-                symWork (symv@ SymV {pos, expr = Just ex, typ = sig}) = do
-                        sig <- substRigidSigma bound sig
-                        ex  <- zonkRigid bound ex
-                        changeSym symv.{expr = Just ex, typ = sig}
+        zonk x | x.{env?} = do                  // update also environment of lambda
+            env <- nested x.env do
+                foreach [ sy | sy@SymV {typ} <- values x.env ] symWork
+            case Expr.typ x of
+                Just sigma -> do
+                    sigma <- substRigidSigma bound sigma
+                    stio (Left (x.{env, typ = Just sigma}))
+                Nothing -> stio (Left x.{env})
+        zonk (Case {ckind,ex,alts,typ}) = do
+            ex  <- zonkRigid bound ex
+            typ <- case typ of
+                Just sigma -> do
+                    s <- substRigidSigma bound sigma;
+                    stio (Just s)
+                Nothing -> stio Nothing
+            alts <- mapSt zonkAlt alts
+            stio (Right (Case ckind ex alts typ))
+          where
+            zonkAlt (CAlt {pos,pat,ex,env}) = do
+                env <- nested env do
+                    foreach [ sy | sy@SymV {typ} <- values env ] symWork
+                ex  <- with env do zonkRigid bound ex
+                stio (CAlt {pos,pat,ex,env})
         zonk x = case Expr.typ x of
             Just sigma -> do
                 sigma <- substRigidSigma bound sigma
@@ -454,14 +480,16 @@ checkSigma x s = do
 /// check constraints
 /// offered type must not be more constrained than expected
 checkConstraints tvs x ety = do
+        g <- getST
         ectx <- exContext x
         // etvs <- mapSt (getTauTvs • Context.tau) ectx
         ety <- canonicContext ety
         etvss <- mapSt ctxTvs ectx
         // find constraints that mention skolemised vars that are not in the expected type
-        let bad = [ ctx |   (ctx,ctvs) <- zip ectx etvss,
+        let implies = impliesG g
+            bad = [ ctx |   (ctx,ctvs) <- zip ectx etvss,
                             any (`elem` tvs) ctvs,
-                            not (elemBy sameCtx ctx ety.context) ]
+                            not (any (ctx `implies`) ety.context) ]
 
         unless (null bad) do
             g <- getST

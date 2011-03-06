@@ -65,7 +65,6 @@ PASSES1 = $(COMPF1)/Grammar.class \
 
 RT2DIR = stage2/frege/rt
 RUNTIME2 = stage2/frege/MD.class    stage2/frege/compiler/JavaUtils.class \
-		stage2/frege/RT.class \
 		$(RT2DIR)/Value.class       $(RT2DIR)/Lazy.class        $(RT2DIR)/Unknown.class \
 		$(RT2DIR)/Boxed.class       $(RT2DIR)/Constant.class    $(RT2DIR)/Ref.class \
 		$(RT2DIR)/Fun1.class        $(RT2DIR)/Fun2.class \
@@ -82,9 +81,7 @@ RUNTIME2 = stage2/frege/MD.class    stage2/frege/compiler/JavaUtils.class \
 		$(RT2DIR)/Fun23.class        $(RT2DIR)/Fun24.class \
 		$(RT2DIR)/Fun25.class        $(RT2DIR)/Fun26.class \
 		$(RT2DIR)/Product1.class    $(RT2DIR)/Product2.class    $(RT2DIR)/Product3.class \
-		$(RT2DIR)/Product4.class \
-		$(RT2DIR)/Product5.class \
-		$(RT2DIR)/Product6.class \
+		$(RT2DIR)/Product4.class    $(RT2DIR)/Product5.class    $(RT2DIR)/Product6.class \
 		$(RT2DIR)/Product7.class \
 		$(RT2DIR)/Product8.class \
 		$(RT2DIR)/Product9.class \
@@ -104,7 +101,8 @@ RUNTIME2 = stage2/frege/MD.class    stage2/frege/compiler/JavaUtils.class \
 		$(RT2DIR)/Product23.class \
 		$(RT2DIR)/Product24.class \
 		$(RT2DIR)/Product25.class \
-		$(RT2DIR)/Product26.class
+		$(RT2DIR)/Product26.class \
+		stage2/frege/RT.class \
 
 
 
@@ -151,6 +149,8 @@ stage1/frege/MD.class: frege/MD.java
 	$(JAVAC) -d stage1 frege/MD.java
 stage1/frege/Run.class: frege/Run.java
 	$(JAVAC) -d stage1 frege/Run.java
+stage1/frege/CA.class: frege/CA.java
+	$(JAVAC5) -d stage1 frege/CA.java
 stage1/frege/compiler/JavaUtils.class: stage1/frege/CA.class $(COMPF)/JavaUtils.java
 	$(JAVAC) -d stage1 -cp stage1 $(COMPF)/JavaUtils.java
 

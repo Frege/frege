@@ -1,6 +1,7 @@
 package frege;
 
 import frege.rt.*;
+import java.io.*;
 
 /*
  * $Author$
@@ -189,96 +190,22 @@ public class RT {
         sr.append("'");
         return sr.toString();
     }
-    /*      Now in frege.rt.Boxed.XXX
-     * <p>Operations for arrays with primitive elements.</p>
-     * <p> For each primitive type in boolean, byte, char, short, int, long, float and double
-     * we have the following utility functions:
-     * <pre>
-     * static <i>type</i>[] arr<i>type</i>new(int size) { return new <i>type</i>[size]; }
-     * static <i>type</i>   arr<i>type</i>get(<i>type</i>[] arr, int inx) { return arr[inx]; }
-     * </pre>
-     *
-     * The compiler needs only {@link RT#arrintlen} and {@link RT#arrintget}.
-     *
-
-    public static boolean[] arrbooleannew(final int size) {return new boolean[size];}
-	public static boolean   arrbooleanget(final boolean[] arr, final int inx) {return arr[inx];}
-	public static boolean[] arrbooleanupd(final boolean[] arr, final int inx, final boolean upd) {
-		boolean[] r = arr.clone();
-		r[inx] = upd;
-		return r;
-	}
-	public static void arrbooleanset(final boolean[] arr, final int inx, final boolean set) {arr[inx] = set;}
-	public static int  arrbooleanlen(final boolean[] arr) { return arr.length; }
-
-    public static char[] arrcharnew(final int size) {return new char[size];}
-	public static char   arrcharget(final char[] arr, final int inx) {return arr[inx];}
-	public static char[] arrcharupd(final char[] arr, final int inx, final char upd) {
-		char[] r = arr.clone();
-		r[inx] = upd;
-		return r;
-	}
-	public static void arrcharset(final char[] arr, final int inx, final char set) {arr[inx] = set;}
-	public static int  arrcharlen(final char[] arr) { return arr.length; }
-
-    public static byte[] arrbytenew(final int size) {return new byte[size];}
-	public static byte arrbyteget(final byte[] arr, final int inx) {return arr[inx];}
-	public static byte[] arrbyteupd(final byte[] arr, final int inx, final byte upd) {
-		byte[] r = arr.clone();
-		r[inx] = upd;
-		return r;
-	}
-	public static void arrbyteset(final byte[] arr, final int inx, final byte set) {arr[inx] = set;}
-	public static int arrbytelen(final byte[] arr) { return arr.length; }
-
-    public static short[] arrshortnew(final int size) {return new short[size];}
-	public static short   arrshortget(final short[] arr, final int inx) {return arr[inx];}
-	public static short[] arrshortupd(final short[] arr, final int inx, final short upd) {
-		short[] r = arr.clone();
-		r[inx] = upd;
-		return r;
-	}
-	public static void arrshortset(final short[] arr, final int inx, final short set) {arr[inx] = set;}
-	public static int  arrshortlen(final short[] arr) { return arr.length; }
-
-    public static int[] arrintnew(final int size) {return new int[size];}
-	public static int arrintget(final int[] arr, final int inx) {return arr[inx];}
-	public static int[] arrintupd(final int[] arr, final int inx, final int upd) {
-		int[] r = arr.clone();
-		r[inx] = upd;
-		return r;
-	}
-	public static void arrintset(final int[] arr, final int inx, final int set) {arr[inx] = set;}
-	public static int arrintlen(final int[] arr) { return arr.length; }
-
-    public static long[] arrlongnew(final int size) {return new long[size];}
-	public static long arrlongget(final long[] arr, final int inx) {return arr[inx];}
-	public static long[] arrlongupd(final long[] arr, final int inx, final long upd) {
-		long[] r = arr.clone();
-		r[inx] = upd;
-		return r;
-	}
-	public static void arrlongset(final long[] arr, final int inx, final long set) {arr[inx] = set;}
-	public static int arrlonglen(final long[] arr) { return arr.length; }
-
-    public static float[] arrfloatnew(final int size) {return new float[size];}
-	public static float   arrfloatget(final float[] arr, final int inx) {return arr[inx];}
-	public static float[] arrfloatupd(final float[] arr, final int inx, final float upd) {
-		float[] r = arr.clone();
-		r[inx] = upd;
-		return r;
-	}
-	public static void arrfloatset(final float[] arr, final int inx, final float set) {arr[inx] = set;}
-	public static int  arrfloatlen(final float[] arr) { return arr.length; }
-
-    public static double[] arrdoublenew(final int size) {return new double[size];}
-	public static double   arrdoubleget(final double[] arr, final int inx) {return arr[inx];}
-	public static double[] arrdoubleupd(final double[] arr, final int inx, final double upd) {
-		double[] r = arr.clone();
-		r[inx] = upd;
-		return r;
-	}
-	public static void arrdoubleset(final double[] arr, final int inx, final double set) {arr[inx] = set;}
-	public static int  arrdoublelen(final double[] arr) { return arr.length; }
-	*/
+    
+    public final static<T extends Serializable> T copySerializable(final T o) {
+        try {
+            final ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            final ObjectOutputStream oos = new ObjectOutputStream(baos);
+            oos.writeObject(o);
+            oos.close();
+            final ByteArrayInputStream bais = new ByteArrayInputStream(baos.toByteArray());
+            final ObjectInputStream ois = new ObjectInputStream(bais);
+            @SuppressWarnings("unchecked")
+            final T s = (T) ois.readObject();
+            ois.close();
+            return s;
+        } catch (Exception exc) {
+            new Undefined("error in (de)serialization", exc).die();
+            return null;
+        }
+    }
 }
