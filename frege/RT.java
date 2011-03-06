@@ -192,6 +192,7 @@ public class RT {
     }
     
     public final static<T extends Serializable> T copySerializable(final T o) {
+        java.util.Date x = new java.util.Date().clone();
         try {
             final ByteArrayOutputStream baos = new ByteArrayOutputStream();
             final ObjectOutputStream oos = new ObjectOutputStream(baos);
