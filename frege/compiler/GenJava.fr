@@ -301,11 +301,15 @@ tauJT  (app@TCon {name}) = do
     sym <- U.findT name
     // vjt <- voidJT
     case sym of
-        SymT {product,nativ,enum}
+        SymT {product,nativ,enum,pur}
             | Just s <- nativ = stio (boxed (Nativ s args))
             | enum            = stio (Ref (JName "" "Boxed.Int") [])
             | otherwise       = stio (Ref {jname = U.javaName g name, targs = args})
-            where args = take (length sym.typ.bound) (repeat voidJT)
+            where args
+                    | Just _  <- nativ,
+                      not pur,
+                      not (null sym.typ.bound) = take  (length sym.typ.bound - 1) (repeat voidJT)
+                    | otherwise = take (length sym.typ.bound) (repeat voidJT)
         other -> undefined   // can not happen because catched in U.findT
 
 
@@ -742,21 +746,28 @@ symCode binds (sym@SymT {sid, nativ = Just _}) = do                             
  *
  * - interface @Cname@</a/> where /a/ is the class variable
  * - for each class method, an abstract method that returns a function
- * - name space for default functions (?)
+ * - name space @I@ for default function implementations
  */
 symCode binds (sym@SymC {sid}) = do           // type class
     g <- getST
     let vals = sortBy (comparing Symbol.name) (values sym.env)
     abstrFuns <- mapSt (abstractFun sym) vals
+    let ivals = filter ((Abstract !=) • Symbol.vis) vals         // default implementations
+    implFuns <- mapSt (symCode binds) ivals
     taujt     <- tauJT sym.tau
     let jtype = Ref (U.javaName g sym.name) [taujt]
         jinterface = if sym.vkind == 0 then JInterface else JTCInterface
-        result = jinterface (attrs [JPublic]) jtype superclasses (concat abstrFuns)
         superclasses = [ Ref (U.javaName g nm) [taujt] | nm <- sym.supers ]
+        implDef
+            | null implFuns = []
+            | otherwise = [JClass {attr = attrs [JPublic, JStatic],
+                            jtype = Ref (JName "" "I") [],
+                            extend = Nothing, implement = [], defs = concat implFuns}]
+        result = jinterface (attrs [JPublic]) jtype superclasses (concat abstrFuns ++ implDef)
     stio [JComment (nice sym g), result]
 
 /**
- * Code for type classes
+ * Code for instances
  *
  * - interface @Cname@</a/> where /a/ is the class variable
  * - for each class method, an abstract method that returns a function
@@ -920,13 +931,15 @@ instFun symc symt mname = do
             ++ " does not mention type variables "
             ++ joinStr ", " unmentioned ++ " from the instantiated type  "
             ++ nice symt.typ g)
-            /*
-    unless (null ctxs) do
-        U.warn sym.pos ("type of " ++ sym.nice g ++ " :: " ++ nicer sym.typ g
-            ++ " has constraints "
-            ++ U.nicerctx ctxs g ++ " that do not appear in instantiated type.")
-            */
-    instMe       <- compiling sym (instSym sym.pos orig sym.typ)
+    let cmeth = case sym.expr of
+            Just (v@Vbl {name=MName cname bs})
+                | cname `elem` (symc.name:symc.supers) = v.name.findit g    // just class method
+            other -> Nothing
+
+    instMe <- case cmeth of
+        Just meth -> compiling sym (instSym0 false sym.pos meth sym.typ)
+        other     -> compiling sym (instSym sym.pos orig sym.typ)
+
     constrformal <- mapSt (curry makeConstraintArg) (zip ctxs ourCtxNms)
     sjt          <- sigmaJT sym.typ
     let constrargs   = map JAtom (take sym.typ.rho.context.length ctxNames)
@@ -936,7 +949,8 @@ instFun symc symt mname = do
                             jtype = if higher then eosjt else sjt,
                             name = mangled sym.name.base ++ latinF,
                             args = constrformal,
-                            body = JBlock [JReturn impl]}
+                            body = JBlock (coerceThis ++ [JReturn impl])}
+        coerceThis = []
         implInst = (toBoxed instMe).jex
         impl
             | higher = JInvoke (JExMemG implInst "coerce" eosjt.targs) []
@@ -1131,7 +1145,7 @@ innerFun (sym@SymV {expr = Just x}) binds = do
     let extend = Ref (JName "" ("Fun" ++ show sym.depth))
                     (ajts ++ [rjt])
     let name   = U.javaName g sym.name                        // X.foo
-        fname  = /*U.fName*/ name                             // X.Ffoo
+        fname  = JName "" name.base                           // foo
         ftargs = map targ bnds                                // <a,b,c>
         ftype  = (Ref (fname) ftargs)                         // Ffoo<a,b,c>
         inner  = true
@@ -1251,7 +1265,7 @@ topFun (sym@SymV {expr = Just x}) binds = do
     let extend = Ref (JName "" ("Fun" ++ show sym.depth))
                     (ajts ++ [rjt])
     let name   = U.javaName g sym.name                        // X.foo
-        fname  = /*U.fName*/ name                                 // X.Ffoo
+        fname  = JName "" name.base                                 // foo
         ftargs = map targ bnds                                // <a,b,c>
         ftype  = (Ref (fname) ftargs)                         // Ffoo<a,b,c>
         dftype = defining ftype
@@ -2357,12 +2371,13 @@ resolveConstraint pos (ctx@Ctx {cname, tau}) = do
                     U.fatal pos ("makeCtx: head is " ++ nice other g)
 
 
-
+/// convenience method for normal instantiation
+instSym = instSym0 true
 /**
  * instantiate a symbol at a given type
  */
-instSym :: Line -> Symbol -> Sigma -> StG Binding
-instSym pos sym sigma = do
+instSym0 :: Bool -> Line -> Symbol -> Sigma -> StG Binding
+instSym0 cmembers pos sym sigma = do
     g <- getST
     U.logmsg TRACEG pos ("instSym: " ++ nice sym g ++ " at " ++ nice sigma g)
     // let taus = sigmaInst g sym.typ sigma    // (List a) (List Int) ==> (a,Int)
@@ -2380,7 +2395,7 @@ instSym pos sym sigma = do
     ctxs     <- mapSt (resolveConstraint pos) contexts
 
     let (_, ss) = U.returnType sym.typ.rho
-        hktvsSigma (ForAll [] rho) = hktvsRho rho
+        hktvsSigma (ForAll _ rho) = hktvsRho rho
         hktvsRho (RhoFun ctxs sig rho) = any (hktvsTau • Context.tau) ctxs
                                             `or` hktvsSigma sig `or` hktvsRho rho
         hktvsRho (RhoTau ctxs tau) = any (hktvsTau • Context.tau) ctxs `or` hktvsTau tau
@@ -2401,7 +2416,7 @@ instSym pos sym sigma = do
                 else stio (Bind RBoxed sigma jt
                             (JInvoke
                                 (JStMem (U.memberOf jname mkn) gargs) []))
-        SymV {name = MName clas m, depth, rkind} | Just (SymC {vkind,tau}) <- clas.findit g = do
+        SymV {name = MName clas m, depth, rkind} | cmembers, Just (SymC {vkind,tau}) <- clas.findit g = do
                 g <- getST
                 U.logmsg TRACEG pos ("instSym: " ++ m ++ " depth=" ++
                         show depth ++ ", vkind=" ++ show vkind)
