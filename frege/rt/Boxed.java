@@ -49,6 +49,12 @@ public final class Boxed<T>  implements Value, Lazy<Boxed<T>> {
      */
     final public static<T> Boxed<T> mk(T ref) { return new Boxed<T>(ref); }
     /**
+     * This is needed in cases where the type argument has itself type arguments
+     * that must be corrected because java does not understand higher kinded type variables.
+     */
+    @SuppressWarnings("unchecked") 
+    public <N> Boxed<N> coerce() { return (Boxed<N>) this; }
+    /**
      * <p> Always 0 for boxed java values. </p>
      *
      * @return 0
@@ -222,7 +228,36 @@ public final class Boxed<T>  implements Value, Lazy<Boxed<T>> {
          * @param arr the int array
          * @return <code>arr.length</code>
          */
-        public static final int arrayLen(int[] arr) { return arr.length; } 
+        public static final int arrayLen(int[] arr) { return arr.length; }
+        /**
+         * <p> Create an array of type int[]. </p>
+         * @param size the size of the array
+         */
+        @SuppressWarnings("unchecked")
+        final public static int[] arrayNew(int size) { return  new int[size]; }
+        
+        /**
+         * <p> Update array nondestructively. </p>
+         * @param arr the array
+         * @param i   index into arr
+         * @param v   new value to set at index i
+         * @return a new array that looks like the old one except that there is value v at index i
+         */
+        final public static int[] arrayUpd(int[] arr, int i, int v) {
+                int[] r = arr.clone();
+                r[i] = v;
+                return r;
+        }
+        /**
+         * <p> Update array destructively. This method is <b>not</b> pure! </p>
+         * @param arr the array
+         * @param i   index into arr
+         * @param v   new value to set at index i
+         * 
+         * <p>Changes the passed array, therefore it is not pure. Because the return type
+         * is <code>void</code> there is no way to make the frege compiler believe it is pure.</p>
+         */
+        final public static void arraySet(int[] arr, int i, int v) { arr[i] = v; }
     }
 
     /**
