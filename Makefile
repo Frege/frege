@@ -108,7 +108,7 @@ RUNTIME2 = stage2/frege/MD.class    stage2/frege/compiler/JavaUtils.class \
 
 compiler2: lib2  $(COMPF2)/Main.class
 $(COMPF2)/Main.class : $(COMPF1)/Main.class
-	$(FREGEC1) -make frege.compiler.Main
+	$(FREGEC1) -v -make frege.compiler.Main
 
 PASSES2 = $(COMPF2)/Grammar.class \
 		$(COMPF2)/Fixdefs.class   $(COMPF2)/Import.class    $(COMPF2)/Enter.class \
@@ -343,8 +343,8 @@ $(COMPF1)/Utilities.class: frege/compiler/Utilities.fr $(COMPF1)/Data.class $(CO
 	$(FREGEC0) frege/compiler/Utilities.fr
 $(COMPF1)/Scanner.class: $(COMPF)/Scanner.fr $(COMPF1)/Classtools.class $(COMPF1)/Utilities.class
 	$(FREGEC0) frege/compiler/Scanner.fr
-$(COMPF1)/Classtools.class: frege/compiler/Classtools.fr runtime1
-	$(FREGEC0) frege/compiler/Classtools.fr
+$(COMPF1)/Classtools.class: frege/compiler/Classtools2.fr runtime1
+	$(FREGEC0) frege/compiler/Classtools2.fr
 $(COMPF1)/Grammar.class: $(COMPF)/Grammar.fr $(COMPF1)/Scanner.class
 	$(FREGEC0) frege/compiler/Grammar.fr
 $(COMPF)/Grammar.fr: $(COMPF)/Grammar.y $(DIR1)/tools/YYgen.class frege/tools/yygenpar.fr
