@@ -1799,10 +1799,13 @@ data StringArr = pure native "java.lang.String[]" where
 
 
 type IntArr = Frozen IntArray
-instance Cloneable IntArray
+instance Cloneable IntArray where
+    native our frege.RT.our :: IntArray s -> ST s (Frozen IntArray)
+
 data IntArray s = native "int[]" where
     native      new    frege.rt.Boxed.Int.arrayNew :: Int -> Mutable IntArray s
-    pure native getAt  frege.rt.Boxed.Int.arrayGet :: IntArr     -> Int -> Int
+    pure native elemAt frege.rt.Boxed.Int.arrayGet :: IntArr     -> Int -> Int
+    native      getAt  frege.rt.Boxed.Int.arrayGet :: IntArray s -> Int -> ST s Int
     native      setAt  frege.rt.Boxed.Int.arraySet :: IntArray s -> Int -> Int -> ST s ()
     pure native length frege.rt.Boxed.Int.arrayLen :: IntArray s -> Int
 
@@ -1812,10 +1815,10 @@ data IntArray s = native "int[]" where
             loop j (x:xs) (iarr::IntArray s) = do
                 iarr.[j <- x]
                 loop (j+1) xs iarr
-            loop _ [] iarr = freeze iarr
+            loop _ [] iarr = our iarr
 
 
-    toList (arr::IntArr) = [ arr.[i] | i <- 0 .. (arr.length-1) ]
+    toList (arr::IntArr) = [ elemAt arr i | i <- 0 .. (arr.length-1) ]
     /*
     fromInxList xs = let
             arr = IntArr.new n
@@ -2560,17 +2563,114 @@ type Frozen  n = n Immutable
 class Freezable f where
     /**
      * "Freeze" a mutable native value. The result is supposed to be immutable
-     * or at least not reachable from java code.
+     * or at least not reachable from other parts of the code, especially from java code.
      *
      * The most prominent way to freeze a value is by 'clone'-ing it, if that is supported.
      */
     freeze :: forall f s. f s -> ST s (Frozen f)
     /**
      * The inverse of 'freeze' creates a value (an object) which can be passed
-     * to impure functions. If this is not implemented correctly, bad things may happen.
+     * to impure functions without compromising the frozen object passed as argument.
+
+     * One possibility to thaw an object properly is by cloning it.
+
+     * If 'thaw' is not implemented correctly, bad things may happen.
+
      */
     thaw   :: forall f s. Frozen f -> Mutable f s
+    /**
+     * [Usage] @withFrozen v f@ where @v@ is a mutable native value.
+     * [Purpose] Temporarily freeze @v@ and pass it to a pure function @f@.
+     * [Return] the result of @f v@ in the 'ST' monad.
+     * [Requirements] @f@ must not fork parallel computations that could access @v@
+     * after @f@ has returned.
+     *
+     * This function is needed to synchronize pure computations on a native value with
+     * manipulations of that same value inside 'ST' actions. Consider the following code:
+     * > do
+     * >    arr <- IntArray.new 100
+     * >    arr.[42 <- 1]
+     * >    let result = arr.elemAt 42   // actually a type error
+     * >    arr.[42 <- 2]
+     * >    return result
+     * The placement of the @let@ does not guarantee that @result@ will be evaluated between
+     * the assignments to cell 42 of the array. To the contrary, the read access to the array
+     * will most probably not occur before the result of the state action is evaluated.
+     * Therefore, such constructs are forbidden through the type of 'IntArray.elemAt' which
+     * requires a frozen array.
+     *
+     * The @let@ must be replaced by
+     * >    result <- withFrozen arr (flip IntArray.elemAt 42)
+     * to sequence evaluation before the next write access to the array.
+     *
+     * Because 'Freezable.withFrozen' employs 'Freezable.our' it can be as easily misused.
+     * In fact @withFrozen v id@ is identical to @our v@.
+     */
+    withFrozen :: forall f s a. f s -> (Frozen f -> a) -> ST s a
+    withFrozen v f  = our v >>= (return • f)
 
+    /**
+     * [Usage] @our v@ as last action in a *do* block that created mutable native value @v@
+     * [Purpose] Make a value that is identical to @v@ but has 'Immutable' as phantom type.
+     * This allows escape of mutable native values from 'ST' actions. Yet, because these
+     * values are tagged 'Immutable', unsafe operations are impossible outside the 'ST'
+     * monad as long as all impure native functions are correctly defined. One can pass
+     * the value to another 'ST' action, which may 'Freezable.thaw' it and apply
+     * impure native functions again.
+     * [Returns] a copy of @v@ tagged as 'Immutable' in the 'ST' monad
+     *
+     * This is intended for cases where want to keep the native value and we know
+     * that there are no references to
+     * the native value other than the ones maintained in the current 'ST' action.
+     * In those not so rare cases, it would be overkill to obtain a copy
+     * of a value by cloning it or serializing/deserializing it. Hence, an
+     * implementation of 'Freezable.our' is allowed to cheat a bit and return just @this@.
+     *
+     * The safety of 'Freezable' operations is something the compiler cannot infer.
+     * It lies entirely in the responsibility
+     * of the programmer to ensure safety. Remember that violation of the informal
+     * contract of 'Freezable' (see below)
+     * will be rewarded with exceptions thrown at runtime or
+     * with inexplicable, perhaps nondeterministic behaviour of the program.
+     *
+     * An example where 'Freezable.our' is employed
+     * is creation and initialization of arrays, as in 'IntArray.fromList'.
+     * When the array is completely initialized, it is safe to let it escape
+     * as a read only value because no further write accesses are possible (unless one
+     * manages to pass the array to an impure function.)
+     *
+     * This is the informal contract of 'Freezable' and its operations.
+     * It is designed so that the
+     * type system will detect unsafe usage of mutable native values. The programmer
+     * should understand that such type errors are a strong signal to go back and rethink
+     * the code. Inventing "clever" workarounds in the form of creatively typed
+     * native functions or so is like loading a shotgun that points to ones foot.
+     * - All mutable native data types have a frege type with a phantom type as it's
+     *   last type argument. (i.e. @data Date s = native java.util.Date@)
+     * - All impure functions have the same type variable (say @s@) for the
+     *   phantom type of mutable types that appear in their type
+     *   and have a result of 'ST' @s@ /a/.
+     * - All object creation functions have a return type of @ST s (M s)@ or @Mutable M s@
+     *   where @M@ is the type constructor of the native values frege type.
+     * - If the function relies on global state, alters global state or performs input/output,
+     *   the return type must be 'ST' 'RealWorld' /a/. Consequently,
+     *   all mutable types that appear in
+     *   the type signature must have 'RealWorld' as phantom type.
+     * - In pure functions, the mutable data types *must* appear as @M Immutable@.
+     *   The return type is an ordinary type (no 'ST' type).
+     * - If the type is an instance of 'Freezable', then the implmentations of
+     *    'Freezable.freeze' and  'Freezable.thaw' create fresh objects.
+     *    This is true for instances of 'Cloneable' and 'Serializable' that use the
+     *    default type class methods (i.e., do not supply own implementations).
+     *  - 'Freezable.our' is used only when there are no alien references to the value *or*
+     *    if a fresh object is created.
+     *
+     *  The default implementation does the same as 'Freezable.freeze'. A generic native
+     *  method to implement a low cost 'Freezable.our'
+     *  is provided in the runtime as @frege.RT.our@. It just returns its argument.
+     */
+    our :: forall f s. f s -> ST s (Frozen f)
+    our f = freeze f
 
 
 
@@ -2578,10 +2678,9 @@ class Freezable f where
  * For a data type declared like
  * > data D s = native Javatype
  * where @Javatype@ implements the @java.io.Serializable@ interface,
- * one can get implementations for 'freeze'
- * and 'thaw' by just stating
- * > instance Cloneable D where
- * >   pure native clone :: D a -> D b
+ * one can get implementations for 'Freezable.freeze'
+ * and 'Freezable.thaw' by just stating
+ * > instance Cloneable D
  * The 'freeze' and 'thaw' operations are implemented in terms of 'clone'.
  */
 class Cloneable (Freezable f) => f  where
@@ -2598,8 +2697,7 @@ class Cloneable (Freezable f) => f  where
  * where @Javatype@ implements the @java.io.Serializable@ interface,
  * one can get implementations for 'freeze'
  * and 'thaw' by just stating
- * > instance Serializable D where
- * >    pure native copySerializable frege.RT.copySerializable :: D a -> D b
+ * > instance Serializable D
  * The 'freeze' and 'thaw' operations are implemented in terms of @copySerializable@,
  * which serializes its argument to a byte array and creates a new copy by
  * deserializing it from the byte array.
@@ -2609,7 +2707,7 @@ class Serializable (Freezable f) => f  where
      *  @copySerializable v@ is supposed to be a native function that is
      *  implemented by @frege.RT.copySerializable@ at the instantiated type.
      */
-    copySerializable :: f a -> f b
+    pure native copySerializable frege.RT.copySerializable :: f a -> f b
     freeze x = ST.return (copySerializable x)
     thaw   x = ST.return (copySerializable x)
 

@@ -191,6 +191,8 @@ public class RT {
         return sr.toString();
     }
     
+    public final static<T> T our(final T o) { return o; }
+    
     public final static<T extends Serializable> T copySerializable(final T o) {
         try {
             final ByteArrayOutputStream baos = new ByteArrayOutputStream();
