@@ -290,16 +290,16 @@ $(DIR1)/Prelude.class: frege/Prelude2.fr
 	$(FREGEC0) frege/Prelude2.fr
 $(DIR1)/Tuples.class: frege/Tuples.fr $(DIR1)/Prelude.class
 	$(FREGEC0) frege/Tuples.fr
-$(DIR1)/List.class: frege/List.fr $(DIR1)/Prelude.class
-	$(FREGEC0) frege/List.fr
+$(DIR1)/List.class: frege/List2.fr $(DIR1)/Prelude.class
+	$(FREGEC0) frege/List2.fr
 $(DIR1)/IO.class: frege/IO2.fr $(DIR1)/Prelude.class
 	$(FREGEC0) frege/IO2.fr
 $(DIR1)/lib/PP.class: frege/lib/PP.fr $(DIR1)/Prelude.class
 	$(FREGEC0) frege/lib/PP.fr
 
 lib2: runtime2 $(COMPF1)/Main.class  \
-	$(DIR2)/Prelude.class    $(DIR2)/List.class \
-	$(DIR2)/IO.class         $(DIR2)/Tuples.class \
+	$(DIR2)/Prelude.class    $(DIR2)/IO.class \
+	$(DIR2)/List.class       $(DIR2)/Tuples.class \
 	$(DIR2)/lib/PP.class
 
 
