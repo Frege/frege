@@ -82,9 +82,7 @@ RUNTIME2 = stage2/frege/MD.class    stage2/frege/compiler/JavaUtils.class \
 		$(RT2DIR)/Fun25.class        $(RT2DIR)/Fun26.class \
 		$(RT2DIR)/Product1.class    $(RT2DIR)/Product2.class    $(RT2DIR)/Product3.class \
 		$(RT2DIR)/Product4.class    $(RT2DIR)/Product5.class    $(RT2DIR)/Product6.class \
-		$(RT2DIR)/Product7.class \
-		$(RT2DIR)/Product8.class \
-		$(RT2DIR)/Product9.class \
+		$(RT2DIR)/Product7.class 	$(RT2DIR)/Product8.class 	$(RT2DIR)/Product9.class \
 		$(RT2DIR)/Product10.class \
 		$(RT2DIR)/Product11.class \
 		$(RT2DIR)/Product12.class \
@@ -102,7 +100,7 @@ RUNTIME2 = stage2/frege/MD.class    stage2/frege/compiler/JavaUtils.class \
 		$(RT2DIR)/Product24.class \
 		$(RT2DIR)/Product25.class \
 		$(RT2DIR)/Product26.class \
-		stage2/frege/RT.class \
+		$(RT2DIR)/Array.class stage2/frege/RT.class
 
 
 
@@ -169,6 +167,8 @@ $(RT2DIR)/Constant.class: frege/rt/Constant.java
 $(RT2DIR)/Lazy.class: frege/rt/Lazy.java
 	$(JAVAC) -d stage2 -cp stage2 $?
 $(RT2DIR)/Ref.class: frege/rt/Ref.java
+	$(JAVAC) -d stage2 -cp stage2 $?
+$(RT2DIR)/Array.class: frege/rt/Array.java
 	$(JAVAC) -d stage2 -cp stage2 $?
 $(RT2DIR)/Unknown.class: frege/rt/Unknown.java
 	$(JAVAC) -d stage2 -cp stage2 $?
