@@ -388,12 +388,14 @@ instance Nice (PatternT Nice:q) where
     nice p g = showp 17 p
         where
             // optree = Global.optab g
-            sf fs = joinStr "," (map sf1 fs)
-            sf1 (a,p) = a ++ "=" ++ showp 17 p
+
             showp 0 (PVar {var}) = var
             showp 0 (PCon {qname, pats=[]}) = qname.nice g
             showp 0 (PCon {qname, pats}) | qname.nice g ~ #\(,+\)$# = "(" ++ joinStr "," (map (showp 0) pats) ++ ")"
             showp 0 (PConFS {qname, fields}) = qname.nice g ++ "{" ++ sf fields ++ "}"
+                where
+                    sf fs = joinStr "," (map sf1 fs)
+                    sf1 (a,p) = a ++ "=" ++ showp 17 p
             showp 0 (PLit {kind=LBig, value}) = value ++ "n"
             showp 0 (PLit {kind=LLong, value}) = value ++ "L"
             showp 0 (PLit {kind=LFloat, value}) = value ++ "f"
@@ -811,17 +813,16 @@ tsort odeps = result where
     // make an array of OrdSet Int
     deparr = Array.fromList ideps
     // make deep dependencies
-    fatal3 = Prelude.error "tsort: uninitialized array element"
+    // fatal3 = Prelude.error "tsort: uninitialized array element"
     deepdep t i
         | t `contains` i = Nil
-        | otherwise = fold union (fromMaybe fatal3 deparr.[i])
-                        [ deepdep ti x | x <- (keys <~ fromMaybe fatal3) deparr.[i] ]
+        | otherwise = fold union di
+                        [ deepdep ti x | x <- (keys di) ]
         where
+            di = deparr.elemAt i
             ti = t `including` i
     deeps = Array.fromList [ deepdep Nil i | i <- 0..(deparr.length-1) ]
-    i `dependson` j
-        | Just set <- deeps.[i] = set `contains` j
-        | otherwise = false
+    i `dependson` j = deeps.elemAt i `contains` j
     cmp i j
         | i `dependson` j = if j `dependson` i then Eq else Gt
         | j `dependson` i = Lt
@@ -832,8 +833,8 @@ tsort odeps = result where
         (same, before)  = partition (`dependson` x) anfang
         eqs = x:same
     sorted = sortit (0..deeps.length-1)
-    fatal4 = Prelude.error "tsort: can't map back??"
-    back ints = [ fromMaybe fatal4 i2o.[i] | i <- ints]
+    // fatal4 = Prelude.error "tsort: can't map back??"
+    back ints = map i2o.elemAt ints
     result = [ back is | is <- sorted ]
 
 
@@ -875,11 +876,11 @@ substSigma t (ForAll bndrs rho) = do
         stio (ForAll bndrs rho)
     where t' = fold Tree.delete t bndrs
 substRho t (RhoFun ctx sig rho) = do
-        ctx <- sequence stio (map (substCtx t) ctx)
+        ctx <- mapSt (substCtx t) ctx
         sig <- substSigma t sig
         rho <- substRho t rho
         stio (RhoFun ctx sig rho)
-substRho t (RhoTau ctx tau) = liftM2 RhoTau (sequence stio (map (substCtx t) ctx)) (substTau t tau)
+substRho t (RhoTau ctx tau) = liftM2 RhoTau (mapSt (substCtx t) ctx) (substTau t tau)
 substTau t (TFun a b)       = liftM2 TFun (substTau t a) (substTau t b)
 substTau t (tau@TCon _ _)   = stio tau
 substTau t (TApp a b)       = liftM2 TApp (substTau t a) (substTau t b)
@@ -1615,10 +1616,10 @@ javaName g qname = case qname.findit g of
             SymT {name} -> t "T" name
             SymD {name = MName tname base} -> case tname.findit g of
                 Just (SymT {product,enum}) -> if enum
-                    then JName (javaName g tname).show (mangled base)
+                    then memberOf (javaName g tname) (mangled base)
                     else if product
                         then javaName g tname
-                        else JName (javaName g tname).show ("D" ++ mangled base)
+                        else memberOf (javaName g tname) ("D" ++ mangled base)
             SymC {name} -> t "C" name
             SymI {name} -> t "I" name
             SymV {name = MName tname base}
@@ -1628,18 +1629,25 @@ javaName g qname = case qname.findit g of
                 | Just (SymC {sid}) <- tname.findit g = memberOf (memberOf tjname "I") mbase
                 | otherwise = memberOf tjname mbase
                 where tjname = javaName g tname
-                      mbase  = mangled base
+                      mbase  = vid sym.name.base
             SymV {name = VName pname base}
-                | pname == g.thisPack = JName (pname.className g).base (mangled base)
-                | pname == pPrelude   = JName "Prelude" (mangled base)
-                | otherwise = JName (show (pname.className g)) (mangled base)
+                | pname == g.thisPack = JName (pname.className g).base vbase
+                | pname == pPrelude   = JName "Prelude" vbase
+                | otherwise = memberOf (pname.className g) vbase
+                where vbase = vid sym.name.base
             other -> Prelude.error ("javaName: strange symbol " ++ nice sym g)
         Nothing -> Prelude.error ("javaName: cannot findit " ++ nice qname g)
     where
+        vid name = case name =~ #\p{Lu}# of
+            Just m | Just x <- m.group 0 = let
+                    c = ("$" ++ x.toLowerCase).quoteReplacement
+                    r  = m.replaceFirst c
+                in vid r
+            Nothing -> mangled name
         t letter (TName pack base)
-            | pack == g.thisPack = JName ""                      (letter ++ mangled base)
-            | pack == pPrelude   = JName "Prelude"               (letter ++ mangled base)
-            | otherwise          = JName (pack.className g).show (letter ++ mangled base)
+            | pack == g.thisPack = JName    ""                   (letter ++ mangled base)
+            | pack == pPrelude   = JName    "Prelude"            (letter ++ mangled base)
+            | otherwise          = memberOf (pack.className g)   (letter ++ mangled base)
 
 /**
  * given a 'JName' for a function, the JName for the function implementing it.

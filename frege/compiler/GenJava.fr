@@ -1134,6 +1134,7 @@ innerFun (sym@SymV {expr = Just x}) binds = do
     g <- getST
 
     let argNames = drop (fold (+) 0 (map Symbol.depth g.genEnv)) GenJava.argNames
+        ctxNames = drop (length (envCtxs g)) GenJava.ctxNames
         bnds = sym.typ.bound                        // [a,b,c]
         (rty, atys) = U.returnTypeN sym.depth sym.typ.rho
         argAttr = if (sym.rkind `band` 8) == 0 then attrFinal else 0
@@ -1148,7 +1149,7 @@ innerFun (sym@SymV {expr = Just x}) binds = do
             stio (rjt, ajts, constraints, constrargs, workerArgs, uArgs)
 
     (rjt, ajts, constraints, constrargs, workerArgs, uArgs)  <- subfun
-    unless (null constraints) do
+    unless (null constraints `or` sym.anno) do
          // U.warn sym.pos ("inner " ++ nice sym g ++ " has constraints")
          // die unless they can be resolved right here
          foreach sym.typ.rho.context (resolveConstraint sym.pos)
@@ -1162,7 +1163,7 @@ innerFun (sym@SymV {expr = Just x}) binds = do
         inner  = true
         dftype = defining ftype
 
-        constructor = JConstr {attr = attrs [JPrivate],
+        constructor = JConstr {attr = attrs [JPublic],
                                 jtype = ftype,
                                 args = constrargs,
                                 body = JBlock (take (length constraints)
@@ -1174,6 +1175,7 @@ innerFun (sym@SymV {expr = Just x}) binds = do
         moder = if lazyr then RLazy else RBoxed
         hasworker = sym.rkind `band` 6 != 0
         // extworker = false
+        /*
         single
             | length constraints == 0 = [JMember {
                                 attr = attrs [JFinal, JPrivate, JStatic],
@@ -1183,6 +1185,7 @@ innerFun (sym@SymV {expr = Just x}) binds = do
             | otherwise = []
         castedSingle = JReturn (JCast ftype (JAtom "single"))
         newInstance  = JReturn (JNew  ftype (take (length constraints) (map JAtom argNames)))
+        */
         rArgs      = reverse uArgs
         workerType = case rmode sym.rkind of
                                 RLazy  -> lazy rjt
@@ -1224,14 +1227,14 @@ innerFun (sym@SymV {expr = Just x}) binds = do
                             args = rArgs,
                             body = if hasworker then invokeWorker ftargs
                                     else JBlock (thisAssign:stmts)}
-        nMethod = JMethod {attr = attrs [JPublic, JStatic,
-                                            if null single then JStatic else JUnchecked],
+        /*
+        nMethod = JMethod {attr = attrs [JPublic, JStatic],
                             gargs = ftargs,
                             jtype = ftype,
                             name = "n",
                             args = constructor.args,
-                            body = JBlock [if length constraints == 0
-                                            then castedSingle else newInstance]}
+                            body = JBlock [newInstance]}
+        */
         worker = JMethod {attr = attrs [JPublic, JFinal],
                           gargs = [],
                           jtype = workerType,
@@ -1247,10 +1250,15 @@ innerFun (sym@SymV {expr = Just x}) binds = do
         flocal = JMember {attr = attrFinal, jtype = extend, name = name.base,
                     init = Just mkInner}
         mkInner = JNewClass extend [] (rMethod:iWorker)
+        fclass = JClass {attr = attrFinal,
+                            jtype = dftype,
+                            extend = Just extend,
+                            implement=[], defs}
+        defs = constraints ++ [constructor, rMethod] ++ iWorker
     stio ([JComment ((nice sym g) ++ "  " ++ show sym.strsig ++ "  " ++ show sym.rkind),
         JComment (nicer sym.typ g),
         JComment (nicer x g),
-        flocal,
+        if sym.anno `and` length constraints > 0 then fclass else flocal,
         ])
 
 topFun (sym@SymV {expr = Just x}) binds = do
@@ -1687,7 +1695,7 @@ methCode (sym@SymV {nativ = Just item})
                 let
                     member = JMember {attr = attrs [JPublic, JStatic, JFinal],
                                 jtype,
-                                name = mangled sym.name.base,
+                                name = (U.javaName g sym.name).base,
                                 init = Just boxit}
                     boxit  = (toBoxed bind).jex
                     bind   = Bind RNative sym.typ (strict jtype) (JAtom item)
@@ -2204,7 +2212,7 @@ genCaseStmt rm (x@Case {ckind,ex=cex,alts=calts}) binds = do
                         walt:_ -> T.openCaseWhen g walt.ex
                         []     -> Nothing
 
-            comment = sComment ("case  " ++ nice cex g ++ "  ... "
+            comment = sComment ("case  " ++ nicer cex g ++ "  ... "
                         ++ (if ckind == CWhen then "(guard)" else ""))
             throw binds
                 | ckind == CWhen  = stio []                     // guards always fall through
@@ -2281,7 +2289,7 @@ genCaseStmt rm (x@Case {ckind,ex=cex,alts=calts}) binds = do
                         g <- getST
                         stio ((altComm g:code):codes, bexs)
             where
-                altComm g = sComment ("... of  " ++ nice pat g ++ " -> " ++ nice ex g)
+                altComm g = sComment ("... of  " ++ nice pat g ++ " -> " ++ nicer ex g)
 
 
         exStr  (ex, stri)
@@ -2332,11 +2340,12 @@ genStmts rm (x@Let {env,ex}) binds = with env do
         localdef (binds, codes) sym = do
             g <- getST
             jt <- subSigmaJT (Symbol.typ sym)
-            let mode = if Symbol.rkind sym `band` 1 == 0 then RLazy else RBoxed
+            let isClass = sym.anno `and` not (null sym.typ.rho.context)
+                mode = if Symbol.rkind sym `band` 1 == 0 then RLazy else RBoxed
                 bjt  = if mode == RLazy then lazy jt else jt
                 name = (U.javaName g sym.name).base
                 bind = Bind mode sym.typ bjt (JAtom name)
-                nbinds = insert binds sym bind
+                nbinds = if isClass then binds else insert binds sym bind
             code <- symCode nbinds sym
             stio (nbinds, code:codes)
 
@@ -2360,6 +2369,10 @@ genStmts rm ex binds = do
 
 impliesG g (Ctx _ d t1 _) (Ctx _ c t2 _) = U.isSuper c g d `and` sameTau t1 t2
 
+envCtxs g = [ ctx | s <- reverse (Global.genEnv g),
+                                    not (null (Symbol.typ s).bound),
+                                    ctx <- (Symbol.typ s).rho.context ]
+
 resolveConstraint pos (ctx@Ctx {cname, tau}) = do
         g <- getST
         // ctx <- TC.reducedCtx ctx
@@ -2372,10 +2385,11 @@ resolveConstraint pos (ctx@Ctx {cname, tau}) = do
 
         findCtx = do
             g <- getST
-            let top = last g.genEnv
-                ctxsnms = zip top.typ.rho.context ctxNames
+            let
+                ctxsnms = zip (envCtxs g) ctxNames
                 implies = impliesG g
-            U.logmsg TRACEG pos ("findCtx: we have " ++ U.nicectx top.typ.rho.context g)
+            U.logmsg TRACEG pos ("findCtx: looking for  " ++ nice cname g ++ " " ++ nice tau g)
+            U.logmsg TRACEG pos ("findCtx: we have  " ++ U.nicectx (envCtxs g) g)
             let ok = [ name | (ctx1, name) <- ctxsnms, ctx1 `implies` ctx]
             U.logmsg TRACEG pos ("findCtx: ok= " ++ show ok)
             if (null ok)
@@ -2488,6 +2502,10 @@ instSym0 cmembers pos sym sigma = do
         SymV {name, nativ = Just _} | U.arity sym == 0 = do
                 let inst = coerce (JStMem jname [])
                 stio (Bind RBoxed sigma jt inst)
+        SymV {name = Local _, expr = Just _, anno = true} = do
+                let inst = coerce (JNew it ctxs)
+                    it = Ref jname gargs
+                stio (Bind RBoxed sigma jt inst)
         SymV {name, depth, rkind} -> do
                 let inst = coerce (JInvoke n ctxs)
                     n    = JStMem (U.memberOf jname "n") gargs
@@ -2541,6 +2559,8 @@ genExpr rm (Vbl {pos, name, typ = Just sigma}) binds
                         coerce = JExMemG boxf.jex "coerce" sjt.targs
                     stio (Bind RBoxed sigma sjt call)
                 | otherwise = stio (toMode rm b)
+            Nothing | Just _ <- sym.expr, sym.anno, length sym.typ.rho.context > 0
+                = instSym sym.pos sym sigma
             Nothing -> do
                 g <- getST
                 U.fatal pos ("genExpr: " ++ nice sym g ++ " not bound")
