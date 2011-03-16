@@ -31,7 +31,7 @@ TOOLSF2 = $(DIR2)/tools
 COMPF  = frege/compiler
 FREGEC0 = $(JAVA) -Xss100m -Xmx400m -cp frege2.jar frege.compiler.Main -3 -hints -C stage1 -D stage1 -nocp -prefix x3
 # DOC0    = $(JAVA) -cp frege2.jar frege.tools.Doc -D doc -prefix x3 -C stage1 -nocp
-FREGE1  = $(JAVA) -Xss8m -cp stage1
+FREGE1  = $(JAVA) -Xss12m -Xmx1g -cp stage1
 FREGEC1 = $(FREGE1) x3frege.compiler.Main -fp stage2 -d stage2 -nocp -prefix y3 -hints
 DOC0    = $(FREGE1) x3frege.tools.Doc     -fp stage2 -d doc    -nocp -prefix y3
 

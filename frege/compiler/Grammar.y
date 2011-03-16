@@ -642,9 +642,9 @@ sigma:
 
 forall:
       FORALL boundvars                 '.' rhofun    { \_\bs\_\r      -> ForAll bs r }
-    | FORALL boundvars  constraints    '.' rhofun    { \_\bs\cs\_\r   -> ForAll bs r.{context=cs} }
+    | FORALL boundvars  constraints    '.' rhofun    { \_\bs\cs\_\r   -> ForAll bs (Rho.{context=cs} r)}
     | FORALL            constraints    '.' rhofun    { \_\cs\_\r      ->
-                                    ForAll (keys (U.freeCtxTVars [] Nil cs)) r.{context=cs} }
+                                    ForAll (keys (U.freeCtxTVars [] Nil cs)) (Rho.{context=cs} r)}
     ;
 
 rhofun:
@@ -1109,7 +1109,7 @@ primary:
                                     u x ((r, true , e):xs) = u (Mem x ("chg$" ++ r) Nothing  `nApp` e)  xs
                                     u x ((r, false, e):xs) = u (Mem x ("upd$" ++ r) Nothing  `nApp` e)  xs
                                 in u x fs}
-    | primary '.' '[' expr ']'      { \p\_\_\v\_     -> Mem p "getAt" Nothing  `nApp` v}
+    | primary '.' '[' expr ']'      { \p\_\_\v\_     -> Mem p "frozenGetAt" Nothing  `nApp` v}
     | primary '.' '[' expr '=' expr ']'
                                     { \p\_\_\v\_\x\_ -> Mem p "updAt" Nothing `nApp` v `nApp` x }
     | primary '.' '[' expr GETS expr ']'
@@ -1246,7 +1246,7 @@ exprToPat :: Exp -> YYM Global Pat
 
 exprToPat (Con {pos,name}) = YYM.return (PCon {pos,qname=name,pats=[]})
 exprToPat (ConFS {pos,name,fields}) = do
-        pfs <- sequence YYM.return (map fpat fields)
+        pfs <- mapSt fpat fields
         YYM.return (PConFS {pos,qname=name,fields=pfs})
     where
         fpat (n,x) = do p <- exprToPat x; YYM.return (n,p)
