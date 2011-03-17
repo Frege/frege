@@ -273,7 +273,11 @@ rhoJT  (fun@RhoFun _ _ _) = do
 rhoJT  (RhoTau {tau}) = tauJT tau
 
 tauJT :: Tau -> StG JType
-tauJT (fun@TFun a b) = rhoJT (U.rhoTau fun)
+tauJT (fun@TFun a b) = do
+    a <- tauJT a
+    b <- tauJT b
+    stio (Ref (JName "" "Fun") [a,b])
+
 tauJT (app@TApp a b) = case app.flat of
     (tcon@TCon {pos}):rest -> do
         taux  <- tauJT tcon
@@ -853,9 +857,10 @@ abstractFun symc (sym@SymV {sid}) = do
             _ -> ""
         ctxs = [ ctx | ctx <- sym.typ.rho.context,
                     not (TC.sameCtx ctx classCtx)]      // filter out class context
+        funtyp = ForAll bnds ((fst • U.returnTypeN 0) sym.typ.rho)
 
     constrformal <- mapSt (curry makeConstraintArg) (zip ctxs ctxNames)
-    sjt          <- sigmaJT sym.typ
+    sjt          <- sigmaJT funtyp
     let    result = JMethod {attr = attrs [JPublic],
                             gargs = map targ (filter (!=tauvar) bnds),
                             jtype = if symc.vkind > 0 then erasedObj sjt else sjt,
@@ -931,6 +936,7 @@ instFun symc symt mname = do
         ftargs = map targ bnds
         itargs = map targ bndsV
         implies = impliesG g
+        funtyp = ForAll bnds ((fst • U.returnTypeN 0) sym.typ.rho)
         ctxs = [ ctx | ctx <- sym.typ.rho.context,
                     not (any (`implies` ctx) symt.typ.rho.context)]
         ourCtxNms = drop symt.typ.rho.context.length ctxNames   // ctx3, ctx4, ....
@@ -950,7 +956,7 @@ instFun symc symt mname = do
         other     -> compiling sym (instSym sym.pos orig sym.typ)
 
     constrformal <- mapSt (curry makeConstraintArg) (zip ctxs ourCtxNms)
-    sjt          <- sigmaJT sym.typ
+    sjt          <- sigmaJT funtyp
     let constrargs   = map JAtom (take sym.typ.rho.context.length ctxNames)
         eosjt = erasedObj sjt
         result = JMethod {attr = attrs [JPublic, JFinal],
@@ -1059,14 +1065,16 @@ cafCode (sym@SymV {depth = 0, expr = Just x}) binds = do
     g    <- getST
     let bnds = if g.toplevel then sym.typ.bound else []    // [a,b]
 
-    let mode  = if rlazy then RLazy else RBoxed
+    let (rtyp, _) = U.returnTypeN 0 sym.typ.rho
+        symtyp = ForAll bnds rtyp
+        mode  = if rlazy then RLazy else RBoxed
         smode = if rlazy then U else S[]
         rlazy = sym.rkind `band` 1 == 0
         ctxs  = if g.toplevel then filter  (not • Context.checked) sym.typ.rho.context else []
 
     cargs <- mapSt (curry makeConstraintArg)  (zip ctxs ctxNames)
-    jtype <- if not g.toplevel then subSigmaJT sym.typ else sigmaJT sym.typ
-    x     <- if not g.toplevel then adaptHigherPolymorphic x sym.typ else stio x
+    jtype <- if not g.toplevel then subSigmaJT symtyp else sigmaJT symtyp
+    x     <- if not g.toplevel then adaptHigherPolymorphic x symtyp else stio x
     ecode <- compiling sym (genExpr  mode x binds)
     scode <- compiling sym (genStmts mode x binds)
 
@@ -2513,8 +2521,15 @@ instSym0 cmembers pos sym sigma = do
                     get
                         | null gargs  = JExMem  (head ctxs) (mangled m ++ latinF)
                         | otherwise   = JExMemG (head ctxs) (mangled m ++ latinF) gargs
+
+                    cojt [x]    = x
+                    cojt (x:xs) = Ref (JName "" "Fun") [x, cojt xs]
+                    coargs = case jt.targs of
+                        [] -> []
+                        [x] -> [x]
+                        h:ts ->  [h, cojt ts]
                     coerce | vkind == 0 = inst
-                           | otherwise = JInvoke (JExMemG inst "coerce" jt.targs) []
+                           | otherwise = JInvoke (JExMemG inst "coerce" coargs) []
                 stio (Bind RBoxed sigma jt coerce)
         SymV {name, depth = 0, rkind, nativ = Nothing} -> do
                 let m    = varIsMethod sym

@@ -3,11 +3,24 @@
 use warnings;
 use strict;
 
-my $n = 2;
+my $n = 3;
+
+sub mkFun {
+    my @args = @_;
+    if (scalar @args > 1) {
+        my $t1 = shift @args;
+        my $t2 = mkFun(@args);
+        return "Fun<$t1, $t2>";
+    }
+    else {
+        return shift @args;
+    }
+}
 
 while ($n < 27) {
     open J, ">frege/rt/Fun$n.java" or die "can't open $!";
     my @targs = map { "T$_" } (1..$n+1);
+    my $ext = mkFun(@targs);
     my @xargs = map { "X$_" } (1..$n+1);
     my @nargs = map {"final Lazy<T$_> arg$_" } (1..$n);
     my $cnargs = join (",", @nargs);
@@ -38,7 +51,7 @@ TEXT
  * <p> See {\@link Fun1} for a general discussion of function values. </p>
  *
  */
-public abstract class Fun$n<$ctargs> implements Value, Lazy<Fun$n<$ctargs>> {
+public abstract class Fun$n<$ctargs> extends $ext {
    /**
      * <p>Apply this function to an argument.</p>
      *
@@ -74,26 +87,26 @@ public abstract class Fun$n<$ctargs> implements Value, Lazy<Fun$n<$ctargs>> {
             final public Lazy<$rt> _v() { return Fun$n.this.r($crargs); }
         };
     }
-    /**
+    /*
      * <p> Always <tt>0</tt> for function values. </p>
      * \@return 0
      */
-    final public int     _c() { return 0; }          // interface Value
-    /**
+    // final public int     _c() { return 0; }          // interface Value
+    /*
      * <p> Return this function object. </p>
      * \@return <tt>this</tt>
      */
-    final public Fun$n<$ctargs> _e() { return this; }       // interface Lazy
-    /**
+    // final public Fun$n<$ctargs> _e() { return this; }       // interface Lazy
+    /*
      * <p> Return this function object. </p>
      * \@return <tt>this</tt>
      */
-    final public Fun$n<$ctargs> _v() { return this; }       // interface Lazy
-    /**
+    // final public Fun$n<$ctargs> _v() { return this; }       // interface Lazy
+    /*
      * <p> Always <tt>false</tt> for function values. </p>
      * \@return <tt>false</tt>
      */
-    final public boolean _u() { return false; }      // interface Lazy
+    // final public boolean _u() { return false; }      // interface Lazy
     /**
      * <p> Run the function. </p>
      *
@@ -120,9 +133,9 @@ public abstract class Fun$n<$ctargs> implements Value, Lazy<Fun$n<$ctargs>> {
      * <p> I see no other way to get around the limitations of the java type system, sorry.</p>
      * <p> This will be used in the case of constructor classes.</p>
      */
-    \@SuppressWarnings("unchecked") 
+    \@SuppressWarnings("unchecked")
     public final <$cxargs> Fun$n<$cxargs> coerce() { return (Fun$n<$cxargs>) this; }
-     
+
 }
 TEXT
     # print "joined=", (join (",", @targs)), "\n";

@@ -838,7 +838,7 @@ simpledalt:
     ;
 
 contypes:
-    simpletypes                 { map ((,) Nothing • ForAll [] • U.rhoTau) }
+    simpletypes                 { map ((,) Nothing • ForAll [] • RhoTau []) }
     ;
 
 simpletypes:

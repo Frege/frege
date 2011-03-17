@@ -13,11 +13,6 @@ package frege.rt;
  * though Fun<sub><em>i</em></sub> uses Fun<sub><em>i-1</em></sub>,
  * except Fun1 which uses {@link Unknown}. </p>
  *
- * <p> Because functions are themselves values,
- * they must implement {@link Value} and {@link Lazy} like any other value.
- * To avoid confusion, one must make clear to oneself that an (un)evaluated function
- * value is not the same as an (un)evaluated result of a <em>function application</em>.
- * </p>
  * <p> Function values are immutable and thus can be reused as often as one
  * needs them. If the frege function type involves no constraints, then
  * a single function object is sufficient for all possible instantiations
@@ -80,7 +75,7 @@ package frege.rt;
  * </p>
  *
  */
-public abstract class Fun1<Ta,Tb> implements Value, Lazy<Fun1<Ta,Tb>> {
+public abstract class Fun1<Ta,Tb> extends Fun<Ta,Tb> {
     /**
      * <p>Apply this function to an argument.</p>
      *
@@ -96,26 +91,6 @@ public abstract class Fun1<Ta,Tb> implements Value, Lazy<Fun1<Ta,Tb>> {
             final public Lazy<Tb> _v() { return Fun1.this.r(arg); }
         };
     }
-    /**
-     * <p> Always <tt>0</tt> for function values. </p>
-     * @return 0
-     */
-    final public int     _c() { return 0; }          // interface Value
-    /**
-     * <p> Return this function object. </p>
-     * @return <tt>this</tt>
-     */
-    final public Fun1<Ta,Tb> _e() { return this; }       // interface Lazy
-    /**
-     * <p> Return this function object. </p>
-     * @return <tt>this</tt>
-     */
-    final public Fun1<Ta,Tb> _v() { return this; }       // interface Lazy
-    /**
-     * <p> Always <tt>false</tt> for function values. </p>
-     * @return <tt>false</tt>
-     */
-    final public boolean _u() { return false; }      // interface Lazy
     /**
      * <p> Run the function. </p>
      *
@@ -188,7 +163,7 @@ public abstract class Fun1<Ta,Tb> implements Value, Lazy<Fun1<Ta,Tb>> {
      * as a parameter of type CListSource.
      */
     @SuppressWarnings("unchecked") 
-    public <a,b> Fun1<a,b> coerce() {
+    final public <a,b> Fun1<a,b> coerce() {
       return (Fun1<a,b>) this;
     }
 }

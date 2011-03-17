@@ -9,7 +9,7 @@ package frege.rt;
  * <p> See {@link Fun1} for a general discussion of function values. </p>
  *
  */
-public abstract class Fun3<T1,T2,T3,T4> implements Value, Lazy<Fun3<T1,T2,T3,T4>> {
+public abstract class Fun3<T1,T2,T3,T4> extends Fun<T1, Fun<T2, Fun<T3, T4>>> {
    /**
      * <p>Apply this function to an argument.</p>
      *
@@ -45,26 +45,26 @@ public abstract class Fun3<T1,T2,T3,T4> implements Value, Lazy<Fun3<T1,T2,T3,T4>
             final public Lazy<T4> _v() { return Fun3.this.r(arg3,arg2,arg1); }
         };
     }
-    /**
+    /*
      * <p> Always <tt>0</tt> for function values. </p>
      * @return 0
      */
-    final public int     _c() { return 0; }          // interface Value
-    /**
+    // final public int     _c() { return 0; }          // interface Value
+    /*
      * <p> Return this function object. </p>
      * @return <tt>this</tt>
      */
-    final public Fun3<T1,T2,T3,T4> _e() { return this; }       // interface Lazy
-    /**
+    // final public Fun3<T1,T2,T3,T4> _e() { return this; }       // interface Lazy
+    /*
      * <p> Return this function object. </p>
      * @return <tt>this</tt>
      */
-    final public Fun3<T1,T2,T3,T4> _v() { return this; }       // interface Lazy
-    /**
+    // final public Fun3<T1,T2,T3,T4> _v() { return this; }       // interface Lazy
+    /*
      * <p> Always <tt>false</tt> for function values. </p>
      * @return <tt>false</tt>
      */
-    final public boolean _u() { return false; }      // interface Lazy
+    // final public boolean _u() { return false; }      // interface Lazy
     /**
      * <p> Run the function. </p>
      *
@@ -91,7 +91,7 @@ public abstract class Fun3<T1,T2,T3,T4> implements Value, Lazy<Fun3<T1,T2,T3,T4>
      * <p> I see no other way to get around the limitations of the java type system, sorry.</p>
      * <p> This will be used in the case of constructor classes.</p>
      */
-    @SuppressWarnings("unchecked") 
+    @SuppressWarnings("unchecked")
     public final <X1,X2,X3,X4> Fun3<X1,X2,X3,X4> coerce() { return (Fun3<X1,X2,X3,X4>) this; }
-     
+
 }

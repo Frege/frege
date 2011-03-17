@@ -67,25 +67,23 @@ RT2DIR = stage2/frege/rt
 RUNTIME2 = stage2/frege/MD.class    stage2/frege/compiler/JavaUtils.class \
 		$(RT2DIR)/Value.class       $(RT2DIR)/Lazy.class        $(RT2DIR)/Unknown.class \
 		$(RT2DIR)/Boxed.class       $(RT2DIR)/Constant.class    $(RT2DIR)/Ref.class \
-		$(RT2DIR)/Fun1.class        $(RT2DIR)/Fun2.class \
+		$(RT2DIR)/Fun.class         $(RT2DIR)/Fun1.class        $(RT2DIR)/Fun2.class \
 		$(RT2DIR)/Fun3.class        $(RT2DIR)/Fun4.class \
 		$(RT2DIR)/Fun5.class        $(RT2DIR)/Fun6.class \
 		$(RT2DIR)/Fun7.class        $(RT2DIR)/Fun8.class \
 		$(RT2DIR)/Fun9.class        $(RT2DIR)/Fun10.class \
-		$(RT2DIR)/Fun11.class        $(RT2DIR)/Fun12.class \
-		$(RT2DIR)/Fun13.class        $(RT2DIR)/Fun14.class \
-		$(RT2DIR)/Fun15.class        $(RT2DIR)/Fun16.class \
-		$(RT2DIR)/Fun17.class        $(RT2DIR)/Fun18.class \
-		$(RT2DIR)/Fun19.class        $(RT2DIR)/Fun20.class \
-		$(RT2DIR)/Fun21.class        $(RT2DIR)/Fun22.class \
-		$(RT2DIR)/Fun23.class        $(RT2DIR)/Fun24.class \
-		$(RT2DIR)/Fun25.class        $(RT2DIR)/Fun26.class \
+		$(RT2DIR)/Fun11.class       $(RT2DIR)/Fun12.class \
+		$(RT2DIR)/Fun13.class       $(RT2DIR)/Fun14.class \
+		$(RT2DIR)/Fun15.class       $(RT2DIR)/Fun16.class \
+		$(RT2DIR)/Fun17.class       $(RT2DIR)/Fun18.class \
+		$(RT2DIR)/Fun19.class       $(RT2DIR)/Fun20.class \
+		$(RT2DIR)/Fun21.class       $(RT2DIR)/Fun22.class \
+		$(RT2DIR)/Fun23.class       $(RT2DIR)/Fun24.class \
+		$(RT2DIR)/Fun25.class       $(RT2DIR)/Fun26.class \
 		$(RT2DIR)/Product1.class    $(RT2DIR)/Product2.class    $(RT2DIR)/Product3.class \
 		$(RT2DIR)/Product4.class    $(RT2DIR)/Product5.class    $(RT2DIR)/Product6.class \
 		$(RT2DIR)/Product7.class 	$(RT2DIR)/Product8.class 	$(RT2DIR)/Product9.class \
-		$(RT2DIR)/Product10.class \
-		$(RT2DIR)/Product11.class \
-		$(RT2DIR)/Product12.class \
+		$(RT2DIR)/Product10.class	$(RT2DIR)/Product11.class	$(RT2DIR)/Product12.class \
 		$(RT2DIR)/Product13.class \
 		$(RT2DIR)/Product14.class \
 		$(RT2DIR)/Product15.class \
@@ -171,6 +169,8 @@ $(RT2DIR)/Ref.class: frege/rt/Ref.java
 $(RT2DIR)/Array.class: frege/rt/Array.java
 	$(JAVAC) -d stage2 -cp stage2 $?
 $(RT2DIR)/Unknown.class: frege/rt/Unknown.java
+	$(JAVAC) -d stage2 -cp stage2 $?
+$(RT2DIR)/Fun.class: frege/rt/Fun.java
 	$(JAVAC) -d stage2 -cp stage2 $?
 $(RT2DIR)/Fun1.class: frege/rt/Fun1.java
 	$(JAVAC) -d stage2 -cp stage2 $?

@@ -9,7 +9,7 @@ package frege.rt;
  * <p> See {@link Fun1} for a general discussion of function values. </p>
  *
  */
-public abstract class Fun7<T1,T2,T3,T4,T5,T6,T7,T8> implements Value, Lazy<Fun7<T1,T2,T3,T4,T5,T6,T7,T8>> {
+public abstract class Fun7<T1,T2,T3,T4,T5,T6,T7,T8> extends Fun<T1, Fun<T2, Fun<T3, Fun<T4, Fun<T5, Fun<T6, Fun<T7, T8>>>>>>> {
    /**
      * <p>Apply this function to an argument.</p>
      *
@@ -45,26 +45,26 @@ public abstract class Fun7<T1,T2,T3,T4,T5,T6,T7,T8> implements Value, Lazy<Fun7<
             final public Lazy<T8> _v() { return Fun7.this.r(arg7,arg6,arg5,arg4,arg3,arg2,arg1); }
         };
     }
-    /**
+    /*
      * <p> Always <tt>0</tt> for function values. </p>
      * @return 0
      */
-    final public int     _c() { return 0; }          // interface Value
-    /**
+    // final public int     _c() { return 0; }          // interface Value
+    /*
      * <p> Return this function object. </p>
      * @return <tt>this</tt>
      */
-    final public Fun7<T1,T2,T3,T4,T5,T6,T7,T8> _e() { return this; }       // interface Lazy
-    /**
+    // final public Fun7<T1,T2,T3,T4,T5,T6,T7,T8> _e() { return this; }       // interface Lazy
+    /*
      * <p> Return this function object. </p>
      * @return <tt>this</tt>
      */
-    final public Fun7<T1,T2,T3,T4,T5,T6,T7,T8> _v() { return this; }       // interface Lazy
-    /**
+    // final public Fun7<T1,T2,T3,T4,T5,T6,T7,T8> _v() { return this; }       // interface Lazy
+    /*
      * <p> Always <tt>false</tt> for function values. </p>
      * @return <tt>false</tt>
      */
-    final public boolean _u() { return false; }      // interface Lazy
+    // final public boolean _u() { return false; }      // interface Lazy
     /**
      * <p> Run the function. </p>
      *
@@ -91,7 +91,7 @@ public abstract class Fun7<T1,T2,T3,T4,T5,T6,T7,T8> implements Value, Lazy<Fun7<
      * <p> I see no other way to get around the limitations of the java type system, sorry.</p>
      * <p> This will be used in the case of constructor classes.</p>
      */
-    @SuppressWarnings("unchecked") 
+    @SuppressWarnings("unchecked")
     public final <X1,X2,X3,X4,X5,X6,X7,X8> Fun7<X1,X2,X3,X4,X5,X6,X7,X8> coerce() { return (Fun7<X1,X2,X3,X4,X5,X6,X7,X8>) this; }
-     
+
 }
