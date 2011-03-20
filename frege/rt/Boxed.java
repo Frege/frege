@@ -80,15 +80,15 @@ public final class Boxed<T>  implements Value, Lazy<Boxed<T>> {
     final public boolean _u() { return false; }
     
     /**
-     * <p> Create an array of type T. </p>
+     * <p> Create an array with T elements. </p>
+     * <p> This works so long as we never try to cast the array implicitely or explicitely
+     * to its supposed type. Therefore, native arry types like StringArray need their
+     * own special array creation routines.</p>
      * @param size the size of the array
      */
     // @SuppressWarnings("unchecked")
-    final public static<T> T[] arrayNew(int size) {
-        final T[] array = null;
-        final Class<T[]> clazz = (Class<T[]>) array.getClass();
-        return (T[]) clazz.cast(java.lang.reflect.Array.newInstance(clazz.getComponentType(), size));
-        // return  (T[]) (new Object[size]); 
+    final public static<T> T[] arrayNew(int size) {        
+        return  (T[]) (new Object[size]); 
     }
     
     /**
