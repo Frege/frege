@@ -32,8 +32,11 @@ COMPF  = frege/compiler
 FREGEC0 = $(JAVA) -Xss100m -Xmx400m -cp frege2.jar frege.compiler.Main -3 -hints -C stage1 -D stage1 -nocp -prefix x3
 # DOC0    = $(JAVA) -cp frege2.jar frege.tools.Doc -D doc -prefix x3 -C stage1 -nocp
 FREGE1  = $(JAVA) -Xss24m -Xmx1g -cp stage1
+FREGE2  = $(JAVA) -Xss12m -Xmx256m -cp stage2
 FREGEC1 = $(FREGE1) x3frege.compiler.Main -fp stage2 -d stage2 -nocp -prefix y3 -hints
+FREGEC2 = $(FREGE2) y3frege.compiler.Main -fp stage2 -d stage2 -nocp -prefix z3 -hints
 DOC0    = $(FREGE1) x3frege.tools.Doc     -fp stage2 -d doc    -nocp -prefix y3
+DOC1    = $(FREGE2) y3frege.tools.Doc     -fp stage2 -d doc    -nocp -prefix y3
 
 
 
@@ -105,6 +108,9 @@ RUNTIME2 = stage2/frege/MD.class    stage2/frege/compiler/JavaUtils.class \
 compiler2: lib2  $(COMPF2)/Main.class
 $(COMPF2)/Main.class : $(COMPF1)/Main.class
 	$(FREGEC1) -v -make frege.compiler.Main
+compiler3: lib2  $(COMPF3)/Main.class
+$(COMPF3)/Main.class : $(COMPF2)/Main.class
+	$(FREGEC2) -v -make frege.compiler.Main
 
 PASSES2 = $(COMPF2)/Grammar.class \
 		$(COMPF2)/Fixdefs.class   $(COMPF2)/Import.class    $(COMPF2)/Enter.class \
