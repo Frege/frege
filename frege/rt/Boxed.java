@@ -86,9 +86,9 @@ public final class Boxed<T>  implements Value, Lazy<Boxed<T>> {
      * own special array creation routines.</p>
      * @param size the size of the array
      */
-    // @SuppressWarnings("unchecked")
-    final public static<T> T[] arrayNew(int size) {        
-        return  (T[]) (new Object[size]); 
+    @SuppressWarnings("unchecked")
+    final public static<T extends Lazy<T>> T[] arrayNew(int size) {        
+        return  (T[]) (new Lazy[size]); 
     }
     
     /**

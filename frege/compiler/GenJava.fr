@@ -1069,7 +1069,9 @@ argMode s sig
  */
 cafCode (sym@SymV {depth = 0, expr = Just x}) binds = do
     g    <- getST
-    let bnds = if g.toplevel then sym.typ.bound else []    // [a,b]
+    let bnds = sym.typ.bound
+        argNames = drop (fold (+) 0 (map Symbol.depth g.genEnv)) GenJava.argNames
+        ctxNames = drop (length (envCtxs g)) GenJava.ctxNames
 
     let (rtyp, _) = U.returnTypeN 0 sym.typ.rho
         symtyp = ForAll bnds rtyp
@@ -1077,9 +1079,10 @@ cafCode (sym@SymV {depth = 0, expr = Just x}) binds = do
         smode = if rlazy then U else S[]
         rlazy = sym.rkind `band` 1 == 0
         rsimple = sym.rkind `band` 16 != 0
-        ctxs  = if g.toplevel then filter  (not • Context.checked) sym.typ.rho.context else []
+        ctxs  = if null bnds then [] else filter  (not • Context.checked) sym.typ.rho.context
 
-    cargs <- mapSt (curry makeConstraintArg)  (zip ctxs ctxNames)
+    cargs       <- mapSt  (curry makeConstraintArg) (zip ctxs argNames)
+    constraints <- mapSt  (curry makeConstraintDef) (zip ctxs ctxNames)
     jtype <- if not g.toplevel then subSigmaJT symtyp else sigmaJT symtyp
     x     <- if not g.toplevel then adaptHigherPolymorphic x symtyp else stio x
     ecode <- compiling sym (genExpr  mode x binds)
@@ -1098,6 +1101,7 @@ cafCode (sym@SymV {depth = 0, expr = Just x}) binds = do
                           name = name.base,
                           init = Just jexpr}
         utype = Ref (JName "" "Unknown") [jtype]    // Unknown<R>
+        ctype = Ref (JName "" cafV.name) (map targ bnds)
         newu  = JNewClass utype [] [vMeth]          // new Unknown<R>() { ... }
         theU
             | rlazy = newu
@@ -1109,27 +1113,34 @@ cafCode (sym@SymV {depth = 0, expr = Just x}) binds = do
         cafU  = JMember { attr = attrs [publik, JFinal, static], jtype = rtype,
                           name = cafV.name,
                           init = Just theU}
-        cafF  = JMethod { attr = cafV.attr, jtype = cafV.jtype, name = cafV.name,
-                          gargs = map (TVbl • greek) bnds,
-                          args = cargs,
-                          body = JBlock scode}
+        cafF  = JClass  { attr = cafV.attr, jtype = defining ctype,
+                          extend = Just utype,
+                          implement=[], defs}
+        defs = constraints ++ [constructor, vMeth]
+        constructor = JConstr {attr = attrs [JPublic],
+                                jtype = ctype,
+                                args = cargs,
+                                body = JBlock (take (length constraints)
+                                                (zipWith JAssign
+                                                    (map JAtom ctxNames)
+                                                    (map JAtom argNames)))}
         !caf = case (g.toplevel, not (null bnds), not (null cargs), rsimple) of
             //top    binds  cargs  simple
-            (false, false, false, false) -> cafU
+            (_,     false, false, false) -> cafU
             (_,     false, false, true)  -> cafV
-            (_,     _,     true,  _   )  -> cafF
-            (_,     true,  _,     _   )  -> cafF
-            (true,  false, false, false) -> cafF
+            (_,     _,     true,  _    ) -> cafF
+            (_,     true,  _,     _    ) -> cafF
+            // (true,  false, false, false) -> cafU
     stio (reverse (caf:comms))
 
 /**
- * tell if a variable is implemented with a function or a method
+ * tell if a variable is implemented with a member or a class
  */
-varIsMethod (sym@SymV {name, depth, rkind})
+varIsClass (sym@SymV {name, depth, rkind})
     | depth > 0 = true
-    | Local _ <- name = false
-    | not (null (filter  (not • Context.checked) sym.typ.rho.context)) = true
-    | global name = not (null sym.typ.bound) `or` not simple
+    // Local _ <- name = false
+    // not (null (filter  (not • Context.checked) sym.typ.rho.context)) = true
+    | not (null sym.typ.bound) = true
     | otherwise   = false
     where
         simple           = (rkind `band` 16) != 0
@@ -2548,10 +2559,10 @@ instSym0 cmembers pos sym sigma = do
                            | otherwise = JInvoke (JExMemG inst "coerce" coargs) []
                 stio (Bind RBoxed sigma jt coerce)
         SymV {name, depth = 0, rkind, nativ = Nothing} -> do
-                let m    = varIsMethod sym
-                    mode = if rkind `band` 1 == 0 then RLazy else RBoxed
-                    inst = JInvoke func ctxs
-                    func = JStMem jname (if m then gargs else [])
+                let m    = varIsClass sym
+                    mode = if rkind `band` 1 == 0 `or` m then RLazy else RBoxed
+                    inst = JNew   (Ref jname gargs) ctxs
+                    func = JStMem jname [] // (if m then gargs else [])
                     bind = Bind mode sigma jt (if m then inst else func)
                 stio bind
         SymV {name, nativ = Just _} | U.arity sym == 0 = do
