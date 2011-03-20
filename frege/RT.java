@@ -138,7 +138,8 @@ public class RT {
         public Undefined(String err, Throwable cause) {
             super(err, cause);
         }
-        public final Undefined die()  { throw this; }
+        /** <p>This function actually never returns. </p> */
+        public final boolean die()  { if (true) throw this; return false; }
     }
     /**
      * <p> Exception thrown when all matches of a case or lambda fail. </p> 
