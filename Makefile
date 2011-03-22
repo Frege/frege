@@ -20,6 +20,7 @@ JAVA = java
 
 DIR1 = stage1/x3frege
 DIR2 = stage2/y3frege
+DIR3 = stage2/z3frege
 DOC  = doc/y3frege
 DOCF = doc/y3frege/compiler
 COMPF1 = $(DIR1)/compiler
@@ -32,8 +33,8 @@ COMPF  = frege/compiler
 FREGEC0 = $(JAVA) -Xss100m -Xmx400m -cp frege2.jar frege.compiler.Main -3 -hints -C stage1 -D stage1 -nocp -prefix x3
 # DOC0    = $(JAVA) -cp frege2.jar frege.tools.Doc -D doc -prefix x3 -C stage1 -nocp
 FREGE1  = $(JAVA) -Xss24m -Xmx1g -cp stage1
-FREGE2  = $(JAVA) -Xss32m -Xmx1g -cp stage2
-FREGEC1 = $(FREGE1) x3frege.compiler.Main -fp stage2 -d stage2 -nocp -prefix y3 -hints
+FREGE2  = $(JAVA) -Xss48m -Xmx1380m -cp stage2
+FREGEC1 = $(FREGE1) x3frege.compiler.Main -fp stage2 -d stage2 -nocp -prefix y3 -O -hints
 FREGEC2 = $(FREGE2) y3frege.compiler.Main -fp stage2 -d stage2 -nocp -prefix z3 -hints
 DOC0    = $(FREGE1) x3frege.tools.Doc     -fp stage2 -d doc    -nocp -prefix y3
 DOC1    = $(FREGE2) y3frege.tools.Doc     -fp stage2 -d doc    -nocp -prefix y3
@@ -108,9 +109,25 @@ RUNTIME2 = stage2/frege/MD.class    stage2/frege/compiler/JavaUtils.class \
 compiler2: lib2  $(COMPF2)/Main.class
 $(COMPF2)/Main.class : $(COMPF1)/Main.class
 	$(FREGEC1) -v -make frege.compiler.Main
-compiler3: lib2  $(COMPF3)/Main.class
+compiler3: lib3  $(COMPF3)/Main.class
 $(COMPF3)/Main.class : $(COMPF2)/Main.class
-	$(FREGEC2) -v -make frege.compiler.Main
+	$(FREGEC2) -v frege/compiler/Classtools.fr
+	$(FREGEC2) -v frege/compiler/Data.fr
+	$(FREGEC2) -v frege/compiler/Utilities.fr
+	$(FREGEC2) -v frege/compiler/Scanner.fr
+	$(FREGEC2) -v frege/compiler/Grammar.fr
+	$(FREGEC2) -v frege/compiler/Fixdefs.fr
+	$(FREGEC2) -v frege/compiler/Enter.fr
+	$(FREGEC2) -v frege/compiler/Import.fr
+	$(FREGEC2) -v frege/compiler/Classes.fr
+	$(FREGEC2) -v frege/compiler/TAlias.fr
+	$(FREGEC2) -v frege/compiler/Transdef.fr
+	$(FREGEC2) -v frege/compiler/Transform.fr
+	$(FREGEC2) -v frege/compiler/TCUtil.fr
+	$(FREGEC2) -v frege/compiler/Typecheck.fr
+	$(FREGEC2) -v frege/compiler/GenMeta.fr
+	$(FREGEC2) -v frege/compiler/GenJava.fr
+	$(FREGEC2) -v frege/compiler/Main.fr
 
 PASSES2 = $(COMPF2)/Grammar.class \
 		$(COMPF2)/Fixdefs.class   $(COMPF2)/Import.class    $(COMPF2)/Enter.class \
@@ -308,19 +325,35 @@ lib2: runtime2 $(COMPF1)/Main.class  \
 	$(DIR2)/List.class       $(DIR2)/Tuples.class \
 	$(DIR2)/lib/PP.class
 
+lib3: runtime2 $(COMPF2)/Main.class  \
+	$(DIR3)/Prelude.class    $(DIR3)/IO.class \
+	$(DIR3)/List.class       $(DIR3)/Tuples.class \
+	$(DIR3)/lib/PP.class
+
 
 $(DIR2)/Prelude.class: frege/Prelude.fr $(COMPF1)/Main.class $(RUNTIME2)
 	rm -rf $(DIR2)
 	$(FREGEC1) frege/Prelude.fr
 $(DIR2)/Tuples.class: frege/Tuples.fr $(DIR2)/Prelude.class
 	$(FREGEC1) frege/Tuples.fr
-$(DIR2)/List.class: frege/List.fr $(DIR2)/Prelude.class
+$(DIR2)/List.class: frege/List.fr $(DIR2)/IO.class
 	$(FREGEC1) frege/List.fr
 $(DIR2)/IO.class: frege/IO.fr $(DIR2)/Prelude.class
 	$(FREGEC1) frege/IO.fr
-$(DIR2)/lib/PP.class: frege/lib/PP.fr $(DIR2)/Prelude.class
+$(DIR2)/lib/PP.class: frege/lib/PP.fr $(DIR2)/List.class
 	$(FREGEC1) frege/lib/PP.fr
 
+$(DIR3)/Prelude.class: frege/Prelude.fr $(COMPF2)/Main.class $(RUNTIME2)
+	rm -rf $(DIR3)
+	$(FREGEC2) frege/Prelude.fr
+$(DIR3)/Tuples.class: frege/Tuples.fr $(DIR3)/Prelude.class
+	$(FREGEC2) frege/Tuples.fr
+$(DIR3)/List.class: frege/List.fr $(DIR3)/IO.class
+	$(FREGEC2) frege/List.fr
+$(DIR3)/IO.class: frege/IO.fr $(DIR3)/Prelude.class
+	$(FREGEC2) frege/IO.fr
+$(DIR3)/lib/PP.class: frege/lib/PP.fr $(DIR3)/List.class
+	$(FREGEC2) frege/lib/PP.fr
 
 #
 #   Tools
