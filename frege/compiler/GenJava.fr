@@ -18,7 +18,7 @@ public version = v "$Revision$" where
     v _ = 0
 
 
-import frege.List (joinStr Tree Nil values keys insert lookup)
+import frege.List (joinStr Tree Nil values keys each insert lookup)
 
 import frege.compiler.Data                                  as D
 import frege.compiler.Utilities(flag isOn setFlag)          as U
@@ -402,14 +402,17 @@ pass = do
     U.print (g.thisPack.className g).base
     U.println " {"
     let vals = values g.thisTab
+
+    makeConstants
+
     mapSt (symCode Nil) (sortBy (comparing Symbol.name) [ s | s@SymT {sid} <- vals ])
         >>= ppSS
     mapSt (symCode Nil) (sortBy (comparing Symbol.name) [ s | s@SymC {sid} <- vals ])
         >>= ppSS
     mapSt (symCode Nil) (sortBy (comparing Symbol.name) [ s | s@SymI {sid} <- vals ])
         >>= ppSS
-    mapSt (symCode Nil) (sortBy (comparing Symbol.name) [ s | s@SymV {sid} <- vals ])
-        >>= ppSS
+    foreach (sortBy (comparing Symbol.name) [ s | s@SymV {sid} <- vals ]) printCode
+
 
 
 
@@ -450,6 +453,85 @@ pass = do
     stio ("java class", 1)
 
 ppSS xss = foreach (concat xss) (pp • anno)
+printCode sym = do
+    defs <- symCode Nil sym
+    foreach defs (pp • anno)
+
+
+findConst (Lit {pos,kind,value})
+    | kind `elem` [LInt, LLong, LBig] = stio (JName "C" (kinda kind ++ value))
+    | kind == LBool = case value of
+        "true" -> stio (JName "Boxed.Bool" "t")
+        _      -> stio (JName "Boxed.Bool" "f")
+    | otherwise  = do
+        g <- getST
+        case g.gen.consts.lookup (kind,value) of
+            Just u -> stio (JName "C" (kinda kind ++ show u))
+            Nothing -> U.fatal pos ("literal not found: " ++ value)
+    where
+        kinda LBool   = "bool"
+        kinda LInt    = "int"
+        kinda LRegex  = "rgx"
+        kinda LString = "str"
+        kinda LDouble = "dbl"
+        kinda LFloat  = "flt"
+        kinda LChar   = "chr"
+        kinda LBig    = "big"
+        kinda LLong   = "long"
+
+
+makeConstants = do
+        allvs  <- T.allourvars
+        cTree  <- foldSt (U.foldEx true literals) Nil [ x | SymV {expr = Just x} <- allvs ]
+        cnList <- mapSt numberConst (each cTree)
+        let cnTree = Tree.fromList cnList
+        changeST Global.{gen <- GenSt.{consts = cnTree}}
+        consts <- mapSt genConst (values cTree)
+        let constclass = JInterface {
+                                attr = attrs [JPublic, JStatic],
+                                jtype = (Ref (JName "" "C") []),
+                                implement = [],
+                                defs = consts
+                                }
+        pp (anno constclass)
+        stio ()
+    where
+        patliterals t (PCon {pats}) = fold patliterals t pats
+        patliterals t p
+            | p.{pat?} = patliterals t p.pat
+        patliterals t (PMat {pos,value})
+            = insert t (LRegex,value) (Lit pos LRegex value (Just TY.sigRegex))
+        patliterals t (PLit {pos,kind,value}) | kind != LBool
+            = insert t (kind,value) (Lit pos kind value (Just (TY.litSigma kind)))
+        patliterals t p = t
+
+        literals t (Lam {pat=p}) = stio (Left (patliterals t p))
+        literals t (Case {alts}) = stio (Left (fold patliterals t (map CAlt.pat alts)))
+        literals t (lit@Lit {kind, value})
+            | kind != LBool = stio (Left (insert t (kind,value) lit))
+            // otherwise = stio (Left t)
+        literals t x = stio (Left t)
+
+        numberConst (k, _) = do
+            u <- U.uniqid
+            stio (k;u)
+
+        genConst (lit@Lit {kind,value}) = do
+            jname <- findConst lit
+            let lsigma = TY.litSigma kind
+            bjt   <- sigmaJT lsigma
+            let it = JMember { attr = attrs [JPublic, JStatic, JFinal],
+                               jtype = bjt, name = jname.base, init = Just bb.jex }
+                ex = case kind of
+                    LBig -> JNew (Ref (JName "" "java.math.BigInteger") []) [JAtom (show value)]
+                    LRegex -> JInvoke
+                                (JStMem (JName "java.util.regex.Pattern" "compile") [])
+                                [JAtom value]
+                    otherwise -> JAtom value
+
+                nb = Bind RNative lsigma (strict bjt) ex
+                bb = toBoxed nb
+            stio it
 
 genMain = do
     g <- getST
@@ -2078,7 +2160,7 @@ match assert (pat@PLit {kind, value}) bind cont binds
         let comment = sComment ("match  " ++ nice pat g
                                 ++ "  with  " ++ showJex (Binding.jex bind))
             sbnd = strictBind bind
-            lit = Lit {pos = pat.pos, kind = LRegex, value, typ = Just (TY.sig "Regex")}
+            lit = Lit {pos = pat.pos, kind = LRegex, value, typ = Just (TY.sigRegex)}
         xbnd <- genExpr RNative lit binds
 
         let matcher = JInvoke (JExMem xbnd.jex "matcher") [sbnd.jex]
@@ -2090,14 +2172,14 @@ match assert (pat@PMat {pos, var, value}) bind cont binds = do
         g <- getST
         vsym <- U.findV (Local var)
         (bind,code) <- realize "$" (notLazy bind)
-        mjt <- sigmaJT (TY.sig "Matcher")
+        mjt <- sigmaJT (TY.sigMatcher)
         let comment = sComment ("match  " ++ nice pat g
                                 ++ "  with  " ++ showJex (Binding.jex bind))
             sbnd = strictBind bind
-            lit = Lit {pos, kind = LRegex, value, typ = Just (TY.sig "Regex")}
+            lit = Lit {pos, kind = LRegex, value, typ = Just (TY.sigRegex)}
 
         xbnd <- genExpr RNative lit binds
-        let mbnd = Bind RNative (TY.sig "Matcher") (strict mjt)
+        let mbnd = Bind RNative (TY.sigMatcher) (strict mjt)
                     (JInvoke (JExMem xbnd.jex "matcher") [sbnd.jex])
         (mbnd,code2) <- realize var mbnd
         body <- cont (binds.insert vsym mbnd)
@@ -2666,6 +2748,7 @@ genExpr rm (Lit {kind = LBool, value, typ = Just sigma}) binds
         t = JStMem (U.memberOf bool.jname "t") []
         f = JStMem (U.memberOf bool.jname "f") []
 
+/*
 genExpr RNative (Lit {kind=LRegex, value, typ = Just sigma}) binds = do
     jt <- sigmaJT sigma
     stio (Bind RNative sigma jt
@@ -2677,13 +2760,17 @@ genExpr RNative (Lit {kind=LBig, value, typ = Just sigma}) binds = do
     jt <- sigmaJT sigma
     stio (Bind RNative sigma jt
         (JNew (Ref (JName "" "java.math.BigInteger") []) [JAtom (show value)]))
+        */
 
-genExpr RNative (Lit {value, typ = Just sigma}) binds = do
-    jt <- sigmaJT sigma
-    stio (Bind RNative sigma jt (JAtom value))
+genExpr RNative (Lit {kind, value, typ = Just sigma}) binds
+    | kind != LRegex `and` kind != LBig = do
+        jt <- sigmaJT sigma
+        stio (Bind RNative sigma jt (JAtom value))
 
-genExpr rm (x@Lit {typ}) binds = do
-    bind <- genExpr RNative x binds
+genExpr rm (x@Lit {kind,value,typ=Just sigma}) binds = do
+    jname <- findConst x
+    jt    <- sigmaJT sigma
+    let bind = Bind RBoxed sigma jt (JStMem jname [])   // genExpr RNative x binds
     stio (toMode rm bind)
 
 genExpr rm (app@App a b (Just sigma)) binds = do
