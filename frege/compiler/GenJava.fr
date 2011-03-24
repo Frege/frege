@@ -970,7 +970,7 @@ instFun symc symt mname = do
     let set = unJust (unJust sym.expr).typ
 
     instMe <- case cmeth of
-        Just meth -> compiling sym (instSym0 false sym.pos meth sym.typ)
+        Just meth -> compiling sym (instSym0 false false sym.pos meth sym.typ)
         other     -> compiling sym (instSym sym.pos orig sym.typ)
 
     constrformal <- mapSt (curry makeConstraintArg) (zip ctxs ourCtxNms)
@@ -2501,14 +2501,15 @@ resolveConstraint pos (ctx@Ctx {cname, tau}) = do
                     g <- getST
                     U.fatal pos ("makeCtx: head is " ++ nice other g)
 
+instSymDirect = instSym0 true true
 
 /// convenience method for normal instantiation
-instSym = instSym0 true
+instSym = instSym0 false true
 /**
  * instantiate a symbol at a given type
  */
-instSym0 :: Bool -> Line -> Symbol -> Sigma -> StG Binding
-instSym0 cmembers pos sym sigma = do
+instSym0 :: Bool -> Bool -> Line -> Symbol -> Sigma -> StG Binding
+instSym0 direct cmembers pos sym sigma = do
     g <- getST
     U.logmsg TRACEG pos ("instSym: " ++ nice sym g ++ " at " ++ nice sigma g)
     // let taus = sigmaInst g sym.typ sigma    // (List a) (List Int) ==> (a,Int)
@@ -2546,7 +2547,9 @@ instSym0 cmembers pos sym sigma = do
             if symt.enum
                 then stio (Bind RBoxed sigma (Ref (JName "" "Boxed.Int") [])
                             (JStMem jname []))
-                else stio (Bind RBoxed sigma jt
+                else if direct
+                    then stio (Bind RBoxed sigma jt (JStMem (U.memberOf jname "mk") gargs))
+                    else stio (Bind RBoxed sigma jt
                             (JInvoke
                                 (JStMem (U.memberOf jname mkn) gargs) []))
         SymV {name = MName clas m, depth, rkind} | cmembers, Just (SymC {vkind,tau}) <- clas.findit g = do
@@ -2687,21 +2690,49 @@ genExpr rm (app@App a b (Just sigma)) binds = do
         g <- getST
         let fun:args = map fst (U.flatx app)
             asigs = maybe [] (snd • U.returnType • Sigma.rho) fun.typ
-        //    sargs = show (map (flip nice g) args)
-        //    ssigs = show (map (flip nicer g) asigs)
-        // U.logmsg TRACEG (getpos app) ("adaptHP args=" ++ sargs ++ ", sigs=" ++ ssigs)
         args   <-   adaptHigherPolymorphicS args asigs
-        fbind  <-   genExpr RLazy fun binds
-        abinds <-   mapSt (flip (genExpr RLazy) binds) args
-        sjt    <-   sigmaJT sigma
-        let appl = fold apply (Binding.jex fbind) abinds
-            result = Bind RLazy sigma (lazy sjt) appl
-        stio (toMode rm result)
+        genApp rm binds fun args
+
     where
-        // apply x (b@Bind RNative _ _ _) = apply x (toBoxed b)
-        apply x b  = JInvoke (JExMem xe "a") [ns.jex]
+        genApp rm binds (con@Con {pos, name, typ = Just csigma}) args = do
+            sym <- U.findD name
+            let a = length sym.flds
+            if length args < a
+                then genAnon rm binds con args          // partial application
+                else do
+                    dbind <- instSymDirect pos sym csigma
+                    sjt   <- sigmaJT sigma
+                    let jx  = dbind.jex
+                        // sjt = dbind.jtype
+                        aargs = take a args
+                        rargs = drop a args
+                    abinds <- mapSt (flip (genExpr RLazy) binds) aargs
+                    rbinds <- mapSt (flip (genExpr RLazy) binds) rargs
+                    let call = Bind RBoxed sigma sjt (JInvoke jx (map Binding.jex abinds))
+                        result
+                            | null rargs = stio call
+                            | otherwise  = do
+                                    // sjt <- sigmaJT sigma
+                                    let r = fold apply call rbinds
+                                        b = Bind RLazy sigma (lazy sjt) r.jex
+                                    stio (toMode rm b)
+                    result
+
+        genApp rm binds fun args = genAnon rm binds fun args
+
+        genAnon rm binds fun args = do
+            fbind  <-   genExpr RLazy fun binds
+            abinds <-   mapSt (flip (genExpr RLazy) binds) args
+            sjt    <-   sigmaJT sigma
+            let appl = fold apply fbind abinds
+            result = Bind RLazy sigma (lazy sjt) appl.jex
+            stio (toMode rm result)
+
+
+        apply x b  = x.{mode=RLazy, jex=JInvoke (JExMem xe.jex "a") [ns.jex]}
             where ns = notStrict b
-                  xe = JInvoke (JExMem x "_e") []
+                  xe = toBoxed x
+
         adaptHigherPolymorphicS []     _                 = stio []
         adaptHigherPolymorphicS args   []                = stio args
         adaptHigherPolymorphicS (a:as) (t:ts) = do

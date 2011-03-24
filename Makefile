@@ -110,12 +110,7 @@ compiler2: lib2  $(COMPF2)/Main.class
 $(COMPF2)/Main.class : $(COMPF1)/Main.class
 	$(FREGEC1) -v -make frege.compiler.Main
 compiler3: lib3  $(COMPF3)/Main.class
-$(COMPF3)/Main.class : $(COMPF2)/Main.class
-	$(FREGEC2) -v frege/compiler/Classtools.fr
-	$(FREGEC2) -v frege/compiler/Data.fr
-	$(FREGEC2) -v frege/compiler/Utilities.fr
-	$(FREGEC2) -v frege/compiler/Scanner.fr
-	$(FREGEC2) -v frege/compiler/Grammar.fr
+$(COMPF3)/Main.class : $(COMPF2)/Main.class $(COMPF3)/Grammar.class
 	$(FREGEC2) -v frege/compiler/Fixdefs.fr
 	$(FREGEC2) -v frege/compiler/Enter.fr
 	$(FREGEC2) -v frege/compiler/Import.fr
@@ -128,6 +123,13 @@ $(COMPF3)/Main.class : $(COMPF2)/Main.class
 	$(FREGEC2) -v frege/compiler/GenMeta.fr
 	$(FREGEC2) -v frege/compiler/GenJava.fr
 	$(FREGEC2) -v frege/compiler/Main.fr
+
+$(COMPF3)/Grammar.class: lib3 $(COMPF2)/Main.class
+	$(FREGEC2) -v frege/compiler/Classtools.fr
+	$(FREGEC2) -v frege/compiler/Data.fr
+	$(FREGEC2) -v frege/compiler/Utilities.fr
+	$(FREGEC2) -v frege/compiler/Scanner.fr
+	$(FREGEC2) -v frege/compiler/Grammar.fr
 
 PASSES2 = $(COMPF2)/Grammar.class \
 		$(COMPF2)/Fixdefs.class   $(COMPF2)/Import.class    $(COMPF2)/Enter.class \
