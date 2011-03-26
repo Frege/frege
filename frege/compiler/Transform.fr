@@ -797,8 +797,8 @@ strictName sids nm = do
                 s <- lambdaStrictness y
                 let x = uneta ari y
                 U.logmsg TRACES v.pos ("strictness for " ++ v.name.nice g ++ " is "
-                                    ++ show (S s))
-                U.changeSym v.{expr = Just x, strsig = S s, state = StrictChecked}
+                                    ++ show (if null s then U else S s))
+                U.changeSym v.{expr = Just x, strsig = if null s then U else S s, state = StrictChecked}
                 stio syms
             where
                 eta 0 x = stio x
@@ -880,12 +880,17 @@ strictness sids x = do
                     stio (Ifte c a b t, syms)
             Let {env,ex} -> with env do
                     (ex, syms) <- strictness sids ex
-                    env <- getTop
+                    // let mysids = map Symbol.sid (my syms)
                     upper <- mapSt (strictName sids) // (map Symbol.sid (my syms)))
                                 (map Symbol.name
                                     (filter ((`notElem` sids) • Symbol.sid)
                                         (my syms)))
                     foreach (my syms) mark
+                    env <- getTop
+                    foreach [ s.name | (s::Symbol)  <- values env,
+                                // x <- s.expr.toList,
+                                s.sid `notElem` sids,
+                                s.state != StrictChecked ] (strictName sids)
                     let result = fold uni (them syms) upper
                     env <- getTop
                     U.logmsg TRACES (getpos x) ("strictness  " ++ nice x g ++ " :: " ++ names g result)
@@ -943,7 +948,9 @@ strictness sids x = do
                 (lam, syms) <- strictness sids (Lam {env,pat,ex,typ=Nothing})
                 stio (alt.{env=lam.env, ex=lam.ex}, syms)
         subapp (a,b)   = apply a b
-        apply ex U     = stio (ex, [])      // lazy
+        apply ex U     = do
+                            (x,_) <- strictness sids ex
+                            stio (x, [])      // lazy
         apply ex (S[]) = strictness sids ex // strict
         apply ex (S ss) = do
             g <- getST
@@ -964,7 +971,9 @@ strictness sids x = do
         convar _ = false
         appstr (app@((f,mbt):as)) | not (convar f) = do
             (f,syms) <- strictness sids f
-            stio ((f,mbt):as, syms)
+            fas <- mapSt (strictness sids) (map fst as)
+            let nas = zip (map fst fas) (map snd as)
+            stio ((f,mbt):nas, syms)
         appstr (app@((f,mbt):as)) = do
             g <- getST
             v <- case f of
@@ -973,8 +982,12 @@ strictness sids x = do
                     _ -> U.fatal (getpos f) ("Can't handle " ++ nice f g ++ "  applications")
             let fsym | Local _ <- v.name = [v]
                      | otherwise = []
+                mkAll = do
+                    fapp <- mapSt (strictness sids) (map fst app)
+                    let napp = zip (map fst fapp) (map snd app)
+                    stio (napp, fsym)
             case v of
-                SymV {state = Typechecked, expr = Nothing} = stio (app, fsym)
+                SymV {state = Typechecked, expr = Nothing} = mkAll
                 SymV {state = Typechecked, expr = Just (Lam {env})} = if v.sid `elem` sids
                         then do
                             // assume all are strict
@@ -990,13 +1003,13 @@ strictness sids x = do
                             (fxas, syms) <- appstr (fx ++ as)
                             let as = drop (length fx) fxas
                             stio ((f,mbt):as, fsym ++ syms)
-                    | otherwise = stio (app, fsym)
-                SymD {strsig = U} -> stio (app, fsym)
+                    | otherwise = mkAll
+                SymD {strsig = U} -> mkAll
                 SymD {strsig = S ss} -> do
                         let xss = take (length as) (ss ++ repeat U)     // make sure enough
                         exsyms <- mapSt subapp (zip (map fst as) xss)
                         stio ((f,mbt):zip (map fst exsyms) (map snd as), fold uni fsym (map snd exsyms))
-                SymV {state = StrictChecked, strsig = U} -> stio (app, fsym)
+                SymV {state = StrictChecked, strsig = U} -> mkAll
                 SymV {state = StrictChecked, strsig = S ss} -> do
                         let xss = take (length as) (ss ++ repeat U)     // make sure enough
                         U.logmsg TRACES (getpos f) ("appstr: xss=" ++ show xss ++ " for " ++ v.name.nice g)

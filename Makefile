@@ -114,11 +114,11 @@ $(COMPF3)/Main.class : $(COMPF2)/Main.class $(COMPF3)/Grammar.class
 	$(FREGEC2) -v frege/compiler/Fixdefs.fr
 	$(FREGEC2) -v frege/compiler/Enter.fr
 	$(FREGEC2) -v frege/compiler/Import.fr
+	$(FREGEC2) -v frege/compiler/TCUtil.fr
 	$(FREGEC2) -v frege/compiler/Classes.fr
 	$(FREGEC2) -v frege/compiler/TAlias.fr
 	$(FREGEC2) -v frege/compiler/Transdef.fr
 	$(FREGEC2) -v frege/compiler/Transform.fr
-	$(FREGEC2) -v frege/compiler/TCUtil.fr
 	$(FREGEC2) -v frege/compiler/Typecheck.fr
 	$(FREGEC2) -v frege/compiler/GenMeta.fr
 	$(FREGEC2) -v frege/compiler/GenJava.fr
