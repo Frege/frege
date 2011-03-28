@@ -65,7 +65,7 @@ yyfromId n
 yychar t
     | Token.tokid t == CHAR = (Token.value t).[0]
     | otherwise = '\0'
-yytoken = Token.tokid
+yytoken t = Token.tokid t
 vid t = (Token.value t; Token.line t)
 
 /*
