@@ -39,6 +39,10 @@ type Guard = (Line, [Qual], Exp)
 
 infixl 16 `nApp`
 
+// this will speed up the parser by a factor of 70, cause yyprods comes out monotyped.
+private yyprod1 :: [(Int, YYsi ParseResult Token)]
+    -> StG (YYsi ParseResult Token, [(Int, YYsi ParseResult Token)])
+
 yyerror = U.error
 yyline  = Token.line
 yyval   = Token.value
