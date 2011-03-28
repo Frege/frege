@@ -35,7 +35,7 @@ FREGEC0 = $(JAVA) -Xss100m -Xmx400m -cp frege2.jar frege.compiler.Main -3 -hints
 FREGE1  = $(JAVA) -Xss24m -Xmx1g -cp stage1
 FREGE2  = $(JAVA) -Xss52m -Xmx1200m -cp stage2
 FREGEC1 = $(FREGE1) x3frege.compiler.Main -fp stage2 -d stage2 -nocp -prefix y3 -O -hints
-FREGEC2 = $(FREGE2) y3frege.compiler.Main -fp stage2 -d stage2 -nocp -prefix z3 -hints
+FREGEC2 = $(FREGE2) y3frege.compiler.Main -fp stage2 -d stage2 -nocp -prefix z3 -hints -v
 DOC0    = $(FREGE1) x3frege.tools.Doc     -fp stage2 -d doc    -nocp -prefix y3
 DOC1    = $(FREGE2) y3frege.tools.Doc     -fp stage2 -d doc    -nocp -prefix y3
 
@@ -115,16 +115,16 @@ $(COMPF3)/Main.class : $(COMPF2)/Main.class $(COMPF3)/Grammar.class
 	$(FREGEC2) -v frege/compiler/Enter.fr
 	$(FREGEC2) -v frege/compiler/Import.fr
 	$(FREGEC2) -v frege/compiler/TCUtil.fr
+	$(FREGEC2) -v frege/compiler/Transdef.fr
 	$(FREGEC2) -v frege/compiler/Classes.fr
 	$(FREGEC2) -v frege/compiler/TAlias.fr
-	$(FREGEC2) -v frege/compiler/Transdef.fr
 	$(FREGEC2) -v frege/compiler/Transform.fr
 	$(FREGEC2) -v frege/compiler/Typecheck.fr
 	$(FREGEC2) -v frege/compiler/GenMeta.fr
 	$(FREGEC2) -v frege/compiler/GenJava.fr
 	$(FREGEC2) -v frege/compiler/Main.fr
 
-$(COMPF3)/Grammar.class: lib3 $(COMPF2)/Main.class
+$(COMPF3)/Grammar.class: lib3 $(COMPF2)/Main.class frege/compiler/Grammar.fr
 	$(FREGEC2) -v frege/compiler/Classtools.fr
 	$(FREGEC2) -v frege/compiler/Data.fr
 	$(FREGEC2) -v frege/compiler/Utilities.fr

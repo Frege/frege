@@ -345,12 +345,15 @@ greek (s@#^[a-z]$#) = ctos (alphabet.charAt (ord (s.charAt 0) - ord 'a'))
 greek s = "Σ" ++ s
 alphabet = "αβγδεζηθιßκλμνξοπρςστυφχψωﬁﬂƒ"
 
+
+numbers = (map show (iterate (1+) 1))
+xxxNames xxx = zipWith (++) (repeat xxx) numbers
 /// arg1, arg2, arg3, ....
-argNames = zipWith (++) (repeat "_arg") (map show (iterate (1+) 1))
+argNames = xxxNames "_arg"
 /// ctx1, ctx2, ctx3, ...
-ctxNames = zipWith (++) (repeat "_ctx") (map show (iterate (1+) 1))
+ctxNames = xxxNames "_ctx"
 /// m1, m2, m3 ...
-memNames = zipWith (++) (repeat "m") (map show (iterate (1+) 1))
+memNames = xxxNames "m"
 
 jtValue  = Ref {jname = JName "" "Value", targs = []}
 jtLazy x = Ref {jname = JName "" "Lazy",  targs = [x]}
@@ -362,7 +365,7 @@ boxed (Nativ "long" [])    = Ref {jname = JName "" "Boxed.Long", targs = []}
 boxed (Nativ "double" [])  = Ref {jname = JName "" "Boxed.Double", targs = []}
 boxed (Nativ "float" [])   = Ref {jname = JName "" "Boxed.Float", targs = []}
 boxed (prim@Nativ _ _)     = Ref {jname = JName "" "Boxed", targs = [prim]}
-boxed (arr@Arr _)       = Ref {jname = JName "" "Boxed", targs = [arr]}
+boxed (arr@Arr _)          = Ref {jname = JName "" "Boxed", targs = [arr]}
 boxed x = x
 lazy x = jtLazy (boxed x)
 strict x = case boxed x of
@@ -1126,6 +1129,7 @@ workerMethod g (sym@SymV {name})
         jname -> JStMem (U.memberOf jname "w") []
     | otherwise = JAtom "w"
 
+
 /**
  * @makeConstraintDef (Ctx cname tau) "ctx3"@ = final Ccname<tau> ctx3
  */
@@ -1265,9 +1269,110 @@ varIsClass (sym@SymV {name, depth, rkind})
 funClass (sym@SymV {expr = Just x}) binds = do
     g <- getST
     if g.toplevel then topFun   sym binds
-                  else innerFun sym binds
+                  else if null sym.typ.bound
+                    then innerFun sym binds
+                    else innerQualifiedFun sym binds
 
+/**
+ * For some reason, when the function arguments have generic type arguments,
+ * it does not work if the local class itself has no type arguments.
+ * Therefore, we must introduce a fake generic type argument in this case.
+ */
 innerFun (sym@SymV {expr = Just x}) binds = do
+    g <- getST
+    let (rty, atys) = U.returnTypeN sym.depth sym.typ.rho
+        argAttr     = if (sym.rkind `band` 8) == 0 then attrFinal else 0
+        argNames    = drop (fold (+) 0 (map Symbol.depth g.genEnv)) GenJava.argNames
+        plain       = false // null (U.freeTVars [] sym.typ.rho.{context = []})
+    rjt  <- rhoJT rty
+    ajts <- mapSt subSigmaJT atys
+    workerArgs <- argDef argAttr sym.strsig atys argNames
+    uArgs      <- argDef argAttr U atys argNames
+    let extend = Ref (JName "" ("Fun" ++ show sym.depth)) (ajts ++ [rjt])
+        name   = U.javaName g sym.name                        // X.foo
+        fname  = JName "" name.base                           // foo
+        cname  = fname.{base <- ("_"++)}                      // _foo
+        ftargs = if plain then [] else [TArg "ﬁ"]             // <ﬁ1,ﬁ2,ﬁ3>
+        ftype  = (Ref cname ftargs)                           // Ffoo<a,b,c>
+        ttype  = if plain then ftype else ftype.{targs=[voidJT]}
+        constructor = JConstr {attr = attrs [JPublic],
+                                jtype = ftype,
+                                args = [],
+                                body = JBlock []}
+        lazyr = sym.rkind `band` 1 == 0
+        moder = if lazyr then RLazy else RBoxed
+        hasworker = sym.rkind `band` 6 != 0
+        rArgs      = reverse uArgs
+        workerType = case rmode sym.rkind of
+                                RLazy  -> lazy rjt
+                                RBoxed -> rjt
+                                RNative -> strict rjt
+        workerName = "w"
+        invokeWorker ftargs = JBlock [return]
+            where
+                return = JReturn (toMode moder worker).jex
+                worker = Bind (rmode sym.rkind) (ForAll [] rty) workerType
+                                                            (JInvoke workerex argexs)
+                workerex = JAtom workerName
+                argbinds = zipWith bind (take sym.depth argNames) (zip ajts atys)
+                bind s (jt, sig) = Bind RLazy sig (lazy jt) (JAtom s)
+                argexs = case sym.strsig of
+                    S ss -> zipWith argexp ss argbinds
+                    _    -> map Binding.jex argbinds
+                argexp s bind
+                    | Strictness.isStrict s = (strictBind bind).jex
+                    | otherwise             = Binding.jex bind
+        thisName = "this"  ++ show sym.sid
+        thisBind = Bind RBoxed sym.typ ttype (JAtom thisName)
+        innerbinds = insert binds sym thisBind
+
+    stmts <- if hasworker
+                then compiling sym (genFunction sym (rmode sym.rkind) workerArgs innerbinds)
+                else compiling sym (genFunction sym moder        (reverse rArgs) innerbinds)
+
+    let thisAssign = JLocal (JMember {attr = attrFinal,
+                                        jtype=ttype, name = thisName,
+                                        init = Just initThis})
+        initThis = if plain then JAtom "this"
+            else JInvoke (JExMemG (JAtom "this") "single" ttype.targs) []
+        single  = if plain then [] else [
+                    JMethod {attr = attrs [JUnchecked, JFinal],
+                             gargs = ftype.targs,
+                             jtype = ftype,
+                             name = "single", args = [],
+                             body = JBlock [
+                                JReturn (JCast ftype (JAtom "this"))]}]
+        rMethod = JMethod {attr = attrs [JPublic, JFinal],
+                            gargs = [],
+                            jtype = if lazyr then lazy rjt else rjt,
+                            name = "r",
+                            args = rArgs,
+                            body = if hasworker then invokeWorker ftargs
+                                    else JBlock (thisAssign:stmts)}
+
+        worker = JMethod {attr = attrs [JPublic, JFinal],
+                          gargs = [],
+                          jtype = workerType,
+                          name = workerName,
+                          args = workerArgs,
+                          body = JBlock (thisAssign:stmts)}
+        // eWorker = if extworker then [worker] else []
+        iWorker = if hasworker then [worker] else []
+        fclass = JClass {attr = attrFinal,
+                            jtype = ftype,
+                            extend = Just extend,
+                            implement=[], defs}
+        defs = [constructor, rMethod] ++ iWorker ++ single
+        fvar = JMember {attr = attrFinal, jtype=ttype, name = fname.base,
+                      init = Just (JNew ttype [])}
+    stio ([JComment ((nice sym g) ++ "  " ++ show sym.strsig ++ "  " ++ show sym.rkind),
+        JComment (nicer sym.typ g),
+        JComment (nicer x g),
+        fclass, fvar
+        ])
+
+
+innerQualifiedFun (sym@SymV {expr = Just x}) binds = do
     g <- getST
 
     let argNames = drop (fold (+) 0 (map Symbol.depth g.genEnv)) GenJava.argNames
@@ -1286,14 +1391,14 @@ innerFun (sym@SymV {expr = Just x}) binds = do
             stio (rjt, ajts, constraints, constrargs, workerArgs, uArgs)
 
     (rjt, ajts, constraints, constrargs, workerArgs, uArgs)  <- subfun
-    unless (null constraints `or` sym.anno) do
-         // U.warn sym.pos ("inner " ++ nice sym g ++ " has constraints")
-         // die unless they can be resolved right here
-         foreach sym.typ.rho.context (resolveConstraint sym.pos)
+    // when (null constraints `or` sym.anno) do
+    //     // U.warn sym.pos ("inner " ++ nice sym g ++ " has constraints")
+    //     // die unless they can be resolved right here
+    //     foreach sym.typ.rho.context (resolveConstraint sym.pos)
 
     let extend = Ref (JName "" ("Fun" ++ show sym.depth))
                     (ajts ++ [rjt])
-    let name   = U.javaName g sym.name                        // X.foo
+        name   = U.javaName g sym.name                        // X.foo
         fname  = JName "" name.base                           // foo
         ftargs = map targ bnds                                // <a,b,c>
         ftype  = (Ref (fname) ftargs)                         // Ffoo<a,b,c>
@@ -1377,9 +1482,9 @@ innerFun (sym@SymV {expr = Just x}) binds = do
         //                    jtype = dftype, extend = Just extend, implement=[], defs}
         // defs = constraints ++ single ++ [constructor, rMethod, nMethod] ++ iWorker
 
-        flocal = JMember {attr = attrFinal, jtype = extend, name = name.base,
-                    init = Just mkInner}
-        mkInner = JNewClass extend [] (rMethod:iWorker)
+        // flocal = JMember {attr = attrFinal, jtype = extend, name = name.base,
+        //            init = Just mkInner}
+        // mkInner = JNewClass extend [] (rMethod:iWorker)
         fclass = JClass {attr = attrFinal,
                             jtype = dftype,
                             extend = Just extend,
@@ -1388,7 +1493,7 @@ innerFun (sym@SymV {expr = Just x}) binds = do
     stio ([JComment ((nice sym g) ++ "  " ++ show sym.strsig ++ "  " ++ show sym.rkind),
         JComment (nicer sym.typ g),
         JComment (nicer x g),
-        if sym.anno `and` length constraints > 0 then fclass else flocal,
+        fclass,
         ])
 
 topFun (sym@SymV {expr = Just x}) binds = do
@@ -2502,8 +2607,9 @@ genStmts rm (x@Let {env,ex}) binds = with env do
         localdef (binds, codes) sym = do
             g <- getST
             jt <- subSigmaJT (Symbol.typ sym)
-            let isClass = sym.anno `and` not (null sym.typ.rho.context)
-                mode = if Symbol.rkind sym `band` 1 == 0 then RLazy else RBoxed
+            let isClass = sym.depth > 0 `and` not (null sym.typ.bound)
+                mode = if sym.depth > 0 then RBoxed
+                        else if Symbol.rkind sym `band` 1 == 0 then RLazy else RBoxed
                 bjt  = if mode == RLazy then lazy jt else jt
                 name = (U.javaName g sym.name).base
                 bind = Bind mode sym.typ bjt (JAtom name)
@@ -2637,7 +2743,9 @@ instSym0 direct cmembers pos sym sigma = do
     gargs    <- mapSt tauJT inst
     U.logmsg TRACEG pos ("instSym: gargs = " ++ show (map (flip nice g) inst))
     jt       <- sigmaJT sigma
-    strho    <- U.substRho (unifySigma g sym.typ sigma) sym.typ.rho
+    let str | Local _ <- sym.name, null sym.typ.bound = sym.typ.rho.{context = []}
+            | otherwise = sym.typ.rho
+    strho    <- U.substRho (unifySigma g sym.typ sigma) str
     U.logmsg TRACEG pos ("instSym: strho = " ++ nice strho g)
     contexts <- mapSt  TC.reducedCtx  strho.context
     ctxs     <- mapSt (resolveConstraint pos) contexts
@@ -2651,8 +2759,9 @@ instSym0 direct cmembers pos sym sigma = do
         hktvsTau (TApp a b) = hktvsTau a `or` hktvsTau b
         hktvsTau (TFun a b) = hktvsTau a `or` hktvsTau b
         hktvsTau _ = false
-        needscoerce = any hktvsSigma ss
+        needscoerce = not (null sym.typ.bound) `and` any hktvsSigma ss
         coerce obj = if needscoerce then JInvoke (JExMemG obj "coerce" jt.targs) [] else obj
+    U.logmsg TRACEG pos ("instSym: coerce = " ++ show needscoerce)
 
     case sym of
         SymD {name=MName tynm _, flds} -> do
@@ -2697,14 +2806,22 @@ instSym0 direct cmembers pos sym sigma = do
         SymV {name, nativ = Just _} | U.arity sym == 0 = do
                 let inst = coerce (JStMem jname [])
                 stio (Bind RBoxed sigma jt inst)
-        SymV {name = Local _, expr = Just _, anno = true} = do
+        SymV {name = Local _, expr = Just _, depth} | depth > 0 = do
                 let inst = coerce (JNew it ctxs)
                     it = Ref jname gargs
-                stio (Bind RBoxed sigma jt inst)
+                if direct
+                    then case workerMethod g sym of
+                        JAtom x -> stio (Bind RBoxed sigma jt (JExMem inst x))
+                        wm      -> stio (Bind RBoxed sigma jt (wm.{targs=gargs}))
+                    else stio (Bind RBoxed sigma jt inst)
         SymV {name, depth, rkind} -> do
                 let inst = coerce (JInvoke n ctxs)
                     n    = JStMem (U.memberOf jname "n") gargs
-                stio (Bind RBoxed sigma jt inst)
+                if direct
+                    then case workerMethod g sym of
+                        JAtom x -> stio (Bind RBoxed sigma jt (JExMem inst x))
+                        wm      -> stio (Bind RBoxed sigma jt (wm.{targs=gargs}))
+                    else stio (Bind RBoxed sigma jt inst)
 
 adaptHigherPolymorphic a (ForAll bnd _)
     | null bnd = stio a
@@ -2755,7 +2872,7 @@ genExpr rm (Vbl {pos, name, typ = Just sigma}) binds
                         coerce = JExMemG boxf.jex "coerce" sjt.targs
                     stio (Bind RBoxed sigma sjt call)
                 | otherwise = stio (toMode rm b)
-            Nothing | Just _ <- sym.expr, sym.anno, length sym.typ.rho.context > 0
+            Nothing | Just _ <- sym.expr // , sym.anno, length sym.typ.rho.context > 0
                 = instSym sym.pos sym sigma
             Nothing -> do
                 g <- getST
@@ -2811,7 +2928,6 @@ genExpr rm (app@App a b (Just sigma)) binds = do
             asigs = maybe [] (snd • U.returnType • Sigma.rho) fun.typ
         args   <-   adaptHigherPolymorphicS args asigs
         genApp rm binds fun args
-
     where
         genApp rm binds (con@Con {pos, name, typ = Just csigma}) args = do
             sym <- U.findD name
@@ -2836,6 +2952,57 @@ genExpr rm (app@App a b (Just sigma)) binds = do
                                         b = Bind RLazy sigma (lazy sjt) r.jex
                                     stio (toMode rm b)
                     result
+        genApp rm binds (vbl@Vbl {pos, name, typ = Just vsigma}) args
+            | rm != RLazy = do
+                g     <- getST
+                sym   <- U.findV name
+                if sym.depth < 1 `or` sym.depth > length args
+                    then genAnon rm binds vbl args
+                    else case sym.name of
+                        MName cname _
+                            | Just (SymC {sid}) <- cname.findit g = genAnon rm binds vbl args
+                        noclassmember -> case sym.nativ of
+                            Just _    -> genAnon rm binds vbl args
+                            nonnative -> genDirect sym
+            where
+                genEx arm aex = genExpr arm aex binds
+                funBind sym   = case lookup binds sym of
+                        Just b -> do        // must be let bound because of depth > 0
+                            vbind <- genExpr RBoxed vbl binds
+                            let hasworker = sym.rkind `band` 6 != 0
+                                w = if hasworker then "w" else "r"
+                                njx = JExMem vbind.jex w
+                            stio (vbind.{jex = njx})
+                        Nothing -> instSymDirect pos sym vsigma
+                genDirect sym = do
+                    vbind <- funBind sym
+                    sjt   <- sigmaJT sigma
+                    let jx = vbind.jex
+                        rev | JExMem _ "r" <- jx = true
+                            | otherwise          = false
+                        r xs = if rev then reverse xs else xs
+                        aargs = take sym.depth args
+                        rargs = drop sym.depth args
+                        sss = case sym.strsig of
+                            S ss -> ss ++ allLazy
+                            U    -> allLazy
+                        (arho, asigs) = U.returnTypeN sym.depth sym.typ.rho
+                        cmode = if rev then rmode (sym.rkind `band` 1) else rmode sym.rkind
+                        rjt | cmode == RLazy   = lazy sjt
+                            | cmode == RNative = strict sjt
+                            | otherwise        = sjt
+                    argmodes <- mapSt (curry argMode) (zip sss asigs)
+                    abinds   <- mapSt (curry genEx)   (r (zip argmodes aargs))
+                    rbinds   <- mapSt (flip (genExpr RLazy) binds) rargs
+                    let call = Bind cmode sigma rjt (JInvoke jx (map Binding.jex abinds))
+                        result
+                            | null rargs = stio (toMode rm call)
+                            | otherwise  = do
+                                    let r = fold apply call rbinds
+                                        b = Bind RLazy sigma (lazy sjt) r.jex
+                                    stio (toMode rm b)
+                    result
+
 
         genApp rm binds fun args = genAnon rm binds fun args
 
