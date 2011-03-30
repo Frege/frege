@@ -1172,7 +1172,7 @@ argDef attr stri sigmas argNms
 /**
  * convert an arg quadrupel to a 'Binding'
  */
-argBind (_, sig, jt, s) = Bind (jtRmode jt) sig jt (JAtom s)
+argBind(_, sig, jt, s) = Bind (jtRmode jt) sig jt (JAtom s)
 
 /**
  * the mode a certain argument is in, given strictness and sigma
@@ -1921,20 +1921,31 @@ methCode (sym@SymV {nativ = Just item})
             dftype      = defining ftype
             args        = if haswrapper then wArgs else rArgs
             haswrapper  = arity > 0 `and` wrapped sym `or` (not (null bnds))
-            callWrapper = JInvoke (JStMem (U.memberOf name "w") ftargs)
-                            (map (Binding.jex • strictBind • argBind) rArgs)
+            callWrapper = (toBoxed bndWrapper).jex
+            bndWrapper  = bndWcode invWrapper
+            invWrapper  = JInvoke (JStMem (U.memberOf name "w") ftargs)
+                                (map (Binding.jex • strictBind • argBind) rArgs)
             jreturn     = if arity > 0 then JReturn else JEx
+            bndWcode  x = Bind (if wrapped sym then RBoxed else maxStrict rjt)
+                            (ForAll [] (RhoTau [] rty)) (strict rjt) x
 
-        wcode          <- wrapCode jreturn rty sym (map argBind args)
+        wcode          <- if wrapped sym
+                                then wrapCode jreturn rty sym (map argBind args)
+                                else do
+                                    bind <- nativeCall sym (map argBind args)
+                                    stio [jreturn bind.jex]
+
 
         let rMethod     = JMethod {attr = attrs [JPublic, JFinal],
                                    gargs = [], jtype = rjt, name = "r", args = reverse rArgs,
                                    body = JBlock rBody}
             rBody       = if haswrapper then [JReturn callWrapper]
-                            else wcode
+                            else case wcode of
+                                [JReturn x] = [JReturn (toBoxed (bndWcode x)).jex]
+                                _ -> wcode
             wrappers    = if haswrapper then [wrapper] else []
             wrapper     = JMethod {attr = attrs [JPublic, JStatic, JFinal],
-                                gargs = ftargs, jtype = rjt, name = "w",
+                                gargs = ftargs, jtype = strict rjt, name = "w",
                                 args = wArgs, body = JBlock wcode}
             single      = JMember {attr = attrs [JFinal, JPrivate, JStatic],
                                 jtype = erased dftype,
@@ -1952,7 +1963,7 @@ methCode (sym@SymV {nativ = Just item})
             fclass      = JClass {attr = attrs [JPublic, JStatic, JFinal],
                                   jtype = dftype, extend = Just extend, implement=[], defs}
             defs        = [single, constructor, rMethod, nMethod] ++ wrappers
-            unex  [(JEx x)] = x
+            unex  [(JEx x)] = (toBoxed (bndWcode x)).jex
             member = JMember {attr = attrs [JPublic, JStatic, JFinal],
                                 jtype = rjt,
                                 name = (U.javaName g sym.name).base,
@@ -2052,6 +2063,7 @@ toBoxed (bind@Bind {mode=RNative, jex = JExMem jx "j"}) = bind.{mode = RBoxed, j
 toBoxed (bind@Bind {mode=RNative, jtype}) = case boxed jtype of
     bt@Ref (JName "" bx) t -> bind.{mode=RBoxed, jtype = bt,
                                 jex = JInvoke (JStMem (JName bx "mk") t) [bind.jex]}
+    other -> bind.{mode=RBoxed, jtype = other}      // questionable whether this is right
 toBoxed (bind@Bind {mode=RLazy}) = bind.{mode=RBoxed, jtype <- boxed,
                                     jex =JInvoke (JExMem bind.jex "_e") []}
 toBoxed bind = bind
@@ -3012,7 +3024,7 @@ genExpr rflg rm (app@App a b (Just sigma)) binds = do
                         else do
                             sjt   <- sigmaJT sigma
                             ajt   <- tauJT atau
-                            let rjt = strict  ajt
+                            let rjt   = strict  ajt
                                 cmode = maxStrict rjt
                             amodes   <- mapSt (curry argMode) (zip sss asigs)
                             abinds   <- mapSt (curry genEx)   (zip amodes aargs)
