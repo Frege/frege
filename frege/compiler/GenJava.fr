@@ -1129,6 +1129,7 @@ javaRhoBinders bound (RhoTau ctxs tau) = do
  */
 workerMethod g (sym@SymD {name}) = case U.javaName g name of
         jname -> JStMem (U.memberOf jname "mk") []
+// workerMethod g (sym@SymV {name, nativ=Just item}) =
 workerMethod g (sym@SymV {name})
     | sym.rkind `band` 6 == 0 = JAtom "r"
     | Local _ <- name = JAtom "w"
@@ -1778,6 +1779,16 @@ wrapped (sym@SymV {nativ = Just item}) = niSpecial rty
     where
         (rty, sigmas) = U.returnType sym.typ.rho
 
+/**
+ * Tell if a native function must be called through it's wrapper.
+ *
+ * Plain types and Maybe types can be called directly
+ */
+wrappedOnly (sym@SymV {nativ = Just item}) = niSpecial rty && isNothing (U.isMaybe rty)
+    where
+        (rty, sigmas) = U.returnType sym.typ.rho
+
+
 /// returns a binding for a direct call of a native method
 nativeCall (sym@SymV {nativ = Just item}) abinds = do
         g <- getST
@@ -1909,7 +1920,7 @@ methCode (sym@SymV {nativ = Just item})
             ftype       = (Ref (fname) ftargs)                         // Ffoo<a,b,c>
             dftype      = defining ftype
             args        = if haswrapper then wArgs else rArgs
-            haswrapper  = arity > 0 `and` wrapped sym
+            haswrapper  = arity > 0 `and` wrapped sym `or` (not (null bnds))
             callWrapper = JInvoke (JStMem (U.memberOf name "w") ftargs)
                             (map (Binding.jex • strictBind • argBind) rArgs)
             jreturn     = if arity > 0 then JReturn else JEx
@@ -2956,17 +2967,21 @@ genExpr rflg rm (app@App a b (Just sigma)) binds = do
         genApp rm binds (vbl@Vbl {pos, name, typ = Just vsigma}) args = do
                 g     <- getST
                 sym   <- U.findV name
-                if sym.depth < 1 `or` sym.depth > length args
+                let d = ari sym
+                if d < 1 `or` d > length args
                     then genAnon rm binds vbl args
                     else case sym.name of
                         MName cname _
                             | Just (SymC {sid}) <- cname.findit g = genAnon rm binds vbl args
                         noclassmember -> case sym.nativ of
-                            Just _    -> /*genNative sym */genAnon rm binds vbl args
+                            Just _    -> genNative sym //genAnon rm binds vbl args
                             nonnative -> genDirect sym
             where
+                ari (sym@SymV {nativ=Just _}) = U.arity sym
+                ari sym                       = sym.depth
                 tailcall = rflg `and` rm == RLazy
                 genEx arm aex = genExpr false arm aex binds
+
                 funBind sym   = case lookup binds sym of
                         Just b -> do        // must be let bound because of depth > 0
                             vbind <- genExpr false RBoxed vbl binds
@@ -2981,20 +2996,56 @@ genExpr rflg rm (app@App a b (Just sigma)) binds = do
                                 vbind <- instSym pos sym vsigma
                                 stio vbind.{jex <- flip JExMem "a"}
                             else instSymDirect pos sym vsigma
+
+                genNative sym = do
+                    // vbind <- funBind sym
+                    let acall = rm == RLazy `and` not tailcall
+                        wcall = not acall `and` (wrappedOnly sym `or` not (null sym.typ.bound))
+                        (atau, asigs) = U.returnType (Symbol.typ sym).rho
+                        depth         = ari sym
+                        aargs         = take depth args
+                        rargs         = drop depth args
+                        sss           = case sym.strsig of
+                                S ss -> ss ++ allLazy
+                                U    -> allLazy
+                    if acall `or` wcall then genDirect sym
+                        else do
+                            sjt   <- sigmaJT sigma
+                            ajt   <- tauJT atau
+                            let rjt = strict  ajt
+                                cmode = maxStrict rjt
+                            amodes   <- mapSt (curry argMode) (zip sss asigs)
+                            abinds   <- mapSt (curry genEx)   (zip amodes aargs)
+                            rbinds   <- mapSt (flip (genExpr false RLazy) binds) rargs
+                            call     <- if wrapped sym
+                                then do
+                                    code <- wrapCode JEx atau sym abinds
+                                    let JEx ex = head code
+                                    stio (Bind cmode sigma rjt ex)
+                                else nativeCall sym abinds
+
+                            let result
+                                    | null rargs = stio (toMode rm call)
+                                    | otherwise  = do
+                                            let r = fold apply call rbinds
+                                                b = Bind RLazy sigma (lazy sjt) r.jex
+                                            stio (toMode rm b)
+                            result
                 genDirect sym = do
                     vbind <- funBind sym
                     sjt   <- sigmaJT sigma
                     let jx = vbind.jex
+                        depth = ari sym
                         rev | JExMem _ "r" <- jx = true
                             | otherwise          = false
                         r xs = if rev then reverse xs else xs
-                        aargs = take sym.depth args
-                        rargs = drop sym.depth args
+                        aargs = take depth args
+                        rargs = drop depth args
                         sss = if rm == RLazy `and` not tailcall then allLazy
                             else case sym.strsig of
                                 S ss -> ss ++ allLazy
                                 U    -> allLazy
-                        (arho, asigs) = U.returnTypeN sym.depth sym.typ.rho
+                        (arho, asigs) = U.returnTypeN depth sym.typ.rho
                         cmode = if rm == RLazy then RLazy
                             else if rev then rmode (sym.rkind `band` 1)
                             else rmode sym.rkind
