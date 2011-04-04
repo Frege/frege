@@ -645,9 +645,12 @@ sigma:
     ;
 
 forall:
-      FORALL boundvars                 '.' rhofun    { \_\bs\_\r      -> ForAll bs r }
-    | FORALL boundvars  constraints    '.' rhofun    { \_\bs\cs\_\r   -> ForAll bs (Rho.{context=cs} r)}
-    | FORALL            constraints    '.' rhofun    { \_\cs\_\r      ->
+      FORALL boundvars                  '.' rhofun    { \_\bs\_\r      -> ForAll bs r }
+    | FORALL boundvars  constraints     '.' rhofun    { \_\bs\cs\_\r   ->
+                                    let
+                                        free = unique (bs ++ keys (U.freeCtxTVars [] Nil cs))
+                                    in ForAll free (Rho.{context=cs} r)}
+    | FORALL                constraints '.' rhofun    { \_\cs\_\r      ->
                                     ForAll (keys (U.freeCtxTVars [] Nil cs)) (Rho.{context=cs} r)}
     ;
 
