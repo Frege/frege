@@ -648,7 +648,7 @@ forall:
       FORALL boundvars                  '.' rhofun    { \_\bs\_\r      -> ForAll bs r }
     | FORALL boundvars  constraints     '.' rhofun    { \_\bs\cs\_\r   ->
                                     let
-                                        free = unique (bs ++ keys (U.freeCtxTVars [] Nil cs))
+                                        free = unique (keys (U.freeCtxTVars [] Nil cs) ++ bs)
                                     in ForAll free (Rho.{context=cs} r)}
     | FORALL                constraints '.' rhofun    { \_\cs\_\r      ->
                                     ForAll (keys (U.freeCtxTVars [] Nil cs)) (Rho.{context=cs} r)}
