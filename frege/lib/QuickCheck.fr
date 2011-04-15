@@ -1,0 +1,368 @@
+/*-----------------------------------------------------------------------------
+-- |
+-- Module      :  Test.QuickCheck
+-- Copyright   :  (c) Koen Claessen, John Hughes 2001
+-- License     :  BSD-style (see the file libraries/base/LICENSE)
+-- 
+-- Maintainer  :  libraries@haskell.org
+-- Stability   :  experimental
+-- Portability :  portable
+--
+-- QuickCheck v.0.2
+-- DRAFT implementation; last update 000104.
+-- Koen Claessen, John Hughes.
+-- This file represents work in progress, and might change at a later date.
+--
+-----------------------------------------------------------------------------*/
+
+/*
+ * $Author$  (edited Haskell version)
+ * $Revision$
+ * $Id$
+ * $Date$
+ */
+
+/**
+ * Please see the QucikCheck manual at @http://www.cse.chalmers.se/~rjmh/QuickCheck/manual.html@
+ */
+package frege.lib.QuickCheck where
+
+
+import frege.lib.Random
+import frege.List (joinStr)
+import frege.IO (getProperty)
+// import Data.List( group, sort, intersperse )
+// import Control.Monad( liftM2, liftM3, liftM4 )
+
+infixr 16 `==>`
+infix  15 `classify`
+
+//-------------------------------------------------------------------
+// common functions
+lnsep = maybe "\n" id (getProperty "line.separator")
+unlines xs = joinStr lnsep xs
+sum xs = fold (+) 0 xs
+
+
+//--------------------------------------------------------------------
+// Generator
+
+data Gen a
+  = Gen (Int -> StdGen -> a)
+
+sized :: (Int -> Gen a) -> Gen a
+sized fgen = Gen (\n \r -> let Gen m = fgen n in m n r)
+
+resize :: Int -> Gen a -> Gen a
+resize n (Gen m) = Gen (\_ \r -> m n r)
+
+rand :: Gen StdGen
+rand = Gen (\n \r -> r)
+
+promote :: (a -> Gen b) -> Gen (a -> b)
+promote f = Gen prom
+    where prom n r a = let Gen m = f a in m n r
+
+variant :: Int -> Gen a -> Gen a
+variant v (Gen m) = Gen (\n \r -> m n (rands r v))
+ where
+  rands r0 0 = r0
+  rands r0 n = let (r1,r2) = split r0
+                   (n',s)  = (n `div` 2; n `rem` 2)
+               in case s of
+                    0 -> rands r1 n'
+                    _ -> rands r2 n'
+
+generate :: Int -> StdGen -> Gen a -> a
+generate n rnd (Gen m) = m size rnd'
+ where
+  (size, rnd') = randomR (0, n) rnd
+
+instance Functor Gen where
+  fmap f m = m >>= return • f
+
+instance Monad Gen where
+  return a    = Gen (\n \r -> a)
+  Gen m >>= k =
+    Gen (\n \r0 -> let (r1,r2) = split r0
+                       Gen m'  = k (m n r1)
+                   in m' n r2)
+
+// derived
+
+choose :: forall Random a . (a, a) -> Gen a
+choose bounds = (fst • randomR bounds) `fmap` rand
+
+elements :: [a] -> Gen a
+elements xs = (xs !!) `fmap` choose (0, length xs - 1)
+
+vector :: forall Arbitrary a . Int -> Gen [a]
+// vector n | traceLn("vector " ++ show n) = undefined
+vector n = sequence [ arbitrary | i <- 1..n ]
+
+oneof :: [Gen a] -> Gen a
+oneof gens = elements gens >>= id
+
+frequency :: [(Int, Gen a)] -> Gen a
+frequency xs = choose (1, tot) >>= (`pick` xs)
+ where
+  tot = sum (map fst xs)
+
+  pick n ((k,x):xs)
+    | n <= k    = x
+    | otherwise = pick (n-k) xs
+
+// general monadic
+
+two :: forall a Monad m . m a -> m (a, a)
+two m = liftM2 (,) m m
+
+three :: forall a Monad m . m a -> m (a, a, a)
+three m = liftM3 (,,) m m m
+
+four :: forall a Monad m . m a -> m (a, a, a, a)
+four m = liftM4 (,,,) m m m m
+
+// --------------------------------------------------------------------
+// -- Arbitrary
+
+class Arbitrary a where
+  arbitrary   :: Gen a
+  coarbitrary :: a -> Gen b -> Gen b
+
+instance Arbitrary () where
+  arbitrary     = return ()
+  coarbitrary _ = variant 0
+
+instance Arbitrary Bool where
+  arbitrary     = elements [true, false]
+  coarbitrary b = if b then variant 0 else variant 1
+
+instance Arbitrary Char where
+  arbitrary     = frequency [
+        (1, elements ['\t', '\n', '\r']),
+        (9, return ' '),
+        (50, choose (ord 'a', ord 'z') >>= (return • chr)),
+        (10, choose (ord 'A', ord 'Z') >>= (return • chr)),
+        (50, choose (32,127) >>= (\n -> Gen.return (chr n))),
+        (5,  choose (0,65535) >>= (\n -> Gen.return (chr n))) ]
+  coarbitrary n = variant (ord n)  
+  
+instance Arbitrary Int where
+  arbitrary     = sized (\n -> choose (0-n,n))
+  coarbitrary n = variant (if n >= 0 then 2*n else 2*(0-n) + 1)
+
+instance Arbitrary Long where
+  arbitrary     = sized (\n -> choose (negate n,n) >>= return • Int.long)
+  coarbitrary n = variant (if n >= 0L then 2L*n else 2L*(negate n) + 1L).int
+  
+instance Arbitrary Integer where
+  arbitrary     = sized (\n -> choose (negate n, n) >>= return • Int.big)
+  coarbitrary n = variant (if n >= 0n then 2n*n else 2n*(0n-n) + 1n).int
+
+instance Arbitrary Float where
+  arbitrary     = liftM3 fraction Int.arbitrary Int.arbitrary Int.arbitrary 
+  coarbitrary x = error "coarbitrary (decodeFloat x)"
+
+instance Arbitrary Double where
+  arbitrary     = liftM3 fraction Int.arbitrary Int.arbitrary Int.arbitrary 
+  coarbitrary x = error "coarbitrary (decodeFloat x)"
+
+fraction :: forall Real f . Int -> Int -> Int -> f
+fraction a b c = fromInt a + (fromInt b / (abs (fromInt c) + fromInt 1))
+
+instance Arbitrary forall Arbitrary a, Arbitrary b . (a, b) where
+  arbitrary          = liftM2 (,) Arbitrary.arbitrary Arbitrary.arbitrary 
+  coarbitrary (a, b) = a.coarbitrary • b.coarbitrary
+
+instance Arbitrary  forall Arbitrary a, Arbitrary b, Arbitrary c . (a, b, c) where
+  arbitrary             = liftM3 (,,) Arbitrary.arbitrary Arbitrary.arbitrary Arbitrary.arbitrary
+  coarbitrary (a, b, c) = a.coarbitrary • b.coarbitrary • c.coarbitrary
+
+instance Arbitrary  forall Arbitrary a, Arbitrary b, Arbitrary c, Arbitrary d .
+       (a, b, c, d)
+ where
+  arbitrary = liftM4 (,,,) Arbitrary.arbitrary Arbitrary.arbitrary Arbitrary.arbitrary Arbitrary.arbitrary
+  coarbitrary (a, b, c, d) =
+    a.coarbitrary • b.coarbitrary • c.coarbitrary • d.coarbitrary
+
+instance Arbitrary forall Arbitrary a . Maybe a where
+  arbitrary            = sized arbMaybe
+   where
+    arbMaybe 0 = return Nothing
+    arbMaybe n = fmap Just (resize (n-1) Arbitrary.arbitrary)
+  coarbitrary Nothing  = variant 0
+  coarbitrary (Just x) = variant 1 • x.coarbitrary
+
+instance Arbitrary  forall Arbitrary a, Arbitrary b . (Either a b) where
+  arbitrary             = oneof [fmap Left Arbitrary.arbitrary, fmap Right Arbitrary.arbitrary]
+  coarbitrary (Left x)  = variant 0 • x.coarbitrary
+  coarbitrary (Right x) = variant 1 • x.coarbitrary
+
+instance Arbitrary forall Arbitrary a . [a] where
+  arbitrary          = sized (\n -> choose (0,n) >>= vector)
+  coarbitrary []     = variant 0
+  coarbitrary (a:as) = a.coarbitrary • variant 1 • coarbitrary as
+  
+instance Arbitrary String where
+    arbitrary = Arbitrary.arbitrary >>= (return • cstos)
+    coarbitrary "" = variant 0
+    coarbitrary str = (str.charAt 0).coarbitrary • variant 1 • coarbitrary str.tail
+
+  /*
+instance (Arbitrary a, Arbitrary b) => Arbitrary (a -> b) where
+  arbitrary         = promote (`coarbitrary` arbitrary)
+  coarbitrary f gen = arbitrary >>= ((`coarbitrary` gen) . f) */
+
+// --------------------------------------------------------------------
+// -- Testable
+
+data Result
+  = Result { ok :: Maybe Bool, stamp :: [String], arguments :: [String] }
+
+nothing :: Result
+nothing = Result{ ok = Nothing, stamp = [], arguments = [] }
+
+/// we cannot make bare functions instances of something, therefore we wrap them here
+data Law a b = Law (a->b)
+
+data Property
+  = Prop (Gen Result)
+
+result :: Result -> Property
+result res = Prop (return res)
+
+evaluate :: forall Testable a . a -> Gen Result
+evaluate a = gen where Prop gen = property a
+
+class Testable a where
+  property :: a -> Property
+
+instance Testable () where
+  property _ = result nothing
+
+instance Testable Bool where
+  property b = result (nothing.{ ok = Just b })
+
+instance Testable Result where
+  property res = result res
+
+instance Testable Property where
+  property prop = prop
+
+instance Testable forall Arbitrary a, Show a, Testable b . Law a b where
+   property (Law f) = forAll arbitrary f
+
+forAll :: forall Show a, Testable b . Gen a -> (a -> b) -> Property
+forAll gen body = Prop $
+  do a   <- gen
+     res <- evaluate (body a)
+     return (argument a res)
+ where
+  argument a res = Result.{ arguments <- (show a :) } res
+
+(==>) :: forall Testable a . Bool -> a -> Property
+true  ==> a = property a
+false ==> a = property ()
+
+label :: forall Testable a . String -> a -> Property
+label s a = Prop (add `fmap` evaluate a)
+ where
+  add res = Result.{ stamp <- (s :) } res
+
+classify :: forall Testable a . Bool -> String -> a -> Property
+classify true  name = label name
+classify false _    = property
+
+trivial :: forall Testable a . Bool -> a -> Property
+trivial = (`classify` "trivial")
+
+collect :: forall Show a, Testable b . a -> b -> Property
+collect v = label (show v)
+
+// --------------------------------------------------------------------
+// -- Testing
+
+data Config = Config
+  { configMaxTest :: Int
+  , configMaxFail :: Int
+  , configSize    :: Int -> Int
+  , configEvery   :: Int -> [String] -> String
+  }
+
+backspaces = repeat '\b'
+backN n = cstos (take n backspaces)
+
+quick :: Config
+quick = Config
+  { configMaxTest = 100
+  , configMaxFail = 1000
+  , configSize    = (+ 3) • (`div` 2)
+  , configEvery   = \n \args -> let s = show n in s ++ backN s.length
+  }
+         
+verbose :: Config
+verbose = quick.
+  { configEvery = \n \args -> show n ++ ":  " ++ joinStr ", " args ++ lnsep
+  }
+
+defaultConfig :: Config
+defaultConfig = quick
+
+test, quickCheck, verboseCheck :: forall Testable a . a -> IO ()
+test         = check quick
+quickCheck   = check quick
+verboseCheck = check verbose
+         
+check :: forall Testable a . Config -> a -> IO ()
+check config a =
+  do rnd <- newStdGen
+     tests config (evaluate a) rnd 0 0 []
+
+tests :: Config -> Gen Result -> StdGen -> Int -> Int -> [[String]] -> IO () 
+tests config gen rnd0 ntest nfail stamps
+  | ntest == Config.configMaxTest config = do done "OK, passed" ntest stamps
+  | nfail == Config.configMaxFail config = do done "Arguments exhausted after" ntest stamps
+  | otherwise               =
+      do printStr (Config.configEvery config ntest (Result.arguments result))
+         case Result.ok result of
+           Nothing    ->
+             tests config gen rnd1 ntest (nfail+1) stamps
+           Just true  ->
+             tests config gen rnd1 (ntest+1) nfail (Result.stamp result:stamps)
+           Just false ->
+             printStrLn ( "Falsifiable, after "
+                   ++ show ntest
+                   ++ " tests:" ++ lnsep
+                   ++ unlines (Result.arguments result)
+                    )
+     where
+      result      = generate (Config.configSize config ntest) rnd2 gen
+      (rnd1,rnd2) = split rnd0
+
+done :: String -> Int -> [[String]] -> IO ()
+done mesg ntest stamps =
+  do printStrLn ( mesg ++ " " ++ show ntest ++ " tests" ++ table )
+ where
+  table = display
+        • map entry
+        • reverse
+        • sort
+        • map pairLength
+        • group
+        • sort
+        • filter (not • null)
+        $ stamps
+
+  display []  = "." ++ lnsep
+  display [x] = " (" ++ x ++ ")." ++ lnsep
+  display xs  = "." ++ lnsep ++ unlines (map (++ ".") xs)
+
+  pairLength xss        = (length xss, head xss)
+  entry (n, xs)         = percentage n ntest
+                       ++ " "
+                       ++ joinStr ", " xs
+
+  percentage n m        = show ((100 * n) `div` m) ++ "%"
+
+
