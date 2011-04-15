@@ -868,7 +868,7 @@ conflds:
 
 confld:
     // simpletype                  { (,) Nothing <~ ForAll [] <~ RhoTau }
-    VARID DCOLON sigma            { \v\_\t -> (Just (Token.value v), t) }
+    VARID DCOLON tau            { \v\_\t -> (Just (Token.value v), ForAll [] (RhoTau [] t)) }
     ;
 
 typedef:
