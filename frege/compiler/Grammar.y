@@ -108,9 +108,9 @@ vid t = (Token.value t; Token.line t)
 //%type importitem      (Pos String)
 //%type annoitem        (Pos String)
 //%type nativestart     (Pos String)
-//%type importlist      [Pos String]
+//%type importlist      [String]
 //%type annoitems       [Pos String]
-//%type importliste     (Maybe [(Pos String)])
+//%type importliste     (Either [String] [String])
 //%type definitions     [Def]
 //%type definition      [Def]
 //%type import          Def
@@ -497,14 +497,14 @@ import:
     ;
 
 importliste:
-    { Nothing }
-    | '(' ')'               { \_\_   -> Just [] }
-    | '(' importlist ')'    { \_\b\_ -> Just b  }
+    { Left [] }
+    | '(' ')'               { \_\_   -> Right [] }
+    | '(' importlist ')'    { \_\b\_ -> Right b  }
     ;
 
 importlist:
-    importitem              { (:[]) }
-    | importitem importlist { (:)   }
+    importitem              { (single • fst) }
+    | importitem importlist { \a\b -> fst a : b }
     ;
 
 varid:   VARID              { vid }
@@ -704,7 +704,7 @@ tauSC:
     ;
 
 tapp:
-    simpletypes         { \(con:ts) -> Tau.mkapp con ts }
+    simpletypes         { \taus -> Tau.mkapp (head taus) (tail taus) }
     ;
 
 simpletype:
@@ -1376,7 +1376,9 @@ funhead (ex@App e1 e2 _)
                 yyerror (getpos x) ("bad function head " ++ es)
                 YYM.return ("bad"; [pat])
     where
-        x:xs = map fst (U.flatx ex)
+        flatex = map fst (U.flatx ex)
+        x = head flatex
+        xs = tail flatex
 
 
 
