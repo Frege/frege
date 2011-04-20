@@ -18,11 +18,11 @@ package frege.compiler.Grammar where
 
 import frege.IO(stdout stderr << BufferedReader)
 import frege.List(Tree keyvalues keys)
-import frege.compiler.Data                      as D
+import frege.compiler.Data    except(version)   D
 import frege.compiler.Utilities
         (posItem posLine unqualified
           tuple)
-                                                as U
+                                                U
 
 version = v "$Revision$" where
     v (m ~ #(\d+)#) | Just g <- m.group 1 = g.atoi
@@ -487,17 +487,18 @@ letdefs:
 import:
     IMPORT   packagename importliste
         { \i\b\c -> ImpDcl {pos=yyline i, pack=b, items=c, as=Nothing} }
-    | IMPORT packagename importliste varid conid
-        { \i\p\l\as\n ->
-            do
-                when ( posItem as != "as" )
-                    $ yyerror (posLine as) (show "as" ++ " expected instead of " ++ show (posItem as))
-                YYM.return (ImpDcl {pos = yyline i,
-                                    pack=p, items=l, as=Just (posItem n)}) }
+    | IMPORT packagename importliste conid
+        { \i\p\l\n -> ImpDcl {pos = yyline i,
+                              pack=p, items=l, as=Just (posItem n)} }
     ;
 
 importliste:
     { Left [] }
+    | varid '(' importlist ')' { \v\_\is\_ -> do
+            when ( posItem v `notElem` [ "except", "excluding", "without" ]) do
+                yyerror (posLine v) (show "except" ++ " expected instead of " ++ show (posItem v))
+            YYM.return (Left is)
+        }
     | '(' ')'               { \_\_   -> Right [] }
     | '(' importlist ')'    { \_\b\_ -> Right b  }
     ;
