@@ -51,6 +51,10 @@ yynice t = case tok of
         DOCUMENTATION -> "documentation comment"
         CHAR          -> show (tv).[0]
         STRCONST      -> "literal " ++ start tv
+        EARROW        -> "'=>'"
+        ARROW         -> "'->'"
+        DCOLON        -> "'::'"
+        GETS          -> "'<-'"
         _             -> if yyline t > 0 then "token " ++ show tv else tv
     where
         tok = yytoken t
@@ -149,11 +153,12 @@ vid t = (Token.value t; Token.line t)
 //%type dvars           [TauS]
 //%type sigma           SigmaS
 //%type forall          SigmaS
-//%type crhofun         RhoS
 //%type constraint      ContextS
 //%type constraints     [ContextS]
 //%type constrlist      [ContextS]
 //%type rhofun          RhoS
+//%type rhotau          RhoS
+//%type rho             RhoS
 //%type fldtype         (Pos String, SigmaS)
 //%type fldtypes        [(Pos String, SigmaS)]
 //%type field           (String, Exp)
@@ -234,7 +239,8 @@ vid t = (Token.value t; Token.line t)
 //%explain simpletype   a non function type
 //%explain simpletypes  non function types
 //%explain rhofun       a type
-//%explain crhofun      a constrained type
+//%explain rhotau       a type
+//%explain rho          a constrained type
 //%explain tapp         a type application
 //%explain forall       a qualified type
 //%explain sigma        a qualified type
@@ -349,7 +355,7 @@ vid t = (Token.value t; Token.line t)
 %left       LOP5
 %nonassoc   NOP5
 %right      ROP4
-%left       LOP4
+%left       LOP4 '-'
 %nonassoc   NOP4
 %right      ROP3
 %left       LOP3
@@ -642,24 +648,26 @@ boundvar:
 
 sigma:
     forall
-    | rhofun                       { ForAll [] }
+    | rho                          { ForAll [] }
     ;
 
 forall:
-      FORALL boundvars                  '.' rhofun    { \_\bs\_\r      -> ForAll bs r }
-    | FORALL boundvars  constraints     '.' rhofun    { \_\bs\cs\_\r   ->
-                                    let
-                                        free = unique (keys (U.freeCtxTVars [] Nil cs) ++ bs)
-                                    in ForAll free (Rho.{context=cs} r)}
-    | FORALL                constraints '.' rhofun    { \_\cs\_\r      ->
-                                    ForAll (keys (U.freeCtxTVars [] Nil cs)) (Rho.{context=cs} r)}
+      FORALL boundvars                  '.' rho    { \_\bs\_\r      -> ForAll bs r }
     ;
 
+rho:
+    tapp EARROW rhofun              { \tau\t\rho -> do
+                                        context <- U.tauToCtx (yyline t) tau
+                                        YYM.return (Rho.{context} rho)
+                                    }
 rhofun:
     '(' forall ')'  ARROW rhofun            { \_\a\_\_\b -> RhoFun [] a b }
-    | tapp          ARROW rhofun            { \a\_\b     -> RhoFun [] (ForAll [] (RhoTau [] a)) b }
-    | tapp                                  { RhoTau [] }
+    | rhotau        ARROW rhofun            { \a\_\b     -> RhoFun [] (ForAll [] a) b }
+    | rhotau
     ;
+
+rhotau:
+    tapp                                    { RhoTau [] }
 
 /*
 crhofun:
@@ -752,8 +760,9 @@ classdef:
         \_\i\(tv::TauS)\defs -> ClaDcl {pos = posLine i, vis = Public, name = posItem i,
                         clvar=tv.{classes=[]}, supers=tv.classes, defs = defs, doc = Nothing}
     }
-    | CLASS conid constrlist EARROW varid wheredef {
-        \_\i\ctxs\_\v\defs -> do
+    | CLASS conid tapp EARROW varid wheredef {
+        \_\i\tau\_\v\defs -> do
+            ctxs <- U.tauToCtx (posLine i) tau
             sups <- classContext (posItem i) ctxs (posItem v)
             YYM.return (ClaDcl {pos = posLine i, vis = Public, name = posItem i,
                              clvar = TVar (posLine v) (posItem v) [],
