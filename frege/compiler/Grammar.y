@@ -153,9 +153,6 @@ vid t = (Token.value t; Token.line t)
 //%type dvars           [TauS]
 //%type sigma           SigmaS
 //%type forall          SigmaS
-//%type constraint      ContextS
-//%type constraints     [ContextS]
-//%type constrlist      [ContextS]
 //%type rhofun          RhoS
 //%type rhotau          RhoS
 //%type rho             RhoS
@@ -246,9 +243,6 @@ vid t = (Token.value t; Token.line t)
 //%explain sigma        a qualified type
 //%explain boundvar     a type variable bound in a forall
 //%explain boundvars    type variables bound in a forall
-//%explain constraint   a type constraint
-//%explain constrlist   a sequence of type constraints
-//%explain constraints  type constraints
 //%explain rop13        ':'
 //%explain aeq          '='
 //%explain classdef     a type class declaration
@@ -660,6 +654,9 @@ rho:
                                         context <- U.tauToCtx (yyline t) tau
                                         YYM.return (Rho.{context} rho)
                                     }
+    | rhofun
+    ;
+
 rhofun:
     '(' forall ')'  ARROW rhofun            { \_\a\_\_\b -> RhoFun [] a b }
     | rhotau        ARROW rhofun            { \a\_\b     -> RhoFun [] (ForAll [] a) b }
@@ -669,38 +666,7 @@ rhofun:
 rhotau:
     tapp                                    { RhoTau [] }
 
-/*
-crhofun:
-      constraints EARROW rhofun              {\a\_\b -> Rho.{context = a} b }
-    | rhofun
-    ;
-    */
 
-constraints:
-      constraint ',' constraints             { liste  }
-    | constraint                             { single }
-    ;
-
-
-constrlist:
-    '(' constraints ')'                     { \_\cs\_ -> cs }
-    | constraints
-    ;
-
-
-constraint:
-    qconid tv                               { \c\t -> Ctx {pos = posLine c, tau = t,
-                                                            checked=false, cname=posItem c}}
-    ;
-
-tvapp:
-    tv
-    | tvapp tv          { \a\b -> TApp a b }
-
-tv:
-    varid               { \v -> TVar {pos=posLine v, var=posItem v, classes=[]}}
-    | '(' tvapp ')'     { \_\t\_ -> t }
-    ;
 
 tau:
     tapp
@@ -740,9 +706,11 @@ rop13: ':'
 
 tyvar:
     varid                   { \n -> TVar (posLine n) (posItem n) [] }
+    /*
     | tyname rop13 tyvar    { \t\_\(tv::TauS) -> do
                                     U.warn (posLine t) "deprecated constraint syntax"
                                     YYM.return tv.{classes <- (posItem t:)}    }
+                                    */
 ;
 
 

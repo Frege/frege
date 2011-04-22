@@ -11,17 +11,23 @@ JAVAC = javac
 YACC = pbyacc
 JAVA = java
 
-DIR1 = build/afrege
-DIR2 = build/bfrege
-DIR  = build/frege
+
+
 DOC  = doc/frege
 DOCF = doc/frege/compiler
+DIR0 = build/cfrege
+COMPF0  = $(DIR0)/compiler
+LIBF0   = $(DIR0)/lib
+TOOLSF0 = $(DIR0)/tools
+DIR1 = build/afrege
 COMPF1  = $(DIR1)/compiler
 LIBF1   = $(DIR1)/lib
 TOOLSF1 = $(DIR1)/tools
+DIR2 = build/bfrege
 COMPF2  = $(DIR2)/compiler
 LIBF2   = $(DIR2)/lib
 TOOLSF2 = $(DIR2)/tools
+DIR  = build/frege
 COMPF   = $(DIR)/compiler
 LIBF    = $(DIR)/lib
 TOOLSF  = $(DIR)/tools
@@ -30,24 +36,35 @@ COMPS   = frege/compiler
 
 FREGE   = $(JAVA) -Xss32m -Xmx1200m -cp build
 FREGECJ = $(FREGE) -jar frege3.jar -fp build -d build -nocp -hints
-FREGECC = $(FREGE) -cp build frege.compiler.Main  -fp build -d build -nocp -hints
+FREGECC = $(FREGE) frege.compiler.Main  -d build -hints
 FREGEC0 = $(FREGECJ) -prefix a
-FREGEC1 = $(FREGE) afrege.compiler.Main -fp build -d build -nocp -hints -prefix b
-FREGEC2 = $(FREGE) bfrege.compiler.Main -fp build -d build -nocp -hints
+FREGEC1 = $(FREGE) afrege.compiler.Main -d build -hints -prefix b
+FREGEC2 = $(FREGE) bfrege.compiler.Main -d build -hints
+FREGEC3 = $(FREGECJ) -prefix c
 GENDOC  = $(FREGE)  frege.tools.Doc -d doc
 
 {frege/compiler}.fr{$(COMPF1)}.class::
 	$(FREGEC0) $<
 {frege/lib}.fr{$(LIBF1)}.class::
 	$(FREGEC0) $<
+{frege/tools}.fr{$(TOOLSF1)}.class::
+	$(FREGEC0) $<
 {frege}.fr{$(DIR1)}.class::
 	$(FREGEC0) $<
+{frege/compiler}.fr{$(COMPF0)}.class::
+	$(FREGEC3) $<
+{frege/lib}.fr{$(LIBF0)}.class::
+	$(FREGEC3) $<
+{frege/tools}.fr{$(TOOLSF0)}.class::
+	$(FREGEC3) $<
+{frege}.fr{$(DIR0)}.class::
+	$(FREGEC3) $<
 
 all:  frege.mk runtime compiler # frege3.jar
 
-stage1: compiler1
-	java -jar   autojar.jar -c build -o frege3.jar afrege/compiler/Main.class
-	jar  -uvfe  frege3.jar afrege.compiler.Main
+stage1: prel0 compiler0
+	java -jar   autojar.jar -c build -o frege3.jar cfrege/compiler/Main.class
+	jar  -uvfe  frege3.jar cfrege.compiler.Main
 	@echo you can do now backwards incompatible changes
 
 
@@ -73,10 +90,10 @@ compiler: compiler2 $(COMPF)/Grammar.class $(COMPF)/Main.class
 
 $(COMPF)/Grammar.class: frege/compiler/Grammar.fr $(COMPF)/Scanner.class
 	$(FREGEC2)  frege/compiler/Grammar.fr
-frege/compiler/Grammar.fr: $(TOOLSF1)/YYgen.class frege/compiler/Grammar.y
+frege/compiler/Grammar.fr: $(TOOLSF)/YYgen.class frege/compiler/Grammar.y
 	@echo 1 shift/reduce conflict is ok
 	$(YACC) -v frege/compiler/Grammar.y
-	$(FREGE) -cp .;build afrege.tools.YYgen -m StIO frege/compiler/Grammar.fr
+	$(FREGE) -cp .;build frege.tools.YYgen -m StIO frege/compiler/Grammar.fr
 $(COMPF)/Scanner.class: $(DIR)/Prelude.class frege/compiler/Scanner.fr
 	$(FREGEC2)  -make frege.compiler.Scanner
 $(COMPF)/Main.class: $(DIR)/Prelude.class frege/compiler/Main.fr
@@ -139,6 +156,26 @@ $(DIR1)/PreludeProperties.class: $(LIBF1)/Random.class $(LIBF1)/QuickCheck.class
 	$(FREGEC0)  frege/PreludeProperties.fr
 $(DIR1)/check1: $(PRE1) $(LIBF1)/Random.class $(LIBF1)/QuickCheck.class $(DIR1)/PreludeProperties.class
     $(JAVA) -cp build afrege.PreludeProperties && echo Prelude Properties checked >$(DIR1)/check1
+
+
+PRE0 = $(DIR0)/IO.class $(DIR0)/List.class $(DIR0)/Tuples.class
+
+
+compiler0: $(DIR0)/check1 $(COMPF0)/Main.class
+	@echo stage 1 compiler ready
+
+$(COMPF0)/Main.class : $(PRE0) $(LIBF0)/PP.class frege/compiler/Grammar.fr # frege3.jar
+	$(FREGEC3)  -make frege.compiler.Main
+prel0:
+	rm -rf $(COMPF0)
+	rm -rf $(DIR0)
+	$(FREGEC3)  frege/Prelude.fr
+$(DIR0)/PreludeProperties.class: $(PRE0) $(LIBF0)/Random.class $(LIBF0)/QuickCheck.class frege/PreludeProperties.fr
+    $(FREGEC3)  frege/PreludeProperties.fr
+$(DIR0)/check1: $(PRE0)  $(DIR0)/PreludeProperties.class
+    $(JAVA) -cp build cfrege.PreludeProperties && echo Prelude Properties checked >$(DIR0)/check1
+
+
 
 #
 #   Runtime
