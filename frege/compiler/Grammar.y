@@ -518,23 +518,18 @@ qvarid:  QUALIFIER VARID    { \a\b -> (Token.value a ++ Token.value b, yyline b)
 qconid:  QUALIFIER CONID    { \a\b -> (Token.value a ++ Token.value b, yyline b)}
     |    CONID              { vid }
     ;
-    /*
-binop:
-    operator                { \x -> do
-                                tok <- unqualified x
-                                YYM.return (vid tok)
-                            }
-    ;
-    */
+
+/*
 qunop:  QUALIFIER unop      { \a\b -> (Token.value a ++ Token.value b, yyline b)}
     |   unop                { vid }
     ;
+    */
 
 importitem:
     qvarid
     | qconid
     | operator              { vid }
-    | qunop
+    | unary
     ;
 
 operator:
@@ -593,6 +588,7 @@ annoitem:
     varid
     | '(' operator ')'          { \_\a\_ -> do binop a }
     | '(' unary ')'             { \_\a\_ -> a }
+    | '(' '-' ')'               { \_\a\_ -> vid a }
     ;
 
 annoitems:
@@ -611,6 +607,7 @@ nativestart:
       NATIVE annoitem      { flip const }
     | NATIVE operator      { \_\b  -> do binop b }
     | NATIVE unary         { flip const }
+    | NATIVE '-'           { \_\b  -> vid b }
     ;
 
 impurenativedef:
@@ -697,12 +694,13 @@ simpletype:
     | '[' tau ']'      {\a\t\_ -> TApp (TCon (yyline a) "Prelude.[]") t }
     ;
 
-
+/*
 rop13: ':'
         | ROP13         { \t -> if Token.value t == ":" then YYM.return t else do
                                 yyerror (yyline t) ("':' expected instead of " ++ yynice t)
                                 YYM.return t }
         ;
+        */
 
 tyvar:
     varid                   { \n -> TVar (posLine n) (posItem n) [] }
@@ -1028,6 +1026,8 @@ binex:
     | binex NOP5  binex                 { mkapp }
     | binex ROP4  binex                 { mkapp }
     | binex LOP4  binex                 { mkapp }
+    | binex '-'   binex                 { mkapp }
+    | '-' binex                         { \m\x -> nApp (Vbl (yyline m) "Prelude.negate" Nothing) x}
     | binex NOP4  binex                 { mkapp }
     | binex ROP3  binex                 { mkapp }
     | binex LOP3  binex                 { mkapp }
@@ -1049,10 +1049,12 @@ appex:
     | appex unex                        { nApp }
     ;
 
+
 unex:
     primary
-    | qunop unex                        { \u\p -> nApp (Vbl {pos=posLine u, name=posItem u, typ=Nothing}) p}
+    | unary unex                        { \u\p -> nApp (Vbl {pos=posLine u, name=posItem u, typ=Nothing}) p}
     ;
+
 
 primary:
     term
@@ -1112,14 +1114,17 @@ term:
     | qconid '{' fields '}'         { \qc\_\fs\_ -> ConFS (posLine qc) (posItem qc) fs Nothing}
     | '(' ')'                       { \z\_ -> Con (yyline z)   "Prelude.()" Nothing}
     | '(' commata ')'               { \z\n\_ -> Con (yyline z) (tuple (n+1)) Nothing}
+    | '(' unary ')'                 { \_\x\_ -> Vbl {pos=posLine x, name=posItem x, typ=Nothing} }
     | '(' operator ')'              { \_\o\_ -> (varcon o) (yyline o) (Token.value o) Nothing}
-    | '(' unary ')'                 { \_\u\_ -> Vbl (posLine u) (posItem u) Nothing}
+    | '(' '-' ')'                   { \_\m\_ -> (Vbl (yyline m) "Prelude.-" Nothing) }
     | '(' operator expr ')'         { \z\o\x\_ ->  let // (+1) --> flip (+) 1
                                         flp = Vbl (yyline o) "Prelude.flip" Nothing
                                         op  = (varcon o) (yyline o) (Token.value o) Nothing
                                         ex = nApp (nApp flp op) x
                                     in ex}
     | '(' binex operator ')'           { \_\x\o\_ ->  // (1+) --> (+) 1
+                                        nApp ((varcon o) (yyline o) (Token.value o) Nothing) x}
+    | '(' binex '-' ')'           { \_\x\o\_ ->  // (1+) --> (+) 1
                                         nApp ((varcon o) (yyline o) (Token.value o) Nothing) x}
     | '(' expr ',' exprSC ')'       { \a\e\_\es\_ -> fold nApp (Con (yyline a)
                                                                    (tuple (1+length es))
