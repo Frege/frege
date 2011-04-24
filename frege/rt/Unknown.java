@@ -230,7 +230,7 @@ package frege.rt;
 
 // The mother of all lazy values
 public abstract class Unknown<V> implements Lazy<V>, java.util.concurrent.Callable<V> {
-    private V result = null;        // cache the evaluated value
+    private volatile V result = null;        // cache the evaluated value
 
     /***
      * <p>Evaluates a lazy value.</p>
@@ -329,7 +329,7 @@ public abstract class Unknown<V> implements Lazy<V>, java.util.concurrent.Callab
      *
      * @return <tt>true</tt> if this value is not yet evaluated, false otherwise.
      */
-    final public synchronized boolean _u() { return result == null; }
+    final public boolean _u() { return result == null; }
 
     /**
      * <p> Implemenation of the {@link java.util.concurrent.Callable} interface </p>
