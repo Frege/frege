@@ -703,7 +703,7 @@ rop13: ':'
         */
 
 tyvar:
-    varid                   { \n -> TVar (posLine n) (posItem n) [] }
+    varid                   { \n -> TVar (posLine n) (posItem n)  }
     /*
     | tyname rop13 tyvar    { \t\_\(tv::TauS) -> do
                                     U.warn (posLine t) "deprecated constraint syntax"
@@ -724,14 +724,14 @@ tyname:
 classdef:
     CLASS conid tyvar wheredef       {
         \_\i\(tv::TauS)\defs -> ClaDcl {pos = posLine i, vis = Public, name = posItem i,
-                        clvar=tv.{classes=[]}, supers=tv.classes, defs = defs, doc = Nothing}
+                        clvar=tv, supers=[], defs = defs, doc = Nothing}
     }
     | CLASS conid tapp EARROW varid wheredef {
         \_\i\tau\_\v\defs -> do
             ctxs <- U.tauToCtx (posLine i) tau
             sups <- classContext (posItem i) ctxs (posItem v)
             YYM.return (ClaDcl {pos = posLine i, vis = Public, name = posItem i,
-                             clvar = TVar (posLine v) (posItem v) [],
+                             clvar = TVar (posLine v) (posItem v),
                              supers = sups, defs = defs, doc = Nothing})
     }
     ;

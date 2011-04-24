@@ -7,9 +7,9 @@
 
 .SUFFIXES: .class .fr
 
-JAVAC = javac
+JAVAC = javac -source 1.6 -target 1.6 -bootclasspath C:/opt/Java/jre6/lib/rt.jar
 YACC = pbyacc
-JAVA = java
+JAVA = java6
 
 
 
@@ -63,7 +63,7 @@ GENDOC  = $(FREGE)  frege.tools.Doc -d doc
 all:  frege.mk runtime compiler # frege3.jar
 
 stage1: prel0 compiler0
-	java -jar   autojar.jar -c build -o frege3.jar cfrege/compiler/Main.class
+	$(JAVA) -jar   autojar.jar -c build -o frege3.jar cfrege/compiler/Main.class
 	jar  -uvfe  frege3.jar cfrege.compiler.Main
 	@echo you can do now backwards incompatible changes
 
@@ -72,11 +72,11 @@ frege.mk: Makefile mkmk.pl
 	perl mkmk.pl <Makefile >frege.mk
 
 frege3.jar: $(TOOLSF)/Doc.class
-	java -jar   autojar.jar -c build -o frege3.jar frege/tools/Doc.class
+	$(JAVA) -jar   autojar.jar -c build -o frege3.jar frege/tools/Doc.class
 	jar  -uvfe  frege3.jar frege.compiler.Main
 
 $(TOOLSF)/Doc.class: $(COMPF)/Main.class frege/tools/Doc.fr
-	$(FREGECC)  frege/tools/Doc.fr
+	$(FREGECC)  -make frege.tools.Doc
 $(TOOLSF)/YYgen.class: frege/tools/YYgen.fr
 	$(FREGECJ)  frege/tools/YYgen.fr
 $(TOOLSF1)/YYgen.class: $(DIR1)/Prelude.class frege/tools/YYgen.fr
@@ -89,11 +89,11 @@ compiler: compiler2 $(COMPF)/Grammar.class $(COMPF)/Main.class
 	@echo Compiler ready
 
 $(COMPF)/Grammar.class: frege/compiler/Grammar.fr $(COMPF)/Scanner.class
-	$(FREGEC2)  frege/compiler/Grammar.fr
-frege/compiler/Grammar.fr: $(TOOLSF)/YYgen.class frege/compiler/Grammar.y
+	$(FREGEC2) -v frege/compiler/Grammar.fr
+frege/compiler/Grammar.fr: $(TOOLSF1)/YYgen.class frege/compiler/Grammar.y
 	@echo 1 shift/reduce conflict is ok
 	$(YACC) -v frege/compiler/Grammar.y
-	$(FREGE) -cp .;build frege.tools.YYgen -m StIO frege/compiler/Grammar.fr
+	$(FREGE) -cp .;build afrege.tools.YYgen -m StIO frege/compiler/Grammar.fr
 $(COMPF)/Scanner.class: $(DIR)/Prelude.class frege/compiler/Scanner.fr
 	$(FREGEC2)  -make frege.compiler.Scanner
 $(COMPF)/Main.class: $(DIR)/Prelude.class frege/compiler/Main.fr
@@ -109,7 +109,7 @@ compiler2: $(COMPF2)/Main.class
 
 
 $(COMPF2)/Main.class: $(DIR2)/Prelude.class # frege/compiler/Main.fr
-	$(FREGEC1)  -make frege.compiler.Main
+	$(FREGEC1) -v -make frege.compiler.Main
 $(DIR2)/Prelude.class: $(COMPF1)/Main.class
 	rm -rf $(COMPF2)
 	rm -rf $(DIR2)
