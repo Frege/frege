@@ -71,10 +71,19 @@ stage1: prel0 compiler0
 frege.mk: Makefile mkmk.pl
 	perl mkmk.pl <Makefile >frege.mk
 
-frege3.jar: $(TOOLSF)/Doc.class
+frege3.jar: $(DIR)/check1 $(TOOLSF)/Doc.class
 	$(JAVA) -jar   autojar.jar -c build -o frege3.jar frege/tools/Doc.class
 	jar  -uvfe  frege3.jar frege.compiler.Main
 
+$(DIR)/check1: $(LIBF)/Random.class $(LIBF)/QuickCheck.class $(DIR)/PreludeProperties.class
+    $(JAVA) -cp build frege.PreludeProperties && echo Prelude Properties checked >$(DIR)/check1
+
+$(LIBF)/Random.class: $(DIR)/Prelude.class frege/lib/Random.fr
+	$(FREGECC)  frege/lib/Random.fr
+$(LIBF)/QuickCheck.class: $(LIBF)/Random.class frege/lib/QuickCheck.fr
+	$(FREGECC)  frege/lib/QuickCheck.fr
+$(DIR)/PreludeProperties.class: $(LIBF)/QuickCheck.class frege/PreludeProperties.fr
+	$(FREGECC)   frege/PreludeProperties.fr
 $(TOOLSF)/Doc.class: $(COMPF)/Main.class frege/tools/Doc.fr
 	$(FREGECC)  -make frege.tools.Doc
 $(TOOLSF)/YYgen.class: frege/tools/YYgen.fr

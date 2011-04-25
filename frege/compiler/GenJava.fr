@@ -33,7 +33,7 @@ infixr 6 `<>`
 /**
  * Java Attributes like *@final@*, *@static@* etc.
  */
-data JAttr = JUnchecked | JFinal | JPrivate | JPublic | JProtected | JStatic
+data JAttr = JUnchecked | JFinal | JPrivate | JPublic | JProtected | JStatic | JAbstract
 derive Enum JAttr
 
 data RMode = RNative | RBoxed | RLazy
@@ -58,6 +58,7 @@ instance Anno JAttr where
     anno JPublic    = text "public"
     anno JProtected = text "protected"
     anno JStatic    = text "static"
+    anno JAbstract  = text "abstract"
 
 /** construct an integer that holds the attributes */
 attrs = fold setFlag 0
@@ -282,42 +283,10 @@ tauJT (fun@TFun a b) = do
     stio (Ref (JName "" "Fun") [a,b])
 
 tauJT (app@TApp a b) = case app.flat of
-    (tcon@TCon {pos}):rest -> do
-        taux  <- tauJT tcon
-        tauxs <- mapSt tauJT rest
-        symt  <- U.findT tcon.name
-        // vjt   <- voidJT
-        let arity   = length symt.typ.bound
-            restjts = take arity (tauxs ++ repeat voidJT)
-        case taux of
-            ref@Ref (JName "" "Boxed") [nat@Nativ _ _] -> do
-                let targs = if symt.pur then restjts else take (arity-1) restjts
-                stio ref.{targs=[nat.{targs}]}
-            ref@Ref {targs} -> stio ref.{targs = restjts}
-            nat@Nativ _ _   -> stio nat
-            _ -> do
-                g <- getST
-                U.fatal (U.tauPos app) ("tauJT: " ++ nicer app g)
-    other -> tauJT a /*do
-        a <- tauJT a
-        b <- tauJT b
-        stio (Ref (JName "" "TyApp") [a,b]) */
-        // voidJT
-tauJT  (app@TCon {name}) = do
-    g <- getST
-    sym <- U.findT name
-    // vjt <- voidJT
-    case sym of
-        SymT {product,nativ,enum,pur}
-            | Just s <- nativ = stio (boxed (Nativ s args))
-            | enum            = stio (Ref (JName "" "Boxed.Int") [])
-            | otherwise       = stio (Ref {jname = U.javaName g name, targs = args})
-            where args
-                    | Just _  <- nativ,
-                      not pur,
-                      not (null sym.typ.bound) = take  (length sym.typ.bound - 1) (repeat voidJT)
-                    | otherwise = take (length sym.typ.bound) (repeat voidJT)
-        other -> undefined   // can not happen because catched in U.findT
+    (TCon {pos,name}):rest -> taujtApp pos name rest
+    other -> tauJT a
+
+tauJT  (TCon {pos, name}) = taujtApp pos name []
 
 
 tauJT  (TVar {var}) = stio (TArg {var = greek var})
@@ -326,6 +295,38 @@ tauJT  (Meta tv) = do
         g <- getST
         U.warn 0 (nice (Meta tv) g ++ " shouldn't appear anymore!")
         stio voidJT
+
+taujtApp pos qname rest = do
+    sym   <- U.findT qname
+    tauxs <- mapSt tauJT rest
+    let arity   = length sym.typ.bound
+        restjts = take arity (tauxs ++ repeat voidJT)
+    case sym of
+        SymT {product=true, newt=true} -> do
+            let sigmas = [ snd f | sym@SymD {flds} <- values sym.env, f <- flds ]
+                rargs = take arity (rest ++ repeat (TCon pos (TName pPrelude "Void")))
+                tree  = Tree.fromList (zip sym.typ.bound rargs)
+            // the sigma is by Grammar.y in the form   ForAll [] (RhoTau [] tau)
+            if (null sigmas)
+                then do
+                    g <- getST
+                    U.error pos (nice sym g ++ " has no fields")
+                    stio voidJT
+                else do
+                    rho <- U.substRho tree (head sigmas).rho
+                    rhoJT rho
+        SymT {product,nativ,enum,pur}
+            | Just s <- nativ = stio (boxed (Nativ s args))
+            | enum            = stio (Ref (JName "" "Boxed.Int") [])
+            | otherwise       = do g <- getST
+                                   stio (Ref {jname = U.javaName g qname, targs = args})
+            where args
+                    | Just _  <- nativ,
+                      not pur,
+                      not (null sym.typ.bound) = take  (arity - 1) restjts
+                    | otherwise = restjts
+        other -> undefined   // can not happen because catched in U.findT
+
 
 targ s = TArg {var = greek s}
 
@@ -767,6 +768,23 @@ symCode binds (sym@SymT {enum=true}) = do
                                              [JAtom (show cid)])}
                       | SymD {name, cid} <- cons ]
     stio [JComment (nice sym g), result]
+
+
+symCode binds (sym@SymT {product=true, newt=true}) = do
+    g <- getST
+
+    let vals = sortBy (comparing Symbol.name) (values sym.env)
+        other = [ sym | sym <- vals, not (Symbol.{flds?} sym)]
+
+    subDefs <- mapSt (symCode binds) other
+
+    let jtype  = Ref (U.javaName g sym.name) []
+        defs   = concat subDefs
+        result = JClass {attr = attrs [JAbstract, JPublic, JStatic], jtype,
+                         extend = Nothing, implement = [], defs}
+    stio [JComment (nice sym g), result]
+
+
 symCode binds (sym@SymT {product=true}) = do                    // product
     g <- getST
 
@@ -1852,7 +1870,7 @@ wrapCode jreturn rtau (sym@SymV {nativ = Just item}) abinds
         tjt     <- tauJT tuple
         fjt     <- rhoJT frho
         let ret     = jreturn mkST
-            mkST    = JInvoke (JStMem (JName "Prelude.TST" "mk") [sjt, ajt]) [fun]
+            mkST    = fun // JInvoke (JStMem (JName "Prelude.TST" "mk") [sjt, ajt]) [fun]
             fun     = JNewClass fjt [] [rMethod]
 
             rMethod = JMethod {attr = attrs [JFinal, JPublic], gargs=[],
@@ -2187,11 +2205,16 @@ match assert (pat@PCon {pos,qname,pats}) bind cont binds = do
         symd <- U.findD qname                   // forall a.a -> List a -> List a
         symt <- U.findT symd.name.tynm          // forall a.List a
         if symt.enum then matchEnum symd symt
-            else if symt.product then matchProd    symd symt // pat bind cont binds
+            else if symt.product
+                then if symt.newt
+                    then match assert (head pats) bind cont binds
+                    else matchProd    symd symt // pat bind cont binds
                 else matchVariant symd symt // pat bind cont binds
     where
         comment g = sComment ("match  " ++ nice pat g
                                 ++ "  with  " ++ showJex (Binding.jex bind))
+        // matchNewt :: Symbol -> Symbol -> StG (Binding, [JStmt])
+        // matchNewt symd symt = match (head pats) bind cont binds
         matchEnum :: Symbol -> Symbol -> StG (Binding, [JStmt])
         matchEnum symd symt = do
             g <- getST
@@ -2763,7 +2786,7 @@ instSym = instSym0 false true
 instSym0 :: Bool -> Bool -> Line -> Symbol -> Sigma -> StG Binding
 instSym0 direct cmembers pos sym sigma = do
     g <- getST
-    U.logmsg TRACEG pos ("instSym: " ++ nice sym g ++ " at " ++ nice sigma g)
+    U.logmsg TRACEG pos ("instSym: " ++ nice sym g ++ "::" ++ nice sym.typ g ++ " at " ++ nice sigma g)
     // let taus = sigmaInst g sym.typ sigma    // (List a) (List Int) ==> (a,Int)
     //     jts  = map (tauJT g) taus
     //     sjt  = (sigmaJT g sym.typ)
@@ -2802,9 +2825,13 @@ instSym0 direct cmembers pos sym sigma = do
             if symt.enum
                 then stio (Bind RBoxed sigma (Ref (JName "" "Boxed.Int") [])
                             (JStMem jname []))
-                else if direct
-                    then stio (Bind RBoxed sigma jt (JStMem (U.memberOf jname "mk") gargs))
-                    else stio (Bind RBoxed sigma jt
+                else if symt.newt
+                    then do
+                        sym <- U.findV (VName pPrelude "id")
+                        instSym0 direct cmembers pos sym sigma
+                    else if direct
+                        then stio (Bind RBoxed sigma jt (JStMem (U.memberOf jname "mk") gargs))
+                        else stio (Bind RBoxed sigma jt
                             (JInvoke
                                 (JStMem (U.memberOf jname mkn) gargs) []))
         SymV {name = MName clas m, depth, rkind} | cmembers, Just (SymC {vkind,tau}) <- clas.findit g = do
@@ -2964,23 +2991,27 @@ genExpr rflg rm (app@App a b (Just sigma)) binds = do
             if length args < a
                 then genAnon rm binds con args          // partial application
                 else do
-                    dbind <- instSymDirect pos sym csigma
-                    sjt   <- sigmaJT sigma
-                    let jx  = dbind.jex
-                        // sjt = dbind.jtype
-                        aargs = take a args
-                        rargs = drop a args
-                    abinds <- mapSt (flip (genExpr false RLazy) binds) aargs
-                    rbinds <- mapSt (flip (genExpr false RLazy) binds) rargs
-                    let call = Bind RBoxed sigma sjt (JInvoke jx (map Binding.jex abinds))
-                        result
-                            | null rargs = stio call
-                            | otherwise  = do
-                                    // sjt <- sigmaJT sigma
-                                    let r = fold apply call rbinds
-                                        b = Bind RLazy sigma (lazy sjt) r.jex
-                                    stio (toMode rm b)
-                    result
+                    symt <- U.findT name.tynm
+                    if symt.product && symt.newt
+                        then genExpr rflg rm (head args) binds
+                        else do
+                            dbind <- instSymDirect pos sym csigma
+                            sjt   <- sigmaJT sigma
+                            let jx  = dbind.jex
+                                // sjt = dbind.jtype
+                                aargs = take a args
+                                rargs = drop a args
+                            abinds <- mapSt (flip (genExpr false RLazy) binds) aargs
+                            rbinds <- mapSt (flip (genExpr false RLazy) binds) rargs
+                            let call = Bind RBoxed sigma sjt (JInvoke jx (map Binding.jex abinds))
+                                result
+                                    | null rargs = stio call
+                                    | otherwise  = do
+                                            // sjt <- sigmaJT sigma
+                                            let r = fold apply call rbinds
+                                                b = Bind RLazy sigma (lazy sjt) r.jex
+                                            stio (toMode rm b)
+                            result
         genApp rm binds (vbl@Vbl {pos, name, typ = Just vsigma}) args = do
                 g     <- getST
                 sym   <- U.findV name
