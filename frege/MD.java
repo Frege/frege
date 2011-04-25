@@ -161,11 +161,15 @@ public class MD {
 		boolean abst()          default false;      // whether abstract
 		String  stri();                             // strictness encoded as string
 		int     depth();                            // number of arguments, i.e. FunN class used
-		int     rkind();                            // wwr - 000 no w-function, r returns lazy
-		                                            //       001 no w-function, r returns boxed
-		                                            //       01r w function returns lazy
-		                                            //       10r w function returns boxed
-		                                            //       11r w function returns unboxed
+		int     rkind();                            // dstwwr - 000 no w-function, r returns lazy
+		                                            //          001 no w-function, r returns boxed
+		                                            //          01r w function returns lazy
+		                                            //          10r w function returns boxed
+		                                            //          11r w function returns unboxed
+		                                            //         1--- tail recursive
+		                                            //        1---- simple expression
+		                                            //       1----- function can be called
+		                                            //              without fear of stack overflow
 	}
 
 	/*
@@ -186,14 +190,14 @@ public class MD {
 
 	@Retention(RetentionPolicy.RUNTIME)
 	public @interface SymD {
-	    // int     pos()     default 0;
 		QName	 name();
-		int      cid();                      // constructor id
-		int      typ();                      // sigma index
+		int      cid();                       // constructor id
+		int      typ();                       // sigma index
 		String[] fnms()         default {};   // field names (null if no field names at all)
 		int[]    ftys()         default {};   // field types
 		String   doc()          default "";
-		String   stri();                     // strictness encoded as string
+		String   stri();                      // strictness encoded as string
+		boolean  priv()         default false; // constructor is private
 	}
 
 	/*
