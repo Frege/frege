@@ -21,7 +21,7 @@ public version = v "$Revision$" where
 import frege.List (joinStr Tree values keys each insert lookup)
 
 import frege.compiler.Data                                  except(version) D
-import frege.compiler.Utilities(flag isOn setFlag)          U
+import frege.compiler.Utilities()                           U
 import frege.compiler.GenMeta(pp Anno)                      GM
 import frege.lib.PP(`<>` `<+>` `</>` `<+/>` `<~/>` text bracket)    PP
 import frege.compiler.Transform(patternStrictness)          T
@@ -59,6 +59,15 @@ instance Anno JAttr where
     anno JProtected = text "protected"
     anno JStatic    = text "static"
     anno JAbstract  = text "abstract"
+
+
+/// get flag bit
+flag :: JAttr -> Int
+flag f = 1 `bshl` ord f
+
+/// @setFlag flags f@ set flag /f/ in /flags/
+setFlag flags f = flags `bor` flag f
+isOn flags f    = (flags `band` flag f) != 0
 
 /** construct an integer that holds the attributes */
 attrs = fold setFlag 0
@@ -1205,11 +1214,22 @@ cafCode (sym@SymV {depth = 0, expr = Just x}) binds = do
     constraints <- mapSt  (curry makeConstraintDef) (zip ctxs ctxNames)
     jtype <- if not g.toplevel then subSigmaJT symtyp else sigmaJT symtyp
     x     <- if not g.toplevel then adaptHigherPolymorphic x symtyp else stio x
-    ecode <- compiling sym (genExpr  false mode x binds)
-    scode <- compiling sym (genStmts mode x binds)
+    escode <- if null bnds && null cargs && rsimple
+        then do
+            ecode <- compiling sym (genExpr  false mode x binds)
+            stio (Left ecode)
+        else do
+            scode <- compiling sym (genStmts mode x binds)
+            stio (Right scode)
 
 
     let name  = U.javaName g sym.name           // P.foo
+        left (Left c) = c
+        left _ =  error "no ecode"
+        right (Right c) = c
+        right _ =  error "no scode"
+        ecode  = left escode
+        scode  = right escode
         rtype = if rlazy then lazy jtype else boxed jtype
         comms = reverse [
                 JComment ((nice sym g) ++ "  " ++ show sym.strsig ++ "  " ++ show sym.rkind),
@@ -3027,12 +3047,25 @@ genExpr rflg rm (app@App a b (Just sigma)) binds = do
                         MName cname _
                             | Just (SymC {sid}) <- cname.findit g = genAnon rm binds vbl args
                         noclassmember -> case sym.nativ of
-                            Just _    -> genNative sym //genAnon rm binds vbl args
+                            Just _    -> do
+                                        cenum <- isConstructorEnum sym vsigma
+                                        if cenum && length args == 1
+                                            then genExpr rflg rm (head args) binds
+                                            else genNative sym //genAnon rm binds vbl args
                             nonnative ->
                                 if tailcall `and` (sym.rkind `band` T.rkSafeTC) != 0
                                     then genApp RBoxed binds vbl args
                                     else genDirect sym
             where
+                isConstructorEnum (SymV {name=VName pp1 "constructor"})
+                    (ForAll [] (RhoFun []
+                        (ForAll [] (RhoTau [] (TCon {name})))
+                        (RhoTau [] (TCon {name=TName pp2 "Int"}))
+                    ))
+                    | pp1 == pPrelude, pp2 == pPrelude = do
+                        symt <- U.findT name
+                        stio symt.enum
+                isConstructorEnum _ _ = stio false
                 ari (sym@SymV {nativ=Just _}) = U.arity sym
                 ari sym                       = sym.depth
                 tailcall = rflg `and` rm == RLazy
