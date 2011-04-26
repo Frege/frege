@@ -75,7 +75,7 @@ pass10 = do
     where
         checkgroup nms = do
             foreach nms (strictName [])         // compute strictness
-            foreach nms (returnName nms)        // compute return type of java methods
+            returnNames [] nms                  // compute return type of java methods
 
 /**
  * In this pass, we make sure that all expressions are in
@@ -155,6 +155,15 @@ depthSym sym = do
     g <- getST
     U.fatal sym.pos ("depthSym no SymV : " ++ sym.nice g)
 
+// constants for the rkind value
+/// simple expression withoud self-/forward references.
+rkSimple = 16
+/// can be called in tailcall
+rkSafeTC = 32
+noSafeTC = rkSafeTC `bxor` -1
+/// tail calls itself
+rkTail   = 8
+
 /**
  * [usage] @returnKind group symbol@
  * [computes] the return type (lazy=0, boxed=1) of the r-Method, and, if a w-Method is needed,
@@ -174,59 +183,68 @@ depthSym sym = do
  *   Forward references can appear in global symbols which reference any global
  *   value from this package.
  */
-returnKind names (sym@SymV {nativ = Just _}) = do
+returnKind syms (sym@SymV {nativ = Just _}) = do
         g <- getST
         jt <- U.isJavaType ((fst • U.returnType) sym.typ.rho)
-        U.changeSym sym.{rkind = if jt then 7 else 5}
+        U.changeSym sym.{rkind = rkSafeTC + (if jt then 7 else 5)}
 
-returnKind names (sym@SymV {expr = Just x, depth = 0}) = do
-        (w, x) <- returnExprKind sym x
-        self   <- references sym.sid x        // is it self-referential?
+returnKind syms (sym@SymV {expr = Just x, depth = 0}) = do
+        (w, x) <- returnExprKind syms sym x
+        self   <- references [sym.sid] x        // is it self-referential?
+        rec    <- references syms x             // is it recursive
         (_, deps) <- U.fundep sym
         let fwrefs
-                | Local _ <- sym.name = false
+                | Local _ <- sym.name = rec > 0
                 | otherwise = not (null deps)        // possible forward references?
+            b32 = if rec > 0 then 0 else 32
             b16 = if isSimple x `and` not fwrefs `and` self == 0 then 16 else 0
-            rkind = if fwrefs then 0 + b16
-                else if self > 0 then 0 + b16
-                    else b16 + ord sym.strsig.isStrict
+            rkind = if fwrefs then 0 + b16 + b32
+                else if self > 0 then 0 + b16 + b32
+                    else b32 + b16 + ord sym.strsig.isStrict
         U.changeSym sym.{rkind, expr = Just x}
 
-returnKind names (sym@SymV {expr = Just x}) = do
-        (w, x) <- returnExprKind sym x
+returnKind syms (sym@SymV {expr = Just x}) = do
+        (w, x) <- returnExprKind syms sym x
         let r = if w `band` 6 <= 2 then 0 else 1
             b16 = if isSimple x then 16 else 0
             rkind = case sym.strsig of
                     S ss | any Strictness.isStrict ss = b16+r+w
-                    otherwise = r+b16
+                    otherwise = r+b16+(w `band` rkSafeTC)
+        // when (rkind `band` rkSafeTC == 0) do
+        //    g <- getST
+        //    U.hint sym.pos (nice sym g ++ " is no safe tail call.")
         U.changeSym sym.{rkind, expr = Just x}
 
+/// assume abstract class functions are tail call safe
+returnKind syms (sym@SymV {expr = Nothing, name = MName _ _}) = U.changeSym sym.{rkind=2+rkSafeTC}
 returnKind _ _ = stio ()     // abstract methods
 
 /**
  * how often the symbol with 'Symbol.sid' is referenced in 'Expr' @x@
  */
-references sid x = U.foldEx true refs 0 x
+references sids x = U.foldEx true refs 0 x
     where
         refs n (Vbl {name}) = do
             sym <- U.findV name
-            if sym.sid == sid then stio (Right (n+1)) else stio (Left n)
+            if sym.sid `elem` sids then stio (Right (n+1)) else stio (Left n)
         refs n (Ifte c t e _) = do
-            crefs <- references sid c
-            trefs <- references sid t
-            erefs <- references sid e
+            crefs <- references sids c
+            trefs <- references sids t
+            erefs <- references sids e
             stio (Right (crefs + max trefs erefs))
         refs n (Case {ex,alts}) = do
-            xrefs <- references sid ex
+            xrefs <- references sids ex
             arefs <- mapSt altRefs alts
             stio (Right (xrefs + fold max 0 arefs))
         refs n _ = stio (Left n)
-        altRefs (CAlt {env,ex}) = with env (references sid ex)
+        altRefs (CAlt {env,ex}) = with env (references sids ex)
 
 /**
- * [usage] @returnExprKind symbol x@
+ * [usage] @returnExprKind syms symbol x@
  *
  * Look for the return expressions in @x@ and compute the minimum return kind.
+ * If any symbol in @syms@ is called, it is regarded as recursive and not fit
+ * for tailcall.
  *
  * A return expression is an application, literal, variable or constructor.
  *
@@ -241,13 +259,13 @@ references sid x = U.foldEx true refs 0 x
  *   it's lazy.
  * - Unsaturated applications are boxed (function types)
  */
-returnExprKind sym (x@Lit {pos}) = stio (6,x)
-returnExprKind sym (x@Con {pos}) = stio (4,x)
-returnExprKind sym (x@Ann {ex})  = do
-        (n,ex) <- returnExprKind sym ex
+returnExprKind syms sym (x@Lit {pos}) = stio (rkSafeTC + 6,x)
+returnExprKind syms sym (x@Con {pos}) = stio (rkSafeTC + 4,x)
+returnExprKind syms sym (x@Ann {ex})  = do
+        (n,ex) <- returnExprKind syms sym ex
         stio (n, x.{ex})
 
-returnExprKind sym (x@Vbl {name}) = do
+returnExprKind syms sym (x@Vbl {name}) = do
     symv <- U.findV name
     g    <- getST
     case symv.expr of
@@ -256,19 +274,19 @@ returnExprKind sym (x@Vbl {name}) = do
                         then case U.returnType symv.typ.rho of
                             (tau, _) = do
                                 jt <- U.isJavaType tau
-                                stio (if jt then 6 else 4; x)
-                        else stio (2,x)               // lambda/case bound
+                                stio (if jt then rkSafeTC + 6 else rkSafeTC + 4; x)
+                        else stio (rkSafeTC + 2, x)               // lambda/case bound
             _ -> case U.returnType symv.typ.rho of
-                (_,[]) -> stio ((symv.rkind `band` 1)*2 + 2, x)
-                _      -> stio (4,x)        // global function
-        Just (Lam {env}) -> stio (4,x)      // return a local function
-        Just _ -> if symv.strsig.isStrict then do
+                (_,[]) -> stio (rkSafeTC + (symv.rkind `band` 1)*2 + 2, x)
+                _      -> stio (rkSafeTC + 4, x)        // global function
+        Just (Lam {env}) -> stio (rkSafeTC + 4, x)      // return a local function
+        Just vx -> let !r = symv.rkind `band` rkSafeTC in if symv.strsig.isStrict then do
                         jt <- U.isJavaType (fst (U.returnType symv.typ.rho))
-                        if jt then stio (6;x) else stio (4;x)
-                    else stio (2;x)
-returnExprKind sym (ex@App a b typ) = do
-    (_, a) <- returnExprKind sym a
-    (_, b) <- returnExprKind sym b
+                        if jt then stio (r+6;x) else stio (r+4;x)
+                    else stio (r+2;x)
+returnExprKind syms sym (ex@App a b typ) = do
+    (_, a) <- returnExprKind syms sym a
+    (_, b) <- returnExprKind syms sym b
     let (f,_) = head flatx
         args  = tail flatx
         flatx = U.flatx ex
@@ -276,46 +294,58 @@ returnExprKind sym (ex@App a b typ) = do
     case f of
         Vbl {name} -> do
             symf <- U.findV name
-            if isJust symf.nativ then stio ((symf.rkind `band` 6), app)
-              else if (length args < symf.depth) then stio (4, app) // unsaturated
-              else if (length args > symf.depth) then stio (2, app) // over saturated
+            let r = symf.rkind `band` rkSafeTC
+                rw0 = symf.rkind `band` (rkSafeTC + 6)
+                rw = if rw0 `band` 6 == 0 then rw0 `bor` ((symf.rkind `band` 1)*2 + 2) else rw0
+            if isJust symf.nativ then stio (rkSafeTC + (symf.rkind `band` 6), app)
+              else if (length args < symf.depth) then stio (rkSafeTC + 4, app) // unsaturated
+              // else if (length args > symf.depth) then stio (r+2, app) // over saturated
               else case symf.expr of
-                    Nothing -> stio (2, app)      // application of lambda/case bound
+                    Nothing -> case name of
+                        Local _ -> stio (rkSafeTC + 2; app)  // application of lambda/case bound
+                        _       -> stio (rw;app)             // global fun
                     Just _ -> do
                         g <- getST
                         if symf.sid == Symbol.sid sym
                             then do
                                 jt <- U.isJavaType (fst (U.returnType symf.typ.rho))
-                                if jt then stio (8+6; app) else stio (8+4; app)
-                            else stio (2; app) // lazy application
-        Con {name} -> stio (4; app)
+                                if jt then stio (rkSafeTC+8+6; app) else stio (rkSafeTC+8+4; app)
+                            else if r == 0 `or` (symf.sid `elem` syms)
+                                then stio (2; app)      // lazy recursive application
+                                else stio (rw; app)     // same as called
+        Con {name} -> stio (rkSafeTC+4; app)
         _ -> do
             g <- getST
             U.fatal (getpos ex) ("returnExprKind: funny application " ++ nice ex g)
 
-returnExprKind sym (Ifte c t e typ) = do
-    (_, c)  <- returnExprKind sym c
-    (w1, t) <- returnExprKind sym t
-    (w2, e) <- returnExprKind sym e
-    stio (minRkind w1 w2, Ifte c t e typ)
+returnExprKind syms sym (Ifte c t e typ) = do
+    rec <- references syms c    //
+    (_,  c) <- returnExprKind syms sym c
+    (w1, t) <- returnExprKind syms sym t
+    (w2, e) <- returnExprKind syms sym e
+    let res = if rec > 0 then minRkind w1 w2 `band` noSafeTC else minRkind w1 w2
+    stio (res; Ifte c t e typ)
 
-returnExprKind sym (x@Lam {ex,env}) = with env do
-        (n, ex) <- returnExprKind sym ex
+returnExprKind syms sym (x@Lam {ex,env}) = with env do
+        (n, ex) <- returnExprKind syms sym ex
         stio (n, x.{ex})
-returnExprKind sym (x@Let {ex,env}) = with env do
+returnExprKind syms sym (x@Let {ex,env}) = with env do
         let nms = map Symbol.name (values env)
-        foreach nms (returnName nms)
-        (n, ex) <- returnExprKind sym ex
+        returnNames syms nms
+        (n, ex) <- returnExprKind syms sym ex
         env <- getTop
         stio (n, x.{ex,env})
-returnExprKind sym (x@Case {ex, alts}) = do
-    (_, ex) <- returnExprKind sym ex
-    wsalts <- mapSt (altExprKind sym) alts
-    stio (foldl1 minRkind (map fst wsalts), x.{ex, alts = map snd wsalts})
-returnExprKind sym _ = error "returnExprKindbad epr."
+returnExprKind syms sym (x@Case {ex, alts}) = do
+    (_, ex) <- returnExprKind syms sym ex
+    rec     <- references syms ex
+    wsalts <- mapSt (altExprKind syms sym) alts
+    let m = foldl1 minRkind (map fst wsalts)
+        res = if rec > 0 then m `band` noSafeTC else m
+    stio (res; x.{ex, alts = map snd wsalts})
+returnExprKind syms sym _ = error "returnExprKindbad epr."
 
-altExprKind sym (alt@CAlt {env,ex}) = with env do
-     (n, ex) <- returnExprKind sym ex
+altExprKind syms sym (alt@CAlt {env,ex}) = with env do
+     (n, ex) <- returnExprKind syms sym ex
      env <- getTop
      stio (n, alt.{env,ex})
 
@@ -323,21 +353,23 @@ altExprKind sym (alt@CAlt {env,ex}) = with env do
  * combine two rkinds by taking the minimum of the lower 3 bits and the maximum of
  * the 2³ bit, which signifies tail recursion.
  */
-minRkind a b = tailbit `bor` wrbits where
+minRkind a b = safetc `bor` tailbit `bor` wrbits where
+    safetc  = (a `band` b) `band` rkSafeTC
     tailbit = (a `bor` b) `band` 8
     wrbits  = min (a `band` 7) (b `band` 7)
 
 /**
- * [usage] returnName names name
+ * [usage] returnNames names name
  *
  * gets the symbol and stores the information computed by 'returnKind' in the 'Symbol.rkind'
  * field.
  *
  * The @names@ list gives the names that are mutually dependend on this one.
  */
-returnName nms name = do
-    sym   <- U.findV name
-    returnKind nms sym
+returnNames sids nms = do
+    syms  <- mapSt U.findV nms
+    foreach syms (returnKind (sids ++ map Symbol.sid syms))
+    // returnKind nms sym
     // U.changeSym sym.{rkind}
 
 unrollSym (vsym@SymV {pos})
