@@ -626,49 +626,13 @@ variantType g jtype symd = jtype.{jname = U.javaName g (Symbol.name symd)}
 
 
 /**
- * Unify 2 Sigmas
- *
- * The first one is a quantified type from some symbol table item.
- * The second one is the actual type of some expression and must be an instance
- * of the first one.
- *
- * > unifySigma (forall a b. Maybe a -> [b]) (Maybe Int -> [Float]) ==> [(a,Int), (b, Float)]
- *
-unifySigma g (ForAll [] _) _ = Nil
-unifySigma g s1 (ForAll _ rho) = unifyRho g Nil s1.rho rho
-unifyRho g t (RhoFun ctx1 (ForAll _ s1) r1) (RhoFun ctx2 (ForAll _ s2) r2) = result
-    where
-        // t1 = unifyCtx g t  ctx1 ctx2
-        t2     = unifyRho g t  s1 s2
-        result = unifyRho g t2 r1 r2
-unifyRho g t (RhoTau ctx1 t1) (RhoTau ctx2 t2) = result
-    where
-        // ta     = unifyCtx g t ctx1 ctx2
-        result = unifyTau g t  t1   t2
-// unifyCtx g t ctx1 ctx2 = fold (uCtx g) t (zip ctx1 ctx2)
-//    where uCtx g t (Ctx {tau=tau1}, Ctx {tau=tau2}) = unifyTau g t tau1 tau2
-
-unifyTau g t (TVar {var}) b = insert t var b
-unifyTau g t (TFun a b) (TFun c d) = unifyTau g (unifyTau g t a c) b d
-unifyTau g t (TApp a b) (TApp c d) = unifyTau g (unifyTau g t a c) b d
-unifyTau g t _ _ = t
-
-// **
- * [usage] @sigmaInst sigma1 sigma2@
- * [returns] a list of 'Tau' types that are substituted for
- * the bounded variables of @sigma1@ in @sigma2@
- * which must be a valid substitution of the former (up to contexts).
- * /
-sigmaInst g sigma1 sigma2 = map (unJust • lookup tree) (Sigma.bound sigma1)
-    where tree =  unifySigma g sigma1 sigma2
-    */
-/**
  * Code for data constructors
  *
  * - For nullary constructors, a subclass of @Constant@ is derived that contains a singleton and
  * an appropriate @mk@ method.
- * - For constructors with arity > 0, a subclass of @Product@/n/
+ * - For non-strict constructors with arity > 0, a subclass of @Product@/n/
  *   with a static @mk@ method is derived.
+ * - For strict constructors, the members are generated directly.
  * - For constructors with arity > 0 a singleton @Fun@/n/ that calls the
  *   @mk@ method is created, also a static @n@ method to get the function.
  */
@@ -679,6 +643,7 @@ conCode symt cons (sym@SymD {flds, cid}) = do       // nullary
 
     let jtype       = variantType g symtjt sym
         (_, argtys) = U.returnType sym.typ.rho
+        struct      = sym.strsig.isStrict
     argjts <- mapSt subSigmaJT argtys
     funty  <- sigmaJT sym.typ
 
@@ -690,14 +655,15 @@ conCode symt cons (sym@SymD {flds, cid}) = do       // nullary
         sumCon = JClass {attr = attrs [JStatic, JPublic, JFinal],
                             jtype = djtype, extend = ext, implement = imp, defs}
         !ext | arity == 0 = Just (Ref {jname=JName "" "Constant", targs=[]})
-            | otherwise  = Just (Ref {jname=JName "" ("Product" ++ show arity),
+             | struct     = Nothing
+             | otherwise  = Just (Ref {jname=JName "" ("Product" ++ show arity),
                                       targs=argjts})
         imp = [symtjt]
 
         defs = [comment, constr, cMethod cid,
                     atomMethod "_v" jtype "this",
                     atomMethod "_e" jtype "this",
-                    single, make] ++ fun ++ getters
+                    single, make] ++ fun ++ getters ++ members
         !single | arity == 0 = JMember {attr = attrs [JPrivate, JStatic],
                                         jtype = nogen,
                                         name = "single",
@@ -715,7 +681,7 @@ conCode symt cons (sym@SymD {flds, cid}) = do       // nullary
         worker  = (workerMethod g sym).{targs = jtype.targs}
         rMethod = JMethod {attr = attrs [JPublic, JFinal], gargs = [], jtype, name = "r",
                             args = reverse constrargs,
-                            body = JBlock [JReturn (JInvoke worker args)]}
+                            body = JBlock [JReturn (JInvoke worker rargs)]}
         nMethod = JMethod {attr = attrs [JUnchecked, JPublic, JFinal, JStatic],
                             gargs = jtype.targs, jtype = cclass.jtype, name = "n",
                             args = [],
@@ -727,7 +693,11 @@ conCode symt cons (sym@SymD {flds, cid}) = do       // nullary
                                     gargs = jtype.targs, jtype, name = "mk",
                                     args = [],
                                     body = JBlock [JReturn (JCast jtype (JAtom "single"))]}
-            | otherwise = JMethod {attr = attrs [JPublic, JFinal, JStatic],
+              | struct     = JMethod {attr = attrs [JPublic, JFinal, JStatic],
+                                    gargs = jtype.targs, jtype, name = "mk",
+                                    args = structargs,
+                                    body = JBlock [JReturn (JNew jtype args)]}
+              | otherwise  = JMethod {attr = attrs [JPublic, JFinal, JStatic],
                                     gargs = jtype.targs, jtype, name = "mk",
                                     args = constrargs,
                                     body = JBlock [JReturn (JNew jtype args)]}
@@ -735,15 +705,30 @@ conCode symt cons (sym@SymD {flds, cid}) = do       // nullary
         constrargs = [ (attrFinal, ty, lazy jt, n) |
                             (jt, (ty, n)) <- zip argjts (zip argtys argNames) ]
         args = take arity (map JAtom argNames)
-        constr = JConstr {attr = attrs [JPrivate], jtype = jtype, args = constrargs,
+        structargs = [ (attrFinal, ty, strict jt, n) |
+                            (jt, (ty, n)) <- zip argjts (zip argtys argNames) ]
+        rbinds = [ Bind RLazy sig jt (JAtom n) | (_,sig,jt,n) <- constrargs ]
+        sargs = map (Binding.jex • strictBind) rbinds
+        rargs = if struct then sargs else args
+        constr = JConstr {attr = attrs [JPrivate], jtype = jtype,
+                            args = if struct then structargs else constrargs,
                             body = JBlock super}
         !super | arity == 0 = []
+               | struct = take (length args) (zipWith JAssign
+                                                    (map JAtom memNames)
+                                                    (map JAtom argNames))
                | otherwise = [JEx (JInvoke (JAtom "super") args)]
         getters = // if symt.product then [] else
                     atomMethod (conGetter sym.name) jtype "this" :
                     [ atomMethod (conGetter (Symbol.name con))
                                  (variantType g symtjt con) "null"
                          | con <- cons, Symbol.sid con != sym.sid ]  // other constructors
+        members | struct =  uMethod : zipWith member argjts memNames
+                | otherwise = []
+                where uMethod = atomMethod "_u" (Nativ "boolean" []) "false"
+        member jt name = JMember {attr = attrs [JFinal, JPublic],
+                                    jtype = strict jt,
+                                    name, init = Nothing}
     stio [result]
 conCode symt cons nocon = error "conCode: no Con"
 
@@ -809,23 +794,35 @@ symCode binds (sym@SymT {product=true}) = do                    // product
         (_, argtys) = U.returnType symd.typ.rho
         coargs = (map targ • take (length sym.typ.bound) • filter (`notElem` sym.typ.bound))
                      U.allBinders
+        struct      = symd.strsig.isStrict
     funty      <- sigmaJT symd.typ
     ftypes     <- mapSt subSigmaJT (map snd symd.flds)
     argjts     <- mapSt subSigmaJT argtys
     let arity  = length symd.flds
-        ext    = Just (Ref {jname=JName "" ("Product" ++ show arity), targs = ftypes})
+        ext | struct = Nothing
+            | otherwise  = Just (Ref {jname=JName "" ("Product" ++ show arity), targs = ftypes})
         imp    = [jtValue, lazy jtype]
         defs = [comment, constr, cMethod symd.cid,
                     atomMethod "_v" jtype "this",
                     atomMethod "_e" jtype "this",
-                    single, make, cclass, nMethod, coerce] ++ concat subDefs
+                    single, make, cclass, nMethod, coerce] ++ members ++ concat subDefs
         comment = JComment (nice symd g)
         constrargs = [ (attrFinal, ty, (lazy jt), n) |
                             ((ty, jt), n) <- zip (zip argtys argjts) argNames ]
         args   = take arity (map JAtom argNames)
-        constr = JConstr {attr = attrs [JPrivate], jtype = jtype, args = constrargs,
+        structargs = [ (attrFinal, ty, strict jt, n) |
+                            (jt, (ty, n)) <- zip argjts (zip argtys argNames) ]
+        rbinds = [ Bind RLazy sig jt (JAtom n) | (_,sig,jt,n) <- constrargs ]
+        sargs = map (Binding.jex • strictBind) rbinds
+        rargs = if struct then sargs else args
+        constr = JConstr {attr = attrs [JPrivate], jtype = jtype,
+                            args = if struct then structargs else constrargs,
                             body = JBlock super}
-        super  = [JEx (JInvoke (JAtom "super") args)]
+        super
+            | struct = take (length args) (zipWith JAssign
+                                                    (map JAtom memNames)
+                                                    (map JAtom argNames))
+            | otherwise  = [JEx (JInvoke (JAtom "super") args)]
         single = JMember {attr = attrs [JPrivate, JStatic],
                                         jtype = erased cclass.jtype,
                                         name = "_single",
@@ -834,10 +831,14 @@ symCode binds (sym@SymT {product=true}) = do                    // product
                                 gargs = coargs, jtype = jtype.{targs=coargs},
                                 name = "coerce", args = [],
                                 body = JBlock [JReturn (JCast jtype.{targs=coargs} (JAtom "this"))]}
-        make   = JMethod {attr = attrs [JPublic, JFinal, JStatic],
-                                    gargs = jtype.targs, jtype, name = "mk",
-                                    args = constrargs,
-                                    body = JBlock [JReturn (JNew jtype args)]}
+        make    | struct     = JMethod {attr = attrs [JPublic, JFinal, JStatic],
+                        gargs = jtype.targs, jtype, name = "mk",
+                        args = structargs,
+                        body = JBlock [JReturn (JNew jtype args)]}
+                | otherwise = JMethod {attr = attrs [JPublic, JFinal, JStatic],
+                        gargs = jtype.targs, jtype, name = "mk",
+                        args = constrargs,
+                        body = JBlock [JReturn (JNew jtype args)]}
         cclass = JClass {attr = attrs [JPublic, JStatic],
                                     jtype = Ref (JName "" "Construct") jtype.targs,
                                     extend = Just funty,
@@ -846,11 +847,17 @@ symCode binds (sym@SymT {product=true}) = do                    // product
         worker  = (workerMethod g symd).{targs = jtype.targs}
         rMethod = JMethod {attr = attrs [JPublic, JFinal], gargs = [], jtype, name = "r",
                             args = reverse constrargs,
-                            body = JBlock [JReturn (JInvoke worker args)]}
+                            body = JBlock [JReturn (JInvoke worker rargs)]}
         nMethod = JMethod {attr = attrs [JUnchecked, JPublic, JFinal, JStatic],
                             gargs = jtype.targs, jtype = cclass.jtype, name = "n",
                             args = [],
                             body = JBlock [JReturn (JCast cclass.jtype (JAtom "_single"))]}
+        members | struct =  uMethod : zipWith member argjts memNames
+                | otherwise = []
+                where uMethod = atomMethod "_u" (Nativ "boolean" []) "false"
+        member jt name = JMember {attr = attrs [JFinal, JPublic],
+                                    jtype = strict jt,
+                                    name, init = Nothing}
         result = JClass {attr = attrs [JFinal, JPublic, JStatic], jtype,
                          extend = ext, implement = imp, defs}
     stio [JComment (nice sym g), result]
@@ -2083,7 +2090,7 @@ genFunction sym rmode args binds = error "genFunction: no function"
  * manipulate such bindings. Many code generating functions will take
  * a ('Tree' 'Symbol' 'Binding') of current bindings as last parameter.
  */
-data Binding = Bind {mode :: RMode, ftype :: Sigma, jtype :: JType, jex :: JExpr}
+data Binding = !Bind {mode :: RMode, ftype :: Sigma, jtype :: JType, jex :: JExpr}
 instance Nice Binding where
     nice (Bind {mode, ftype, jtype, jex}) g = "Bind {" ++ show mode ++ ", "
                                             ++ ftype.nice g ++ ", "
@@ -2272,7 +2279,10 @@ match assert (pat@PCon {pos,qname,pats}) bind cont binds = do
                 (_,sigs) = U.returnType rho               // [b, List b]
             sjts <- mapSt sigmaJT sigs
             let sigssjts = zip sigs sjts
-                pbinds = [ Bind RLazy sig (lazy sjt) (JExMem (bcon.jex) m)
+                pbinds
+                    | symd.strsig.isStrict = [ Bind (jtRmode (strict sjt)) sig (strict sjt) (JExMem (bcon.jex) m)
+                                    | ((sig, sjt), m) <- zip sigssjts memNames ]
+                    | otherwise = [ Bind RLazy sig (lazy sjt) (JExMem (bcon.jex) m)
                                                     | ((sig, sjt), m) <- zip sigssjts memNames ]
 
             rest <- matches assert pats pbinds cont binds
@@ -2294,7 +2304,7 @@ match assert (pat@PCon {pos,qname,pats}) bind cont binds = do
             (boxd, code1) <- realize "$" (boxedBind bind)
             pss <- mapSt patternStrictness pats
 
-            let smode = any Strictness.isStrict pss
+            let smode = symd.strsig.isStrict || any Strictness.isStrict pss
                 bcon = if smode then boxd else bind
                 (rty,sigs) = U.returnType rho               // [b, List b]
             rjt <- tauJT rty
@@ -2309,6 +2319,8 @@ match assert (pat@PCon {pos,qname,pats}) bind cont binds = do
                         mkfun = JStMem (JName prodnm ("n")) sigjts
 
                 pbinds
+                    | symd.strsig.isStrict = [ Bind (jtRmode (strict sjt)) sig (strict sjt) (JExMem (bcon.jex) m)
+                                    | ((sig, sjt), m) <- zip sigssjts memNames ]
                     | smode = [ Bind RLazy sig (lazy sjt) (JExMem (bcon.jex) m)
                                     | ((sig, sjt), m) <- zip sigssjts memNames ]
                     | otherwise = [ Bind RLazy sig (lazy sjt) (field bcon f sig)
@@ -3010,9 +3022,11 @@ genExpr rflg rm (app@App a b (Just sigma)) binds = do
         args   <-   adaptHigherPolymorphicS args asigs
         genApp rm binds fun args
     where
+        genEx arm aex = genExpr false arm aex binds
         genApp rm binds (con@Con {pos, name, typ = Just csigma}) args = do
             sym <- U.findD name
             let a = length sym.flds
+                (arho, asigs) = U.returnTypeN a sym.typ.rho
             if length args < a
                 then genAnon rm binds con args          // partial application
                 else do
@@ -3020,15 +3034,30 @@ genExpr rflg rm (app@App a b (Just sigma)) binds = do
                     if symt.product && symt.newt
                         then genExpr rflg rm (head args) binds
                         else do
-                            dbind <- instSymDirect pos sym csigma
+                            let islazy = rm == RLazy && !rflg
+                                struct = sym.strsig.isStrict
+                            dbind <- if struct && islazy
+                                then instSym pos sym csigma
+                                else instSymDirect pos sym csigma
                             sjt   <- sigmaJT sigma
-                            let jx  = dbind.jex
+                            let jx  = case dbind.jex of
+                                    jst@JStMem _ _ -> jst
+                                    jin@JInvoke _ _ -> JExMem jin "r"
+                                    _ -> error "genApp: bad instSym"
                                 // sjt = dbind.jtype
                                 aargs = take a args
                                 rargs = drop a args
-                            abinds <- mapSt (flip (genExpr false RLazy) binds) aargs
+                                sss = if islazy then allLazy
+                                        else case sym.strsig of
+                                            S ss -> ss
+                                            U    -> allLazy
+                            amodes <- mapSt (curry argMode) (zip sss asigs)
+                            abinds <- mapSt (curry genEx)   (zip amodes aargs) // mapSt (flip (genExpr false RLazy) binds) aargs
                             rbinds <- mapSt (flip (genExpr false RLazy) binds) rargs
-                            let call = Bind RBoxed sigma sjt (JInvoke jx (map Binding.jex abinds))
+                            let !cbinds = case jx of
+                                    JExMem _ "r" -> reverse abinds
+                                    _ -> abinds
+                                call = Bind RBoxed sigma sjt (JInvoke jx (map Binding.jex cbinds))
                                 result
                                     | null rargs = stio call
                                     | otherwise  = do
@@ -3070,7 +3099,7 @@ genExpr rflg rm (app@App a b (Just sigma)) binds = do
                 ari sym                       = sym.depth
                 tailcall = rflg `and` rm == RLazy
                 // safetailcall = tailcall
-                genEx arm aex = genExpr false arm aex binds
+                // genEx arm aex = genExpr false arm aex binds
 
                 funBind sym   = case lookup binds sym of
                         Just b -> do        // must be let bound because of depth > 0
