@@ -7,7 +7,7 @@
 
 .SUFFIXES: .class .fr
 
-JAVAC = javac -source 1.6 -target 1.6 -bootclasspath C:/opt/Java/jre6/lib/rt.jar
+JAVAC = javac -source 1.6 -target 1.6 -bootclasspath java6-rt.jar
 YACC = pbyacc
 JAVA = java6
 
