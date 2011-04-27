@@ -180,6 +180,7 @@ vid t = (Token.value t; Token.line t)
 //%type contypes        [(Maybe String, SigmaS)]
 //%type dalt            DConS
 //%type simpledalt      DConS
+//%type strictdalt      DConS
 //%type visdalt         DConS
 //%type dalts           [DConS]
 //%type calt            CAltS
@@ -274,6 +275,7 @@ vid t = (Token.value t; Token.line t)
 //%explain datainit     a data definition
 //%explain dalt         a variant of an algebraic datatype
 //%explain simpledalt   a variant of an algebraic datatype
+//%explain strictdalt   a variant of an algebraic datatype
 //%explain visdalt      a variant of an algebraic datatype
 //%explain dalts        an algebraic datatype
 //%explain contypes     constructor types
@@ -301,7 +303,7 @@ vid t = (Token.value t; Token.line t)
 %token VARID CONID QUALIFIER DOCUMENTATION
 %token PACKAGE IMPORT INFIX INFIXR INFIXL NATIVE DATA WHERE CLASS EXTENDS
 %token INSTANCE ABSTRACT TYPE TRUE FALSE IF THEN ELSE CASE OF DERIVE
-%token LET IN WHILE BREAK CONTINUE DO FORALL PRIVATE PUBLIC PROTECTED PURE
+%token LET IN WHILE BREAK CONTINUE DO FORALL PRIVATE PUBLIC PURE
 %token INTCONST STRCONST LONGCONST FLTCONST DBLCONST CHRCONST REGEXP BIGCONST
 %token ARROW DCOLON GETS EARROW TARROW
 %token LOP1 LOP2 LOP3 LOP4 LOP5 LOP6 LOP7 LOP8 LOP9 LOP10 LOP11 LOP12 LOP13 LOP14 LOP15 LOP16
@@ -417,7 +419,7 @@ definition:
 
 visibledefinition:
     PRIVATE     publicdefinition      { \_\ds -> map (updVis Private) ds }
-    | PROTECTED publicdefinition      { \_\ds -> map (updVis Protected) ds }
+    // PROTECTED publicdefinition      { \_\ds -> map (updVis Protected) ds }
     | PUBLIC    publicdefinition      { \_\ds -> map (updVis Public) ds }
     | ABSTRACT  datadef               { \_\(d::Def) -> [d.{ctrs <- map updCtr}] }
     ;
@@ -461,7 +463,7 @@ plocaldef:
     localdef
     // documentation                     { single }
     | PRIVATE   localdef                { \_\ds -> map (updVis Private) ds }
-    | PROTECTED localdef                { \_\ds -> map (updVis Protected) ds }
+    // PROTECTED localdef                { \_\ds -> map (updVis Protected) ds }
     | PUBLIC    localdef                { \_\ds -> map (updVis Public) ds }
     ;
 
@@ -779,6 +781,7 @@ datainit:
         \dat\d\docu\alts -> DatDcl {pos=yyline dat, vis=Public,
                                     name=d, vars=[], ctrs=alts, defs=[], doc=Nothing}
     }
+    /*
     | DATA dconid '=' NATIVE '{' conflds '}'    {
         \dat\d\_\n\_\fs\_ ->
             let con = DCon {pos=yyline n, vis=Public,
@@ -786,6 +789,7 @@ datainit:
             in DatDcl {pos=yyline dat, vis=Public,
                                     name=d, vars=[], ctrs=[con], defs=[], doc=Nothing}
     }
+    */
     ;
 
 dvars:
@@ -805,18 +809,23 @@ dalt:
     ;
 
 visdalt:
-    simpledalt
-    | PUBLIC    simpledalt      { \_\dc -> (dc::DConS).{vis = Public}    }
-    | PRIVATE   simpledalt      { \_\dc -> (dc::DConS).{vis = Private}   }
-    | PROTECTED simpledalt      { \_\dc -> (dc::DConS).{vis = Protected} }
+    strictdalt
+    | PUBLIC    strictdalt      { \_\dc -> (dc::DConS).{vis = Public}    }
+    | PRIVATE   strictdalt      { \_\dc -> (dc::DConS).{vis = Private}   }
+    // PROTECTED strictdalt      { \_\dc -> (dc::DConS).{vis = Protected} }
+    ;
+
+strictdalt:
+    '!' simpledalt              { \_\dcon ->  DCon.{strict=true} dcon }
+    | simpledalt
     ;
 
 simpledalt:
-    conid                       { \c        -> DCon {pos=posLine c, vis=Public,
+    conid                       { \c        -> DCon {pos=posLine c, vis=Public, strict=false,
                                                 name=posItem c, flds=[], doc=Nothing } }
-    | conid '{' conflds '}'     { \c\_\fs\_ -> DCon {pos=posLine c, vis=Public,
+    | conid '{' conflds '}'     { \c\_\fs\_ -> DCon {pos=posLine c, vis=Public, strict=false,
                                                 name=posItem c, flds=fs, doc=Nothing } }
-    | conid contypes            { \c\fs     -> DCon {pos=posLine c, vis=Public,
+    | conid contypes            { \c\fs     -> DCon {pos=posLine c, vis=Public, strict=false,
                                                 name=posItem c, flds=fs, doc=Nothing } }
     ;
 
