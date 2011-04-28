@@ -2471,7 +2471,11 @@ patternRMode p = do
         PVar {var} -> do
             v <- U.findV (Local var)
             if v.strsig.isStrict
-                then stio RBoxed
+                then case v.typ.rho of
+                    RhoTau _ t -> do
+                        b <- U.isJavaType t
+                        stio (if b then RNative else RBoxed)
+                    _ -> stio RBoxed
                 else stio RLazy
         PAt {pos,var,pat} -> do
             rm <- patternRMode pat
@@ -2684,6 +2688,19 @@ genCaseStmt rm nocase binds = error "genCaseStmt: no case"
  */
 genStmts rm (x@Case {ckind,ex=cex,alts=calts}) binds = genCaseStmt rm x binds
 
+genStmts rm (x@Let {env=Node nn Nil Nil k symv, ex}) binds
+    | symv.depth == 0,
+      symv.strsig.isStrict,
+      symv.rkind `band` T.rkSimple != 0,
+      RhoTau [] t <- symv.typ.rho,
+      Just vx <- symv.expr = genStmts rm (cas vx) binds
+    where
+        cas vx = Case CWhen vx [alt] x.typ
+        alt = CAlt {pos = symv.pos,
+                     env = Node nn Nil Nil k symv.{expr = Nothing},
+                     pat = PVar symv.pos k,
+                     ex}
+
 genStmts rm (x@Let {env,ex}) binds = with env do
         g <- getST
         (nbinds, stmtss) <- foldSt localdef (binds, []) (values env)
@@ -2813,10 +2830,10 @@ resolveConstraint pos (ctx@Ctx {cname, tau}) = do
                     g <- getST
                     U.fatal pos ("makeCtx: head is " ++ nice other g)
 
-instSymDirect = instSym0 true true
+instSymDirect p sy sig = instSym0 true true p sy sig
 
 /// convenience method for normal instantiation
-instSym = instSym0 false true
+instSym p sy sig = instSym0 false true p sy sig
 /**
  * instantiate a symbol at a given type
  */
@@ -2832,6 +2849,7 @@ instSym0 direct cmembers pos sym sigma = do
 
 
 
+    // U.logmsg TRACEG pos ("instSym: gargs = " ++ show (map (flip nice g) inst))
     gargs    <- mapSt tauJT inst
     U.logmsg TRACEG pos ("instSym: gargs = " ++ show (map (flip nice g) inst))
     jt       <- sigmaJT sigma
@@ -3005,7 +3023,7 @@ genExpr _ rm (Lit {kind = LBool, value, typ = Just sigma}) binds
 genExpr _ RNative (Lit {kind, value, typ = Just sigma}) binds
     | kind != LRegex `and` kind != LBig = do
         jt <- sigmaJT sigma
-        stio (Bind RNative sigma jt (JAtom value))
+        stio (Bind RNative sigma (strict jt) (JAtom value))
 
 genExpr _ rm (x@Lit {kind,value,typ=Just sigma}) binds = do
     jname <- findConst x
@@ -3199,6 +3217,7 @@ genExpr rflg rm (app@App a b (Just sigma)) binds = do
             stio (toMode rm result)
 
 
+        apply :: Binding -> Binding -> Binding
         apply x b  = x.{mode=RLazy, jex=JInvoke (JExMem xe.jex "a") [ns.jex]}
             where ns = notStrict b
                   xe = toBoxed x
@@ -3216,12 +3235,14 @@ genExpr rflg RLazy (ifte@Ifte c t e (Just sigma)) binds = do
     cbind <- genExpr false RLazy c binds
     tbind <- genExpr false RLazy t binds
     ebind <- genExpr false RLazy e binds
+    let rrho = U.tauRho sigma.rho
+    rjt  <- rhoJT rrho
     let lif = VName pPrelude "lazyif"
         jif = U.javaName g lif
-        ifn = JStMem (U.memberOf jif "n") [jt]
+        ifn = JStMem (U.memberOf jif "n") [rjt]
         ifna = JExMem (JInvoke ifn []) "a"
         jex = JInvoke ifna [cbind.jex, tbind.jex, ebind.jex]
-    stio (Bind RLazy sigma (lazy jt) jex)
+    stio (Bind RLazy sigma (lazy rjt) jex)
 
 genExpr _ rm (ifte@Ifte c t e (Just sigma)) binds = do
     // g <- getST

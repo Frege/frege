@@ -224,19 +224,27 @@ returnKind _ _ = stio ()     // abstract methods
  */
 references sids x = U.foldEx true refs 0 x
     where
-        refs n (Vbl {name}) = do
+        refs n (Vbl {pos,name}) = do
+            // g <- getST
+            // U.logmsg TRACE7 pos ("references " ++ show n ++ " " ++ show sids ++ "  " ++ nice name g)
             sym <- U.findV name
             if sym.sid `elem` sids then stio (Right (n+1)) else stio (Left n)
         refs n (Ifte c t e _) = do
             crefs <- references sids c
             trefs <- references sids t
             erefs <- references sids e
-            stio (Right (crefs + max trefs erefs))
+            stio (Right (n + crefs + max trefs erefs))
         refs n (Case {ex,alts}) = do
             xrefs <- references sids ex
             arefs <- mapSt altRefs alts
-            stio (Right (xrefs + fold max 0 arefs))
-        refs n _ = stio (Left n)
+            stio (Right (n + xrefs + fold max 0 arefs))
+        refs n (Lam {env,ex}) = do
+            lrefs <- with env (references sids ex)
+            stio (Right (n+2*lrefs))
+        refs n x = do
+            // g <- getST
+            // U.logmsg TRACE7 (getpos x) ("references " ++ show n ++ " " ++ show sids ++ "  " ++ nice x g)
+            stio (Left n)
         altRefs (CAlt {env,ex}) = with env (references sids ex)
 
 /**
@@ -315,8 +323,15 @@ returnExprKind syms sym (ex@App a b typ) = do
                                 else stio (rw; app)     // same as called
         Con {name} -> stio (rkSafeTC+4; app)
         _ -> do
-            g <- getST
-            U.fatal (getpos ex) ("returnExprKind: funny application " ++ nice ex g)
+                n <- references syms f
+                if n > 0
+                    then stio (2; app)                   // better safe than sorry
+                    else stio (rkSafeTC + 2; app)
+            /*
+              do
+                g <- getST
+                U.fatal (getpos ex) ("returnExprKind: funny application " ++ nice ex g)
+                */
 
 returnExprKind syms sym (Ifte c t e typ) = do
     rec <- references syms c    //
@@ -437,7 +452,10 @@ unrollLet (x@Let {env,ex}) = do
     where
         sublet env inx [k@#^let\$\d+$#]
                 | Just (vsym@SymV {expr=Just (Lam {env=ev,ex,pat})}) <- lookup env k
-                = Case CNormal ex [CAlt {env=ev, pos=vsym.pos, pat, ex=inx}] Nothing
+                = Case (ck inx) ex [CAlt {env=ev, pos=vsym.pos, pat, ex=inx}] Nothing
+                where
+                    ck (Case {ckind}) = ckind
+                    ck _ = CNormal
         sublet env xin locals = if isEmpty e then xin else Let e [] xin Nothing where
             lookups = [ (s, env.lookup s) | s <- locals ]
             e = fold put Tree.Nil [ (s, sym) | (s, Just sym) <- lookups ]
@@ -713,7 +731,21 @@ closedLambda (Let {env=letenv,ex=letex,typ=lettyp})
             env <- getTop
             stio (Right (Let {env,ex=letex,typ=lettyp,defs=[]}))
 
-
+/*
+closedLambda (xlet@Let {env=letenv,ex=letex,typ=lettyp})
+        | [(x,sym)] <- each letenv,
+          Just inline <- sym.expr,
+          isSimple inline = do
+            self <- with letenv (references [sym.sid] inline)
+            down <- with letenv (references [sym.sid] letex)
+            if self == 0 && down == 1
+                then do
+                    ex <- with letenv (replSid sym.sid inline letex)
+                    g <- getST
+                    U.logmsg TRACE8 sym.pos ("let " ++ x ++ " = " ++ nice inline.untyped g ++ " in ... replaced with " ++ nice ex.untyped g)
+                    closedLambda ex
+                else stio (Left xlet)
+                */
 
 closedLambda (Lam {pat,env,ex,typ = Just sigma}) = do
         ex    <- with env (U.mapEx true closedLambda ex)     // recurse
