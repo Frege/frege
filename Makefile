@@ -157,7 +157,7 @@ $(COMPF1)/Scanner.class: $(PRE1) frege/compiler/Scanner.fr
 	$(FREGEC0)  -make frege.compiler.Scanner
 $(COMPF1)/Main.class : $(PRE1) $(LIBF1)/PP.class $(CLASSES)
 	$(FREGEC0)  -make frege.compiler.Main
-$(DIR1)/Prelude.class: frege/Prelude.fr
+$(DIR1)/Prelude.class: $(RUNTIME) frege/Prelude.fr
 	rm -rf $(COMPF1)
 	rm -rf $(DIR1)
 	$(FREGEC0)  frege/Prelude.fr

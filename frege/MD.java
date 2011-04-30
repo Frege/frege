@@ -62,6 +62,8 @@ public class MD {
 	    SymL[]      symls()     default {};
 	    /** <p>Table of values and functions.</p> */
 	    SymV[]      symvs()     default {};
+	    /** <p>Table of expressions.</p> */
+	    Expr[]      exprs()     default {};
 	}
 
     /**
@@ -170,6 +172,7 @@ public class MD {
 		                                            //        1---- simple expression
 		                                            //       1----- function can be called
 		                                            //              without fear of stack overflow
+        int     expr()          default 0;          // index into expression table if >0		                                            
 	}
 
 	/*
@@ -254,4 +257,34 @@ public class MD {
 		boolean  pur()          default false;  // whether this is a pure (immutable) native type
 		boolean  newt()         default false;  // whether this is a new type (1-tuple)
 	}
+	
+	@Retention(RetentionPolicy.RUNTIME)
+	/*
+	 * encoding of expressions, no let allowed.
+	 */
+	public @interface Expr {
+	    /* 
+	     * expression kind
+	     * 0 - Ann
+	     * 1 - App
+	     * 2 - Case
+	     * 3 - Con
+	     * 4 - Ifte
+	     * 5 - Lam
+	     * 6 - Lit
+	     * 7 - local Vbl
+	     * 8 - global Vbl
+	     */
+	    int        xkind()         default 7;     // local Vbl
+	    QName[]    name()          default {};    // set for global Vbl, Con
+	    int        lkind()         default 0;     // ord LiteralKind, set for Lit
+	    String     varval()        default "";    // local Vbl name or Literal value
+	    long[]     alts()          default {};    // case alternatives or lambda
+	                                              // left word is expression index for pattern
+	                                              // right word is expression index for expression
+	    int        subx1()         default 0;     // index of 1st subexpression, set for Ann, App, If, Case
+	    int        subx2()         default 0;     // index of 2nd subexpression, set for App, If
+	    int        subx3()         default 0;     // index of 3rd subexpression, set fot If
+	}
+	
 }
