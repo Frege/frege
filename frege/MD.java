@@ -277,11 +277,13 @@ public class MD {
 	     */
 	    int        xkind()         default 7;     // local Vbl
 	    QName[]    name()          default {};    // set for global Vbl, Con
-	    int        lkind()         default 0;     // ord LiteralKind, set for Lit
+	    int        lkind()         default 0;     // Lit: ord LiteralKind
+	                                              // Ann: sigma index
+	                                              // Case: ord CKind
 	    String     varval()        default "";    // local Vbl name or Literal value
-	    long[]     alts()          default {};    // case alternatives or lambda
-	                                              // left word is expression index for pattern
-	                                              // right word is expression index for expression
+	    int[]      alts()          default {};    // case alternatives or lambda
+	                                              // first halve are expression indexes for patterns
+	                                              // second halve are expression indexes for expressions
 	    int        subx1()         default 0;     // index of 1st subexpression, set for Ann, App, If, Case
 	    int        subx2()         default 0;     // index of 2nd subexpression, set for App, If
 	    int        subx3()         default 0;     // index of 3rd subexpression, set fot If
