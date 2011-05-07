@@ -30,7 +30,7 @@ import frege.IO   (File)
 import frege.compiler.Data      except (version)
 import frege.compiler.Utilities(print println)      U
 import frege.lib.PP             except (version line)
-import frege.compiler.Transform (patsComplete rkSafeTC rkTail)
+import frege.compiler.Transform (patsComplete openCaseWhen rkSafeTC rkTail rkSimple)
 
 
 
@@ -395,9 +395,13 @@ expIndex exp = encodeX exp >>= mbIndex
             g <- getST
             let pats = map CAlt.pat alts
                 exs  = map CAlt.ex  alts
-            case patsComplete g pats of
-                Just _ -> stio Nothing      // inline complete cases only
-                Nothing -> do
+                isok
+                    | ck == CWhen, Nothing <- openCaseWhen g ex = true
+                    | ck != CWhen, Nothing <- patsComplete g pats = true
+                    | otherwise = false
+            if not isok
+                then stio Nothing      // inline complete cases only
+                else do
                     exx <- encodeX ex
                     case exx of
                         Nothing -> stio Nothing
@@ -515,9 +519,24 @@ annoSymV symv = do
         false -> do
             sig <- sigIndex (Symbol.typ symv)
             // inline candidates must be safe tail calls and no loops
-            exp <- if symv.rkind `band` rkSafeTC != 0 && symv.rkind `band` rkTail == 0
+            exp <- if symv.depth == 0 && symv.rkind `band` rkSimple != 0
+                        || symv.rkind `band` rkSafeTC != 0 && symv.rkind `band` rkTail == 0
                         then maybe (stio 0) expIndex symv.expr
                         else stio 0
+            let sorry
+                    | Nothing <- symv.expr = false
+                    | MName cname _ <- symv.name,
+                      Just (SymC {}) <- cname.findit g = exp == 0
+                    | otherwise = false
+                reason
+                    | symv.depth == 0 = "may be too expensive to recompute"
+                    | symv.rkind `band` rkSafeTC == 0 = "may be deeply recursive"
+                    | symv.rkind `band` rkTail   != 0 = "is tail recursive"
+                    | otherwise = "contains let expressions, where clauses or case expressions that may fail"
+
+            when (sorry) do
+                U.hint symv.pos ("The code of " ++ nice symv g
+                                ++ " cannot be exported because it " ++ reason ++ ". ")
             let a = annotation "SymV" [
                     ("name", anno symv.name),
                     ("stri", lit symv.strsig.show),

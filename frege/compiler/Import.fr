@@ -226,6 +226,7 @@ importClassData pos pack = do
             U.error pos ("`" ++ clname ++ "` is not a frege package")
             stio Nothing
         Right (Just fp) -> do
+            g <- getST
             let packs = [ Pack.new p | p <- map fp.imps.elemAt (0..fp.imps.length-1) ]
             foreach packs (importClass pos)
             // now everything is in place for making the new symtab
@@ -270,8 +271,57 @@ importClassData pos pack = do
                     where abort = error ("unknown rho index " ++ show i)
                 nSigma i = ForAll sig.bound.toList (nRho sig.rho)
                     where sig = fp.sigmas.[i]
+                rebuildEx t n = res >>= stio • insert t n
+                    where
+                        !res = case exa.xkind of
+                            0 -> stio Ann {ex = xref exa.subx1, typ = Just (nSigma exa.lkind)}
+                            1 -> stio (App (xref exa.subx1) (xref exa.subx2) Nothing)
+                            2 -> do
+                                alts <- mapSt calt (zip pats exps)
+                                stio Case {ckind = from exa.lkind, ex = xref exa.subx1,
+                                            typ = Nothing, alts}
+                            3 -> stio Con {pos = 0, typ = Nothing, name = rebuildQN exa.name.[0]}
+                            4 -> stio (Ifte (xref exa.subx1) (xref exa.subx2) (xref exa.subx3) Nothing)
+                            5 -> do
+                                alts <- mapSt calt (zip pats exps)
+                                let alt = head alts
+                                stio Lam {env = alt.env, pat = alt.pat, ex = alt.ex, typ = Nothing}
+                            6 -> stio Lit {pos=0, typ=Nothing, kind = from exa.lkind, value = exa.varval}
+                            7 -> stio Vbl {pos=0, typ=Nothing, name=Local exa.varval}
+                            8 -> stio Vbl {pos=0, typ=Nothing, name=rebuildQN exa.name.[0]}
+                            w -> error ("bad expra id: " ++ show w)
+                        exa = fp.exprs.[n]
+                        x0 = exa.alts.length `div` 2
+                        pats = [ pref exa.alts.[i] | i <- 0 .. (x0-1) ]
+                        exps = [ xref exa.alts.[i] | i <- x0.. (exa.alts.length-1) ]
+                        calt (pat, ex) = with Nil do
+                                foreach ((keys • U.patNames) pat)
+                                    (U.enter • U.patLocal 0)
+                                env <- getTop
+                                stio CAlt {pos = 0, env, pat, ex}
+                        xref i = case lookup t i of
+                            Just x -> x
+                            Nothing -> error ("illegal xref " ++ show i  ++ " in expr#"
+                                        ++ show n ++ ", xkind=" ++ show exa.xkind)
+                        x2p :: Expr -> Pattern
+                        x2p (Vbl {pos, name = Local n}) = PVar {pos, var = n}
+                        x2p (Lit {pos, kind, value})    = PLit {pos, kind, value}
+                        x2p (Con {pos, name})           = PCon {pos, qname = name, pats=[]}
+                        x2p (Ann {ex,typ=Just sig}) = PAnn {pat = x2p ex, typ = sig}
+                        x2p (app@App _ _ _) = case map fst (U.flatx app) of
+                            (Con {name}:args) -> PCon {pos=0, qname=name, pats = map x2p args}
+                            [Vbl {name=VName _ "!"}, x] -> PStrict {pat=x2p x}
+                            [Vbl {name=VName _ "@"}, v1, v2] -> PAt {pos=0, var=p1.var, pat=p2}
+                                where p1 = x2p v1; p2 = x2p v2
+                            [Vbl {name=VName _ "~"}, v1, v2] -> PMat {pos=0, var=p1.var, value}
+                                where p1 = x2p v1; value = v2.value
+                            sonst -> error ("x2p: illegal expr " ++ nice app g)
+                        pref i = x2p (xref i)
+            xtree <- foldM rebuildEx Nil (1..fp.exprs.length-1)
             U.logmsg TRACE2 pos ("reconstructed " ++ show fp.taus.length ++ " tau types")
             U.logmsg TRACE2 pos ("reconstructed " ++ show fp.rhos.length ++ " rho types")
+            let nExpr i = maybe abort id (xtree.lookup i)
+                    where abort = error ("unknown expr index " ++ show i)
             let strMB "" = Nothing
                 strMB s  = Just s
             let rbSymA n = SymA {sid=0, pos, vis=Public, doc=strMB sym.doc,
@@ -283,11 +333,14 @@ importClassData pos pack = do
                 rbSymV arr n = SymV {sid=0, pos, vis=v, doc=strMB sym.doc,
                     name = rebuildQN sym.name, typ = nSigma sym.sig, pur = sym.pur,
                     nativ = if sym.nativ == "" then Nothing else Just sym.nativ,
-                    expr = Nothing, anno = true, state = StrictChecked,
+                    expr = rbExpr sym.expr,
+                    anno = true, state = StrictChecked,
                     strsig = decodeS sym.stri,
                     depth = sym.depth, rkind = sym.rkind }
                   where sym = arr.[n]
                         v = if sym.abst then Abstract else Public
+                rbExpr 0 = Nothing
+                rbExpr ix = Just (nExpr ix)
                 rbSymD :: CT.SymDArr -> Int -> Symbol
                 rbSymD arr n = SymD {sid=0, pos, vis=Public, doc=strMB sym.doc,
                     name = rebuildQN sym.name, cid = sym.cid,
@@ -363,6 +416,7 @@ rebuildQN qn = case qn.kind of
     k -> error ("illegal QName kind in CT:QName " ++ show (k, qn.pack, qn.base, qn.member))
   where
     tname = TName (Pack.new qn.pack) qn.base
+
 
 mapqs :: CT.QNameArr -> [QName]
 mapqs xs = [ rebuildQN qn | i <- 0..xs.length-1, qn = xs.[i] ]

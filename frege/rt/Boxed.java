@@ -79,6 +79,8 @@ public final class Boxed<T>  implements Value, Lazy<Boxed<T>> {
      */
     final public boolean _u() { return false; }
     
+    public String toString() { return j.toString(); }
+    
     /**
      * <p> Create an array with T elements. </p>
      * <p> This works so long as we never try to cast the array implicitely or explicitely
@@ -156,6 +158,8 @@ public final class Boxed<T>  implements Value, Lazy<Boxed<T>> {
         final public Bool      _v() { return this; }
         /** <p>Always <tt>false</tt>.</p> @return <tt>false</tt> */
         final public boolean   _u() { return false; }
+        
+        public String toString() { return j?"true":"false"; }
     }
 
 
@@ -188,6 +192,8 @@ public final class Boxed<T>  implements Value, Lazy<Boxed<T>> {
         final public Char      _v() { return this; }
         /** <p>Always <tt>false</tt>.</p> @return <tt>false</tt> */
         final public boolean   _u() { return false; }
+        
+        public String toString() { return "'" + j + "'"; }
     }
 
     /**
@@ -220,6 +226,8 @@ public final class Boxed<T>  implements Value, Lazy<Boxed<T>> {
         final public Int      _v() { return this; }
         /** <p>Always <tt>false</tt>.</p> @return <tt>false</tt> */
         final public boolean   _u() { return false; }
+        
+        public String toString() { return "" + j; }
         
         /**
          * <p> Access array element. </p>
@@ -276,9 +284,9 @@ public final class Boxed<T>  implements Value, Lazy<Boxed<T>> {
         /** the primitive value boxed by this instance */
         final public long   j;
         /**
-         * <p> box an int value </p>
+         * <p> box  long value </p>
          *
-         * @return the boxed int
+         * @return the boxed long
          */
         final public static Long mk(long c) {
             if (c >= 0L && c < 256L) return small[(int)c];
@@ -294,6 +302,8 @@ public final class Boxed<T>  implements Value, Lazy<Boxed<T>> {
         final public Long      _v() { return this; }
         /** <p>Always <tt>false</tt>.</p> @return <tt>false</tt> */
         final public boolean   _u() { return false; }
+        
+        public String toString() { return j + "L"; }
     }
 
     /**
@@ -322,6 +332,8 @@ public final class Boxed<T>  implements Value, Lazy<Boxed<T>> {
         final public Float      _v() { return this; }
         /** <p>Always <tt>false</tt>.</p> @return <tt>false</tt> */
         final public boolean   _u() { return false; }
+        
+        public String toString() { return j + "f"; }
     }
 
     /**
@@ -350,5 +362,7 @@ public final class Boxed<T>  implements Value, Lazy<Boxed<T>> {
         final public Double      _v() { return this; }
         /** <p>Always <tt>false</tt>.</p> @return <tt>false</tt> */
         final public boolean   _u() { return false; }
+        
+        public String toString() { return j + ""; }
     }
 }
