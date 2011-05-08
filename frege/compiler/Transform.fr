@@ -37,10 +37,17 @@ allourvars = do
 
 pass7 = do
     g <- getST
-    collectedvars <- allourvars
+
     // unroll let expressions
+    collectedvars <- allourvars
     foreach collectedvars unrollSym
-    stio ("expressions", length collectedvars)
+
+    // simplify let expressions by lifting local function bindings to the top
+    // or inlining variables
+    collectedvars <- allourvars
+    foreach collectedvars unLetSym
+
+    stio ("expressions", 2 * length collectedvars)
 
 
 pass8 = do
@@ -396,6 +403,15 @@ unrollSym sym = do
     g <- getST
     U.fatal sym.pos ("unrollSym no SymV : " ++ sym.nice g)
 
+unLetSym (vsym@SymV {pos})
+    | Just x <- vsym.expr = do
+        nx <- unLetExpr x
+        U.changeSym vsym.{expr = Just nx}
+    | otherwise = stio ()       // do nothing
+unLetSym sym = do
+    g <- getST
+    U.fatal sym.pos ("unLetSym no SymV : " ++ sym.nice g)
+
 /*
 singleLetSym (vsym@SymV {pos})
     | Just x <- vsym.expr = do
@@ -418,7 +434,7 @@ closedLambdaSym sym = do
 
 
 unrollExpr    = U.mapEx true unrollLet
-// singleLetExpr = U.mapEx true singleLet
+unLetExpr     = U.mapEx true unLet
 easyExpr      = U.mapEx true easyX
 
 unrollLet (x@Let {env,ex}) = do
@@ -526,13 +542,33 @@ easyX x = do
         makeEasy (x@Lam {ex, env}) = with env do        // so as to avoid bad symbols
             (ex, envs) <- makeEasy ex
             stio (x.{ex = fold mkLet ex envs}, [])
-        makeEasy (x@App (Lam {env,pat,ex}) b t) = do
+        makeEasy (app@App a b t) = do
             g <- getST
-            let cas = Case CNormal b [CAlt {pat, ex, env, pos = getpos x}] t
-            U.logmsg TRACE9 (getpos x) ("beta reduction:  " ++ nice x g ++ "  ==>  "
+            (a,evs1) <- makeEasy a
+            case a of
+                Lam {env,pat,ex} = do
+                    let cas = Case CNormal b [CAlt {pat, ex, env, pos = getpos app}] t
+                    U.logmsg TRACE9 (getpos app) ("beta reduction:  " ++ nice app g ++ "  ==>  "
                                         ++ nice cas g)
-            makeEasy cas
-        makeEasy (x@App _ _ _)     = makeSimple x
+                    c <- easyExpr cas
+                    stio (c, evs1)
+                Case {alts,typ = Just csigma}
+                    | ForAll [] (RhoFun _ _ _) <- csigma = do     // apply b to each alt
+                        let // ctype = ForAll [] t
+                            nalts = [ (calt::CAlt).{ex = App calt.ex b t} | calt <- alts ]
+                            cas = a.{alts=nalts, typ=t}
+                        U.logmsg TRACE9 (getpos app) ("(case ...) " ++ nice b g
+                            ++ "  ==>  " ++ nice cas g)
+                        c <- easyExpr cas
+                        stio (c, evs1)
+                    | otherwise = U.fatal (getpos app) ("Can't apply  " ++ nice b g
+                            ++ "  to case with type  "
+                            ++ nicer csigma g)
+                _ = do
+                    (napp, evs2) <- makeSimple (App a b t)
+                    stio (napp, evs1++evs2)
+        // makeEasy (x@App (Case ck cx calts) b ty)
+        // makeEasy (x@App _ _ _)     = makeSimple x
         makeEasy (x@Let {defs})    = stio (x, [])       // will be made easy recursively
         makeEasy (x@Case {ex})     = do
             (ex, envs) <- makeSimple ex
@@ -637,7 +673,7 @@ replName sid nm ex = U.mapEx true action ex
         action x = stio (Left x)
 
 
-closedLambda (x@Let {env,ex}) | length vals > 1 = do
+unLet (x@Let {env,ex}) | length vals > 1 = do
         g <- getST
         freevbls <- toPass
         case freevbls of
@@ -647,9 +683,9 @@ closedLambda (x@Let {env,ex}) | length vals > 1 = do
                 let vgs = zip vals gsyms
                 syms   <- mapSt (mkGlobal vgs) vgs
                 newlet <- foldSt replsym ex vgs
-                U.logmsg TRACE8 pos ("changed  " ++ nice newlet g)
+                U.logmsg TRACE7 pos ("changed  " ++ nice newlet g)
                 foreach syms U.changeSym
-                foreach (map Symbol.name syms) closedLambdaName
+                foreach (map Symbol.name syms) unLetName
                 stio (Left newlet)
             xs -> do
                 U.error (getpos x) ("implementation restriction: mutual recursive local functions"
@@ -685,7 +721,7 @@ closedLambda (x@Let {env,ex}) | length vals > 1 = do
         globalize sym = do
             g <- getST
             let name = U.unusedName (VName (Global.thisPack g) (sym.name.base)) g
-            stio sym.{name, sid=0, expr = Nothing}
+            stio sym.{name, sid=0, expr = Nothing, vis = Private}
 
         replsym :: Expr -> (Symbol, Symbol) -> StG Expr
         replsym x (sym,gsym) = replName sym.sid gsym.name x
@@ -697,19 +733,19 @@ closedLambda (x@Let {env,ex}) | length vals > 1 = do
             ex <- foldSt replsym ex vgs
             // sym <- globalize sym
             g <- getST
-            U.logmsg TRACE8 pos ("global: " ++ gsym.name.nice g ++ " = " ++ nice ex g)
+            U.logmsg TRACE7 pos ("global: " ++ gsym.name.nice g ++ " = " ++ nice ex g)
             let typ = ForAll (U.freeTVars [] sym.typ.rho) sym.typ.rho
             stio gsym.{expr = Just ex, typ}
 
-        closedLambdaName nm = do
+        unLetName nm = do
             symv <- U.findV nm
-            closedLambdaSym symv
+            unLetSym symv
 
-closedLambda (Let {env=letenv,ex=letex,typ=lettyp})
+unLet (Let {env=letenv,ex=letex,typ=lettyp})
         | [(x,sym)] <- each letenv,          // let x = ... in ex
           Just lam <- sym.expr,           // let x = y   in ex
           Lam {pat,env,ex,typ} <- lam = with letenv do           // let x = \_ -> ... in ex
-    ex    <- with env (U.mapEx true closedLambda ex)
+    ex    <- with env (U.mapEx true unLet ex)
     used  <- with env (U.localSyms ex)
     inner <- with env (innerSids ex)
     let thisSids = fold including inner (sym.sid:[ sid | SymV {sid} <- values env ])  // including x
@@ -722,17 +758,17 @@ closedLambda (Let {env=letenv,ex=letex,typ=lettyp})
             let lamx = Lam {pat,env,ex,typ}
             let typ  = ForAll (U.freeTVars [] sym.typ.rho) sym.typ.rho
             U.enter sym.{sid = 0, name, expr = Just lamx, vis = Private, typ}
-            U.logmsg TRACE8 sym.pos ("let " ++ x ++ " = " ++ nice lamx.untyped g ++ " in ... replaced with " ++ nice letex.untyped g)
-            U.logmsg TRACE8 sym.pos ("new function is " ++ name.nice g)
-            closedLambda letex       // other opportunities possible here
+            U.logmsg TRACE7 sym.pos ("let " ++ x ++ " = " ++ nice lamx.untyped g ++ " in ... replaced with " ++ nice letex.untyped g)
+            U.logmsg TRACE7 sym.pos ("new function is " ++ name.nice g)
+            unLet letex       // other opportunities possible here
         else do
             U.changeSym sym.{expr = Just (Lam {pat,env,ex,typ})}
-            letex <- U.mapEx true closedLambda letex
+            letex <- U.mapEx true unLet letex
             env <- getTop
             stio (Right (Let {env,ex=letex,typ=lettyp,defs=[]}))
 
 
-closedLambda (xlet@Let {env=letenv,ex=letex,typ=lettyp})
+unLet (xlet@Let {env=letenv,ex=letex,typ=lettyp})
         | [(x,sym)] <- each letenv,
           Just cx <- sym.expr,          // candidate expression
           isSimple cx = do
@@ -745,10 +781,27 @@ closedLambda (xlet@Let {env=letenv,ex=letex,typ=lettyp})
                                     else Ann {ex = cx, typ = Just sym.typ}
                     ex <- with letenv (replSid sym.sid inline letex)
                     g <- getST
-                    U.logmsg TRACE8 sym.pos ("let " ++ x ++ " = " ++ nice inline.untyped g ++ " in ... replaced with " ++ nice ex.untyped g)
-                    closedLambda ex
+                    U.logmsg TRACE7 sym.pos ("let " ++ x ++ " = " ++ nice inline.untyped g ++ " in ... replaced with " ++ nice ex.untyped g)
+                    unLet ex
                 else stio (Left xlet)
 
+unLet x = stio (Left x)
+
+closedLambda (app@App (Lam {pat,env,ex,typ}) b ty) = do
+        g <- getST
+        let pos = getpos app
+        U.logmsg TRACE8 pos ("beta reduction on: " ++ nice app g)
+        let result = Case CNormal b [CAlt {pos,pat,env,ex}] ty
+        U.logmsg TRACE8 pos ("results in: " ++ nice result g)
+        closedLambda result
+
+closedLambda (app@App a b ty) = do
+        a <- U.mapEx true closedLambda a
+        case a of
+            Lam {} -> closedLambda (App a b ty)
+            _ -> do
+                b <- U.mapEx true closedLambda b
+                stio (Right (App a b ty))
 
 closedLambda (Lam {pat,env,ex,typ = Just sigma}) = do
         ex    <- with env (U.mapEx true closedLambda ex)     // recurse
