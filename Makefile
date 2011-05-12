@@ -59,6 +59,10 @@ GENDOC  = $(FREGE)  frege.tools.Doc -d doc
 	$(FREGEC3) $<
 {frege}.fr{$(DIR0)}.class::
 	$(FREGEC3) $<
+# {frege/lib}.fr{$(LIBF)}.class::
+#	$(FREGECC) $<
+{frege/tools}.fr{$(TOOLSF)}.class::
+	$(FREGECC) $<
 
 all:  frege.mk runtime compiler # frege3.jar
 
@@ -75,22 +79,27 @@ frege3.jar: $(DIR)/check1 $(TOOLSF)/Doc.class
 	$(JAVA) -jar   autojar.jar -c build -o frege3.jar frege/tools/Doc.class
 	jar  -uvfe  frege3.jar frege.compiler.Main
 
-$(DIR)/check1: $(LIBF)/Random.class $(LIBF)/QuickCheck.class $(DIR)/PreludeProperties.class
+$(DIR)/check1: $(LIBRARY) $(TOOLS) $(DIR)/PreludeProperties.class
     $(JAVA) -cp build frege.PreludeProperties && echo Prelude Properties checked >$(DIR)/check1
 
 $(LIBF)/Random.class: $(DIR)/Prelude.class frege/lib/Random.fr
 	$(FREGECC)  frege/lib/Random.fr
 $(LIBF)/QuickCheck.class: $(LIBF)/Random.class frege/lib/QuickCheck.fr
 	$(FREGECC)  frege/lib/QuickCheck.fr
-$(DIR)/PreludeProperties.class: $(LIBF)/QuickCheck.class frege/PreludeProperties.fr
+$(LIBF)/Swing.class: $(DIR)/Prelude.class frege/lib/Swing.fr
+	$(FREGE) frege.compiler.Main  -d build -nowarn  frege/lib/Swing.fr
+
+$(DIR)/PreludeProperties.class: $(COMPF)/Main.class $(LIBF)/QuickCheck.class frege/PreludeProperties.fr
 	$(FREGECC)   frege/PreludeProperties.fr
-$(TOOLSF)/Doc.class: $(COMPF)/Main.class frege/tools/Doc.fr
-	$(FREGECC)  -make frege.tools.Doc
-$(TOOLSF)/YYgen.class: frege/tools/YYgen.fr
-	$(FREGECJ)  frege/tools/YYgen.fr
+# $(TOOLSF)/Doc.class: $(COMPF)/Main.class frege/tools/Doc.fr
+#	$(FREGECC)  -make frege.tools.Doc
+#$(TOOLSF)/YYgen.class: frege/tools/YYgen.fr
+#	$(FREGECJ)  frege/tools/YYgen.fr
 $(TOOLSF1)/YYgen.class: $(DIR1)/Prelude.class frege/tools/YYgen.fr
 	$(FREGEC0)  -make frege.tools.YYgen
 
+LIBRARY = $(LIBF)/Random.class $(LIBF)/QuickCheck.class $(LIBF)/Swing.class
+TOOLS = $(TOOLSF)/Doc.class $(TOOLSF)/YYgen.class
 #
 # final compiler
 #
@@ -214,18 +223,12 @@ RUNTIME  = build/frege/MD.class    $(COMPF)/JavaUtils.class \
 		$(RTDIR)/Product7.class    $(RTDIR)/Product8.class      $(RTDIR)/Product9.class \
 		$(RTDIR)/Product10.class   $(RTDIR)/Product11.class     $(RTDIR)/Product12.class \
 		$(RTDIR)/Product13.class   $(RTDIR)/Product14.class     $(RTDIR)/Product15.class \
-		$(RTDIR)/Product16.class \
-		$(RTDIR)/Product17.class \
-		$(RTDIR)/Product18.class \
-		$(RTDIR)/Product19.class \
-		$(RTDIR)/Product20.class \
-		$(RTDIR)/Product21.class \
-		$(RTDIR)/Product22.class \
-		$(RTDIR)/Product23.class \
-		$(RTDIR)/Product24.class \
-		$(RTDIR)/Product25.class \
-		$(RTDIR)/Product26.class \
-		$(RTDIR)/Array.class build/frege/RT.class
+		$(RTDIR)/Product16.class   $(RTDIR)/Product17.class     $(RTDIR)/Product18.class \
+		$(RTDIR)/Product19.class   $(RTDIR)/Product20.class     $(RTDIR)/Product21.class \
+		$(RTDIR)/Product22.class   $(RTDIR)/Product23.class     $(RTDIR)/Product24.class \
+		$(RTDIR)/Product25.class   $(RTDIR)/Product26.class \
+		$(RTDIR)/Array.class       $(RTDIR)/SwingSupport.class \
+		build/frege/RT.class
 
 
 #
@@ -373,6 +376,8 @@ $(RTDIR)/Product24.class: frege/rt/Product24.java
 $(RTDIR)/Product25.class: frege/rt/Product25.java
 	$(JAVAC) -d build -cp build $?
 $(RTDIR)/Product26.class: frege/rt/Product26.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/SwingSupport.class: frege/rt/SwingSupport.java
 	$(JAVAC) -d build -cp build $?
 
 
