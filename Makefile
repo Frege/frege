@@ -18,18 +18,22 @@ DOCF = doc/frege/compiler
 DIR0 = build/cfrege
 COMPF0  = $(DIR0)/compiler
 LIBF0   = $(DIR0)/lib
+LIBJ0   = $(DIR0)/j
 TOOLSF0 = $(DIR0)/tools
 DIR1 = build/afrege
 COMPF1  = $(DIR1)/compiler
 LIBF1   = $(DIR1)/lib
+LIBJ0   = $(DIR1)/j
 TOOLSF1 = $(DIR1)/tools
 DIR2 = build/bfrege
 COMPF2  = $(DIR2)/compiler
 LIBF2   = $(DIR2)/lib
+LIBJ2   = $(DIR2)/j
 TOOLSF2 = $(DIR2)/tools
 DIR  = build/frege
 COMPF   = $(DIR)/compiler
 LIBF    = $(DIR)/lib
+LIBJ    = $(DIR)/j
 TOOLSF  = $(DIR)/tools
 COMPS   = frege/compiler
 
@@ -86,8 +90,16 @@ $(LIBF)/Random.class: $(DIR)/Prelude.class frege/lib/Random.fr
 	$(FREGECC)  frege/lib/Random.fr
 $(LIBF)/QuickCheck.class: $(LIBF)/Random.class frege/lib/QuickCheck.fr
 	$(FREGECC)  frege/lib/QuickCheck.fr
-$(LIBF)/Swing.class: $(DIR)/Prelude.class frege/lib/Swing.fr
-	$(FREGE) frege.compiler.Main  -d build -nowarn  frege/lib/Swing.fr
+
+#
+# The j library conatins native definitions from java and javax
+#
+$(LIBJ)/Swing.class: $(LIBJ)/Lang.class $(LIBJ)/Awt.class frege/j/Swing.fr
+	$(FREGE) frege.compiler.Main  -d build -nowarn  frege/j/Swing.fr
+$(LIBJ)/Lang.class: $(DIR)/Prelude.class frege/j/Lang.fr
+	$(FREGECC) $?
+$(LIBJ)/Awt.class: $(DIR)/Prelude.class frege/j/Awt.fr
+	$(FREGECC) $?
 
 $(DIR)/PreludeProperties.class: $(COMPF)/Main.class $(LIBF)/QuickCheck.class frege/PreludeProperties.fr
 	$(FREGECC)   frege/PreludeProperties.fr
@@ -98,7 +110,7 @@ $(DIR)/PreludeProperties.class: $(COMPF)/Main.class $(LIBF)/QuickCheck.class fre
 $(TOOLSF1)/YYgen.class: $(DIR1)/Prelude.class frege/tools/YYgen.fr
 	$(FREGEC0)  -make frege.tools.YYgen
 
-LIBRARY = $(LIBF)/Random.class $(LIBF)/QuickCheck.class $(LIBF)/Swing.class
+LIBRARY = $(LIBF)/Random.class $(LIBF)/QuickCheck.class $(LIBJ)/Swing.class
 TOOLS = $(TOOLSF)/Doc.class $(TOOLSF)/YYgen.class
 #
 # final compiler
