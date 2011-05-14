@@ -94,12 +94,14 @@ $(LIBF)/QuickCheck.class: $(LIBF)/Random.class frege/lib/QuickCheck.fr
 #
 # The j library conatins native definitions from java and javax
 #
-$(LIBJ)/Swing.class: $(LIBJ)/Lang.class $(LIBJ)/Awt.class frege/j/Swing.fr
-	$(FREGE) frege.compiler.Main  -d build -nowarn  frege/j/Swing.fr
 $(LIBJ)/Lang.class: $(DIR)/Prelude.class frege/j/Lang.fr
-	$(FREGECC) $?
+	$(FREGE) frege.compiler.Main  -d build -nowarn  $?
 $(LIBJ)/Awt.class: $(DIR)/Prelude.class frege/j/Awt.fr
 	$(FREGECC) $?
+$(LIBJ)/Swing.class: $(LIBJ)/Lang.class $(LIBJ)/Awt.class frege/j/Swing.fr
+	$(FREGECC) frege/j/Swing.fr
+$(LIBJ)/Util.class: $(LIBJ)/Lang.class frege/j/Util.fr
+	$(FREGECC) frege/j/Util.fr
 
 $(DIR)/PreludeProperties.class: $(COMPF)/Main.class $(LIBF)/QuickCheck.class frege/PreludeProperties.fr
 	$(FREGECC)   frege/PreludeProperties.fr
@@ -110,7 +112,8 @@ $(DIR)/PreludeProperties.class: $(COMPF)/Main.class $(LIBF)/QuickCheck.class fre
 $(TOOLSF1)/YYgen.class: $(DIR1)/Prelude.class frege/tools/YYgen.fr
 	$(FREGEC0)  -make frege.tools.YYgen
 
-library: $(LIBF)/Random.class $(LIBF)/QuickCheck.class $(LIBJ)/Swing.class
+library: $(LIBF)/Random.class $(LIBF)/QuickCheck.class $(LIBJ)/Swing.class \
+    $(LIBJ)/Util.class
 tools: $(TOOLSF)/Doc.class $(TOOLSF)/YYgen.class
 #
 # final compiler
@@ -256,7 +259,7 @@ docu:       $(TOOLSF)/Doc.class \
 			$(DOCF)/Transform.html  $(DOCF)/Typecheck.html  $(DOCF)/TCUtil.html \
 			$(DOCF)/GenMeta.html    $(DOCF)/GenJava.html \
 			$(DOC)/lib/PP.html      $(DOC)/tools/YYgen.html \
-			$(DOC)/tools/Doc.html
+			$(DOC)/tools/Doc.html   $(DOC)/j/Lang.html
 
 
 doc/index.html: $(RUNTIME)
@@ -408,6 +411,8 @@ $(DOC)/tools/YYgen.html: $(DIR)/tools/YYgen.class
 	$(GENDOC) frege.tools.YYgen
 $(DOC)/tools/Doc.html: $(DIR)/tools/Doc.class
 	$(GENDOC) frege.tools.Doc
+$(DOC)/j/Lang.html: $(LIBJ)/Lang.class
+    $(GENDOC) frege.j.Lang
 $(DOCF)/Classtools.html: $(COMPF)/Classtools.class
 	$(GENDOC) frege.compiler.Classtools
 $(DOCF)/Scanner.html: $(COMPF)/Scanner.class
