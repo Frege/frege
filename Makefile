@@ -87,17 +87,17 @@ $(DIR)/check1: $(DIR)/PreludeProperties.class
     $(JAVA) -cp build frege.PreludeProperties && echo Prelude Properties checked >$(DIR)/check1
 
 $(LIBF)/Random.class: $(DIR)/Prelude.class frege/lib/Random.fr
-	$(FREGECC)  frege/lib/Random.fr
+	$(FREGEC2)  frege/lib/Random.fr
 $(LIBF)/QuickCheck.class: $(LIBF)/Random.class frege/lib/QuickCheck.fr
-	$(FREGECC)  frege/lib/QuickCheck.fr
+	$(FREGEC2)  frege/lib/QuickCheck.fr
 
 #
 # The j library conatins native definitions from java and javax
 #
 $(LIBJ)/Lang.class: $(DIR)/Prelude.class frege/j/Lang.fr
-	$(FREGE) frege.compiler.Main  -d build -nowarn  $?
-$(LIBJ)/Awt.class: $(DIR)/Prelude.class frege/j/Awt.fr
-	$(FREGECC) $?
+	$(FREGE) frege.compiler.Main  -d build -nowarn  frege/j/Lang.fr
+$(LIBJ)/Awt.class: $(LIBJ)/Util.class frege/j/Awt.fr
+	$(FREGECC) frege/j/Awt.fr
 $(LIBJ)/Swing.class: $(LIBJ)/Lang.class $(LIBJ)/Awt.class frege/j/Swing.fr
 	$(FREGECC) frege/j/Swing.fr
 $(LIBJ)/Util.class: $(LIBJ)/Lang.class frege/j/Util.fr
@@ -118,7 +118,7 @@ tools: $(TOOLSF)/Doc.class $(TOOLSF)/YYgen.class
 #
 # final compiler
 #
-compiler: compiler2 library tools $(COMPF)/Grammar.class $(COMPF)/Main.class
+compiler: compiler2 $(COMPF)/Grammar.class $(COMPF)/Main.class library tools
 	@echo Compiler ready
 
 $(COMPF)/Grammar.class: frege/compiler/Grammar.fr $(COMPF)/Scanner.class
@@ -259,7 +259,7 @@ docu:       $(TOOLSF)/Doc.class \
 			$(DOCF)/Transform.html  $(DOCF)/Typecheck.html  $(DOCF)/TCUtil.html \
 			$(DOCF)/GenMeta.html    $(DOCF)/GenJava.html \
 			$(DOC)/lib/PP.html      $(DOC)/tools/YYgen.html \
-			$(DOC)/tools/Doc.html   $(DOC)/j/Lang.html
+			$(DOC)/tools/Doc.html   $(DOC)/j/Lang.html      $(DOC)/j/Awt.html
 
 
 doc/index.html: $(RUNTIME)
@@ -413,6 +413,8 @@ $(DOC)/tools/Doc.html: $(DIR)/tools/Doc.class
 	$(GENDOC) frege.tools.Doc
 $(DOC)/j/Lang.html: $(LIBJ)/Lang.class
     $(GENDOC) frege.j.Lang
+$(DOC)/j/Awt.html: $(LIBJ)/Awt.class
+    $(GENDOC) frege.j.Awt
 $(DOCF)/Classtools.html: $(COMPF)/Classtools.class
 	$(GENDOC) frege.compiler.Classtools
 $(DOCF)/Scanner.html: $(COMPF)/Scanner.class
