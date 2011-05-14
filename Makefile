@@ -83,7 +83,7 @@ frege3.jar: $(DIR)/check1 $(TOOLSF)/Doc.class
 	$(JAVA) -jar   autojar.jar -c build -o frege3.jar frege/tools/Doc.class
 	jar  -uvfe  frege3.jar frege.compiler.Main
 
-$(DIR)/check1: $(LIBRARY) $(TOOLS) $(DIR)/PreludeProperties.class
+$(DIR)/check1: $(DIR)/PreludeProperties.class
     $(JAVA) -cp build frege.PreludeProperties && echo Prelude Properties checked >$(DIR)/check1
 
 $(LIBF)/Random.class: $(DIR)/Prelude.class frege/lib/Random.fr
@@ -110,12 +110,12 @@ $(DIR)/PreludeProperties.class: $(COMPF)/Main.class $(LIBF)/QuickCheck.class fre
 $(TOOLSF1)/YYgen.class: $(DIR1)/Prelude.class frege/tools/YYgen.fr
 	$(FREGEC0)  -make frege.tools.YYgen
 
-LIBRARY = $(LIBF)/Random.class $(LIBF)/QuickCheck.class $(LIBJ)/Swing.class
-TOOLS = $(TOOLSF)/Doc.class $(TOOLSF)/YYgen.class
+library: $(LIBF)/Random.class $(LIBF)/QuickCheck.class $(LIBJ)/Swing.class
+tools: $(TOOLSF)/Doc.class $(TOOLSF)/YYgen.class
 #
 # final compiler
 #
-compiler: compiler2 $(COMPF)/Grammar.class $(COMPF)/Main.class
+compiler: compiler2 library tools $(COMPF)/Grammar.class $(COMPF)/Main.class
 	@echo Compiler ready
 
 $(COMPF)/Grammar.class: frege/compiler/Grammar.fr $(COMPF)/Scanner.class
