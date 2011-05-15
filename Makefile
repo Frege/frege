@@ -259,7 +259,8 @@ docu:       $(TOOLSF)/Doc.class \
 			$(DOCF)/Transform.html  $(DOCF)/Typecheck.html  $(DOCF)/TCUtil.html \
 			$(DOCF)/GenMeta.html    $(DOCF)/GenJava.html \
 			$(DOC)/lib/PP.html      $(DOC)/tools/YYgen.html \
-			$(DOC)/tools/Doc.html   $(DOC)/j/Lang.html      $(DOC)/j/Awt.html
+			$(DOC)/tools/Doc.html   $(DOC)/j/Lang.html      $(DOC)/j/Awt.html \
+			$(DOC)/j/Util.html      $(DOC)/j/Swing.html
 
 
 doc/index.html: $(RUNTIME)
@@ -415,6 +416,10 @@ $(DOC)/j/Lang.html: $(LIBJ)/Lang.class
     $(GENDOC) frege.j.Lang
 $(DOC)/j/Awt.html: $(LIBJ)/Awt.class
     $(GENDOC) frege.j.Awt
+$(DOC)/j/Swing.html: $(LIBJ)/Swing.class
+    $(GENDOC) frege.j.Swing
+$(DOC)/j/Util.html: $(LIBJ)/Util.class
+    $(GENDOC) frege.j.Util
 $(DOCF)/Classtools.html: $(COMPF)/Classtools.class
 	$(GENDOC) frege.compiler.Classtools
 $(DOCF)/Scanner.html: $(COMPF)/Scanner.class
