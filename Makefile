@@ -79,10 +79,8 @@ stage1: prel0 compiler0
 frege.mk: Makefile mkmk.pl
 	perl mkmk.pl <Makefile >frege.mk
 
-#dist: fregec.jar
-#    perl mkdist.pl
-#   find build/frege -name "*.java" -print -exec rm "{}" ";"
-#	jar -cfe frege3.jar frege.compiler.Main  -C build frege
+dist: fregec.jar
+	perl mkdist.pl
 
 fregec.jar: $(DIR)/check1 $(TOOLSF)/Doc.class
 	$(JAVA) -jar   autojar.jar -c build -o fregec.jar frege/tools/Doc.class
