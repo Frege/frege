@@ -1,3 +1,39 @@
+/* «•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»
+
+    Copyright © 2011, Ingo Wechsung
+    All rights reserved.
+    
+    Redistribution and use in source and binary forms, with or
+    without modification, are permitted provided that the following
+    conditions are met:
+    
+        Redistributions of source code must retain the above copyright
+        notice, this list of conditions and the following disclaimer.
+    
+        Redistributions in binary form must reproduce the above
+        copyright notice, this list of conditions and the following
+        disclaimer in the documentation and/or other materials provided
+        with the distribution. Neither the name of the copyright holder
+        nor the names of its contributors may be used to endorse or
+        promote products derived from this software without specific
+        prior written permission. 
+        
+    THIS SOFTWARE IS PROVIDED BY THE
+    COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR
+    IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+    WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+    PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER
+    OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+    SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+    LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
+    USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED
+    AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+    LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
+    IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
+    THE POSSIBILITY OF SUCH DAMAGE.
+
+    «•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•» */
+    
 package frege.rt;
 
 // $Author$
@@ -24,7 +60,7 @@ package frege.rt;
  * would most likely cause even the simplest program to perform unacceptably bad.
  * </p>
 
- * <p> The real work, then, is done by evak(). eavl() may return a proper value or
+ * <p> The real work, then, is done by _v(). _v() may return a proper value or
  * another lazy value, though it is required that the latter is somehow closer
  * to the final result, so that evaluation of that value gets even closer
  * and repeated evaluation of the indermediate lazy values
@@ -159,7 +195,7 @@ package frege.rt;
  *  eitherOr false x y = y
  *  </pre>
  * <p> we know for instance that if <tt>eitherOr a b c</tt> is evaluated,
- * then <tt>a</tt> will be evaluated
+ * then <tt>a</tt> absolutely must be evaluated
  * also. This opens opportunities for optimizations that remove unneeded
  * lazyness <em>without</em> changing the behaviour of the program.</p>
 
@@ -173,7 +209,7 @@ package frege.rt;
  * <p>
  * Hence, it does not make a difference from a semantic point of view, whether we
  * pass a strict argument in evaluated or lazy form: If the evaluation of the argument
- * diverges, the evaluation of the function call will also diverges. If the argument
+ * diverges, the evaluation of the function call will also diverge. If the argument
  * evaluates to a proper value, the function call may or may not diverge,
  * but if it does,
  * it will not be the fault of the argument. </p>
@@ -187,7 +223,7 @@ package frege.rt;
  * is strict, while the others are non-strict.
  * </p>
  *
- * <p> The compiler does a so called <em>strictness analysis</em>
+ * <p> The frege compiler does a so called <em>strictness analysis</em>
  * that helps it find most function arguments (and, in general)
  * pattern bound variables that are strict. </p>
  * <p>
