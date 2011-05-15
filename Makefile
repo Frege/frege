@@ -39,7 +39,7 @@ COMPS   = frege/compiler
 
 
 FREGE   = $(JAVA) -Xss32m -Xmx1200m -cp build
-FREGECJ = $(FREGE) -jar frege3.jar -fp build -d build -nocp -hints
+FREGECJ = $(FREGE) -jar fregec.jar -fp build -d build -nocp -hints
 FREGECC = $(FREGE) frege.compiler.Main  -d build -hints
 FREGEC0 = $(FREGECJ) -prefix a
 FREGEC1 = $(FREGE) afrege.compiler.Main -d build -hints -prefix b
@@ -68,20 +68,25 @@ GENDOC  = $(FREGE)  frege.tools.Doc -d doc
 {frege/tools}.fr{$(TOOLSF)}.class::
 	$(FREGECC) $<
 
-all:  frege.mk runtime compiler # frege3.jar
+all:  frege.mk runtime compiler # fregec.jar
 
 stage1: prel0 compiler0
-	$(JAVA) -jar   autojar.jar -c build -o frege3.jar cfrege/compiler/Main.class
-	jar  -uvfe  frege3.jar cfrege.compiler.Main
+	$(JAVA) -jar   autojar.jar -c build -o fregec.jar cfrege/compiler/Main.class
+	jar  -uvfe  fregec.jar cfrege.compiler.Main
 	@echo you can do now backwards incompatible changes
 
 
 frege.mk: Makefile mkmk.pl
 	perl mkmk.pl <Makefile >frege.mk
 
-frege3.jar: $(DIR)/check1 $(TOOLSF)/Doc.class
-	$(JAVA) -jar   autojar.jar -c build -o frege3.jar frege/tools/Doc.class
-	jar  -uvfe  frege3.jar frege.compiler.Main
+#dist: fregec.jar
+#    perl mkdist.pl
+#   find build/frege -name "*.java" -print -exec rm "{}" ";"
+#	jar -cfe frege3.jar frege.compiler.Main  -C build frege
+
+fregec.jar: $(DIR)/check1 $(TOOLSF)/Doc.class
+	$(JAVA) -jar   autojar.jar -c build -o fregec.jar frege/tools/Doc.class
+	jar  -uvfe  fregec.jar frege.compiler.Main
 
 $(DIR)/check1: $(DIR)/PreludeProperties.class
     $(JAVA) -cp build frege.PreludeProperties && echo Prelude Properties checked >$(DIR)/check1
@@ -197,7 +202,7 @@ PRE0 = $(DIR0)/IO.class $(DIR0)/List.class $(DIR0)/Tuples.class
 compiler0: $(DIR0)/check1 $(COMPF0)/Main.class
 	@echo stage 1 compiler ready
 
-$(COMPF0)/Main.class : $(PRE0) $(LIBF0)/PP.class frege/compiler/Grammar.fr # frege3.jar
+$(COMPF0)/Main.class : $(PRE0) $(LIBF0)/PP.class frege/compiler/Grammar.fr # fregec.jar
 	$(FREGEC3)  -make frege.compiler.Main
 prel0:
 	rm -rf $(COMPF0)
