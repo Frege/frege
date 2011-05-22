@@ -442,11 +442,18 @@ isPrimitive _ = Nothing
 
 post = stio true
 
+/// the main class name for this package
+mainClass :: Global -> String
+mainClass g = (g.thisPack.className g).base
+
+/// the name of the interface that serves as namespace for this main class
+constClass g = mainClass g ++ "C"
+
 pass = do
     g <- getST
 
     U.print "final public class "
-    U.print (g.thisPack.className g).base
+    U.print (mainClass g)
     U.println " {"
     let vals = values g.thisTab
 
@@ -478,16 +485,16 @@ pass = do
                 toMaybeMethod = JMethod {attr = attrs [JFinal, JPublic],
                                 gargs = [],
                                 jtype = Nativ "static" [],
-                                name = if boxd then "<α> TMaybe<Boxed<α>> _toMaybe"
-                                               else "<α extends Lazy<α>> TMaybe<α> _toMaybe",
+                                name = if boxd then "<α> tMaybe<Boxed<α>> _toMaybe"
+                                               else "<α extends Lazy<α>> tMaybe<α> _toMaybe",
                                 args = [(attrFinal,
                                     ForAll [] (RhoTau [] tvara),
                                     if boxd then targ "a" else lazy (targ "a"),
                                     "arg")],
                                 body = JBlock [JReturn toMBex]}
                 toMBex = JQC (JBin (JAtom "arg") "==" (JAtom "null"))
-                            (JInvoke (JStMem (JName "TMaybe.DNothing" "mk") [boxeda]) [])
-                            (JInvoke (JStMem (JName "TMaybe.DJust" "mk")    [boxeda]) [boxArg])
+                            (JInvoke (JStMem (JName "tMaybe.dNothing" "mk") [boxeda]) [])
+                            (JInvoke (JStMem (JName "tMaybe.dJust" "mk")    [boxeda]) [boxArg])
                 boxArg = if boxd
                     then JInvoke (JStMem (JName "Boxed" "mk") [targ "a"]) [JAtom "arg"]
                     else JAtom "arg"
@@ -506,14 +513,16 @@ printCode sym = do
 
 
 findConst (Lit {pos,kind,value})
-    | kind `elem` [LInt, LLong, LBig] = stio (JName "C" (kinda kind ++ value))
+    | kind `elem` [LInt, LLong, LBig] = do
+            g <- getST
+            stio (JName (constClass g) (kinda kind ++ value))
     | kind == LBool = case value of
         "true" -> stio (JName "Boxed.Bool" "t")
         _      -> stio (JName "Boxed.Bool" "f")
     | otherwise  = do
         g <- getST
         case g.gen.consts.lookup (kind,value) of
-            Just u -> stio (JName "C" (kinda kind ++ show u))
+            Just u -> stio (JName (constClass g) (kinda kind ++ show u))
             Nothing -> U.fatal pos ("literal not found: " ++ value)
     where
         kinda LBool   = "bool"
@@ -528,6 +537,7 @@ findConst (Lit {pos,kind,value})
 findConst _ = error "findConst: no Lit"
 
 makeConstants = do
+        g <- getST
         allvs  <- T.allourvars
         cTree  <- foldSt (U.foldEx true literals) Nil [ x | SymV {expr = Just x} <- allvs ]
         cnList <- mapSt numberConst (each cTree)
@@ -536,7 +546,7 @@ makeConstants = do
         consts <- mapSt genConst (values cTree)
         let constclass = JInterface {
                                 attr = attrs [JPublic, JStatic],
-                                jtype = (Ref (JName "" "C") []),
+                                jtype = (Ref (JName "" (constClass g)) []),
                                 implement = [],
                                 defs = consts
                                 }
@@ -655,7 +665,7 @@ conGetter _ = error "conGetter: no member"
 
 /**
  * [usage] @variantType g jtype symd@
- * [return] the type of the variant, i.e. @TMaybe.Just<a>@, if jtype is the jt of the type
+ * [return] the type of the variant, i.e. @tMaybe.dJust<a>@, if jtype is the jt of the type
  */
 variantType :: Global -> JType -> Symbol -> JType
 variantType g jtype symd = jtype.{jname = U.javaName g (Symbol.name symd)}
@@ -916,7 +926,7 @@ symCode binds (sym@SymT {nativ=Nothing}) = do                   // sum type
             | con <- cons ]
         mClass | null cafDefs = []
                | otherwise    = [JClass {attr = attrs [JPublic, JStatic, JFinal],
-                                    jtype = Ref (JName "" "M") [],
+                                    jtype = Ref (JName "" "m") [],
                                     extend = Nothing, implement = [],
                                     defs = concat cafDefs}]
         result = JInterface {attr = attrs [JPublic], jtype,
@@ -954,7 +964,7 @@ symCode binds (sym@SymC {sid}) = do           // type class
         implDef
             | null implFuns = []
             | otherwise = [JClass {attr = attrs [JPublic, JStatic],
-                            jtype = Ref (JName "" "I") [],
+                            jtype = Ref (JName "" "i") [],
                             extend = Nothing, implement = [], defs = concat implFuns}]
         result = jinterface (attrs [JPublic]) jtype superclasses (concat abstrFuns ++ implDef)
     stio [JComment (nice sym g), result]
@@ -1929,7 +1939,7 @@ wrapCode jreturn rtau (sym@SymV {nativ = Just item}) abinds
         sjt     <- tauJT stau          // type #1 for parameterization of ST s a
         ajt     <- tauJT atau          // type #2 for parameterization of ST s a
         let ssig    = ForAll [] (RhoTau [] stau)
-            mktup x = JReturn (JInvoke (JStMem (JName "Prelude.TTuple2" "mk") [ajt, sjt])
+            mktup x = JReturn (JInvoke (JStMem (JName "Prelude.tTuple2" "mk") [ajt, sjt])
                                         [x, JAtom "_state"])
         rbody <- wrapCode mktup atau sym abinds
 
@@ -1951,10 +1961,10 @@ wrapCode jreturn rtau (sym@SymV {nativ = Just item}) abinds
 
         mjt     <- tauJT mtau
         xjt     <- tauJT (TCon {pos = sym.pos, name = TName pPrelude "JException"})
-        let right x = jreturn (JInvoke (JStMem (JName "Prelude.TEither.DRight" "mk")
+        let right x = jreturn (JInvoke (JStMem (JName "Prelude.tEither.dRight" "mk")
                                                [xjt, mjt])
                                        [x])
-            left    = jreturn (JInvoke (JStMem (JName "Prelude.TEither.DLeft"  "mk")
+            left    = jreturn (JInvoke (JStMem (JName "Prelude.tEither.dLeft"  "mk")
                                                [xjt, mjt])
                                        [JInvoke (JStMem (JName "Boxed" "mk")
                                                         [head xjt.targs])
@@ -1973,7 +1983,7 @@ wrapCode jreturn rtau (sym@SymV {nativ = Just item}) abinds
     | Just _ <- U.isUnit rtau = do
         g          <- getST
         bind       <- nativeCall sym abinds
-        let unit    = JStMem (JName "Prelude.TUnit" "Unit") []
+        let unit    = JStMem (JName "Prelude.tUnit" "Unit") []
         stio [JEx bind.jex, jreturn unit]
     | otherwise = do
         g          <- getST
