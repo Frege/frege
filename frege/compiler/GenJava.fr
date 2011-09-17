@@ -470,8 +470,14 @@ pass = do
 
 
 
-    let toMaybe | g.thisPack == pPrelude = [mkMaybe false, mkMaybe true]
+    let toMaybe | g.thisPack == pPrelude = [mkMaybe false, mkMaybe true] ++ primMaybes
                 | otherwise = []
+                where
+                    primMaybes = map (curry primMaybe) (zip p1 p2)
+                        where
+                            p1 = map (flip Nativ []) ["boolean", "char", "int", "long", "double", "float"]
+                            p2 = map (flip Ref [] • JName "java.lang")
+                                    ["Boolean", "Character", "Integer", "Long", "Double", "Float"]
         /*
          * Code for the _toMaybe function(s)
          */
@@ -498,7 +504,26 @@ pass = do
                 boxArg = if boxd
                     then JInvoke (JStMem (JName "Boxed" "mk") [targ "a"]) [JAtom "arg"]
                     else JAtom "arg"
-
+        // create java code for primitive _toMaybe functions
+        // will be used whenever a native return type is Maybe x and x is a primitive type
+        primMaybe prim ref = toMaybeMethod
+            where
+                primname = maybe "unsupported primitive type" id (isPrimitive prim)
+                boxprim = boxed prim
+                boxclass = case boxprim of
+                    Ref x _ -> x
+                    _ -> error "boxed prim must be Ref"
+                toMaybeMethod = JMethod {
+                        attr = attrs [JFinal, JPublic, JStatic],
+                        gargs = [],
+                        jtype = Ref (JName "" "tMaybe") [boxprim],
+                        name = "_" ++ primname ++ "ToMaybe",
+                        args = [(attrFinal, ForAll [] (RhoTau [] tvara), ref, "arg")],
+                        body = JBlock [JReturn toMBex]}
+                toMBex = JQC (JBin (JAtom "arg") "==" (JAtom "null"))
+                            (JInvoke (JStMem (JName "tMaybe.dNothing" "mk") [boxprim]) [])
+                            (JInvoke (JStMem (JName "tMaybe.dJust" "mk")    [boxprim]) [boxArg])
+                boxArg = JInvoke (JStMem (U.memberOf boxclass "mk") []) [JAtom "arg"]
 
     invokeMain <- genMain
     ppSS [invokeMain, toMaybe]
@@ -1978,7 +2003,11 @@ wrapCode jreturn rtau (sym@SymV {nativ = Just item}) abinds
         g          <- getST
         ajt        <- tauJT atau
         bind       <- nativeCall sym abinds
-        let mkmb    = JInvoke (JStMem (JName "Prelude" "_toMaybe") [bind.jtype]) [bind.jex]
+        let mkmb    = case isPrimitive ajt of
+                Just prim ->
+                    JInvoke (JStMem (JName "Prelude" ("_" ++ prim++ "ToMaybe")) []) [bind.jex]
+                Nothing   ->
+                    JInvoke (JStMem (JName "Prelude" "_toMaybe") [bind.jtype]) [bind.jex]
         stio [jreturn mkmb]
     | Just _ <- U.isUnit rtau = do
         g          <- getST

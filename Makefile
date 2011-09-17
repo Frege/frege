@@ -9,7 +9,7 @@
 
 JAVAC = javac
 YACC = pbyacc
-JAVA = java
+JAVA = java "-Dfrege.javac=javac -J-Xmx512m"
 
 
 
