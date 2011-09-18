@@ -336,7 +336,7 @@ public abstract class Unknown<V> implements Lazy<V>, java.util.concurrent.Callab
             if (result == null) {
                 Lazy<V> item = this;
                 while (item._u()) item = item._v();   // looks very innocent
-                result = item._e();                  // evaluated once and for all!
+                result = item._e();                   // evaluated once and for all!
             }
             return result;
     }
