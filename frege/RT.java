@@ -247,4 +247,73 @@ public class RT {
             return null;
         }
     }
+    
+    /* ----------- code for fork/join support  ------------- */
+    /**
+     *  <p> Start a program to run in a fork/join task </p>
+     *
+     *
+     *  <p> Called from the java <tt>main</tt> method of a frege program.
+     *  This converts the argument String array to a list and passes this to
+     *  the compiled frege main function. The result is an IO action of type 
+     *  <tt>IO ()</tt> to which then <tt>IO.performUnsafe</tt> is applied.
+     *  The resulting {@link frege.rt.Unknown} then actually executes the frege code
+     *  when evaluated.</p>
+     *
+     *  <p>This method checks first if the system property <tt>frege.parallel</tt>
+     *  is set to a value that does not represent <tt>true</tt>. 
+     *  If so, it just evaluates the argument.
+     *  Otherwise it submits its argument to a {@link java.util.concurrent.ForkJoinPool}
+     *  and waits for completion. This ensures that frege code sees itself executed
+     *  in a fork join pool and is able to fork further tasks.
+     *  </p>
+     *  <p>In frege code that is not executed in a fork join pool all library
+     *  functions for ad hoc parallelism shall perform semantically equivalent 
+     *  sequential functions
+     *  with as little overhead as possible.
+     *  </p>
+     *
+     *  @param action a {@link frege.rt.Unknown} value to be evaluated in a fork/join context
+     */
+    public static<V> void fjMain(final java.util.concurrent.Callable<V> action) {
+        // Check if parallel execution is prohibited
+        // This is the case when the VM was started with -Dfrege.parallel=x
+        // and x is not equal, ignoring case, to the string "true".
+        final String  prop     = System.getProperty("frege.parallel");
+        final boolean parallel = prop == null ? true : Boolean.valueOf( prop );  
+        if ( !parallel ) {
+            // execution outside fork/join pool
+            try {
+                action.call();
+            } catch (Exception ex) {
+                ex.printStackTrace();
+            }
+            return;
+        }
+        // run in fork/join pool
+        try {
+            new java.util.concurrent.ForkJoinPool().submit(action).get();
+        } catch (Exception ex) {
+            ex.printStackTrace();
+        }        
+        return;
+    }
+    
+    /**
+     * <p> fork execution of an Unknown </p>
+     * <p> If we are in a fork/join pool and the argument contains an unevaluated value
+     * evaluation of this value is started in a new fork/join task. </p>
+     * @param it A product of arity 2 that contains the value that must be evaluated in member m1
+     * @return The value whose evaluation may have been forked off
+     */
+    public final static<V> frege.rt.Lazy<V> fork(final frege.rt.Product2<V, frege.rt.Boxed.Int> it) {
+        if (java.util.concurrent.ForkJoinTask.inForkJoinPool()
+            && it.m1 instanceof frege.rt.Unknown
+            && it.m1._u()) {
+                final frege.rt.Unknown<V> u = (frege.rt.Unknown<V>) it.m1;
+                java.util.concurrent.ForkJoinTask.<V>adapt(u).fork();
+                return u;
+        }
+        return it.m1;
+    }
 }
