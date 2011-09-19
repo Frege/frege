@@ -304,16 +304,17 @@ public class RT {
      * <p> If we are in a fork/join pool and the argument contains an unevaluated value
      * evaluation of this value is started in a new fork/join task. </p>
      * @param it A product of arity 2 that contains the value that must be evaluated in member m1
-     * @return The value whose evaluation may have been forked off
+     * @return <tt>true</tt>
      */
-    public final static<V> frege.rt.Lazy<V> fork(final frege.rt.Product2<V, frege.rt.Boxed.Int> it) {
+    public final static<V extends frege.rt.Lazy<V>, U extends frege.rt.Lazy<U>> 
+                    boolean fork(final frege.rt.Product2<V, U> it) {
         if (java.util.concurrent.ForkJoinTask.inForkJoinPool()
             && it.m1 instanceof frege.rt.Unknown
             && it.m1._u()) {
                 final frege.rt.Unknown<V> u = (frege.rt.Unknown<V>) it.m1;
                 java.util.concurrent.ForkJoinTask.<V>adapt(u).fork();
-                return u;
+                return true;
         }
-        return it.m1;
+        return true;
     }
 }
