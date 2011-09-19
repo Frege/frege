@@ -292,7 +292,10 @@ public class RT {
         }
         // run in fork/join pool
         try {
-            new java.util.concurrent.ForkJoinPool().submit(action).get();
+            new java.util.concurrent.ForkJoinPool(
+                        2*Runtime.getRuntime().availableProcessors())
+                .submit(action)
+                .get();
         } catch (Exception ex) {
             ex.printStackTrace();
         }        
