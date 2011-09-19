@@ -93,7 +93,8 @@ $(LIBF)/Random.class: $(DIR)/Prelude.class frege/lib/Random.fr
 	$(FREGEC2)  frege/lib/Random.fr
 $(LIBF)/QuickCheck.class: $(LIBF)/Random.class frege/lib/QuickCheck.fr
 	$(FREGEC2)  frege/lib/QuickCheck.fr
-
+$(LIBF)/ForkJoin.class: $(DIR)/Prelude.class frege/lib/ForkJoin.fr
+	$(FREGEC2)  frege/lib/ForkJoin.fr
 #
 # The j library conatins native definitions from java and javax
 #
@@ -116,7 +117,7 @@ $(TOOLSF1)/YYgen.class: $(DIR1)/Prelude.class frege/tools/YYgen.fr
 	$(FREGEC0)  -make frege.tools.YYgen
 
 library: $(LIBF)/Random.class $(LIBF)/QuickCheck.class $(LIBJ)/Swing.class \
-    $(LIBJ)/Util.class
+    $(LIBJ)/Util.class $(LIBF)/ForkJoin.class
 tools: $(TOOLSF)/Doc.class $(TOOLSF)/YYgen.class
 #
 # final compiler
