@@ -262,7 +262,9 @@ docu:       $(TOOLSF)/Doc.class \
 			$(DOCF)/TAlias.html     $(DOCF)/Transdef.html   $(DOCF)/Classes.html \
 			$(DOCF)/Transform.html  $(DOCF)/Typecheck.html  $(DOCF)/TCUtil.html \
 			$(DOCF)/GenMeta.html    $(DOCF)/GenJava.html \
-			$(DOC)/lib/PP.html      $(DOC)/tools/YYgen.html \
+			$(DOC)/lib/PP.html      $(DOC)/lib/ForkJoin.html \
+			$(DOC)/lib/Random.html  $(DOC)/lib/QuickCheck.html \
+			$(DOC)/tools/YYgen.html \
 			$(DOC)/tools/Doc.html   $(DOC)/j/Lang.html      $(DOC)/j/Awt.html \
 			$(DOC)/j/Util.html      $(DOC)/j/Swing.html
 
@@ -412,6 +414,12 @@ $(DOC)/IO.html: $(DIR)/IO.class
 	$(GENDOC) frege.IO
 $(DOC)/lib/PP.html: $(DIR)/lib/PP.class
 	$(GENDOC) frege.lib.PP
+$(DOC)/lib/ForkJoin.html: $(DIR)/lib/ForkJoin.class
+	$(GENDOC) frege.lib.ForkJoin
+$(DOC)/lib/QuickCheck.html: $(DIR)/lib/QuickCheck.class
+	$(GENDOC) frege.lib.QuickCheck
+$(DOC)/lib/Random.html: $(DIR)/lib/Random.class
+	$(GENDOC) frege.lib.Random
 $(DOC)/tools/YYgen.html: $(DIR)/tools/YYgen.class
 	$(GENDOC) frege.tools.YYgen
 $(DOC)/tools/Doc.html: $(DIR)/tools/Doc.class
