@@ -70,7 +70,7 @@ GENDOC  = $(FREGE)  frege.tools.Doc -d doc
 
 all:  frege.mk runtime compiler # fregec.jar
 
-stage1: prel0 compiler0
+stage1: prel0 compiler0 $(TOOLSF0)/LexConvt.class
 	$(JAVA) -jar   autojar.jar -c build -o fregec.jar cfrege/compiler/Main.class
 	jar  -uvfe  fregec.jar cfrege.compiler.Main
 	@echo you can do now backwards incompatible changes
@@ -82,7 +82,7 @@ frege.mk: Makefile mkmk.pl
 dist: fregec.jar
 	perl mkdist.pl
 
-fregec.jar: $(DIR)/check1 $(TOOLSF)/Doc.class
+fregec.jar: $(DIR)/check1 $(TOOLSF)/LexConvt.class $(TOOLSF)/Doc.class
 	$(JAVA) -jar   autojar.jar -c build -o fregec.jar frege/tools/Doc.class
 	jar  -uvfe  fregec.jar frege.compiler.Main
 
@@ -199,7 +199,7 @@ PRE0 = $(DIR0)/IO.class $(DIR0)/List.class $(DIR0)/Tuples.class
 
 
 compiler0: $(DIR0)/check1 $(COMPF0)/Main.class
-	@echo stage 1 compiler ready
+	@echo stage 0 compiler ready
 
 $(COMPF0)/Main.class : $(PRE0) $(LIBF0)/PP.class frege/compiler/Grammar.fr # fregec.jar
 	$(FREGEC3)  -make frege.compiler.Main
