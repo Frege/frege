@@ -127,10 +127,12 @@ compiler: compiler2 $(COMPF)/Grammar.class $(COMPF)/Main.class library tools
 
 $(COMPF)/Grammar.class: frege/compiler/Grammar.fr $(COMPF)/Scanner.class
 	$(FREGEC2) -v frege/compiler/Grammar.fr
-frege/compiler/Grammar.fr: $(TOOLSF1)/YYgen.class frege/compiler/Grammar.y
+frege/compiler/Grammar.fr: $(TOOLSF1)/YYgen.class $(TOOLSF1)/LexConvt.class frege/compiler/Grammar.y
 	@echo 1 shift/reduce conflict is ok
 	$(YACC) -v frege/compiler/Grammar.y
 	$(FREGE) -cp .;build afrege.tools.YYgen -m StIO frege/compiler/Grammar.fr
+	$(FREGE) -cp build   afrege.tools.LexConvt frege/compiler/Grammar.fr
+	rm -f frege/compiler/Grammar.fr.bak
 $(COMPF)/Scanner.class: $(DIR)/Prelude.class frege/compiler/Scanner.fr
 	$(FREGEC2)  -make frege.compiler.Scanner
 $(COMPF)/Main.class: $(DIR)/Prelude.class frege/compiler/Main.fr
