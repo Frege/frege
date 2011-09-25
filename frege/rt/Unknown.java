@@ -243,9 +243,10 @@ package frege.rt;
  * <em>tail recursion</em>. Here are examples: </p>
  * <pre>
  * even 0 = true
- * even n | n > 0 = odd  (n-1)
- * odd  n | n > 0 = even (n-1)
- * factorial n | n >= 0 = helper 1 n where
+ * even n = odd  (n-1)
+ * odd  0 = false
+ * odd  n = even (n-1)
+ * factorial n | n &gt;= 0 = helper 1 n where
  *    helper r 0 = r
  *    helper r n = helper (r*n) (n-1)
  * </pre>
@@ -259,7 +260,52 @@ package frege.rt;
  * But frege functions may simply return their tail call in the form of
  * an Unknown object instead of actually evaluating it themselves. This way, a long
  * series of tail calls can be converted to a while loop, see {@link Unknown#_e}. </p>
- *
+ * <p>Unfortunately, this does not work in every case. Take the even/odd exmple in a slightly
+ * changed form:</p>
+ * <pre>
+ * even 0 = true
+ * even 1 = false
+ * even n = odd  (n-1)
+ * odd  n = !(even n)
+ * </pre>
+ * This will very soon run out of stack space with greater n. To see why, imagine <tt>even 5</tt>
+ * had to be evaluated.
+ * <pre>
+ * even 5 = odd 4               by 3rd rule of even
+ * odd 4 = !(even 4)            by definition of odd
+ * !(even 4) = !(odd 3)         by 3rd rule of even
+ * !(odd 3)  = !(!(even 3))
+ * !(!(even 3)) = !(!(odd 2))
+ * !(!(odd 2))  = !(!(!(even 2)))
+ * !(!(!(even 2))) = !(!(!(odd 1)))
+ * !(!(!(odd 1))) = !(!(!(!(even 0))))
+ * !(!(!(!(even 0)))) = !(!(!(!true)))
+ * </pre>
+ * <p>
+ * Because ! must first know the value to negate it must evaluate its argument
+ * before it returns. Hence, evaluation of (odd n) results in n nested negations, i.e. in
+ * a stack depth of n.
+ * </p>
+ * <p>This effect happens always when the recursion is done indirectly in an
+ * argument of a strict function. Another well-known case is the naive implementation
+ * of a function that tells a lists's length:</p>
+ * <pre>
+ * naiveLength [] = 0
+ * naiveLength (_:as) = 1 + naiveLength as
+ * </pre>
+ * <p>Here, the recursion takes place in the 2nd argument of the addition.
+ * To add 1 to something, one must first know to what, hence the
+ * whole list must be consulted before even the first addition 
+ * can take place.</p>
+ * <p>Compare the better implementation:</p>
+ * <pre>
+ * length xs = helper xs 0
+ *    where
+ *       helper []     !count = count
+ *       helper (_:as) !count = helper as (count+1)
+ * </pre>
+ * Here, only tail call recursion takes place and because counter is strict, the increment
+ * will be evaluated in each loop.
  * </li>
  * </ol>
  */
