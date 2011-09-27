@@ -167,7 +167,7 @@ checkMain = do
     case (VName g.thisPack "main").findit g of
         Just sym | sym.name.pack == g.thisPack -> do
             let m = Vbl {pos = sym.pos, name = sym.name, typ = Just pSigma}
-            checkSigma m mainSigma
+            checkAnnotated m mainSigma
             gnew <- getST
             when (g.errors < gnew.errors) do
                 U.error sym.pos ("The main function must have type [String] -> IO ()")
@@ -218,45 +218,46 @@ checkgroup nms = do
         checkAmbiguous sym sym.typ
         checkReturn    sym sym.typ
         removeCheckedCtx sym sym.typ
-    checkAmbiguous sym (ForAll bnd r) = do
-            let ra = r.{context=[]}                     -- ctx => rho    --> rho
-                rb = (rhoInt).{context=r.context}       -- Int           --> ctx => Int
-                va = freeTVars [] ra
-                vb = freeTVars [] rb
-                bad = filter (`notElem` va) vb
-            if null bad then stio ()
+
+checkAmbiguous sym (ForAll bnd r) = do
+        let ra = r.{context=[]}                     -- ctx => rho    --> rho
+            rb = (rhoInt).{context=r.context}       -- Int           --> ctx => Int
+            va = freeTVars [] ra
+            vb = freeTVars [] rb
+            bad = filter (`notElem` va) vb
+        if null bad then stio ()
+          else do
+            g <- getST
+            U.error (Symbol.pos sym) ("Ambiguous type "
+                    ++ nicer r g ++ " in " ++ nice sym g)
+            U.hint  (Symbol.pos sym) ("It is not clear at what types to instantiate "
+                    ++ (if length bad == 1 then "type variable " else "type variables ")
+                    ++ joinStr ", " bad ++ " that "
+                    ++ (if length bad == 1 then "occurs" else "occur")
+                    ++ " in the context, but not in the type.")
+            U.hint  (Symbol.pos sym) ("This can happen thorugh constructs like (Enum.ord • Enum.from) "
+                    ++ " where a class context is both introduced and eliminated locally so "
+                    ++ "that a caller can not know which type is meant.")
+checkReturn :: Symbol -> Sigma -> StG ()
+checkReturn sym sigma =
+    case U.returnType sigma.rho of
+        (_, []) -> stio ()
+        (t, ss) -> do
+            let svars = [ v | ForAll bs br <- ss, v <- U.freeTVars bs br ]
+                        ++ keys (U.freeCtxTVars [] Nil sigma.rho.context)
+                tvars = case t of
+                    TVar {pos} -> [t.var]
+                    TApp _ _ | (TVar {var}:_) <- t.flat = [var]
+                    _ -> []
+            if all (`elem` svars) tvars then stio ()
               else do
                 g <- getST
-                U.error (Symbol.pos sym) ("Ambiguous type "
-                        ++ nicer r g ++ " in " ++ nice sym g)
-                U.hint  (Symbol.pos sym) ("It is not clear at what types to instantiate "
-                        ++ (if length bad == 1 then "type variable " else "type variables ")
-                        ++ joinStr ", " bad ++ " that "
-                        ++ (if length bad == 1 then "occurs" else "occur")
-                        ++ " in the context, but not in the type.")
-                U.hint  (Symbol.pos sym) ("This can happen thorugh constructs like (Enum.ord • Enum.from) "
-                        ++ " where a class context is both introduced and eliminated locally so "
-                        ++ "that a caller can not know which type is meant.")
-    checkReturn :: Symbol -> Sigma -> StG ()
-    checkReturn sym sigma =
-        case U.returnType sigma.rho of
-            (_, []) -> stio ()
-            (t, ss) -> do
-                let svars = [ v | ForAll bs br <- ss, v <- U.freeTVars bs br ]
-                            ++ keys (U.freeCtxTVars [] Nil sigma.rho.context)
-                    tvars = case t of
-                        TVar {pos} -> [t.var]
-                        TApp _ _ | (TVar {var}:_) <- t.flat = [var]
-                        _ -> []
-                if all (`elem` svars) tvars then stio ()
-                  else do
-                    g <- getST
-                    U.hint (sym.pos) ("application of " ++ sym.name.nice g ++ " will diverge.")
-    removeCheckedCtx :: Symbol -> Sigma -> StG ()
-    removeCheckedCtx sym sigma
-        | any Context.checked sigma.rho.context =
-          U.changeSym sym.{typ = sigma.{rho <- Rho.{context <- filter (not • Context.checked)}}}
-        | otherwise = stio ()
+                U.hint (sym.pos) ("application of " ++ sym.name.nice g ++ " will diverge.")
+removeCheckedCtx :: Symbol -> Sigma -> StG ()
+removeCheckedCtx sym sigma
+    | any Context.checked sigma.rho.context =
+      U.changeSym sym.{typ = sigma.{rho <- Rho.{context <- filter (not • Context.checked)}}}
+    | otherwise = stio ()
 
 {--
  * look for applications of class member functions in the code of the named item
@@ -355,7 +356,7 @@ checkName nm = do
             -- SymV {expr = Just x, sig = Just t, state = Recursive } = stio t
             SymV {expr = Just x, typ = t, state, anno}
                 | not (U.isPSigma t), state == Unchecked  = do
-                    x <- checkSigma x t
+                    x <- checkAnnotated x t
                     -- t <- canonicSignature t
                     U.changeSym sym.{state = Typechecked, expr = Just x {-, typ = t-} }
                     stio t
@@ -511,7 +512,9 @@ inferRho x = do
 checkRho x r = tcRho x (Check r)
 
 checkSigma :: Expr -> Sigma -> StG Expr
-checkSigma x s = do
+checkSigma x s = checkSigma1 false x s
+checkAnnotated x s = checkSigma1 true x s
+checkSigma1 annotated x s = do
     (skolTvs, rho) <- skolemise s
     x <- checkRho x rho
     tvs <- sigmaTvs s
@@ -531,26 +534,32 @@ checkSigma x s = do
             U.error ">" ("inferred from  " ++ x.untyped.nice g ++ "  is not as polymorphic as")
             U.error ">" ("expected type  " ++ s.nicer g)
             stio x
+  where
 
---- check constraints
---- offered type must not be more constrained than expected
-checkConstraints tvs x ety = do
-        g <- getST
-        ectx <- exContext x
-        -- etvs <- mapSt (getTauTvs • Context.tau) ectx
-        ety <- canonicContext ety
-        etvss <- mapSt ctxTvs ectx
-        -- find constraints that mention skolemised vars that are not in the expected type
-        let implies = impliesG g
-            bad = [ ctx |   (ctx,ctvs) <- zip ectx etvss,
-                            any (`elem` tvs) ctvs,
-                            not (any (ctx `implies`) ety.context) ]
+        -- check constraints
+        -- offered type must not be more constrained than expected
+        checkConstraints tvs x ety = do
+                g <- getST
+                ectx <- exContext x
+                -- etvs <- mapSt (getTauTvs • Context.tau) ectx
+                ety <- canonicContext ety
+                etvss <- mapSt ctxTvs ectx
 
-        unless (null bad) do
-            g <- getST
-            U.error (getpos x) ("inferred type  " ++ (unJust x.typ).nicer g
-                    ++ "  is more constrained than expected type  " ++ nicer ety g)
-        stio x
+                let pos = getpos x
+                U.logmsg TRACET pos ("expr context:     "   ++ U.nicectx ectx g)
+                U.logmsg TRACET pos ("expected context: "   ++ U.nicectx ety.context g)
+                -- find constraints that mention skolemised vars that are not in the expected type
+                let implies = impliesG g
+                    bad = [ ctx |   (ctx,ctvs) <- zip ectx etvss,
+                                    annotated `or` any (`elem` tvs) ctvs,
+                                    not (any (ctx `implies`) ety.context) ]
+
+                unless (null bad) do
+                    g <- getST
+                    U.error (getpos x) "inferred type is more constrained than expected type"
+                    U.error ">"  ("inferred: " ++ (unJust x.typ).nicer g)
+                    U.error ">"  ("expected: " ++ nicer ety g)
+                stio x
 
 
 inferPat p = do
@@ -718,7 +727,7 @@ tcRho' (x@Ifte a b c _) (ety@Check erho) = do
     instSigma (Ifte a b c Nothing) (unJust c.typ) ety
 
 tcRho' (x@Ann ex (Just s)) ety  = do         -- a genuine forall, should be rare
-    ex <- checkSigma ex s
+    ex <- checkAnnotated ex s
     instSigma ex (unJust ex.typ) ety         -- we don't want to see Ann after typechecking anymore
 
 tcRho' x (Check _) = do
