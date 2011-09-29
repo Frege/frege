@@ -138,23 +138,45 @@ passC = do
             g <- getST
             case QName.find qcls g of
                 Just (symc@SymC {pos}) -> do
-                        symc <- foldSt tvkind symc (values symc.env) -- find out kind of class variable
+                        let kinds = map (sigmaKind symc.tau)   [ sym |
+                                (sym@SymV {typ,anno,nativ}) <- values symc.env,
+                                anno `or` isJust nativ,
+                                not (U.isPSigma typ),
+                              ]
+                        symc <- tvKinds symc kinds    -- check and apply kinds
                         foreach symc.supers (supercheck symc)
                         foreach (values symc.env) (methodcheck symc)
                 nothing -> U.fatal (negate 1) ("lost class " ++ QName.nice qcls g)
-        tvkind (symc@SymC {tau}) (msym@SymV {anno,typ,nativ})
-            | not anno `and` isNothing nativ `or` U.isPSigma typ = stio symc
+        tvKinds (symc@SymC {tau}) kinds
+            | null kinds = do
+                g <- getST
+                let supvs = [ vkind | s <- superclasses symc g, Just (sym@SymC{vkind}) <- [QName.find s g]]
+                result (if null supvs
+                            then 0              -- class without methods and superclasses
+                            else head supvs)    -- class without new methods
             | otherwise = do
-                let kind = sigmaKind tau typ
-                if kind > symc.vkind
-                    then do
-                        let nsymc = symc.{vkind = kind}
-                        U.changeSym nsymc
-                        stio nsymc
-                    else stio symc
+                let badkinds = [ k | k <- kinds, fst k != fst (head kinds) ]
+                if null badkinds
+                  then result (fst (head kinds))
+                  else do
+                    U.error symc.pos ("Class variable " ++ symc.tau.var
+                        ++ " is used with different kinds.")
+                    g <- getST
+                    foreach (head kinds:badkinds) (kinderror g)
+                    U.hint symc.pos ("A class variable can represent a type (kind 0) or a "
+                        ++ "type constructor or type application that needs N type arguments "
+                        ++ "to give a type (kind N). The kind can not be different across class methods.")
+                    result (fst (head kinds))
             where
-                sigmaKind (TVar {var}) (ForAll _ rho) = rhoKind var rho
-                sigmaKind _            _              = 0
+                kinderror g (k, sym) = U.error (Symbol.pos sym) ("Kind of class variable " ++ symc.tau.var
+                    ++ " is " ++ show k ++ " in " ++ sym.name.nice g)
+                result n = do
+                    let nsymc = symc.{vkind=n}
+                    U.changeSym nsymc
+                    stio nsymc
+        tvKinds _ _ = error "tvkind: bad args, must be class method"
+        sigmaKind (TVar {var}) (sym@SymV {typ=ForAll _ rho}) = (rhoKind var rho, sym)
+            where
                 rhoKind var (RhoFun ctxs s r) = max ck (max sk rk)
                     where
                         ck = ctxsKind var ctxs
@@ -167,7 +189,7 @@ passC = do
                     | TVar {var}:ts <- tau.flat, var == v = length ts
                     | otherwise = max (tauKind v a) (tauKind v b)
                 tauKind v _ = 0
-        tvkind _ _ = error "tvkind: bad args, must be class method"
+        sigmaKind _            sym              = (0, sym)
 
         methodcheck symc (msym@SymV {pos}) = do
             g <- getST
