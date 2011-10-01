@@ -2,22 +2,22 @@
 
     Copyright © 2011, Ingo Wechsung
     All rights reserved.
-    
+
     Redistribution and use in source and binary forms, with or
     without modification, are permitted provided that the following
     conditions are met:
-    
+
         Redistributions of source code must retain the above copyright
         notice, this list of conditions and the following disclaimer.
-    
+
         Redistributions in binary form must reproduce the above
         copyright notice, this list of conditions and the following
         disclaimer in the documentation and/or other materials provided
         with the distribution. Neither the name of the copyright holder
         nor the names of its contributors may be used to endorse or
         promote products derived from this software without specific
-        prior written permission. 
-        
+        prior written permission.
+
     THIS SOFTWARE IS PROVIDED BY THE
     COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR
     IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
@@ -33,7 +33,7 @@
     THE POSSIBILITY OF SUCH DAMAGE.
 
     «•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•» */
-    
+
 package frege.rt;
 
 
@@ -56,7 +56,7 @@ package frege.rt;
  */
 
 public abstract class Fun<A, B> implements Value, Lazy<Fun<A,B>> {
-    
+
     /**
      * <p>Apply this function to a possibly lazy argument.</p>
      *
@@ -64,33 +64,33 @@ public abstract class Fun<A, B> implements Value, Lazy<Fun<A,B>> {
      * value of the return type of this function.
      */
     public abstract Lazy<B> a(final Lazy<A> arg);
-    
+
     /**
      * <p> Always <tt>0</tt> for function values. </p>
      * @return 0
      */
     final public int     _c() { return 0; }          // interface Value
-    
+
     /**
      * <p> Return this function object. </p>
      * @return <tt>this</tt>
      */
     final public Fun<A,B> _e() { return this; }       // interface Lazy
-    
+
     /**
      * <p> Return this function object. </p>
      * @return <tt>this</tt>
      */
     final public Fun<A,B> _v() { return this; }       // interface Lazy
-    
+
     /**
      * <p> Always <tt>false</tt> for function values. </p>
      * @return <tt>false</tt>
      */
     final public boolean _u() { return false; }      // interface Lazy
-    
-    @SuppressWarnings("unchecked") 
-    public <a,b> Fun<a,b> coerce() {
-      return (Fun<a,b>) this;
+
+    @SuppressWarnings("unchecked")
+    public <X,Y> Fun<X,Y> coerce() {
+      return (Fun<X,Y>) this;
     }
 }

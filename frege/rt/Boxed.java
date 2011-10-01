@@ -2,22 +2,22 @@
 
     Copyright © 2011, Ingo Wechsung
     All rights reserved.
-    
+
     Redistribution and use in source and binary forms, with or
     without modification, are permitted provided that the following
     conditions are met:
-    
+
         Redistributions of source code must retain the above copyright
         notice, this list of conditions and the following disclaimer.
-    
+
         Redistributions in binary form must reproduce the above
         copyright notice, this list of conditions and the following
         disclaimer in the documentation and/or other materials provided
         with the distribution. Neither the name of the copyright holder
         nor the names of its contributors may be used to endorse or
         promote products derived from this software without specific
-        prior written permission. 
-        
+        prior written permission.
+
     THIS SOFTWARE IS PROVIDED BY THE
     COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR
     IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
@@ -33,7 +33,7 @@
     THE POSSIBILITY OF SUCH DAMAGE.
 
     «•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•» */
-    
+
 package frege.rt;
 
 
@@ -88,7 +88,7 @@ public final class Boxed<T>  implements Value, Lazy<Boxed<T>> {
      * This is needed in cases where the type argument has itself type arguments
      * that must be corrected because java does not understand higher kinded type variables.
      */
-    @SuppressWarnings("unchecked") 
+    @SuppressWarnings("unchecked")
     public <N> Boxed<N> coerce() { return (Boxed<N>) this; }
     /**
      * <p> Always 0 for boxed java values. </p>
@@ -114,9 +114,9 @@ public final class Boxed<T>  implements Value, Lazy<Boxed<T>> {
      * @return <tt>false</tt>
      */
     final public boolean _u() { return false; }
-    
+
     public String toString() { return j.toString(); }
-    
+
     /**
      * <p> Create an array with T elements. </p>
      * <p> This works so long as we never try to cast the array implicitely or explicitely
@@ -125,10 +125,10 @@ public final class Boxed<T>  implements Value, Lazy<Boxed<T>> {
      * @param size the size of the array
      */
     @SuppressWarnings("unchecked")
-    final public static<T extends Lazy<T>> T[] arrayNew(int size) {        
-        return  (T[]) (new Lazy[size]); 
+    final public static<T extends Lazy<T>> T[] arrayNew(int size) {
+        return  (T[]) (new Lazy[size]);
     }
-    
+
     /**
      * <p> Update array nondestructively. </p>
      * @param arr the array
@@ -146,20 +146,20 @@ public final class Boxed<T>  implements Value, Lazy<Boxed<T>> {
      * @param arr the array
      * @param i   index into arr
      * @param v   new value to set at index i
-     * 
+     *
      * <p>Changes the passed array, therefore it is not pure. Because the return type
      * is <code>void</code> there is no way to make the frege compiler believe it is pure.</p>
      */
     final public static<T> void arraySet(T[] arr, int i, T v) { arr[i] = v; }
-    
+
     /**
      * <p> Get array element. </p>
      * @param arr the array
      * @param i   index into arr
-     * @return the value at index i, which may be <code>null</code> 
+     * @return the value at index i, which may be <code>null</code>
      */
     final public static<T> T arrayGet(T[] arr, int i) { return arr[i]; }
-    
+
     /**
      * <p> Get array length. </p>
      * @param arr the array
@@ -168,10 +168,115 @@ public final class Boxed<T>  implements Value, Lazy<Boxed<T>> {
     final public static<T> int arrayLen(T[] arr) { return arr.length; }
 
     /**
+     * <p> Wrapper for MethodHandle </p>
+     */
+    public final static class Fun implements Value, Lazy<Fun> {
+        final public java.lang.invoke.MethodHandle j;
+        private Fun(final java.lang.invoke.MethodHandle mh) { j = mh; }
+        /**
+            <p> wrapper for <code>java.lang.invoke.MethodHandles.Lookup.findStatic(Class,String,MethodType)</code></p>
+            @return the desired boxed method handle
+        */
+        final static public Fun findStatic(final Class<?> in,
+                                            final String name,
+                                            final java.lang.invoke.MethodType type) {
+            try {
+                return new Fun (
+                    java.lang.invoke.MethodHandles.lookup().findStatic(in, name, type)
+                );
+            }
+            catch (Exception e) {
+                // System.err.println(e.getMessage());
+                throw new Error("Can't make Boxed.Fun for " + in.getName() + "." + name, e);
+            }
+        }
+
+        /**
+            <p> wrapper for <code>java.lang.invoke.MethodHandles.Lookup.findVirtual(Class,String,MethodType)</code></p>
+            @return the desired boxed method handle
+        */
+        final static public Fun findVirtual(final Class<?> in,
+                                            final String name,
+                                            final java.lang.invoke.MethodType type) {
+            try {
+                return new Fun (
+                    java.lang.invoke.MethodHandles.lookup().findVirtual(in, name, type)
+                );
+            }
+            catch (Exception e) {
+                // System.err.println(e.getMessage());
+                throw new Error("Can't make Boxed.Fun for " + in.getName() + "." + name, e);
+            }
+        }
+
+        /**
+            <p> wrapper for <code>java.lang.invoke.MethodHandles.Lookup.findGetter(Class,String,Class)</code></p>
+            @return the desired boxed method handle
+        */
+        final static public Fun findGetter(final Class<?> in,
+                                            final String name,
+                                            final Class<?> type) {
+            try {
+                return new Fun (
+                    java.lang.invoke.MethodHandles.lookup().findGetter(in, name, type)
+                );
+            }
+            catch (Exception e) {
+                // System.err.println(e.getMessage());
+                throw new Error("Can't make Boxed.Fun for " + in.getName() + "." + name, e);
+            }
+        }
+
+        /**
+            <p> wrapper for <code>java.lang.invoke.MethodHandles.Lookup.bind(Object,String,MethodType)</code></p>
+            @return the desired boxed method handle
+        */
+        final static public Fun bind(final Lambda lam,
+                                            final String name,
+                                            final java.lang.invoke.MethodType type) {
+            try {
+                return new Fun (
+                    java.lang.invoke.MethodHandles.lookup().in(lam.getClass()).bind(lam, name, type)
+                );
+            }
+            catch (Exception e) {
+                // System.err.println(e.getMessage());
+                throw new Error("Can't make Boxed.Fun for " + lam.getClass().getName() + "." + name, e);
+            }
+        }
+
+        public final static Fun unboxObject = findGetter(Boxed.class, "j", Object.class);
+        public final static Fun unboxRef(final Class<?> result) {
+            return mk(unboxObject.j.asType(java.lang.invoke.MethodType.methodType(result, Boxed.class)));
+        }
+        public final static Fun unboxFun = findGetter(Boxed.Fun.class, "j", java.lang.invoke.MethodHandle.class);
+        public final static Fun unboxInt = findGetter(Boxed.Int.class, "j", int.class);
+
+        /**
+         * box a MethodHandle
+         *
+         */
+        final public static Fun mk(final java.lang.invoke.MethodHandle mh) { return new Fun(mh); }
+        /** <p>Always 0</p>
+         * @return 0
+         */
+        final public int       _c() { return 0; }
+        /** <p>Always <tt>this</tt>.</p>  @return <tt>this</tt> */
+        final public Fun      _e() { return this; }
+        /** <p>Always <tt>this</tt>.</p>  @return <tt>this</tt> */
+        final public Fun      _v() { return this; }
+        /** <p>Always <tt>false</tt>.</p> @return <tt>false</tt> */
+        final public boolean   _u() { return false; }
+
+        public String toString() { return j.toString(); }
+    }
+
+
+    /**
      * <p> Boxed primitive boolean </p>
      */
     public final static class Bool implements Value, Lazy<Bool> {
-        private Bool(boolean c) { j = c; }
+        private Bool(final boolean c) { j = c; }
         /** the primitive boolean value boxed by this instance */
         final public boolean   j;
         /** boxed false value */
@@ -194,7 +299,7 @@ public final class Boxed<T>  implements Value, Lazy<Boxed<T>> {
         final public Bool      _v() { return this; }
         /** <p>Always <tt>false</tt>.</p> @return <tt>false</tt> */
         final public boolean   _u() { return false; }
-        
+
         public String toString() { return j?"true":"false"; }
     }
 
@@ -228,7 +333,7 @@ public final class Boxed<T>  implements Value, Lazy<Boxed<T>> {
         final public Char      _v() { return this; }
         /** <p>Always <tt>false</tt>.</p> @return <tt>false</tt> */
         final public boolean   _u() { return false; }
-        
+
         public String toString() { return "'" + j + "'"; }
     }
 
@@ -262,9 +367,9 @@ public final class Boxed<T>  implements Value, Lazy<Boxed<T>> {
         final public Int      _v() { return this; }
         /** <p>Always <tt>false</tt>.</p> @return <tt>false</tt> */
         final public boolean   _u() { return false; }
-        
+
         public String toString() { return "" + j; }
-        
+
         /**
          * <p> Access array element. </p>
          * @param arr the int array
@@ -284,7 +389,7 @@ public final class Boxed<T>  implements Value, Lazy<Boxed<T>> {
          */
         @SuppressWarnings("unchecked")
         final public static int[] arrayNew(int size) { return  new int[size]; }
-        
+
         /**
          * <p> Update array nondestructively. </p>
          * @param arr the array
@@ -302,7 +407,7 @@ public final class Boxed<T>  implements Value, Lazy<Boxed<T>> {
          * @param arr the array
          * @param i   index into arr
          * @param v   new value to set at index i
-         * 
+         *
          * <p>Changes the passed array, therefore it is not pure. Because the return type
          * is <code>void</code> there is no way to make the frege compiler believe it is pure.</p>
          */
@@ -338,7 +443,7 @@ public final class Boxed<T>  implements Value, Lazy<Boxed<T>> {
         final public Long      _v() { return this; }
         /** <p>Always <tt>false</tt>.</p> @return <tt>false</tt> */
         final public boolean   _u() { return false; }
-        
+
         public String toString() { return j + "L"; }
     }
 
@@ -368,7 +473,7 @@ public final class Boxed<T>  implements Value, Lazy<Boxed<T>> {
         final public Float      _v() { return this; }
         /** <p>Always <tt>false</tt>.</p> @return <tt>false</tt> */
         final public boolean   _u() { return false; }
-        
+
         public String toString() { return j + "f"; }
     }
 
@@ -398,7 +503,7 @@ public final class Boxed<T>  implements Value, Lazy<Boxed<T>> {
         final public Double      _v() { return this; }
         /** <p>Always <tt>false</tt>.</p> @return <tt>false</tt> */
         final public boolean   _u() { return false; }
-        
+
         public String toString() { return j + ""; }
     }
 }
