@@ -168,108 +168,82 @@ public final class Boxed<T>  implements Value, Lazy<Boxed<T>> {
     final public static<T> int arrayLen(T[] arr) { return arr.length; }
 
     /**
-     * <p> Wrapper for MethodHandle </p>
-     */
-    public final static class Fun implements Value, Lazy<Fun> {
-        final public java.lang.invoke.MethodHandle j;
-        private Fun(final java.lang.invoke.MethodHandle mh) { j = mh; }
-        /**
-            <p> wrapper for <code>java.lang.invoke.MethodHandles.Lookup.findStatic(Class,String,MethodType)</code></p>
-            @return the desired boxed method handle
-        */
-        final static public Fun findStatic(final Class<?> in,
-                                            final String name,
-                                            final java.lang.invoke.MethodType type) {
-            try {
-                return new Fun (
-                    java.lang.invoke.MethodHandles.lookup().findStatic(in, name, type)
-                );
-            }
-            catch (Exception e) {
-                // System.err.println(e.getMessage());
-                throw new Error("Can't make Boxed.Fun for " + in.getName() + "." + name, e);
-            }
+        <p> wrapper for <code>java.lang.invoke.MethodHandles.Lookup.findStatic(Class,String,MethodType)</code></p>
+        @return the desired boxed method handle
+    */
+    final static public java.lang.invoke.MethodHandle findStatic(final Class<?> in,
+                                        final String name,
+                                        final java.lang.invoke.MethodType type) {
+        try {
+            return
+                java.lang.invoke.MethodHandles.lookup().findStatic(in, name, type);
         }
-
-        /**
-            <p> wrapper for <code>java.lang.invoke.MethodHandles.Lookup.findVirtual(Class,String,MethodType)</code></p>
-            @return the desired boxed method handle
-        */
-        final static public Fun findVirtual(final Class<?> in,
-                                            final String name,
-                                            final java.lang.invoke.MethodType type) {
-            try {
-                return new Fun (
-                    java.lang.invoke.MethodHandles.lookup().findVirtual(in, name, type)
-                );
-            }
-            catch (Exception e) {
-                // System.err.println(e.getMessage());
-                throw new Error("Can't make Boxed.Fun for " + in.getName() + "." + name, e);
-            }
+        catch (Exception e) {
+            // System.err.println(e.getMessage());
+            throw new Error("Can't get method handle for " + in.getName() + "." + name, e);
         }
-
-        /**
-            <p> wrapper for <code>java.lang.invoke.MethodHandles.Lookup.findGetter(Class,String,Class)</code></p>
-            @return the desired boxed method handle
-        */
-        final static public Fun findGetter(final Class<?> in,
-                                            final String name,
-                                            final Class<?> type) {
-            try {
-                return new Fun (
-                    java.lang.invoke.MethodHandles.lookup().findGetter(in, name, type)
-                );
-            }
-            catch (Exception e) {
-                // System.err.println(e.getMessage());
-                throw new Error("Can't make Boxed.Fun for " + in.getName() + "." + name, e);
-            }
-        }
-
-        /**
-            <p> wrapper for <code>java.lang.invoke.MethodHandles.Lookup.bind(Object,String,MethodType)</code></p>
-            @return the desired boxed method handle
-        */
-        final static public Fun bind(final Lambda lam,
-                                            final String name,
-                                            final java.lang.invoke.MethodType type) {
-            try {
-                return new Fun (
-                    java.lang.invoke.MethodHandles.lookup().in(lam.getClass()).bind(lam, name, type)
-                );
-            }
-            catch (Exception e) {
-                // System.err.println(e.getMessage());
-                throw new Error("Can't make Boxed.Fun for " + lam.getClass().getName() + "." + name, e);
-            }
-        }
-
-        public final static Fun unboxObject = findGetter(Boxed.class, "j", Object.class);
-        public final static Fun unboxRef(final Class<?> result) {
-            return mk(unboxObject.j.asType(java.lang.invoke.MethodType.methodType(result, Boxed.class)));
-        }
-        public final static Fun unboxFun = findGetter(Boxed.Fun.class, "j", java.lang.invoke.MethodHandle.class);
-        public final static Fun unboxInt = findGetter(Boxed.Int.class, "j", int.class);
-
-        /**
-         * box a MethodHandle
-         *
-         */
-        final public static Fun mk(final java.lang.invoke.MethodHandle mh) { return new Fun(mh); }
-        /** <p>Always 0</p>
-         * @return 0
-         */
-        final public int       _c() { return 0; }
-        /** <p>Always <tt>this</tt>.</p>  @return <tt>this</tt> */
-        final public Fun      _e() { return this; }
-        /** <p>Always <tt>this</tt>.</p>  @return <tt>this</tt> */
-        final public Fun      _v() { return this; }
-        /** <p>Always <tt>false</tt>.</p> @return <tt>false</tt> */
-        final public boolean   _u() { return false; }
-
-        public String toString() { return j.toString(); }
     }
+
+    /**
+        <p> wrapper for <code>java.lang.invoke.MethodHandles.Lookup.findVirtual(Class,String,MethodType)</code></p>
+        @return the desired method handle
+    */
+    final static public java.lang.invoke.MethodHandle findVirtual(final Class<?> in,
+                                        final String name,
+                                        final java.lang.invoke.MethodType type) {
+        try {
+            return 
+                java.lang.invoke.MethodHandles.lookup().findVirtual(in, name, type);
+        }
+        catch (Exception e) {
+            // System.err.println(e.getMessage());
+            throw new Error("Can't get method handle for " + in.getName() + "." + name, e);
+        }
+    }
+
+    /**
+        <p> wrapper for <code>java.lang.invoke.MethodHandles.Lookup.findGetter(Class,String,Class)</code></p>
+        @return the desired method handle
+    */
+    final static public java.lang.invoke.MethodHandle  findGetter(final Class<?> in,
+                                        final String name,
+                                        final Class<?> type) {
+        try {
+            return 
+                java.lang.invoke.MethodHandles.lookup().findGetter(in, name, type);
+        }
+        catch (Exception e) {
+            // System.err.println(e.getMessage());
+            throw new Error("Can't get method handle for " + in.getName() + "." + name, e);
+        }
+    }
+
+    /*
+        <p> wrapper for <code>java.lang.invoke.MethodHandles.Lookup.bind(Object,String,MethodType)</code></p>
+        @return the desired boxed method handle
+    **
+    final static public Fun bind(final Lambda lam,
+                                        final String name,
+                                        final java.lang.invoke.MethodType type) {
+        try {
+            return new Fun (
+                java.lang.invoke.MethodHandles.lookup().in(lam.getClass()).bind(lam, name, type)
+            );
+        }
+        catch (Exception e) {
+            // System.err.println(e.getMessage());
+            throw new Error("Can't make Boxed.Fun for " + lam.getClass().getName() + "." + name, e);
+        }
+    }
+    */
+
+    public final static java.lang.invoke.MethodHandle unboxObject = findGetter(Boxed.class, "j", Object.class);
+    public final static java.lang.invoke.MethodHandle unboxRef(final Class<?> result) {
+        return unboxObject.asType(java.lang.invoke.MethodType.methodType(result, Boxed.class));
+    }
+    // public final static java.lang.invoke.MethodHandle unboxFun = findGetter(Boxed.class,     "j", java.lang.invoke.MethodHandle.class);
+    public final static java.lang.invoke.MethodHandle unboxInt = findGetter(Boxed.Int.class, "j", int.class);
+
 
 
     /**

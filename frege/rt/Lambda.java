@@ -42,13 +42,11 @@ package frege.rt;
 // $Id$
 
 /**
- * <p> Base class for anonymous lambdas of arity 1</p>
+ * <p> Base class for anonymous lambdas </p>
  */
 public abstract class Lambda {
     /**
-     * <P>get a box with a methodhandle that invokes this Lambdas worker</P>
+     * <P>get a methodhandle that invokes this Lambdas worker</P>
      */
-    public abstract Boxed.Fun boxed();
-
-    // public<A extends Lazy<A>, B extends Lazy<B>> Lazy<A> eval(final Lazy<B> arg);
+    public abstract java.lang.invoke.MethodHandle handle();
 }
