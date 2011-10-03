@@ -3,22 +3,22 @@
 
     Copyright © 2011, Ingo Wechsung
     All rights reserved.
-    
+
     Redistribution and use in source and binary forms, with or
     without modification, are permitted provided that the following
     conditions are met:
-    
+
         Redistributions of source code must retain the above copyright
         notice, this list of conditions and the following disclaimer.
-    
+
         Redistributions in binary form must reproduce the above
         copyright notice, this list of conditions and the following
         disclaimer in the documentation and/or other materials provided
         with the distribution. Neither the name of the copyright holder
         nor the names of its contributors may be used to endorse or
         promote products derived from this software without specific
-        prior written permission. 
-        
+        prior written permission.
+
     THIS SOFTWARE IS PROVIDED BY THE
     COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR
     IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
@@ -137,6 +137,7 @@ vid t = (Token.value t; Token.line t)
 //%type rop13           Token
 //%type aeq             Token
 //%type varid           (Pos String)
+//%type varids          [Pos String]
 //%type conid           (Pos String)
 //%type qvarid          (Pos String)
 //%type qconid          (Pos String)
@@ -210,7 +211,7 @@ vid t = (Token.value t; Token.line t)
 //%type exprSS          [Exp]
 //%type pattern         Pat
 //%type funhead         (String, [Pat])
-//%type confld          (Maybe String, SigmaS)
+//%type confld          [(Maybe String, SigmaS)]
 //%type conflds         [(Maybe String, SigmaS)]
 //%type contypes        [(Maybe String, SigmaS)]
 //%type dalt            DConS
@@ -247,6 +248,7 @@ vid t = (Token.value t; Token.line t)
 //%explain unop         an unary operator
 //%explain unary        an unary operator
 //%explain varid        a variable name
+//%explain varids       a list of field names
 //%explain qvarid       a qualified variable name
 //%explain importitem   a symbol in an import list
 //%explain binop        a binary operator
@@ -546,6 +548,10 @@ importlist:
     ;
 
 varid:   VARID              { vid }
+    ;
+varids:
+    varid                   { single }
+    | varid ',' varids      { liste }
     ;
 conid:   CONID              { vid }
     ;
@@ -874,21 +880,14 @@ simpletypes:
     ;
 
 conflds:
-    confld                      { single }
-    | confld ','                { (const @ single) }
-    | confld ',' conflds        { \a\c\ls ->
-                                        if elemBy (using (unJust • fst)) a ls then do {
-                                            U.error (yyline c) ("field `" ++ (unJust • fst) a
-                                                ++ "` must appear only once.");
-                                            YYM.return ls
-                                        } else
-                                            YYM.return (a:ls)
-                                }
+    confld                      // { single }
+    | confld ','                { const }
+    | confld ',' conflds        { \as\c\ls -> as ++ ls }
     ;
 
 confld:
     // simpletype                  { (,) Nothing <~ ForAll [] <~ RhoTau }
-    VARID DCOLON tau            { \v\_\t -> (Just (Token.value v), ForAll [] (RhoTau [] t)) }
+    varids DCOLON tau            { \vs\_\t -> [(Just (fst v), ForAll [] (RhoTau [] t)) | v <- vs ]}
     ;
 
 typedef:
