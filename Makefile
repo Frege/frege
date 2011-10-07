@@ -9,7 +9,7 @@
 
 JAVAC = javac
 YACC = pbyacc
-JAVA = java "-Dfrege.javac=javac -J-Xmx512m"
+JAVA = java7 "-Dfrege.javac=javac -J-Xmx512m"
 
 
 
@@ -38,12 +38,12 @@ TOOLSF  = $(DIR)/tools
 COMPS   = frege/compiler
 
 
-FREGE   = $(JAVA) -Xss32m -Xmx1200m -cp build
+FREGE   = $(JAVA) -Xss30m -Xmx1024m -cp build
 FREGECJ = $(FREGE) -jar fregec.jar -fp build -d build -nocp -hints
 FREGECC = $(FREGE) frege.compiler.Main  -d build -hints
 FREGEC0 = $(FREGECJ) -prefix a
 FREGEC1 = $(FREGE) afrege.compiler.Main -d build -hints -prefix b
-FREGEC2 = $(FREGE) bfrege.compiler.Main -d build -hints
+FREGEC2 = $(FREGE) -server bfrege.compiler.Main -d build -hints
 FREGEC3 = $(FREGECJ) -prefix c
 GENDOC  = $(FREGE)  frege.tools.Doc -d doc
 
@@ -126,6 +126,7 @@ tools: $(TOOLSF)/Doc.class $(TOOLSF)/YYgen.class
 # final compiler
 #
 compiler: compiler2 $(COMPF)/Grammar.class $(COMPF)/Main.class library tools
+    cp frege/tools/yygenpar.fr frege/tools/YYgenparM.fr build/frege/tools
 	@echo Compiler ready
 
 $(COMPF)/Grammar.class: frege/compiler/Grammar.fr $(COMPF)/Scanner.class
