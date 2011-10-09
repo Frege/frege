@@ -51,11 +51,11 @@ package frege.compiler.Grammar where
  * $Id$
  */
 
-import frege.IO(stdout stderr << BufferedReader)
-import frege.List(Tree keyvalues keys)
-import frege.compiler.Data    except(version)   D
+-- import frege.IO(stdout, stderr, <<, BufferedReader)
+import frege.List(Tree, keyvalues, keys)
+import frege.compiler.Data                      D
 import frege.compiler.Utilities
-        (posItem posLine unqualified
+        (posItem, posLine, unqualified,
           tuple)
                                                 U
 
@@ -338,9 +338,9 @@ vid t = (Token.value t; Token.line t)
 %}
 
 %token VARID CONID QUALIFIER DOCUMENTATION
-%token PACKAGE IMPORT INFIX INFIXR INFIXL NATIVE DATA WHERE CLASS EXTENDS
+%token PACKAGE IMPORT INFIX INFIXR INFIXL NATIVE DATA WHERE CLASS
 %token INSTANCE ABSTRACT TYPE TRUE FALSE IF THEN ELSE CASE OF DERIVE
-%token LET IN WHILE BREAK CONTINUE DO FORALL PRIVATE PUBLIC PURE
+%token LET IN WHILE DO FORALL PRIVATE PROTECTED PUBLIC PURE
 %token INTCONST STRCONST LONGCONST FLTCONST DBLCONST CHRCONST REGEXP BIGCONST
 %token ARROW DCOLON GETS EARROW TARROW
 %token LOP1 LOP2 LOP3 LOP4 LOP5 LOP6 LOP7 LOP8 LOP9 LOP10 LOP11 LOP12 LOP13 LOP14 LOP15 LOP16
@@ -428,7 +428,6 @@ docs:
     DOCUMENTATION                       { Token.value }
     | DOCUMENTATION docs                { \b\a   -> (Token.value b ++ "\n" ++ a) }
     | DOCUMENTATION semicoli docs       { \b\_\a -> (Token.value b ++ "\n" ++ a) }
-    // docs semicoli                    { const }
     ;
 
 packageclause:
@@ -456,7 +455,7 @@ definition:
 
 visibledefinition:
     PRIVATE     publicdefinition      { \_\ds -> map (updVis Private) ds }
-    // PROTECTED publicdefinition      { \_\ds -> map (updVis Protected) ds }
+    | PROTECTED   publicdefinition      { \_\ds -> map (updVis Protected) ds }
     | PUBLIC    publicdefinition      { \_\ds -> map (updVis Public) ds }
     | ABSTRACT  datadef               { \_\(d::Def) -> [d.{ctrs <- map updCtr}] }
     ;
@@ -465,7 +464,8 @@ visibledefinition:
 topdefinition:
     import                              { single }
     | infix                             { single }
-    // documentation                     { single }
+    | instdef                           { single }
+    | derivedef                         { single }
     | publicdefinition
     ;
 
@@ -477,8 +477,6 @@ publicdefinition:
     typedef                             { single }
     | datadef                           { single }
     | classdef                          { single }
-    | derivedef                         { single }
-    | instdef                           { single }
     | localdef
     ;
 
@@ -491,16 +489,14 @@ localdefs:
 
 localdef:
     annotation
-    // documentation                     { single }
     | nativedef                         { single }
     | fundef
     ;
 
 plocaldef:
     localdef
-    // documentation                     { single }
     | PRIVATE   localdef                { \_\ds -> map (updVis Private) ds }
-    // PROTECTED localdef                { \_\ds -> map (updVis Protected) ds }
+    | PROTECTED localdef                { \_\ds -> map (updVis Protected) ds }
     | PUBLIC    localdef                { \_\ds -> map (updVis Public) ds }
     ;
 
@@ -543,8 +539,8 @@ importliste:
     ;
 
 importlist:
-    importitem              { (single • fst) }
-    | importitem importlist { \a\b -> fst a : b }
+    importitem                  { (single • fst) }
+    | importitem ',' importlist { \a\_\b -> fst a : b }
     ;
 
 varid:   VARID              { vid }
@@ -561,12 +557,6 @@ qvarid:  QUALIFIER VARID    { \a\b -> (Token.value a ++ Token.value b, yyline b)
 qconid:  QUALIFIER CONID    { \a\b -> (Token.value a ++ Token.value b, yyline b)}
     |    CONID              { vid }
     ;
-
-/*
-qunop:  QUALIFIER unop      { \a\b -> (Token.value a ++ Token.value b, yyline b)}
-    |   unop                { vid }
-    ;
-    */
 
 importitem:
     qvarid
