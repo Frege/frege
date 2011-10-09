@@ -182,6 +182,7 @@ public class MD {
         int[]   vars()    default {};               // tau indexes
         int     typ();                              // sigma index
         String  doc()     default "";
+        boolean  publik()     default true;       // will it be imported by default
     }
 
     /*
@@ -208,7 +209,8 @@ public class MD {
                                                     //        1---- simple expression
                                                     //       1----- function can be called
                                                     //              without fear of stack overflow
-        int     expr()          default 0;          // index into expression table if >0                                                    
+        int     expr()          default 0;          // index into expression table if >0
+        boolean  publik()       default true;       // will it be imported by default
     }
 
     /*
@@ -221,6 +223,7 @@ public class MD {
         QName   name();
         QName   alias();
         String  doc()           default "";
+        boolean  publik()     default true;   // will it be imported by default
     }
 
     /*
@@ -237,6 +240,7 @@ public class MD {
         String   doc()          default "";
         String   stri();                      // strictness encoded as string
         boolean  priv()         default false; // constructor is private
+        boolean  publik()       default true;  // will it be imported by default
     }
 
     /*
@@ -255,6 +259,7 @@ public class MD {
         SymL[]   lnks();                      // aliases in environment
         SymV[]   funs();                      // functions in environment
         String   doc()          default "";
+        boolean  publik()       default true;   // will it be imported by default
     }
 
     /*
@@ -292,6 +297,7 @@ public class MD {
         boolean  isEnum()       default false;  // whether this is a enum type
         boolean  pur()          default false;  // whether this is a pure (immutable) native type
         boolean  newt()         default false;  // whether this is a new type (1-tuple)
+        boolean  publik()       default true;   // will it be imported by default
     }
     
     @Retention(RetentionPolicy.RUNTIME)
