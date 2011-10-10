@@ -117,12 +117,12 @@ doImports = do
         prelimp  = any (isPimport) imports0
         isPimport (ImpDcl {pack}) = Pack.new pack == pPrelude
         isPimport _               = false
-        preldef  = ImpDcl {pos=1, pack="frege.Prelude", as=Nothing, items=Left []}
+        preldef  = ImpDcl {pos=1, pack="frege.Prelude", as=Nothing, imports = linkAll}  -- import frege.Prelude
         imports = if prelimp then imports0 else preldef : imports0
     foreach imports importHere
     stio ()
 
-importHere (imp@ImpDcl {pos}) = do
+importHere (imp@ImpDcl {pos,imports}) = do
         g <- getST
         let pack = Pack.new imp.pack
             as   = maybe pack.nsName NSX imp.as
@@ -135,7 +135,7 @@ importHere (imp@ImpDcl {pos}) = do
                 case g.packages.lookup pack of
                     Just env -> do
                         changeST Global.{sub <- SubSt.{namespaces <- insertkv as pack}}
-                        importEnv pos env as (Definition.items imp)
+                        importEnv pos env as imports
                     Nothing -> stio ()      -- importClass did the error logging
         oldns imp pack as oldp = do
                 old <- U.inState (Pack.unpack oldp)
@@ -145,66 +145,119 @@ importHere (imp@ImpDcl {pos}) = do
                 when (pack == oldp) do
                     g <- getST
                     case g.packages.lookup pack of
-                        Just env -> importEnv pos env as (Definition.items imp)
+                        Just env -> importEnv pos env as imports
                         Nothing -> U.fatal pos ("package " ++ Pack.unpack pack g ++ " should be here?")
                 stio ()
 importHere d = U.fatal d.pos ("must be an import definition, not " ++ show (constructor d))
 
-importEnv :: Line -> Symtab -> NSName -> Either [String] [String] -> StG ()
-importEnv pos env ns (Left except) = do
+{--
+    Process an import list
+
+    An export list with except list is equivalent to one that names all public
+    top level symbols whose name does not appear in the list.
+-}
+importEnv :: Line -> Symtab -> NSName -> ImportList -> StG ()
+importEnv pos env ns (imp@Imports {except=true, items}) = do
         g <- getST
-        let xs = [ (ns.unNS ++ "." ++ e) | e <- except ]
+        let xs = [ (ns.unNS ++ "." ++ ImportItem.name e) | e <- items ]
         exss <- mapSt (U.resolve (VName g.thisPack) pos) xs
         let exs = fold (++) [] exss
-        foreach (values env) (linkSym exs)
-    where
-        linkSym exs (sym@SymL{name,alias})
-            | name `notElem` exs, alias `notElem` exs, sym.vis == Public = linkHere sym
-            | otherwise = stio ()
-        linkSym exs sym
-            | sym.name `notElem` exs, sym.vis == Public = linkHere sym
-            | otherwise = stio ()
-importEnv pos env ns (Right []) = stio ()
-importEnv pos env ns (Right list) = do
-        let qlist = [ (ns.unNS ++ "." ++ e, pos) | e <- list ]
-        foreach qlist lookupThenLinkHere
+            nitems = [ protoItem.{ pos, name = (Symbol.name sym).base,
+                                      alias  = (Symbol.name sym).base} |
+                        sym <- sortBy (comparing constructor) (values env),           -- place SymL before SymC
+                        Symbol.name sym `notElem` exs,
+                        Symbol.vis sym == Public  ]
+            noConstructor (SymD {}) = false
+            noConstructor _         = true
+        importEnv pos env ns imp.{except=false, items=nitems}
 
-linkHere (sym@SymL {alias}) = do
+--- A public import list is equivalent to one without public but public specified for all items.
+importEnv pos env ns (imp@Imports {publik=true, items})
+    = importEnv pos env ns imp.{publik = false, items <- map ImportItem.{publik=true}}
+--- All items in the list are processed one by one
+importEnv pos env ns (Imports {items}) = foreach items (linkItem (ns.unNS ++ "."))
+
+--- a symbolic link is dereferenced and the link goes to the target
+linkHere ns (item@Item {alias=itema}) (link@SymL {name, alias}) = do
     g <- getST
     case alias.findit g of
-        Just sym -> linkHere sym
-        Nothing -> U.fatal sym.pos (sym.name.nice g ++ " points to non-existing " ++ sym.alias.nice g)
-linkHere sym = do
+        Just sym -> linkHere ns item sym
+        Nothing -> U.fatal (item.pos) (link.name.nice g ++ " points to non-existing " ++ link.alias.nice g)
+
+-- an alias of Nothing is replaced by the base name of the item linked to
+-- linkHere ns (item@Item {alias=Nothing}) sym = linkHere ns item.{alias = Just sym.name.base} sym
+
+-- linkHere ns (item@Item {alias=Just ""}) sym = U.fatal item.pos ("bad alias for " ++ item.name ++ ", must be at least 1 char")
+
+-- otherwise the alias is checked for correctness
+linkHere ns (item@Item {pos,publik,name,members,alias=newn}) sym = do
+    let conid = (newn.elemAt 0).isUpperCase
+        conidOk
+            | TName _ _ <- sym.name = true
+            | SymD {}   <- sym      = true
+            | otherwise             = false
+        vis = if publik then Public else Private
     g <- getST
     case sym.name of
-        TName _ b -> U.linkq (TName g.thisPack b) sym
-        _         -> U.linkq (VName g.thisPack sym.name.base) sym
+        TName _ b
+            | newn == sym.name.base || conid = U.linkqv (TName g.thisPack newn) sym vis
+            | otherwise = do
+                U.error pos ("Alias for " ++ nice sym g ++ " must be a type name, not `" ++ newn ++ "'")
+                stio ()
+        _
+            | newn == sym.name.base || conid == conidOk = U.linkqv   (VName g.thisPack newn) sym vis
+            | otherwise = do
+                U.error pos ("Alias for " ++ nice sym g ++ " must be a "
+                    ++ (if conidOk then "constructor" else "variable")
+                    ++ "name, not  `" ++ newn ++ "'")
+                stio ()
 
-lookupThenLinkHere (e,pos) = do
+    case sym of
+        SymT {env}
+            | Nothing <- members = do        -- link constructors also
+                let cons = [ item.{name <- (++ ("." ++ sym.name.base)),
+                                    members = Nothing,
+                                    alias = sym.name.base, publik = false}
+                                | sym@SymD {pos} <- values env, sym.vis != Private ]
+                foreach cons (linkItem ns)
+            | Just ms <- members = do
+                let nms = map  ImportItem.{name <- ((item.name ++ ".") ++)} ms
+                foreach nms (linkItem ns)
+        SymC {env}
+            | Nothing <- members =  do        -- link class methods
+                let meth = [  item.{name <- (++ ("." ++ sym.name.base)),
+                                    members = Nothing, alias = sym.name.base}
+                                | sym@SymV {pos, vis} <- values env,
+                                  vis == Public || vis == Abstract,
+                                  not (defined sym.name.base) ]     -- import only yet undefined class members
+                    here = g.thisTab
+                    defined s = isJust (lookup here s)
+                foreach meth (linkItem ns)
+            | Just ms <- members = do
+                let nms = map  ImportItem.{name <- ((item.name ++ ".") ++)} ms
+                foreach nms (linkItem ns)
+        _ -> if isNothing members then stio ()
+             else do
+                U.error pos ("Member list not allowed for " ++ name)
+                stio ()
+
+linkItem ns (item@Item {pos,publik,name,members,alias}) = do
     g <- getST
-    res <- U.resolve (VName g.thisPack) pos e
+    res <- U.resolve (VName g.thisPack) pos (ns ++ name)
     case res of
         [] -> stio ()       -- got error message from resolve or excluded
         [x] -> case x.findit g of
             Just sym -> do
-                linkHere sym
-                case sym of
-                    SymT {env} -> do        -- link constructors also
-                        let cons = [ sym | sym@SymD {pos} <- values env, sym.vis != Private ]
-                        foreach cons linkHere
-                    SymC {env} -> do        -- link class methods
-                        let meth = [ sym | sym@SymV {pos} <- values env ]
-                        foreach meth linkHere
-                    _ -> stio ()
+                linkHere ns item sym
             Nothing  -> U.fatal pos (x.nice g ++ " resolved, but not found")
         xs -> do
             tname   = head [ x | x@TName _ _ <- xs ]    -- there should be a TName, right
             xsym    = unJust (tname.findit g)
             canmean = [ sym.nice g | x <- xs, Just sym <- [QName.findit x g]]
-            U.warn pos ("`" ++ e ++ "` could mean the "
-                ++ joinStr " or the " canmean
-                ++ ", but we are importing the " ++ xsym.kind g)
-            linkHere xsym
+            -- U.warn pos ("`" ++ name ++ "` could mean the "
+            --    ++ joinStr " or the " canmean
+            --    ++ ", but we are importing the " ++ xsym.kind g)
+            linkHere ns item xsym
 
 
 
@@ -359,11 +412,12 @@ importClassData pos pack = do
                     where abort = error ("unknown expr index " ++ show i)
             let strMB "" = Nothing
                 strMB s  = Just s
-            let rbSymA n = SymA {sid=0, pos, vis=Public, doc=strMB sym.doc,
+            let rbSymA n = SymA {sid=0, pos, vis, doc=strMB sym.doc,
                     name = rebuildQN sym.name,
                     typ = nSigma sym.typ,
                     vars = [ nTau (sym.vars.[i]) | i <- 0..sym.vars.length-1 ]}
                   where sym = fp.symas.[n]
+                        vis = if sym.publik then Public else Protected
                 rbSymV :: CT.SymVArr -> Int -> Symbol
                 rbSymV arr n = SymV {sid=0, pos, vis=v, doc=strMB sym.doc,
                     name = rebuildQN sym.name, typ = nSigma sym.sig, pur = sym.pur,
@@ -373,7 +427,7 @@ importClassData pos pack = do
                     strsig = decodeS sym.stri,
                     depth = sym.depth, rkind = sym.rkind }
                   where sym = arr.[n]
-                        v = if sym.abst then Abstract else Public
+                        v = if sym.abst then Abstract else if sym.publik then Public else Protected
                 rbExpr 0 = Nothing
                 rbExpr ix = Just (nExpr ix)
                 rbSymD :: CT.SymDArr -> Int -> Symbol
@@ -390,11 +444,12 @@ importClassData pos pack = do
                                                 i <- 0..sym.fnms.length-1,
                                                 mbs = sym.fnms.[i]]
                 rbSymL :: CT.SymLArr -> Int -> Symbol
-                rbSymL arr n = SymL {sid=0, pos, vis=Public, doc=strMB sym.doc,
+                rbSymL arr n = SymL {sid=0, pos, vis, doc=strMB sym.doc,
                     name = rebuildQN sym.name, alias = rebuildQN sym.alias}
                   where sym = arr.[n]
+                        vis = if sym.publik then Public else Protected
                 rbSymC :: CT.SymC -> Symbol
-                rbSymC sym = SymC {sid=0, pos, vis=Public, doc=strMB sym.doc,
+                rbSymC sym = SymC {sid=0, pos, vis, doc=strMB sym.doc,
                     name = rebuildQN sym.name,
                     tau  = nTau sym.tau, vkind = sym.vkind,
                     supers = sups,
@@ -404,6 +459,7 @@ importClassData pos pack = do
                     ins1 = mapqs sym.ins1
                     ins2 = mapqs sym.ins2
                     sups = mapqs sym.sups
+                    vis = if sym.publik then Public else Protected
                 rebuildClass n = do
                     let sym = fp.symcs.[n]
                     U.enter (rbSymC sym)
@@ -421,7 +477,8 @@ importClassData pos pack = do
                     foreach (0..sym.funs.length-1) (U.enter • rbSymV sym.funs)
                     foreach (0..sym.lnks.length-1) (U.enter • rbSymL sym.lnks)
                 rbSymT :: CT.SymT -> Symbol
-                rbSymT sym = SymT {sid=0, pos, vis=Public, doc=strMB sym.doc,
+                rbSymT sym = SymT {sid=0, pos,
+                    vis = if sym.publik then Public else Protected, doc=strMB sym.doc,
                     name = rebuildQN sym.name,
                     typ  = nSigma sym.typ, product = sym.prod, enum = sym.isEnum,
                     nativ = if sym.nativ == "" then Nothing else Just sym.nativ,
@@ -481,7 +538,7 @@ preludeBasics = do
                 sid=0, pos=1, vis=Public, doc=Just "Unit value",
                 strsig = U})
     U.enter (SymL {name = unitCA, alias = unitC,
-                sid=0, pos=1, vis=Public, doc=Just "Unit value"})
+                sid=0, pos=1, vis=Protected, doc=Just "Unit value"})
     -- [], a:as
     let listT    = TName pPrelude "[]"
         listNil  = MName listT "[]"
@@ -507,9 +564,9 @@ preludeBasics = do
                    sid=0, pos=1, vis=Public, doc=Just "list construction",
                    strsig = U})
     U.enter (SymL {name = VName pPrelude "[]", alias = listNil,
-                   sid=0, pos=1, vis=Public, doc=Just "empty list"})
+                   sid=0, pos=1, vis=Protected, doc=Just "empty list"})
     U.enter (SymL {name = VName pPrelude ":", alias = listCons,
-                   sid=0, pos=1, vis=Public, doc=Just "list construction"})
+                   sid=0, pos=1, vis=Protected, doc=Just "list construction"})
     foreach (2..26) tupletype
 
     -- ->
@@ -544,5 +601,5 @@ preludeBasics = do
                         sid=0, pos=1, vis=Public, doc=Just (show n ++ "-tuple constructor"),
                         strsig = U})
         U.enter (SymL {name = VName pPrelude name, alias = tupleC,
-                        sid=0, pos=1, vis=Public, doc=Just (show n ++ "-tuple constructor")})
+                        sid=0, pos=1, vis=Protected, doc=Just (show n ++ "-tuple constructor")})
 

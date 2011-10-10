@@ -148,9 +148,14 @@ vid t = (Token.value t; Token.line t)
 //%type importitem      (Pos String)
 //%type annoitem        (Pos String)
 //%type nativestart     (Pos String)
-//%type importlist      [String]
+//%type importspec      ImportItem
+//%type importspecs     [ImportItem]
+//%type memspec         ImportItem
+//%type memspecs        [ImportItem]
+//%type importitem      ImportItem
+//%type alias           Token
 //%type annoitems       [Pos String]
-//%type importliste     (Either [String] [String])
+//%type importliste     ImportList
 //%type definitions     [Def]
 //%type definition      [Def]
 //%type import          Def
@@ -242,15 +247,19 @@ vid t = (Token.value t; Token.line t)
 //%explain conid        a constructor or type name
 //%explain qconid       a qualified constructor or type name
 //%explain docs         a sequence of doc comments
-//%explain importliste  a list of symbols to import
-//%explain importlist   a sequence of symbols to import
+//%explain importliste  an import list
+//%explain importspecs  a list of import items
+//%explain importspec   an import specification
+//%explain memspec      a member import specification
+//%explain memspecs     a list of member imports
 //%explain qunop        a qualified unary operator
 //%explain unop         an unary operator
 //%explain unary        an unary operator
 //%explain varid        a variable name
 //%explain varids       a list of field names
 //%explain qvarid       a qualified variable name
-//%explain importitem   a symbol in an import list
+//%explain importitem   an import item
+//%explain alias        a simple name for a member or import item
 //%explain binop        a binary operator
 //%explain dconid       a type or class name
 //%explain commata      a sequence of one or more ','
@@ -521,26 +530,59 @@ letdefs:
 
 import:
     IMPORT   packagename importliste
-        { \i\b\c -> ImpDcl {pos=yyline i, pack=b, items=c, as=Nothing} }
+        { \i\b\c -> ImpDcl {pos=yyline i, pack=b, imports=c, as=Nothing} }
     | IMPORT packagename importliste conid
         { \i\p\l\n -> ImpDcl {pos = yyline i,
-                              pack=p, items=l, as=Just (posItem n)} }
+                              pack=p, imports=l, as=Just (posItem n)} }
     ;
 
 importliste:
-    { Left [] }
-    | varid '(' importlist ')' { \v\_\is\_ -> do
-            when ( posItem v `notElem` [ "except", "excluding", "without" ]) do
+    { linkAll }
+    | varid '(' importspecs ')' { \v\_\is\_ -> do
+            when ( posItem v `notElem` [ "except", "excluding", "without", "außer", "ohne", "but" ]) do
                 yyerror (posLine v) (show "except" ++ " expected instead of " ++ show (posItem v))
-            YYM.return (Left is)
+            YYM.return linkAll.{items=is}
         }
-    | '(' ')'               { \_\_   -> Right [] }
-    | '(' importlist ')'    { \_\b\_ -> Right b  }
+    | '(' ')'               { \_\_   -> linkNone }
+    | '(' importspecs ')'   { \_\is\_ -> linkNone.{items = is}  }
+    | PUBLIC importliste    { \_\il  -> ImportList.{publik = true} il }
     ;
 
-importlist:
-    importitem                  { (single • fst) }
-    | importitem ',' importlist { \a\_\b -> fst a : b }
+importspecs:
+    importspec                   { single }
+    | importspec ',' importspecs { liste  }
+    ;
+
+importitem:
+    qvarid                          { \v        -> protoItem.{ pos = posLine v, name = posItem v} }
+    | conid '(' memspecs ')'        { \v\_\ms\_ -> protoItem.{ pos = posLine v, name = posItem v, members = Just ms} }
+    | conid '(' ')'                 { \v\_\_    -> protoItem.{ pos = posLine v, name = posItem v, members = Just []} }
+    | qconid                        { \v        -> protoItem.{ pos = posLine v, name = posItem v} }
+    | operator                      { \t        -> protoItem.{ pos = yyline t,  name = Token.value t} }
+    | unary                         { \v        -> protoItem.{ pos = posLine v, name = posItem v} }
+    ;
+
+importspec:
+    importitem                      { \s      -> ImportItem.{alias = (last • #\.#.splitted • ImportItem.name) s} s}
+    | importitem alias              { \s\a    -> ImportItem.{alias = Token.value a} s }
+    | PUBLIC importspec             { \_\s    -> ImportItem.{publik=true} s }
+    ;
+
+memspec:
+    alias               { \v     -> protoItem.{pos = yyline v, name = Token.value v, alias = (last • (#\.#.splitted) • Token.value) v} }
+    | alias  alias      { \v\a   -> protoItem.{pos = yyline v, name = Token.value v, alias = Token.value a} }
+    | PUBLIC memspec    { \_\s   -> ImportItem.{publik=true} s }
+    ;
+
+memspecs:
+    memspec                 { single }
+    | memspec ',' memspecs  { liste  }
+    ;
+
+alias:
+    VARID
+    | CONID
+    | operator
     ;
 
 varid:   VARID              { vid }
@@ -558,12 +600,6 @@ qconid:  QUALIFIER CONID    { \a\b -> (Token.value a ++ Token.value b, yyline b)
     |    CONID              { vid }
     ;
 
-importitem:
-    qvarid
-    | qconid
-    | operator              { vid }
-    | unary
-    ;
 
 operator:
       LOP1 | LOP2 | LOP3 | LOP4 | LOP5 | LOP6 | LOP7 | LOP8 | LOP9 | LOP10 | LOP11 | LOP12 | LOP13 | LOP14 | LOP15 | LOP16
