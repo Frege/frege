@@ -85,7 +85,7 @@ frege.mk: Makefile mkmk.pl
 dist: fregec.jar
 	perl mkdist.pl
 
-fregec.jar: $(DIR)/check1 $(TOOLSF)/LexConvt.class $(TOOLSF)/Doc.class
+fregec.jar: tools $(DIR)/check1
 	$(JAVA) -jar   autojar.jar -c build -o fregec.jar frege/tools/Doc.class
 	jar  -uvfe  fregec.jar frege.compiler.Main
 
@@ -112,16 +112,16 @@ $(LIBJ)/Util.class: $(LIBJ)/Lang.class frege/j/Util.fr
 
 $(DIR)/PreludeProperties.class: $(COMPF)/Main.class $(LIBF)/QuickCheck.class frege/PreludeProperties.fr
 	$(FREGECC)   frege/PreludeProperties.fr
-# $(TOOLSF)/Doc.class: $(COMPF)/Main.class frege/tools/Doc.fr
-#	$(FREGECC)  -make frege.tools.Doc
-#$(TOOLSF)/YYgen.class: frege/tools/YYgen.fr
-#	$(FREGECJ)  frege/tools/YYgen.fr
+$(TOOLSF)/Doc.class: $(COMPF)/Main.class frege/tools/Doc.fr
+	$(FREGECC)  -make frege.tools.Doc
+$(TOOLSF)/YYgen.class: frege/tools/YYgen.fr
+	$(FREGECC)  frege/tools/YYgen.fr
 $(TOOLSF1)/YYgen.class: $(DIR1)/Prelude.class frege/tools/YYgen.fr
 	$(FREGEC0)  -make frege.tools.YYgen
 
 library: $(LIBF)/Random.class $(LIBF)/QuickCheck.class $(LIBJ)/Swing.class \
     $(LIBJ)/Util.class $(LIBF)/ForkJoin.class
-tools: $(TOOLSF)/Doc.class $(TOOLSF)/YYgen.class
+tools: $(TOOLSF)/Doc.class $(TOOLSF)/YYgen.class $(TOOLSF)/LexConvt.class
 #
 # final compiler
 #
