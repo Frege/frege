@@ -53,11 +53,10 @@ package frege.compiler.Grammar where
 
 -- import frege.IO(stdout, stderr, <<, BufferedReader)
 import frege.List(Tree, keyvalues, keys)
-import frege.compiler.Data                      D
-import frege.compiler.Utilities
-        (posItem, posLine, unqualified,
-          tuple)
-                                                U
+import frege.compiler.Data      as D
+import frege.compiler.Utilities as U(
+    posItem, posLine, unqualified, tuple)
+
 
 version = v "$Revision$" where
     v (m ~ #(\d+)#) | Just g <- m.group 1 = g.atoi
@@ -473,8 +472,6 @@ visibledefinition:
 topdefinition:
     import                              { single }
     | infix                             { single }
-    | instdef                           { single }
-    | derivedef                         { single }
     | publicdefinition
     ;
 
@@ -486,6 +483,8 @@ publicdefinition:
     typedef                             { single }
     | datadef                           { single }
     | classdef                          { single }
+    | instdef                           { single }
+    | derivedef                         { single }
     | localdef
     ;
 
@@ -531,15 +530,24 @@ letdefs:
 import:
     IMPORT   packagename importliste
         { \i\b\c -> ImpDcl {pos=yyline i, pack=b, imports=c, as=Nothing} }
-    | IMPORT packagename importliste conid
+    /* | IMPORT packagename importliste conid
         { \i\p\l\n -> ImpDcl {pos = yyline i,
                               pack=p, imports=l, as=Just (posItem n)} }
+    */
+    | IMPORT packagename VARID conid importliste { \i\p\a\c\l -> do
+            when (Token.value a != "as") do
+                yyerror (yyline a) (show "as" ++ " expected instead of " ++ show (Token.value a))
+            YYM.return ImpDcl {pos = yyline i, pack = p, imports = l, as = Just (posItem c)}
+        }
+    | IMPORT packagename conid importliste { \i\p\c\l ->
+            ImpDcl {pos = yyline i, pack = p, imports = l, as = Just (posItem c)}
+        }
     ;
 
 importliste:
     { linkAll }
     | varid '(' importspecs ')' { \v\_\is\_ -> do
-            when ( posItem v `notElem` [ "except", "excluding", "without", "außer", "ohne", "but" ]) do
+            when ( posItem v `notElem` [ "except", "excluding", "without", "außer", "ohne", "hiding" ]) do
                 yyerror (posLine v) (show "except" ++ " expected instead of " ++ show (posItem v))
             YYM.return linkAll.{items=is}
         }
