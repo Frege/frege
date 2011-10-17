@@ -145,7 +145,7 @@ $(DIR)/Prelude.class: $(COMPF2)/Main.class
 	rm -rf $(COMPF)
 	rm -f $(DIR)/Prelude.class $(DIR)/IO.class $(DIR)/List.class  $(DIR)/Tuples.class
 	$(JAVAC) -d build -cp build frege/compiler/JavaUtils.java
-	$(FREGEC2)  frege/Prelude.fr
+	$(FREGEC2)  frege/prelude/Base.fr frege/Prelude.fr
 
 compiler2: $(COMPF2)/Main.class
 	@echo stage 2 compiler ready
@@ -156,7 +156,7 @@ $(COMPF2)/Main.class: $(DIR2)/Prelude.class # frege/compiler/Main.fr
 $(DIR2)/Prelude.class: $(COMPF1)/Main.class
 	rm -rf $(COMPF2)
 	rm -rf $(DIR2)
-	$(FREGEC1)  frege/Prelude.fr
+	$(FREGEC1)  frege/prelude/Base.fr  frege/Prelude.fr
 
 
 
@@ -194,7 +194,7 @@ $(COMPF1)/Main.class : $(PRE1) $(LIBF1)/PP.class $(CLASSES)
 $(DIR1)/Prelude.class: $(RUNTIME) frege/Prelude.fr
 	rm -rf $(COMPF1)
 	rm -rf $(DIR1)
-	$(FREGEC0)  frege/Prelude.fr
+	$(FREGEC0)  frege/prelude/Base.fr frege/Prelude.fr
 $(DIR1)/PreludeProperties.class: $(LIBF1)/Random.class $(LIBF1)/QuickCheck.class
 	$(FREGEC0)  frege/PreludeProperties.fr
 $(DIR1)/check1: $(PRE1) $(LIBF1)/Random.class $(LIBF1)/QuickCheck.class $(DIR1)/PreludeProperties.class
