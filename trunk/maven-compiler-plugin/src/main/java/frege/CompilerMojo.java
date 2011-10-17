@@ -40,7 +40,7 @@ public class CompilerMojo extends AbstractMojo{
             throws MojoExecutionException, MojoFailureException {
 
         Log log = getLog();
-        log.error(fregeSources.getAbsolutePath());
+        log.error(fregeSources.getAbsolutePath() +" hallo ");
 
     }
 
