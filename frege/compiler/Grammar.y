@@ -768,7 +768,7 @@ simpletype:
                                 tname = tuple i
                             in  (TCon (yyline c) tname).mkapp tus
                         }
-    | '[' tau ']'      {\a\t\_ -> TApp (TCon (yyline a) "[]") t }
+    | '[' tau ']'      {\a\t\_ -> TApp (TCon (yyline a) "PreludeBase.[]") t }
     ;
 
 /*
@@ -791,10 +791,10 @@ tyvar:
 
 tyname:
     qconid
-    | '[' ']'               { \a\_ -> ("[]", yyline a) }
-    | '(' ')'               { \a\_ -> ("()", yyline a) }
+    | '[' ']'               { \a\_ -> ("PreludeBase.[]", yyline a) }
+    | '(' ')'               { \a\_ -> ("PreludeBase.()", yyline a) }
     | '(' commata ')'       { \z\n\_ -> (tuple (n+1), yyline z) }
-    | '(' ARROW ')'         { \_\a\_ -> ("->", yyline a) }
+    | '(' ARROW ')'         { \_\a\_ -> ("PreludeBase.->", yyline a) }
     ;
 
 
@@ -1104,7 +1104,7 @@ binex:
     | binex ROP4  binex                 { mkapp }
     | binex LOP4  binex                 { mkapp }
     | binex '-'   binex                 { mkapp }
-    | '-' binex                         { \m\x -> nApp (Vbl (yyline m) "negate" Nothing) x}
+    | '-' binex                         { \m\x -> nApp (Vbl (yyline m) "PreludeBase.negate" Nothing) x}
     | binex NOP4  binex                 { mkapp }
     | binex ROP3  binex                 { mkapp }
     | binex LOP3  binex                 { mkapp }
@@ -1147,15 +1147,15 @@ primary:
     | QUALIFIER     '{' varid GETS '}' { \q\_\v\_\_ ->
                                             Vbl (yyline q) (yyval q ++ "chg$" ++ posItem v) Nothing}
     | QUALIFIER     '{' varid '=' expr '}' { \q\_\v\_\x\_ ->
-                                         Vbl (yyline q) ("flip") Nothing `nApp`
+                                         Vbl (yyline q) ("PreludeBase.flip") Nothing `nApp`
                                          Vbl (yyline q) (yyval q ++ "upd$" ++ posItem v) Nothing `nApp`
                                          x}
     | QUALIFIER     '{' varid '}'          { \q\_\v\_ ->        // Q.{n} --> Q.{n=n}
-                                         Vbl (yyline q) ("flip") Nothing `nApp`
+                                         Vbl (yyline q) ("PreludeBase.flip") Nothing `nApp`
                                          Vbl (yyline q) (yyval q ++ "upd$" ++ posItem v) Nothing `nApp`
                                          Vbl (posLine v) (posItem v) Nothing}
     | QUALIFIER     '{' varid GETS expr '}' { \q\_\v\_\x\_ ->
-                                         Vbl (yyline q) ("flip") Nothing `nApp`
+                                         Vbl (yyline q) ("PreludeBase.flip") Nothing `nApp`
                                          Vbl (yyline q) (yyval q ++ "chg$" ++ posItem v) Nothing `nApp`
                                          x}
     | primary   '.' '{' varid '?' '}' { \p\_\_\v\_\_ -> case p of {
@@ -1189,13 +1189,13 @@ term:
     | qconid                        { \qc  -> Con (posLine qc) (posItem qc) Nothing}
     | qconid '{'        '}'         { \qc\_\_    -> ConFS (posLine qc) (posItem qc) [] Nothing}
     | qconid '{' fields '}'         { \qc\_\fs\_ -> ConFS (posLine qc) (posItem qc) fs Nothing}
-    | '(' ')'                       { \z\_ -> Con (yyline z)   "()" Nothing}
+    | '(' ')'                       { \z\_ -> Con (yyline z)   "PreludeBase.()" Nothing}
     | '(' commata ')'               { \z\n\_ -> Con (yyline z) (tuple (n+1)) Nothing}
     | '(' unary ')'                 { \_\x\_ -> Vbl {pos=posLine x, name=posItem x, typ=Nothing} }
     | '(' operator ')'              { \_\o\_ -> (varcon o) (yyline o) (Token.value o) Nothing}
-    | '(' '-' ')'                   { \_\m\_ -> (Vbl (yyline m) "-" Nothing) }
+    | '(' '-' ')'                   { \_\m\_ -> (Vbl (yyline m) "PreludeBase.-" Nothing) }
     | '(' operator expr ')'         { \z\o\x\_ ->  let // (+1) --> flip (+) 1
-                                        flp = Vbl (yyline o) "flip" Nothing
+                                        flp = Vbl (yyline o) "PreludeBase.flip" Nothing
                                         op  = (varcon o) (yyline o) (Token.value o) Nothing
                                         ex = nApp (nApp flp op) x
                                     in ex}
@@ -1208,17 +1208,17 @@ term:
                                                                    Nothing)
                                                               (e:es)}
     | '(' expr ';' exprSS ')'       { \a\e\_\es\_ -> fold nApp (Vbl (yyline a)
-                                                                   ("strictTuple" ++
+                                                                   ("PreludeBase.strictTuple" ++
                                                                         show (1+length es))
                                                                     Nothing)
                                                               (e:es)}
     | '(' expr ')'                  { \_\x\_ -> x }
-    | '[' ']'                       { \z\_ ->  Con (yyline z) "[]" Nothing}
+    | '[' ']'                       { \z\_ ->  Con (yyline z) "PreludeBase.[]" Nothing}
     | '[' exprSC ']'                { \b\es\z -> foldr (\a\as -> nApp (nApp (Con (yyline b) ":" Nothing) a) as)
-                                                       (Con (yyline z)  "[]" Nothing)
+                                                       (Con (yyline z)  "PreludeBase.[]" Nothing)
                                                        es}
     | '[' expr '|' lcquals ']'      { \_\e\b\qs\z -> do {
-                                        listComprehension (yyline b) e qs (Con (yyline z) "[]" Nothing) }}
+                                        listComprehension (yyline b) e qs (Con (yyline z) "PreludeBase.[]" Nothing) }}
     ;
 
 commata:
@@ -1576,7 +1576,7 @@ refutable (PStrict p)    = refutable p
  */
 listComprehension pos e [] l2 = YYM.return (cons `nApp` e `nApp` l2)
      where
-        cons = Con {name = ":", pos = pos, typ = Nothing}
+        cons = Con {name = "PreludeBase.:", pos = pos, typ = Nothing}
 
 listComprehension pos e (q:qs) l2 = case q of
     Right defs                 -> do   // let defs
@@ -1595,8 +1595,8 @@ listComprehension pos e (q:qs) l2 = case q of
             xsvar = Vbl  pos ("_xs" ++ show uid) Nothing
             xspat = PVar pos ("_xs" ++ show uid)
             anpat = PVar pos "_"
-            pnil  = PCon pos "[]" []
-            pcons p ps = PCon pos ":" [p, ps]  // p:ps
+            pnil  = PCon pos "PreludeBase.[]" []
+            pcons p ps = PCon pos "PreludeBase.:" [p, ps]  // p:ps
             calt1 = CAlt {pos = pos, env = Nil, pat = pnil, ex = l2 }  // [] -> l2
         hxs <- listComprehension pos e qs (hvar `nApp` xsvar)
         let
@@ -1627,7 +1627,7 @@ mkMonad line [e]
             YYM.return x
     | Right _ <- e = do
             U.error line "last statement in a monadic do block must not be  let decls"
-            YYM.return (Vbl line "undefined" Nothing)
+            YYM.return (Vbl line "PreludeBase.undefined" Nothing)
 
 mkMonad line (e:es)
     | Left (Nothing,  x) <- e
@@ -1647,11 +1647,11 @@ mkMonad line (e:es)
             YYM.return (Let Nil defs rest  Nothing)
     where
         indef e = FunDcl {pos = (getpos e), vis = Private, name="in", pats=[], expr=e, doc = Nothing}
-        bind0 = Vbl line "Monad.>>" Nothing
-        bind  = Vbl line "Monad.>>=" Nothing
+        bind0 = Vbl line "PreludeBase.>>" Nothing
+        bind  = Vbl line "PreludeBase.>>=" Nothing
         invar = Vbl line "in" Nothing
         ofvar = Vbl line "of" Nothing
-        failvar = Vbl line "Monad.fail" Nothing
+        failvar = Vbl line "PreludeBase.fail" Nothing
         ofpat = PVar line  "of"
         def   = PVar line  "_"
         failcase pat rest = Case CNormal ofvar [alt1, alt2]  Nothing where
