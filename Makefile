@@ -10,6 +10,7 @@
 JAVAC = javac
 YACC = pbyacc
 JAVA = java7 "-Dfrege.javac=javac -J-Xmx512m"
+JAVAP = $(JAVA) -Dfrege.inPrelude=true
 
 
 
@@ -42,14 +43,21 @@ TOOLSF  = $(DIR)/tools
 COMPS   = frege/compiler
 
 
-FREGE   = $(JAVA) -Xss30m -Xmx1024m -cp build
-FREGECJ = $(FREGE) -jar fregec.jar -fp build -d build -nocp -hints
-FREGECC = $(FREGE) frege.compiler.Main  -d build -hints
-FREGEC0 = $(FREGECJ) -prefix a
-FREGEC1 = $(FREGE) afrege.compiler.Main -d build -hints -prefix b
-FREGEC2 = $(FREGE) -server bfrege.compiler.Main -d build -hints
-FREGEC3 = $(FREGECJ) -prefix c
-GENDOC  = $(FREGE)  frege.tools.Doc -d doc
+FREGE    = $(JAVA) -Xss30m -Xmx1024m -cp build
+FREGEP   = $(JAVAP) -Xss30m -Xmx1024m -cp build
+FREGECJ  = $(FREGE) -jar fregec.jar -fp build -d build -nocp -hints
+FREGECJP = $(FREGEP) -jar fregec.jar -fp build -d build -nocp -hints
+FREGECC  = $(FREGE) frege.compiler.Main  -d build -hints
+FREGECCP = $(FREGEP) frege.compiler.Main  -d build -hints
+FREGEC0  = $(FREGECJ) -prefix a
+FREGEC0P = $(FREGECJP) -prefix a
+FREGEC1  = $(FREGE) afrege.compiler.Main -d build -hints -prefix b
+FREGEC1P = $(FREGEP) afrege.compiler.Main -d build -hints -prefix b
+FREGEC2  = $(FREGE) -server bfrege.compiler.Main -d build -hints
+FREGEC2P = $(FREGEP) -server bfrege.compiler.Main -d build -hints
+FREGEC3  = $(FREGECJ) -prefix c
+FREGEC3P = $(FREGECJP) -prefix c
+GENDOC   = $(FREGE)  frege.tools.Doc -d doc
 
 # Prelude files in the order they must be compiled
 PRELUDE  =  frege/prelude/Base.fr frege/prelude/Text.fr
@@ -160,7 +168,7 @@ $(DIR)/Prelude.class: $(COMPF2)/Main.class $(PRELUDE)
 	rm -rf $(COMPF)
 	rm -f $(DIR)/Prelude.class $(DIR)/IO.class $(DIR)/List.class  $(DIR)/Tuples.class
 	$(JAVAC) -d build -cp build frege/compiler/JavaUtils.java
-	$(FREGEC2)  $(PRELUDE)
+	$(FREGEC2P)  $(PRELUDE)
 	$(FREGEC2)  -make  frege.Prelude
 
 compiler2: $(COMPF2)/Main.class
@@ -172,7 +180,7 @@ $(COMPF2)/Main.class: $(DIR2)/Prelude.class # frege/compiler/Main.fr
 $(DIR2)/Prelude.class: $(COMPF1)/Main.class frege/Prelude.fr $(PRELUDE)
 	rm -rf $(COMPF2)
 	rm -rf $(DIR2)
-	$(FREGEC1)  $(PRELUDE)
+	$(FREGEC1P)  $(PRELUDE)
 	$(FREGEC1)  -make frege.Prelude
 
 
@@ -209,7 +217,7 @@ $(COMPF1)/Main.class : $(PRE1) $(LIBF1)/PP.class $(CLASSES)
 $(DIR1)/Prelude.class: $(PRELUDE) frege/Prelude.fr
 	rm -rf $(COMPF1)
 	rm -rf $(DIR1)
-	$(FREGEC0)  frege/prelude/Base.fr
+	$(FREGEC0P) $(PRELUDE)
 	$(FREGEC0)  -make frege.Prelude
 $(DIR1)/PreludeProperties.class: $(LIBF1)/Random.class $(LIBF1)/QuickCheck.class
 	$(FREGEC0)  frege/PreludeProperties.fr
@@ -229,7 +237,7 @@ $(COMPF0)/Main.class : $(PRE0) $(LIBF0)/PP.class frege/compiler/Grammar.fr # fre
 prel0:
 	rm -rf $(COMPF0)
 	rm -rf $(DIR0)
-	$(FREGEC3)  frege/prelude/Base.fr
+	$(FREGEC3P)  $(PRELUDE)
 	$(FREGEC3)  -make frege.Prelude
 $(DIR0)/PreludeProperties.class: $(PRE0) $(LIBF0)/Random.class $(LIBF0)/QuickCheck.class frege/PreludeProperties.fr
     $(FREGEC3)  frege/PreludeProperties.fr
