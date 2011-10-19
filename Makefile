@@ -60,7 +60,7 @@ FREGEC3P = $(FREGECJP) -prefix c
 GENDOC   = $(FREGE)  frege.tools.Doc -d doc
 
 # Prelude files in the order they must be compiled
-PRELUDE  =  frege/prelude/Base.fr frege/prelude/Text.fr
+PRELUDE  =  frege/prelude/Base.fr frege/prelude/Native.fr  frege/prelude/Text.fr
 
 
 {frege/prelude}.fr{$(PREL1)}.class::
@@ -292,6 +292,7 @@ RUNTIME  = build/frege/MD.class    $(COMPF)/JavaUtils.class \
 docu:       $(TOOLSF)/Doc.class \
             $(DOC)/Prelude.html     $(DOC)/List.html        $(DOC)/IO.html \
             $(DOC)/prelude/Text.html    $(DOC)/prelude/Base.html \
+            $(DOC)/prelude/Native.html \
 			$(DOCF)/Scanner.html    $(DOCF)/Classtools.html $(DOCF)/Data.html \
 			$(DOCF)/Utilities.html  $(DOCF)/Main.html       $(DOCF)/Grammar.html \
 			$(DOCF)/Fixdefs.html    $(DOCF)/Import.html     $(DOCF)/Enter.html \
@@ -450,6 +451,8 @@ $(DOC)/prelude/Base.html: $(DIR)/prelude/Base.class
 	$(GENDOC) frege.prelude.Base
 $(DOC)/prelude/Text.html: $(DIR)/prelude/Text.class
 	$(GENDOC) frege.prelude.Text
+$(DOC)/prelude/Native.html: $(DIR)/prelude/Native.class
+	$(GENDOC) frege.prelude.Native
 $(DOC)/List.html: $(DIR)/List.class
 	$(GENDOC) frege.List
 $(DOC)/IO.html: $(DIR)/IO.class
