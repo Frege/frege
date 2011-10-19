@@ -215,9 +215,9 @@ vid t = (Token.value t; Token.line t)
 //%type exprSS          [Exp]
 //%type pattern         Pat
 //%type funhead         (String, [Pat])
-//%type confld          [(Maybe String, SigmaS)]
-//%type conflds         [(Maybe String, SigmaS)]
-//%type contypes        [(Maybe String, SigmaS)]
+//%type confld          [ConField String]
+//%type conflds         [ConField String]
+//%type contypes        [ConField String]
 //%type dalt            DConS
 //%type simpledalt      DConS
 //%type strictdalt      DConS
@@ -907,7 +907,7 @@ simpledalt:
     ;
 
 contypes:
-    simpletypes                 { map ((,) Nothing • ForAll [] • RhoTau []) }
+    simpletypes                 { map (Field Nothing Nothing • ForAll [] • RhoTau []) }
     ;
 
 simpletypes:
@@ -916,14 +916,19 @@ simpletypes:
     ;
 
 conflds:
-    confld                      // { single }
-    | confld ','                { const }
-    | confld ',' conflds        { \as\c\ls -> as ++ ls }
+    confld
+    | confld ','                    { const }
+    | confld DOCUMENTATION          { \cs\(d::Token) -> map ConField.{doc <- addDoc d.value} cs }
+    | confld ',' conflds            { \as\c\ls -> as ++ ls }
+    | confld DOCUMENTATION conflds  { \as\(d::Token)\ls -> map ConField.{doc <- addDoc d.value} as ++ ls }
     ;
 
 confld:
-    // simpletype                  { (,) Nothing <~ ForAll [] <~ RhoTau }
-    varids DCOLON tau            { \vs\_\t -> [(Just (fst v), ForAll [] (RhoTau [] t)) | v <- vs ]}
+    varids DCOLON tau           { \vs\_\t -> [Field (Just (fst v)) Nothing (ForAll [] (RhoTau [] t)) | v <- vs ]}
+    | docs varids DCOLON tau    { \(d::String)\vs\_\t ->
+                                        map ConField.{doc=Just d}
+                                            [Field (Just (fst v)) Nothing (ForAll [] (RhoTau [] t)) | v <- vs ]
+                                }
     ;
 
 typedef:
@@ -1275,6 +1280,9 @@ exprSS:
 single x = [x]
 liste x _ xs = x:xs
 
+addDoc :: String -> Maybe String -> Maybe String
+addDoc second  Nothing = Just second
+addDoc second (Just first) = Just (first ++ "\n" ++ second)
 
 /// return 'Con' if it is (:)
 varcon o
