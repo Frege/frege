@@ -139,6 +139,8 @@ $(TOOLSF)/Doc.class: $(COMPF)/Main.class frege/tools/Doc.fr
 	$(FREGECC)  -make frege.tools.Doc
 $(TOOLSF)/YYgen.class: frege/tools/YYgen.fr $(DIR)/Prelude.class
 	$(FREGECC)  -make frege/tools/YYgen.fr
+$(TOOLSF)/LexConvt.class: frege/tools/LexConvt.fr $(DIR)/Prelude.class
+	$(FREGECC)  -make frege/tools/LexConvt.fr
 $(TOOLSF1)/YYgen.class: $(DIR1)/Prelude.class frege/tools/YYgen.fr
 	$(FREGEC0)  -make frege.tools.YYgen
 
@@ -289,6 +291,7 @@ RUNTIME  = build/frege/MD.class    $(COMPF)/JavaUtils.class \
 
 docu:       $(TOOLSF)/Doc.class \
             $(DOC)/Prelude.html     $(DOC)/List.html        $(DOC)/IO.html \
+            $(DOC)/prelude/Text.html    $(DOC)/prelude/Base.html \
 			$(DOCF)/Scanner.html    $(DOCF)/Classtools.html $(DOCF)/Data.html \
 			$(DOCF)/Utilities.html  $(DOCF)/Main.html       $(DOCF)/Grammar.html \
 			$(DOCF)/Fixdefs.html    $(DOCF)/Import.html     $(DOCF)/Enter.html \
@@ -443,6 +446,10 @@ $(RTDIR)/SwingSupport.class: frege/rt/SwingSupport.java
 #
 $(DOC)/Prelude.html: $(DIR)/Prelude.class
 	$(GENDOC) frege.Prelude
+$(DOC)/prelude/Base.html: $(DIR)/prelude/Base.class
+	$(GENDOC) frege.prelude.Base
+$(DOC)/prelude/Text.html: $(DIR)/prelude/Text.class
+	$(GENDOC) frege.prelude.Text
 $(DOC)/List.html: $(DIR)/List.class
 	$(GENDOC) frege.List
 $(DOC)/IO.html: $(DIR)/IO.class

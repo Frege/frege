@@ -558,6 +558,7 @@ importliste:
 
 importspecs:
     importspec                   { single }
+    | importspec ','             { \s\_ -> [s] }
     | importspec ',' importspecs { liste  }
     ;
 
@@ -573,17 +574,18 @@ importitem:
 importspec:
     importitem                      { \s      -> ImportItem.{alias = (last • #\.#.splitted • ImportItem.name) s} s}
     | importitem alias              { \s\a    -> ImportItem.{alias = Token.value a} s }
-    | PUBLIC importspec             { \_\s    -> ImportItem.{publik=true} s }
+    | PUBLIC importspec             { \_\s    -> ImportItem.export s }
     ;
 
 memspec:
     alias               { \v     -> protoItem.{pos = yyline v, name = Token.value v, alias = (last • (#\.#.splitted) • Token.value) v} }
     | alias  alias      { \v\a   -> protoItem.{pos = yyline v, name = Token.value v, alias = Token.value a} }
-    | PUBLIC memspec    { \_\s   -> ImportItem.{publik=true} s }
+    | PUBLIC memspec    { \_\s   -> ImportItem.export s }
     ;
 
 memspecs:
     memspec                 { single }
+    | memspec ','           { \s\_ -> [s] }
     | memspec ',' memspecs  { liste  }
     ;
 
