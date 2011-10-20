@@ -282,6 +282,7 @@ RUNTIME  = build/frege/MD.class    $(COMPF)/JavaUtils.class \
 		$(RTDIR)/Product22.class   $(RTDIR)/Product23.class     $(RTDIR)/Product24.class \
 		$(RTDIR)/Product25.class   $(RTDIR)/Product26.class \
 		$(RTDIR)/Array.class       $(RTDIR)/SwingSupport.class \
+		$(RTDIR)/FregeCompiler.class \
 		build/frege/RT.class
 
 
@@ -439,6 +440,8 @@ $(RTDIR)/Product25.class: frege/rt/Product25.java
 $(RTDIR)/Product26.class: frege/rt/Product26.java
 	$(JAVAC) -d build -cp build $?
 $(RTDIR)/SwingSupport.class: frege/rt/SwingSupport.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/FregeCompiler.class: frege/rt/FregeCompiler.java
 	$(JAVAC) -d build -cp build $?
 
 
