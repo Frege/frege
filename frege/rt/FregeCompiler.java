@@ -45,8 +45,8 @@ public class FregeCompiler  implements Callable<MethodHandle> {
             String[] sourcePath,
             int flags,
             String target,
-            String prefix,
             String[] fregePath,
+            String prefix,
             PrintWriter compilerMessages) throws Exception {
         // correct bad manners
         if (compiler == null) compiler = "frege.compiler.Main";
@@ -55,7 +55,29 @@ public class FregeCompiler  implements Callable<MethodHandle> {
         if (target == null) target = ".";
         if (prefix == null) prefix = "";
         if (fregePath == null) fregePath =  new String[] {};
-        Class runclass = Class.forName(compiler + ".runcompiler");
+        try {
+            Class runclass = Class.forName(compiler + "$runcompiler");
+            MethodHandle runcompilerw = MethodHandles.lookup().findStatic(
+                runclass, "w",
+                MethodType.methodType( 
+                    Fun.class,
+                    String[].class,     // modules
+                    String[].class,     // sourcePath
+                    int.class,          // flags
+                    String.class,       // target directory
+                    String[].class,     // frege path
+                    String.class,       // prefix
+                    PrintWriter.class   )); 
+            Fun<Boxed.Int, Boxed.Bool> io = (Fun<Boxed.Int, Boxed.Bool>) runcompilerw.invokeExact(
+                    modules, sourcePath, flags, target, fregePath, prefix, compilerMessages
+                );
+            return io._e().a(Boxed.Int.mk(42))._e().j;
+        } catch (Throwable e) {
+            compilerMessages.println("exception: " + e);
+            e.printStackTrace();
+        }
+        
+        
         compilerMessages.println("frege compiler (not yet) running.");
         return true;
     }
@@ -94,5 +116,13 @@ public class FregeCompiler  implements Callable<MethodHandle> {
                             PrintWriter.class   // error message sink
                         )
                     );
+    }
+    
+    // test ruzn, specify 0..n files to compile
+    public static void main(String[] argv) throws Exception {
+        PrintWriter pw = new PrintWriter(System.err);
+        boolean succ = compile(null, argv, null, 31, "build", null, null, pw);
+        pw.println("compile returned " + succ);
+        pw.close();
     }
 }
