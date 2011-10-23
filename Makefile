@@ -9,7 +9,7 @@
 
 JAVAC = javac
 YACC = pbyacc
-JAVA = java7 "-Dfrege.javac=javac -J-Xmx512m"
+JAVA = java7 "-Dfrege.javac=javac -J-Xmx512m" -Dfrege.parallel=false
 JAVAP = $(JAVA) -Dfrege.inPrelude=true
 
 
@@ -185,6 +185,8 @@ $(DIR2)/Prelude.class: $(COMPF1)/Main.class frege/Prelude.fr $(PRELUDE)
 	$(FREGEC1P)  $(PRELUDE)
 	$(FREGEC1)  -make frege.Prelude
 
+$(DIR2)/prelude/Text.class: $(COMPF1)/Main.class
+    $(FREGEC1P)  -x9 -v frege/prelude/Text.fr
 
 SOURCES  =      $(COMPS)/Scanner.fr   $(COMPS)/Classtools.fr \
 				$(COMPS)/Data.fr      $(COMPS)/Utilities.fr \

@@ -152,12 +152,12 @@ pass10 = do
  -}
 pass9 = do
     g <- getST
-    collectedvars <- allourvars
-    -- make all expressions easy
-    foreach collectedvars easySym
     -- set lambdadepth for each symbol
     collectedvars <- allourvars
     foreach collectedvars depthSym
+    -- make all expressions easy
+    collectedvars <- allourvars
+    foreach collectedvars easySym
     stio ("expressions", length collectedvars)
 
 easySym (vsym@SymV {pos})
@@ -174,7 +174,7 @@ depthSym (vsym@SymV {pos})
     | Just x <- vsym.expr = do
         nx <- depthExpr x
         -- U.changeSym vsym.{expr = Just nx}
-        let (_, sigmas) = U.returnType vsym.typ.rho
+        let (ret, sigmas) = U.returnType vsym.typ.rho
         let lambdaDepth (Lam {ex}) = 1 + lambdaDepth ex
             lambdaDepth ex = 0
             depth = lambdaDepth nx
@@ -184,7 +184,16 @@ depthSym (vsym@SymV {pos})
                     ++ ": lambdaDepth for expression " ++ nice nx g
                     ++ " (" ++ show depth ++ ") is greater than arity (" ++ show (length sigmas)
                     ++ ") for type " ++ nicer vsym.typ g)
-        U.changeSym vsym.{expr = Just nx, depth}
+        if (depth == length sigmas)
+            then U.changeSym vsym.{expr = Just nx, depth}       -- fine!
+            else do
+                g <- getST                                      -- depth < sigmas, eta expand it
+                newx <- etaExpand nx
+                let newd = lambdaDepth newx
+                U.hint (vsym.pos) ("eta expanded "
+                    ++ nice vsym.name g ++ "::" ++ nice vsym.typ g
+                    ++ " to lambda depth " ++ show newd)
+                U.changeSym vsym.{expr = Just newx, depth = newd}
     | otherwise = stio ()
     where
         depthExpr = U.mapEx false depthX
@@ -194,9 +203,66 @@ depthSym (vsym@SymV {pos})
                 stio (Left x.{env})
             | otherwise = stio (Left x)
 
+
 depthSym sym = do
     g <- getST
     U.fatal sym.pos ("depthSym no SymV : " ++ sym.nice g)
+
+{--
+    Eta expansion, applied to a value @x@ with function type
+    yields another expression @\\n -> x n@ with the same type.
+
+    This is done as long as the lambda body has still function type.
+
+    This will remove points free stype from definitions like
+
+    > sum = fold (+) 0
+
+    and will turn it into
+
+    > sum n = fold (+) 0 n
+
+    thus promoting fully satisfied applications as often as possible.
+
+    Eta expansion must be done after type check and should be done before strictness check.
+-}
+etaExpand :: Expr -> StG Expr
+
+etaExpand (lam@Lam {}) = do                 -- eta (\a -> x) = \a -> eta x
+            nex <- etaExpand lam.ex
+            stio lam.{ex=nex}
+
+etaExpand (x@Ann {}) = do                   -- eta (x :: y) = (eta x :: y)
+            nex <- etaExpand x.ex
+            stio x.{ex=nex}
+
+etaExpand x = case x.typ of                 -- all other expressions
+    Just (ForAll [] (RhoTau _ _))         = stio x
+    Just (ForAll [] (RhoFun ctx arg res)) = do
+            uniq <- U.uniqid
+            let var = "$" ++ show uniq
+                pos  = getpos x
+                app = App x (Vbl {pos, name=Local var, typ = Just arg}) (Just (ForAll [] res))
+                pat = PVar {pos,var}
+                env = insert Nil pat.var (U.patLocal pos pat.var).{sid=uniq}
+
+            body <- with env (etaExpand app)
+            stio  Lam {env, pat, ex=body, typ = x.typ}
+
+    Just sig = do
+        g <- getST
+        U.warn (getpos x) ("can't do eta expansion for an expression of type " ++ nice sig g)
+        U.hint (getpos x) ("try to write the surrounding binding in a eta expanded form")
+        stio x
+    Nothing -> do
+        g <- getST
+        U.fatal (getpos x) ("eta expansion must be done after type check for "
+             ++ nice x g)
+        stio x
+
+
+
+
 
 -- constants for the rkind value
 --- simple expression withoud self-/forward references.
@@ -574,7 +640,6 @@ easyX x = do
         isEasy (Ann {ex})        = isEasy ex
         isEasy x                 = isSimple x
 
-        makeEasy x | isEasy x    = stio (x, [])
         makeEasy (x@Lam {ex, env}) = with env do        -- so as to avoid bad symbols
             (ex, envs) <- makeEasy ex
             stio (x.{ex = fold mkLet ex envs}, [])
@@ -588,8 +653,7 @@ easyX x = do
                                         ++ nice cas g)
                     c <- easyExpr cas
                     stio (c, evs1)
-                Case {alts,typ = Just csigma}
-                    | ForAll [] (RhoFun _ _ _) <- csigma = do     -- apply b to each alt
+                Case {alts,typ = Just csigma} = do     -- apply b to each alt
                         let -- ctype = ForAll [] t
                             nalts = [ (calt::CAlt).{ex = App calt.ex b t} | calt <- alts ]
                             cas = a.{alts=nalts, typ=t}
@@ -597,9 +661,20 @@ easyX x = do
                             ++ "  ==>  " ++ nice cas g)
                         c <- easyExpr cas
                         stio (c, evs1)
-                    | otherwise = U.fatal (getpos app) ("Can't apply  " ++ nice b g
-                            ++ "  to case with type  "
-                            ++ nicer csigma g)
+                Ifte cnd thn els s = do
+                    let nthn = App thn b t
+                        nels = App els b t
+                        nif  = Ifte cnd nthn nels t
+                    U.logmsg TRACE9 (getpos app) ("(" ++ nice a g ++ ") " ++ nice b g
+                            ++ " ==> " ++ nice nif g)
+                    eif <- easyExpr nif
+                    stio (eif, evs1)
+                Let {} = do
+                    let nlet = a.{ex = App a.ex b t, typ = t}
+                    U.logmsg TRACE9 (getpos app) ("(" ++ nice a g ++ ") " ++ nice b g
+                            ++ " ==> " ++ nice nlet g)
+                    elet <- easyExpr nlet
+                    stio (elet, evs1)
                 _ = do
                     (napp, evs2) <- makeSimple (App a b t)
                     stio (napp, evs1++evs2)
@@ -612,6 +687,7 @@ easyX x = do
         makeEasy (x@Ifte a b c t)  = do                 -- branches will be made easy recursively
             (a, envs) <- makeSimple a
             stio (Ifte a b c t, envs)
+        makeEasy x | isEasy x    = stio (x, [])
         makeEasy x = do
             g <- getST
             U.error (getpos x) ("don't know how to make easy:  " ++ nice x g)
@@ -630,7 +706,9 @@ easyX x = do
                 nm = U.unusedName (Local ("ƒ" ++ show u ++ "_" ++ show pos)) g
                 sym = (U.patLocal pos nm.base).{typ = s, expr = Just x, state = Typechecked }
                 vbl = Vbl {pos, name=nm, typ = x.typ}
-            env <- nested Nil (U.enter sym)
+            env <- nested Nil do
+                U.enter sym
+                depthSym sym
             stio (vbl, env:[])
         makeSimple (x@Let {env,ex}) = do        -- foo x = f (let x = ... in x) x
                 g <- getST                      -- float let higher: let xa = ... in f xa x
@@ -936,7 +1014,7 @@ strictName sids nm = do
     v <- U.findV nm
     when (v.state != StrictChecked) do
         U.logmsg TRACES v.pos ("strictness analysis for " ++ v.nice g)
-    let ari = U.arity v
+    let ari = U.arity v             -- ... based on type
     case v of
         SymV {state = StrictChecked} = stio []          -- do nothing
         SymV {nativ = Just _} -> do
