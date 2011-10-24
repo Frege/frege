@@ -71,6 +71,15 @@ allourvars = do
         collectedvars = [ v | env <- collectedenvs, v@SymV {name} <- values env, name.our g]
     stio collectedvars
 
+--- find all 'SymV' symbols, be they ours or not
+allvars = do
+    g <- getST
+    let envEnvs env = env : [Symbol.env sy | sy <- values env, Symbol.{env?} sy]
+        packEnvs = values g.packages
+        collectedenvs = fold (++) [] (map envEnvs packEnvs)
+        collectedvars = [ v | env <- collectedenvs, v@SymV {name} <- values env]
+    stio collectedvars
+
 pass7 = do
     g <- getST
 
@@ -88,6 +97,9 @@ pass7 = do
 
 pass8 = do
     g <- getST
+    -- rename every local varaible v to v ++ show sid
+    collectedvars <- allvars
+    foreach collectedvars renameSym
     collectedvars <- allourvars
     -- find closed lambdas and make them private global
     foreach collectedvars closedLambdaSym
@@ -190,7 +202,7 @@ depthSym (vsym@SymV {pos})
                 g <- getST                                      -- depth < sigmas, eta expand it
                 newx <- etaExpand nx
                 let newd = lambdaDepth newx
-                U.hint (vsym.pos) ("eta expanded "
+                U.logmsg TRACE9 (vsym.pos) ("eta expanded "
                     ++ nice vsym.name g ++ "::" ++ nice vsym.typ g
                     ++ " to lambda depth " ++ show newd)
                 U.changeSym vsym.{expr = Just newx, depth = newd}
@@ -534,6 +546,66 @@ closedLambdaSym sym = do
     g <- getST
     U.fatal sym.pos ("closedLambdaSym no SymV : " ++ sym.nice g)
 
+renameSym (vsym@SymV {})
+    | Just x <- vsym.expr = do
+        nx <- U.mapEx true renameLocals x
+        U.changeSym vsym.{expr = Just nx}
+    | otherwise = stio ()
+renameSym sym = do
+    g <- getST
+    U.fatal sym.pos ("renameSym no SymV : " ++ sym.nice g)
+
+--- map an environment to conatin changed names and symbols
+renamedEnv = Tree.fromList • map renamekv • each
+    where
+       renamekv (k, sym@SymV {name=Local _, sid}) = (k ++ show sid,
+                                              sym.{name <- Local • (++ show sid) • QName.base})
+       renamekv (k, sym) = error ("bad env, k=" ++ k ++ ", name = " ++ show sym.name)
+
+--- rename all local variables in patterns and expressions
+renameLocals (lam@Lam{env,pat,ex}) = with env do
+    g <- getST
+    let nenv = renamedEnv env
+    U.logmsg TRACE8 (getpos lam) ("renameLocals before: " ++ nice lam g ++ "  " ++ show (keys env) ++ "  " ++ show (keys nenv))
+    npat <- replPat pat
+    U.logmsg TRACE8 (getpos lam) ("renameLocals pattern " ++ nice npat g)
+    nex  <- replVar (map Symbol.sid (values env)) ex
+    let nlam = lam.{env=nenv, ex=nex, pat=npat}
+    U.logmsg TRACE8 (getpos lam) ("renameLocals after:  " ++ nice nlam g)
+    stio (Left nlam)
+renameLocals (cas@Case {alts}) = do
+    nalts <- mapSt renameAlt alts
+    stio (Left cas.{alts=nalts})
+renameLocals (letex@Let {env, ex})
+        | [(k, SymV {sid, expr=Just _})] <- each env = do        -- exactly 1 definition
+            g <- getST
+            U.logmsg TRACE8 (getpos letex) ("renameLocals before: " ++ nice letex g ++ "  " ++ show (keys env))
+            let repsym (k,v@SymV {sid, expr = Just x}) = do
+                    nx <- with env (replVar [sid] x)
+                    stio (k, v.{expr = Just nx})
+                repsym (k,v) = stio (k, v)
+            nlst <- mapSt repsym (each (renamedEnv env))
+            U.logmsg TRACE8 (getpos letex) ("renameLocals new: " ++ show (map fst nlst))
+            nex <- with env (replVar [sid] ex)
+            let nenv = Tree.fromList nlst
+                nlet = letex.{ex=nex, env=nenv}
+            U.logmsg TRACE8 (getpos letex) ("renameLocals before: " ++ nice nlet g)
+            stio (Left nlet)
+renameLocals other = stio (Left other)
+
+--- rename local variables in a case alternative
+renameAlt :: CAlt -> StG CAlt
+renameAlt alt = with alt.env do
+    g <- getST
+    let nenv = renamedEnv alt.env
+        -- renameX = [replName (Symbol.sid sym) (Symbol.name sym) | (nm, sym) <- each nenv]
+        -- renameP = [replPat  (Symbol.sid sym) nm                | (nm, sym) <- each nenv]
+    U.logmsg TRACE8 (getpos alt.pat) ("renameAlt before: " ++ nice alt.pat g ++ " -> " ++ nice alt.ex g)
+    nex  <- replVar (map Symbol.sid (values alt.env)) alt.ex
+    npat <- replPat alt.pat
+    let nalt = alt.{env=nenv, ex=nex, pat=npat}
+    U.logmsg TRACE8 (getpos alt.pat) ("renameAlt after:  " ++ nice npat g ++ " -> " ++ nice nex g)
+    stio nalt
 
 unrollExpr    = U.mapEx true unrollLet
 unLetExpr     = U.mapEx true unLet
@@ -778,13 +850,40 @@ replSid sid r ex = U.mapEx true action ex
             if sym.sid == sid then stio (Right r) else stio (Right v)
         action x = stio (Left x)
 
----/ @replName sid nm ex@ - rename variables that references sid in ex
+--- @replName sid nm ex@ - rename variables that references sid in ex
 replName sid nm ex = U.mapEx true action ex
     where
         action (v@Vbl {name}) = do
             sym <- U.findV name
             if sym.sid == sid then stio (Right v.{name=nm}) else stio (Right v)
         action x = stio (Left x)
+
+-- rename all variables that are element of sids
+replVar sids = U.mapEx true action
+    where
+        action (v@Vbl {name=Local nm}) = do
+            sym <- U.findV v.name
+            if sym.sid `elem` sids
+                then stio (Right v.{name=Local (nm++show sym.sid)})
+                else stio (Right v)
+        action x = stio (Left x)
+
+replPat pat = case pat of
+    PCon {pats} = do
+        npats <- mapSt replPat pats
+        stio pat.{pats = npats}
+    PConFS{} = U.fatal (getpos pat) "PConFS must not happen"
+    _ | pat.{var?} = do
+            sym <- U.findV (Local pat.var)
+            if pat.{pat?}       -- PAt !
+                then do
+                    p <- replPat pat.pat
+                    stio  pat.{var = sym.name.base ++ show sym.sid, pat = p}
+                else stio pat.{var = sym.name.base ++ show sym.sid}
+      | pat.{pat?} = do
+            p <- replPat pat.pat
+            stio pat.{pat=p}
+      | otherwise = stio pat
 
 
 unLet (x@Let {env,ex}) | length vals > 1 = do
@@ -888,8 +987,10 @@ unLet (xlet@Let {env=letenv,ex=letex,typ=lettyp})
           isSimple cx = do
             self <- with letenv (references [sym.sid] cx)
             down <- with letenv (references [sym.sid] letex)
-            if self == 0 && down == 1       -- used exactly once, note that use
-                                            -- in a local function counts twice.
+            if self == 0
+                && (down == 1       -- used exactly once, note that use
+                                    -- in a local function counts twice.
+                    {-|| isAtomic cx-})    -- or if it is just literal, variable or constructor
                 then do
                     let inline = if U.isPSigma sym.typ then cx
                                     else Ann {ex = cx, typ = Just sym.typ}
@@ -900,6 +1001,14 @@ unLet (xlet@Let {env=letenv,ex=letex,typ=lettyp})
                 else stio (Left xlet)
 
 unLet x = stio (Left x)
+
+{--
+    tell if an expression is just a literal, variable or constructor name
+ -}
+isAtomic Vbl {} = true
+isAtomic Lit {} = true
+isAtomic Con {} = true
+isAtomic _      = false
 
 closedLambda (app@App (Lam {pat,env,ex,typ}) b ty) = do
         g <- getST

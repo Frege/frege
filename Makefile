@@ -168,6 +168,7 @@ $(COMPF)/Main.class: $(DIR)/Prelude.class frege/compiler/Main.fr
 	$(FREGEC2)  -make frege.compiler.Main
 $(DIR)/Prelude.class: $(COMPF2)/Main.class $(PRELUDE)
 	rm -rf $(COMPF)
+	rm -rf $(DIR)/prelude
 	rm -f $(DIR)/Prelude.class $(DIR)/IO.class $(DIR)/List.class  $(DIR)/Tuples.class
 	$(JAVAC) -d build -cp build frege/compiler/JavaUtils.java
 	$(FREGEC2P)  $(PRELUDE)
