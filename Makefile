@@ -195,7 +195,7 @@ SOURCES  =      $(COMPS)/Scanner.fr   $(COMPS)/Classtools.fr \
 		$(COMPS)/Fixdefs.fr   $(COMPS)/Import.fr    $(COMPS)/Enter.fr \
 		$(COMPS)/TAlias.fr    $(COMPS)/Transdef.fr  $(COMPS)/Classes.fr \
 		$(COMPS)/Transform.fr $(COMPS)/Typecheck.fr $(COMPS)/TCUtil.fr \
-		$(COMPS)/GenMeta.fr   $(COMPS)/GenJava.fr
+		$(COMPS)/GenMeta.fr   $(COMPS)/GenJava.fr   $(COMPS)/GenJava7.fr
 
 
 CLASSES  =       $(COMPF1)/Scanner.class   $(COMPF1)/Classtools.class \
@@ -205,7 +205,7 @@ CLASSES  =       $(COMPF1)/Scanner.class   $(COMPF1)/Classtools.class \
 		$(COMPF1)/Transdef.class   $(COMPF1)/TCUtil.class   \
 		$(COMPF1)/TAlias.class    $(COMPF1)/Classes.class \
 		$(COMPF1)/Transform.class $(COMPF1)/Typecheck.class \
-		$(COMPF1)/GenMeta.class   $(COMPF1)/GenJava.class
+		$(COMPF1)/GenMeta.class   $(COMPF1)/GenJava.class $(COMPF1)/GenJava7.class
 
 PRE1 = $(DIR1)/Prelude.class $(DIR1)/IO.class $(DIR1)/List.class $(DIR1)/Tuples.class
 
@@ -260,7 +260,7 @@ runtime: $(RUNTIME)  doc/index.html
 RTDIR    = build/frege/rt
 RUNTIME  = build/frege/MD.class    $(COMPF)/JavaUtils.class \
 		$(RTDIR)/Value.class       $(RTDIR)/Lazy.class        $(RTDIR)/Unknown.class \
-		$(RTDIR)/Lambda.class \
+		$(RTDIR)/Lambda.class      $(RTDIR)/MH.class \
 		$(RTDIR)/Boxed.class       $(RTDIR)/Constant.class    $(RTDIR)/Ref.class \
 		$(RTDIR)/Fun.class         $(RTDIR)/Fun1.class        $(RTDIR)/Fun2.class \
 		$(RTDIR)/Fun3.class        $(RTDIR)/Fun4.class \
@@ -302,7 +302,7 @@ docu:       $(TOOLSF)/Doc.class \
 			$(DOCF)/Fixdefs.html    $(DOCF)/Import.html     $(DOCF)/Enter.html \
 			$(DOCF)/TAlias.html     $(DOCF)/Transdef.html   $(DOCF)/Classes.html \
 			$(DOCF)/Transform.html  $(DOCF)/Typecheck.html  $(DOCF)/TCUtil.html \
-			$(DOCF)/GenMeta.html    $(DOCF)/GenJava.html \
+			$(DOCF)/GenMeta.html    $(DOCF)/GenJava.html    $(DOCF)/GenJava7.html \
 			$(DOC)/lib/PP.html      $(DOC)/lib/ForkJoin.html \
 			$(DOC)/lib/Random.html  $(DOC)/lib/QuickCheck.html \
 			$(DOC)/tools/YYgen.html \
@@ -321,6 +321,8 @@ $(COMPF)/JavaUtils.class: build/frege/MD.class frege/compiler/JavaUtils.java
 $(DIR)/RT.class: frege/RT.java
 	$(JAVAC) -d build -cp build $?
 $(RTDIR)/Lambda.class: frege/rt/Lambda.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/MH.class: frege/rt/MH.java
 	$(JAVAC) -d build -cp build $?
 $(RTDIR)/Boxed.class: frege/rt/Boxed.java
 	$(JAVAC) -d build -cp build $?
@@ -517,3 +519,5 @@ $(DOCF)/GenMeta.html: $(COMPF)/GenMeta.class
 	$(GENDOC) frege.compiler.GenMeta
 $(DOCF)/GenJava.html: $(COMPF)/GenJava.class
 	$(GENDOC) frege.compiler.GenJava
+$(DOCF)/GenJava.html: $(COMPF)/GenJava7.class
+	$(GENDOC) frege.compiler.GenJava7
