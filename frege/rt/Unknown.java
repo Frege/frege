@@ -390,15 +390,19 @@ public abstract class Unknown<V> implements Lazy<V>, java.util.concurrent.Callab
     /**
      * <p>Do the real work in evaluating the result.</p>
      *
-     * <p>From the type one can see that _v() is not required to return
-     * an actual evaluated value. It can also return another unevaluated
+     * <p>From the type one can see that eval() is <b>not</b> required to return
+     * the final evaluated value. It can also return another unevaluated
      * value, though the understanding is that the returned value must be
-     * somehow closer to the final result, so that, by calling that values _v()
+     * somehow closer to the final result, so that, by calling that values eval()
      * one gets even closer to the result and so forth until it is finally reached. </p>
      *
      * <p> This is the method subclasses of Unknown must implement. </p>
      */
     public abstract Lazy<V> _v();
+    /**
+     * Backwards compatibility
+     */
+    public Lazy<V> eval() { return this._v(); } 
 
     /**
      * <p> Checks if this value is unevaluated. </p>
@@ -411,11 +415,12 @@ public abstract class Unknown<V> implements Lazy<V>, java.util.concurrent.Callab
      *
      * @return <tt>true</tt> if this value is not yet evaluated, false otherwise.
      */
+    final public boolean unknown() { return result == null; }
     final public boolean _u() { return result == null; }
 
     /**
      * <p> Implemenation of the {@link java.util.concurrent.Callable} interface </p>
      * @return the result of {@link Unknown#_e}
      */
-    final public V call() { return _e(); }
+    final public V call() { return this._e(); }
 }

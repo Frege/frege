@@ -36,17 +36,39 @@
 
 package frege.rt;
 
+
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
+
 // $Author$
 // $Date$
 // $Rev$
 // $Id$
 
 /**
- * <p> Base class for anonymous lambdas </p>
+ * <p> A fully satisfied {@link MethodHandle} waiting to be invoked. </p>
+ *
  */
-public abstract class Lambda {
-    /**
-     * <P>get a {@link java.lang.invoke.MethodHandle} that invokes this Lambdas worker</P>
+public final class Result extends Unknown<Val> {
+    final private MethodHandle mh;
+    /** <p> Construct a Result from a MethodHandle that has all arguments bound </p> ***/
+    private Result(final MethodHandle it) { mh = it; }
+    final public Lazy<Val> _v() {  
+        try {
+            return (Lazy<Val>) mh.invokeExact(); 
+        } catch (Throwable e) {
+            throw new Error("MethodHandle evaluation error", e);
+        }
+    }
+    /** 
+        <p> Create a result from a MethodHandle </p>
+        @param it a {@link MethodHandle} with all arguments bound
+        @return a Result if all arguments are bound, otherwise throw an Error
      */
-    public abstract java.lang.invoke.MethodHandle handle();
+    final static public Result mk(final MethodHandle it) {
+        if (it.type().parameterCount() == 0)
+            return new Result(it);
+        throw new Error(it.toString() + " cannot be a result");
+    }     
 }

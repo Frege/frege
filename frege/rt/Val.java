@@ -2,22 +2,22 @@
 
     Copyright © 2011, Ingo Wechsung
     All rights reserved.
-
+    
     Redistribution and use in source and binary forms, with or
     without modification, are permitted provided that the following
     conditions are met:
-
+    
         Redistributions of source code must retain the above copyright
         notice, this list of conditions and the following disclaimer.
-
+    
         Redistributions in binary form must reproduce the above
         copyright notice, this list of conditions and the following
         disclaimer in the documentation and/or other materials provided
         with the distribution. Neither the name of the copyright holder
         nor the names of its contributors may be used to endorse or
         promote products derived from this software without specific
-        prior written permission.
-
+        prior written permission. 
+        
     THIS SOFTWARE IS PROVIDED BY THE
     COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR
     IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
@@ -33,7 +33,7 @@
     THE POSSIBILITY OF SUCH DAMAGE.
 
     «•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•» */
-
+    
 package frege.rt;
 
 // $Author$
@@ -42,11 +42,40 @@ package frege.rt;
 // $Id$
 
 /**
- * <p> Base class for anonymous lambdas </p>
+ * Designates an evaluated frege value or function.
+ * This is the base class of all non-lazy frege values in the Java7 code generation.
  */
-public abstract class Lambda {
+public class Val implements Value, Lazy<Val> {
     /**
-     * <P>get a {@link java.lang.invoke.MethodHandle} that invokes this Lambdas worker</P>
+     * <p> Applies this Val to another Val. </p>
+     * <p> This only makes sense when this FunVal is actually a function </p>
      */
-    public abstract java.lang.invoke.MethodHandle handle();
+     public Lazy<Val> apply(Lazy<Val> it) {
+        throw new Error("cannot apply a " + this.getClass().getName());
+     }
+     
+    /**
+     * <p> 0 for most frege values, override if not so. </p>
+     *
+     * @return 0
+     */
+    public int     _c() { return 0; }
+    /**
+     * <p> Always this instance. </p>
+     *
+     * @return <tt>this</tt>
+     */
+    final public Val    _e() { return this; }
+    /**
+     * <p> Always this instance. </p>
+     *
+     * @return <tt>this</tt>
+     */
+    final public Val    _v() { return this; }
+    /**
+     * <p> Always <tt>false</tt>. </p>
+     *
+     * @return <tt>false</tt>
+     */
+    final public boolean _u() { return false; }
 }

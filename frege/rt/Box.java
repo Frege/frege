@@ -56,14 +56,14 @@ package frege.rt;
  *
  * <p> creates a noninstantiable class TX that serves as namepsace
  * for the member functions. Yet, the java type for frege type X
- * is always Boxed&lt;some.reference.type&gt;  </p>
+ * is always Box&lt;some.reference.type&gt;  </p>
  *
  * <p> In addition, for each primitive type supported by frege, there is
- * a nested class <tt>Boxed.</tt><em>type</em> where <em>type</em> is the
+ * a nested class <tt>Box.</tt><em>type</em> where <em>type</em> is the
  * name given that type in frege.
- * Hence, {@link Boxed.Int} is a boxed primitive <tt><b>int</b></tt>.
+ * Hence, {@link Box.Int} is a boxed primitive <tt><b>int</b></tt>.
  */
-public final class Boxed<T>  implements Value, Lazy<Boxed<T>> {
+public class Box<T>  extends Val {
     /**
      * <p>Reference to the java object.</p>
      *
@@ -75,45 +75,16 @@ public final class Boxed<T>  implements Value, Lazy<Boxed<T>> {
      * is incorrectly specified or by array accesses. </p>
      */
     public final T j;
-    private Boxed(T a) { j = a; }
+    protected Box(T a) { j = a; }
     /**
      * public constructor for boxed values
      *
      * @param ref a non null reference of type <tt>T</tt>
      *
-     * @return an instance of Boxed&lt;T&gt;.
+     * @return an instance of Box&lt;T&gt;.
      */
-    final public static<T> Boxed<T> mk(T ref) { return new Boxed<T>(ref); }
-    /**
-     * This is needed in cases where the type argument has itself type arguments
-     * that must be corrected because java does not understand higher kinded type variables.
-     */
-    @SuppressWarnings("unchecked")
-    public <N> Boxed<N> coerce() { return (Boxed<N>) this; }
-    /**
-     * <p> Always 0 for boxed java values. </p>
-     *
-     * @return 0
-     */
-    final public int     _c() { return 0; }
-    /**
-     * <p> Always this instance. </p>
-     *
-     * @return <tt>this</tt>
-     */
-    final public Boxed<T>    _e() { return this; }
-    /**
-     * <p> Always this instance. </p>
-     *
-     * @return <tt>this</tt>
-     */
-    final public Boxed<T>    _v() { return this; }
-    /**
-     * <p> Always <tt>false</tt>. </p>
-     *
-     * @return <tt>false</tt>
-     */
-    final public boolean _u() { return false; }
+    final public static<T> Box<T> mk(T ref) { return new Box<T>(ref); }
+    
 
     public String toString() { return j.toString(); }
 
@@ -169,9 +140,9 @@ public final class Boxed<T>  implements Value, Lazy<Boxed<T>> {
 
 
     /**
-     * <p> Boxed primitive boolean </p>
+     * <p> Box primitive boolean </p>
      */
-    public final static class Bool implements Value, Lazy<Bool> {
+    public final static class Bool extends Val {
         private Bool(final boolean c) { j = c; }
         /** the primitive boolean value boxed by this instance */
         final public boolean   j;
@@ -185,25 +156,15 @@ public final class Boxed<T>  implements Value, Lazy<Boxed<T>> {
          * @return one of {@link Bool#f} or {@link Bool#t}
          */
         final public static Bool mk(boolean b) { return b?t:f; }
-        /** <p>Always 0</p>
-         * @return 0
-         */
-        final public int       _c() { return 0; }
-        /** <p>Always <tt>this</tt>.</p>  @return <tt>this</tt> */
-        final public Bool      _e() { return this; }
-        /** <p>Always <tt>this</tt>.</p>  @return <tt>this</tt> */
-        final public Bool      _v() { return this; }
-        /** <p>Always <tt>false</tt>.</p> @return <tt>false</tt> */
-        final public boolean   _u() { return false; }
 
         public String toString() { return j?"true":"false"; }
     }
 
 
     /**
-     * <p> Boxed primitive char </p>
+     * <p> Box primitive char </p>
      */
-    public final static class Char implements Value, Lazy<Char> {
+    public final static class Char extends Val {
         private Char(char c) { j = c; }
         /** a cache for all ASCII chars */
         private final static Char[] ascii = new Char[128];
@@ -219,24 +180,13 @@ public final class Boxed<T>  implements Value, Lazy<Boxed<T>> {
             if (c >= 0 && c < 128) return ascii[c];
             return new Char(c);
         }
-        /** <p>Always 0</p>
-         * @return 0
-         */
-        final public int       _c() { return 0; }
-        /** <p>Always <tt>this</tt>.</p> @return <tt>this</tt> */
-        final public Char      _e() { return this; }
-        /** <p>Always <tt>this</tt>.</p> @return <tt>this</tt> */
-        final public Char      _v() { return this; }
-        /** <p>Always <tt>false</tt>.</p> @return <tt>false</tt> */
-        final public boolean   _u() { return false; }
-
         public String toString() { return "'" + j + "'"; }
     }
 
     /**
-     * <p> Boxed primitive int </p>
+     * <p> Box primitive int </p>
      */
-    public final static class Int implements Value, Lazy<Int> {
+    public final static class Int extends Val {
         private Int(int c) { j = c; }
         /** a cache for small ints */
         private final static Int[] small = new Int[256];
@@ -257,12 +207,6 @@ public final class Boxed<T>  implements Value, Lazy<Boxed<T>> {
          * @return 0
          */
         final public int       _c() { return j; }
-        /** <p>Always <tt>this</tt>.</p> @return <tt>this</tt> */
-        final public Int      _e() { return this; }
-        /** <p>Always <tt>this</tt>.</p> @return <tt>this</tt> */
-        final public Int      _v() { return this; }
-        /** <p>Always <tt>false</tt>.</p> @return <tt>false</tt> */
-        final public boolean   _u() { return false; }
 
         public String toString() { return "" + j; }
 
@@ -311,9 +255,9 @@ public final class Boxed<T>  implements Value, Lazy<Boxed<T>> {
     }
 
     /**
-     * <p> Boxed primitive long </p>
+     * <p> Box primitive long </p>
      */
-    public final static class Long implements Value, Lazy<Long> {
+    public final static class Long extends Val {
         private Long(long c) { j = c; }
         /** a cache for small longs */
         private final static Long[] small = new Long[256];
@@ -329,76 +273,46 @@ public final class Boxed<T>  implements Value, Lazy<Boxed<T>> {
             if (c >= 0L && c < 256L) return small[(int)c];
             return new Long(c);
         }
-        /** <p>Always 0</p>
-         * @return 0
-         */
-        final public int       _c() { return 0; }
-        /** <p>Always <tt>this</tt>.</p> @return <tt>this</tt> */
-        final public Long      _e() { return this; }
-        /** <p>Always <tt>this</tt>.</p> @return <tt>this</tt> */
-        final public Long      _v() { return this; }
-        /** <p>Always <tt>false</tt>.</p> @return <tt>false</tt> */
-        final public boolean   _u() { return false; }
 
         public String toString() { return j + "L"; }
     }
 
     /**
-     * <p> Boxed primitive float </p>
+     * <p> Box primitive float </p>
      */
-    public final static class Float implements Value, Lazy<Float> {
+    public final static class Float extends Val {
         private Float(float c) { j = c; }
 
         /** the primitive value boxed by this instance */
         final public float   j;
         /**
-         * <p> box an int value </p>
+         * <p> box an float value </p>
          *
-         * @return the boxed int
+         * @return the boxed float
          */
         final public static Float mk(float c) {
             return new Float(c);
         }
-        /** <p>Always 0</p>
-         * @return 0
-         */
-        final public int       _c() { return 0; }
-        /** <p>Always <tt>this</tt>.</p> @return <tt>this</tt> */
-        final public Float      _e() { return this; }
-        /** <p>Always <tt>this</tt>.</p> @return <tt>this</tt> */
-        final public Float      _v() { return this; }
-        /** <p>Always <tt>false</tt>.</p> @return <tt>false</tt> */
-        final public boolean   _u() { return false; }
-
+        
         public String toString() { return j + "f"; }
     }
 
     /**
-     * <p> Boxed primitive double </p>
+     * <p> Box primitive double </p>
      */
-    public final static class Double implements Value, Lazy<Double> {
+    public final static class Double extends Val {
         private Double(double c) { j = c; }
 
         /** the primitive value boxed by this instance */
         final public double   j;
         /**
-         * <p> box an int value </p>
+         * <p> box a double value </p>
          *
-         * @return the boxed int
+         * @return the boxed double
          */
         final public static Double mk(double c) {
             return new Double(c);
         }
-        /** <p>Always 0</p>
-         * @return 0
-         */
-        final public int       _c() { return 0; }
-        /** <p>Always <tt>this</tt>.</p> @return <tt>this</tt> */
-        final public Double      _e() { return this; }
-        /** <p>Always <tt>this</tt>.</p> @return <tt>this</tt> */
-        final public Double      _v() { return this; }
-        /** <p>Always <tt>false</tt>.</p> @return <tt>false</tt> */
-        final public boolean   _u() { return false; }
 
         public String toString() { return j + ""; }
     }

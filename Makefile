@@ -260,7 +260,8 @@ runtime: $(RUNTIME)  doc/index.html
 RTDIR    = build/frege/rt
 RUNTIME  = build/frege/MD.class    $(COMPF)/JavaUtils.class \
 		$(RTDIR)/Value.class       $(RTDIR)/Lazy.class        $(RTDIR)/Unknown.class \
-		$(RTDIR)/Lambda.class      $(RTDIR)/MH.class \
+		$(RTDIR)/Val.class         $(RTDIR)/Box.class \
+		$(RTDIR)/Lambda.class      $(RTDIR)/Result.class      $(RTDIR)/MH.class \
 		$(RTDIR)/Boxed.class       $(RTDIR)/Constant.class    $(RTDIR)/Ref.class \
 		$(RTDIR)/Fun.class         $(RTDIR)/Fun1.class        $(RTDIR)/Fun2.class \
 		$(RTDIR)/Fun3.class        $(RTDIR)/Fun4.class \
@@ -322,7 +323,13 @@ $(DIR)/RT.class: frege/RT.java
 	$(JAVAC) -d build -cp build $?
 $(RTDIR)/Lambda.class: frege/rt/Lambda.java
 	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Val.class: frege/rt/Val.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Box.class: frege/rt/Box.java
+	$(JAVAC) -d build -cp build $?
 $(RTDIR)/MH.class: frege/rt/MH.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Result.class: frege/rt/Result.java
 	$(JAVAC) -d build -cp build $?
 $(RTDIR)/Boxed.class: frege/rt/Boxed.java
 	$(JAVAC) -d build -cp build $?
