@@ -43,8 +43,8 @@ TOOLSF  = $(DIR)/tools
 COMPS   = frege/compiler
 
 
-FREGE    = $(JAVA) -Xss30m -Xmx1024m -cp build
-FREGEP   = $(JAVAP) -Xss30m -Xmx1024m -cp build
+FREGE    = $(JAVA) -Xss30m -Xmx800m -cp build
+FREGEP   = $(JAVAP) -Xss30m -Xmx800m -cp build
 FREGECJ  = $(FREGE) -jar fregec.jar -fp build -d build -nocp -hints
 FREGECJP = $(FREGEP) -jar fregec.jar -fp build -d build -nocp -hints
 FREGECC  = $(FREGE) frege.compiler.Main  -d build -hints
@@ -96,7 +96,7 @@ sanitycheck:
 	$(JAVA) -version
 
 stage1: prel0 compiler0 $(TOOLSF0)/LexConvt.class $(TOOLSF0)/YYgen.class
-    cp frege/tools/yygenpar.fr frege/tools/YYgenparM.fr build/cfrege/tools
+	cp frege/tools/yygenpar.fr frege/tools/YYgenparM.fr build/cfrege/tools
 	jar  -cf    fregec.jar -C build cfrege frege
 	jar  -uvfe  fregec.jar cfrege.compiler.Main
 	@echo you can do now backwards incompatible changes
@@ -113,7 +113,7 @@ fregec.jar: tools $(DIR)/check1
 	jar  -uvfe  fregec.jar frege.compiler.Main
 
 $(DIR)/check1: $(DIR)/PreludeProperties.class
-    $(JAVA) -cp build frege.PreludeProperties && echo Prelude Properties checked >$(DIR)/check1
+	$(JAVA) -cp build frege.PreludeProperties && echo Prelude Properties checked >$(DIR)/check1
 
 $(LIBF)/Random.class: $(DIR)/Prelude.class frege/lib/Random.fr
 	$(FREGEC2)  frege/lib/Random.fr
@@ -151,7 +151,7 @@ tools: $(TOOLSF)/Doc.class $(TOOLSF)/YYgen.class $(TOOLSF)/LexConvt.class
 # final compiler
 #
 compiler: compiler2 $(COMPF)/Grammar.class $(COMPF)/Main.class library tools
-    cp frege/tools/yygenpar.fr frege/tools/YYgenparM.fr build/frege/tools
+	cp frege/tools/yygenpar.fr frege/tools/YYgenparM.fr build/frege/tools
 	@echo Compiler ready
 
 $(COMPF)/Grammar.class: frege/compiler/Grammar.fr $(COMPF)/Scanner.class
@@ -187,7 +187,7 @@ $(DIR2)/Prelude.class: $(COMPF1)/Main.class frege/Prelude.fr $(PRELUDE)
 	$(FREGEC1)  -make frege.Prelude
 
 $(DIR2)/prelude/Text.class: $(COMPF1)/Main.class
-    $(FREGEC1P)  -x9 -v frege/prelude/Text.fr
+	$(FREGEC1P)  -x9 -v frege/prelude/Text.fr
 
 SOURCES  =      $(COMPS)/Scanner.fr   $(COMPS)/Classtools.fr \
 				$(COMPS)/Data.fr      $(COMPS)/Utilities.fr \
@@ -227,7 +227,7 @@ $(DIR1)/Prelude.class: $(PRELUDE) frege/Prelude.fr
 $(DIR1)/PreludeProperties.class: $(LIBF1)/Random.class $(LIBF1)/QuickCheck.class
 	$(FREGEC0)  frege/PreludeProperties.fr
 $(DIR1)/check1: $(PRE1) $(LIBF1)/Random.class $(LIBF1)/QuickCheck.class $(DIR1)/PreludeProperties.class
-    $(JAVA) -cp build afrege.PreludeProperties && echo Prelude Properties checked >$(DIR1)/check1
+	$(JAVA) -cp build afrege.PreludeProperties && echo Prelude Properties checked >$(DIR1)/check1
 
 
 PRE0 = $(DIR0)/IO.class $(DIR0)/List.class $(DIR0)/Tuples.class
@@ -245,9 +245,9 @@ prel0:
 	$(FREGEC3P)  $(PRELUDE)
 	$(FREGEC3)  -make frege.Prelude
 $(DIR0)/PreludeProperties.class: $(PRE0) $(LIBF0)/Random.class $(LIBF0)/QuickCheck.class frege/PreludeProperties.fr
-    $(FREGEC3)  frege/PreludeProperties.fr
+	$(FREGEC3)  frege/PreludeProperties.fr
 $(DIR0)/check1: $(PRE0)  $(DIR0)/PreludeProperties.class
-    $(JAVA) -cp build cfrege.PreludeProperties && echo Prelude Properties checked >$(DIR0)/check1
+	$(JAVA) -cp build cfrege.PreludeProperties && echo Prelude Properties checked >$(DIR0)/check1
 
 
 
@@ -261,7 +261,7 @@ RTDIR    = build/frege/rt
 RUNTIME  = build/frege/MD.class    $(COMPF)/JavaUtils.class \
 		$(RTDIR)/Value.class       $(RTDIR)/Lazy.class        $(RTDIR)/Unknown.class \
 		$(RTDIR)/Val.class         $(RTDIR)/Box.class \
-		$(RTDIR)/Lambda.class      $(RTDIR)/Result.class      $(RTDIR)/MH.class \
+		$(RTDIR)/Lambda.class      $(RTDIR)/Result.class      /$(RTDIR)/MH.class \
 		$(RTDIR)/Boxed.class       $(RTDIR)/Constant.class    $(RTDIR)/Ref.class \
 		$(RTDIR)/Fun.class         $(RTDIR)/Fun1.class        $(RTDIR)/Fun2.class \
 		$(RTDIR)/Fun3.class        $(RTDIR)/Fun4.class \
@@ -485,13 +485,13 @@ $(DOC)/tools/YYgen.html: $(DIR)/tools/YYgen.class
 $(DOC)/tools/Doc.html: $(DIR)/tools/Doc.class
 	$(GENDOC) frege.tools.Doc
 $(DOC)/j/Lang.html: $(LIBJ)/Lang.class
-    $(GENDOC) frege.j.Lang
+	$(GENDOC) frege.j.Lang
 $(DOC)/j/Awt.html: $(LIBJ)/Awt.class
-    $(GENDOC) frege.j.Awt
+	$(GENDOC) frege.j.Awt
 $(DOC)/j/Swing.html: $(LIBJ)/Swing.class
-    $(GENDOC) frege.j.Swing
+	$(GENDOC) frege.j.Swing
 $(DOC)/j/Util.html: $(LIBJ)/Util.class
-    $(GENDOC) frege.j.Util
+	$(GENDOC) frege.j.Util
 $(DOCF)/Classtools.html: $(COMPF)/Classtools.class
 	$(GENDOC) frege.compiler.Classtools
 $(DOCF)/Scanner.html: $(COMPF)/Scanner.class
