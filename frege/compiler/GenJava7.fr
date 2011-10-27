@@ -73,10 +73,6 @@ infixr 6 `<>`
 --- Post condition of the code generation pass, always true
 post = stio true
 
-pass = do
-    stio ("java7 classes", 1)
-
-
 {--
     The mode of the java type assoicated with an expression
  -}
@@ -171,8 +167,8 @@ data JDecl =
                 extend :: Maybe JType, implement :: [JType], defs :: [JDecl] }
     | JInterface {attr::Int, jtype :: JType,
                 implement :: [JType], defs :: [JDecl] }
-    | JTCInterface {attr::Int, jtype :: JType,
-                implement :: [JType], defs :: [JDecl] }
+--    | JTCInterface {attr::Int, jtype :: JType,
+--                implement :: [JType], defs :: [JDecl] }
     | JMethod {attr::Int, gargs :: [JType], jtype:: JType, name :: String,
                args::[(Int, Sigma, JType, String)], body:: JStmt}
     | JConstr {attr::Int, jtype::JType, args::[(Int, Sigma, JType, String)], body:: JStmt}
@@ -182,27 +178,27 @@ data JDecl =
 instance Anno JDecl where
     anno (JComment s)       = text "// " <> text s -- <> PP.line
     anno (cl@JClass {attr}) = annoAttrs attr <+> text "class"
-                        <+> JType.anno (defining cl.jtype)
+                        <+> JType.anno (cl.jtype)
                         <+> bracket ""
                              (maybe PP.nil ((text "extends" <+>) • JType.anno) cl.extend
                              <+> annoImplements "implements" cl.implement) ""
                         <+> PP.block "{" (PP.stack (map anno cl.defs)) "}"
     anno (cl@JInterface {attr}) = annoAttrs attr <+> text "interface"
-                        <+> JType.anno (defining cl.jtype)
+                        <+> JType.anno (cl.jtype)
                         <+> bracket "" (annoImplements "extends" cl.implement) ""
                         <+> PP.block "{" (PP.stack (map anno cl.defs)) "}"
-    anno (cl@JTCInterface {attr}) = annoAttrs attr <+> text "interface"
-                        <+> JType.anno (definingTC cl.jtype)
-                        <+> bracket "" (annoImplements "extends" cl.implement) ""
-                        <+> PP.block "{" (PP.stack (map anno cl.defs)) "}"
+--    anno (cl@JTCInterface {attr}) = annoAttrs attr <+> text "interface"
+--                        <+> JType.anno (cl.jtype)
+--                        <+> bracket "" (annoImplements "extends" cl.implement) ""
+--                        <+> PP.block "{" (PP.stack (map anno cl.defs)) "}"
     anno (m@JMethod {attr}) = annoAttrs m.attr
-                        <+> annoGenerics (map introduce m.gargs)
+                        <+> annoGenerics (m.gargs)
                         <+> m.jtype.anno
                         <+> text m.name
                         <> annoArgDef m.args
                         <+> m.body.anno
     anno (m@JConstr {attr}) = annoAttrs m.attr
-                        <+> (defining m.jtype).{targs = []}.anno
+                        <+> (m.jtype).{targs = []}.anno
                         <> annoArgDef m.args
                         <+> m.body.anno
     anno (m@JMember {attr}) = annoAttrs m.attr
@@ -320,33 +316,94 @@ cheap _ = false
  -}
 data JType =
       !Ref   { jname :: JName,  targs :: [JType] }  --- generic java type @x.y.Class<A,B>@
-    | !TArg  { var   :: String }                    --- type argument @A@
-    | !TVbl  { var   :: String }                    --- lazy type variable @A extends Lazy<A>@
+    -- !TArg  { var   :: String }                    --- type argument @A@
+    -- !TVbl  { var   :: String }                    --- lazy type variable @A extends Lazy<A>@
     | !Nativ { typ   :: String, targs :: [JType] }  --- native type
     | !Arr   { etype :: JType }                     --- array type
+    | !Lazy  { etype :: JType }                     --- lazy type
 
 
 instance Anno JType where
     anno (Ref  {jname,targs}) = text (show jname) <> annoGenerics targs
-    anno (TArg var          ) = text var
-    anno (TVbl var          ) = text var <+> text "extends" <+> anno (lazy (TArg var))
+    -- anno (TArg var          ) = text var
+    -- anno (TVbl var          ) = text var <+> text "extends" <+> anno (lazy (TArg var))
     anno (Nativ {typ,targs} ) = text typ  <> annoGenerics targs
     anno (Arr  {etype}      ) = anno etype <> text "[]"
+    anno (Lazy {})            = text "Lazy<Val>"
+
+{--
+ * This data structure describes mode, java type and java expression associated with
+ * some frege item. The task of code generation is to create, combine and
+ * manipulate such bindings. Many code generating functions will take
+ * a ('Tree' 'Symbol' 'Binding') of current bindings as last parameter.
+ -}
+data Binding = !Bind {mode :: RMode, ftype :: Sigma, jtype :: JType, jex :: JExpr}
+instance Nice Binding where
+    nice (Bind {mode, ftype, jtype, jex}) g = "Bind {" ++ show mode ++ ", "
+                                            ++ ftype.nice g ++ ", "
+                                            ++ showJty jtype ++  ", "
+                                            ++ showJex jex ++ "}"
+
+--- tell how strict this java type can get
+maxStrict jt = case strict jt of
+    Nativ _ _  -> RNative
+    _          -> RBoxed
+
+--- bring a java expression to boxed mode
+toBoxed (bind@Bind {mode=RNative, jex = JExMem jx "j"}) = bind.{mode = RBoxed, jtype <- boxed, jex = jx}
+toBoxed (bind@Bind {mode=RNative, jtype}) = case boxed jtype of
+    bt@Ref (JName "" bx) t -> bind.{mode=RBoxed, jtype = bt,
+                                jex = JInvoke (JStMem (JName bx "mk") t) [bind.jex]}
+    other -> bind.{mode=RBoxed, jtype = other}      -- questionable whether this is right
+toBoxed (bind@Bind {mode=RLazy}) = bind.{mode=RBoxed, jtype <- boxed,
+                                    jex =JInvoke (JExMem bind.jex "_e") []}
+toBoxed bind = bind
+
+--- bring a java expression to desired strictness mode
+toMode RLazy (bind@Bind {mode})
+    | mode == RNative = toBoxed bind
+    | otherwise = bind
+toMode RBoxed bind = toBoxed bind
+toMode RNative (bind@Bind {mode}) = case maxStrict bind.jtype of
+    RBoxed -> toBoxed bind
+    RNative
+        | mode == RLazy  =  bind.{mode=RNative, jtype <- strict,
+                                    jex = JExMem (toBoxed bind).jex "j"}
+        | mode == RBoxed =  bind.{mode=RNative, jtype <- strict,
+                                    jex = JExMem bind.jex "j"}
+        | otherwise = bind
+    _ -> error "toMode RNative: unexpected result from maxStrict"
+
+{--
+    make a binding strict
+ -}
+strictBind bind = toMode RNative bind
+boxedBind  bind = toBoxed bind
+notStrict (bind@Bind {mode=RNative}) = toBoxed bind
+notStrict bind = bind
+notLazy   (bind@Bind {mode=RLazy}) = toBoxed bind
+notLazy   bind = bind
+
+--- show a java expression
+showJex jex | cheap jex = PP.pretty 1000 (anno jex)
+            | otherwise = "complicated java expression"
+--- show a java expression
+showJty jty = PP.pretty 1000 (anno jty)
 
 
---- changes 'JName' of a 'Ref' so that it is suitable for the place where it is defined
-defining (t@Ref {jname}) = t.{jname <- JName.{qual=""}, targs <- map introduce}
-defining x = x
---- like defining, but suitable for type classes, TArgs will not extend Lazy
-definingTC (t@Ref {jname}) = t.{jname <- JName.{qual=""}}
-definingTC x = x
-
-introduce (TArg s) = TVbl s
-introduce t = t
+----- changes 'JName' of a 'Ref' so that it is suitable for the place where it is defined
+--defining (t@Ref {jname}) = t.{jname <- JName.{qual=""}, targs <- map introduce}
+--defining x = x
+----- like defining, but suitable for type classes, TArgs will not extend Lazy
+--definingTC (t@Ref {jname}) = t.{jname <- JName.{qual=""}}
+--definingTC x = x
+--
+--introduce (TArg s) = TVbl s
+--introduce t = t
 
 --- the type constructor for 'Void'
-voidTau = TCon {pos=0, name = TName pPreludeBase "Void"}
-voidJT  = Ref (JName "" "Boxed") [Nativ "Void" []]
+-- voidTau = TCon {pos=0, name = TName pPreludeBase "Void"}
+-- voidJT  = Ref (JName "" "Boxed") [Nativ "Void" []]
 
 
 sigmaJT (ForAll _ rho)        = rhoJT rho
@@ -382,33 +439,31 @@ tauJT  (Meta tv)    = stio jtVal
 
 taujtApp pos qname rest = do
     sym   <- U.findT qname
-    tauxs <- mapSt tauJT rest
-    let arity   = length sym.typ.bound
-        restjts = take arity (tauxs ++ repeat jtVal)
+    -- tauxs <- mapSt tauJT rest
+    -- let arity   = length sym.typ.bound
+    --    restjts = take arity (tauxs ++ repeat jtVal)
     case sym of
         SymT {product=true, newt=true} -> do
             let sigmas = [ ConField.typ f | sym@SymD {flds} <- values sym.env, f <- flds ]
-                rargs = take arity (rest ++ repeat voidTau)
-                tree  = Tree.fromList (zip sym.typ.bound rargs)
+                -- rargs = take arity (rest ++ repeat jtVal)
+                -- tree  = Tree.fromList (zip sym.typ.bound rargs)
             -- the sigma is by Grammar.y in the form   ForAll [] (RhoTau [] tau)
-            if (null sigmas)
-                then do
+            case sigmas of
+                [] -> do
                     g <- getST
                     U.error pos (nice sym g ++ " has no fields")
                     stio jtVal
-                else do
-                    rho <- U.substRho tree (head sigmas).rho
-                    rhoJT rho
+                (s:_) -> rhoJT s.rho
         SymT {product,nativ,enum,pur}
-            | Just s <- nativ = stio (boxed (Nativ s args))
+            | Just s <- nativ = stio (boxed (Nativ s []))
             | enum            = stio (Ref (JName "" "Boxed.Int") [])
             | otherwise       = do g <- getST
                                    stio (Ref {jname = U.javaName g qname, targs = []})
-            where args
-                    | Just _  <- nativ,
-                      not pur,
-                      not (null sym.typ.bound) = take  (arity - 1) restjts
-                    | otherwise = restjts
+            -- where args
+            --        | Just _  <- nativ,
+            --          not pur,
+            --          not (null sym.typ.bound) = take  (arity - 1) restjts
+            --        | otherwise = restjts
         other -> undefined   -- can not happen because catched in U.findT
 --
 --
@@ -429,27 +484,29 @@ taujtApp pos qname rest = do
 --alphabet = "αβγδεζηθιßκλμνξοπρςστυφχψωﬁﬂƒ"
 --
 --
---numbers = (map show (iterate (1+) 1))
---xxxNames xxx = zipWith (++) (repeat xxx) numbers
------ arg1, arg2, arg3, ....
---argNames = xxxNames "_arg"
------ ctx1, ctx2, ctx3, ...
---ctxNames = xxxNames "_ctx"
------ m1, m2, m3 ...
---memNames = xxxNames "m"
+numbers = (map show (iterate (1+) 1))
+xxxNames xxx = zipWith (++) (repeat xxx) numbers
+--- arg$1, arg$2, arg$3, ....
+argNames = xxxNames "arg$"
+--- ctx$1, ctx$2, ctx$3, ...
+ctxNames = xxxNames "ctx$"
+--- mem1, mem2, mem3 ...
+memNames = xxxNames "mem"
 --
 
 --- the @Val@ type
 jtVal    = Ref {jname = JName "" "Val", targs = []}
+--- the @Lazy<Val>@ type
+lazyVal = lazy jtVal
 
 --- the @MH@ type, which is a boxed @MethodHandle@
 jtFun    = Ref {jname = JName "" "MethodHandle", targs = []}
 
 --- create @Lazy<T>@ for @T@, see 'lazy'
-jtLazy x = Ref {jname = JName "" "Lazy",  targs = [x]}
+jtLazy   = Lazy
 
 --- create the boxed form of a java type
-boxed (Ref {jname = JName "" "Lazy", targs = [x]}) = x
+boxed (Lazy x) = x
 boxed (Ref {jname = JName "" "MethodHandle", targs = []}) = jtFun
 boxed (Nativ "boolean" []) = Ref {jname = JName "" "Box.Bool", targs = []}
 boxed (Nativ "byte" [])    = Ref {jname = JName "" "Box.Byte", targs = []}
@@ -480,7 +537,7 @@ strict x = case boxed x of
     Ref {jname = JName "" "Box.Float"}  -> Nativ "float" []
     other -> other
 --
---jtRmode (Ref (JName "" "Lazy") _) = RLazy
+--jtRmode (Lazy _) = RLazy
 --jtRmode (Nativ _ _) = RNative
 --jtRmode _ = RBoxed
 --
@@ -499,26 +556,26 @@ strict x = case boxed x of
 --isPrimitive _ = Nothing
 --
 --
------ the main class name for this package
---mainClass :: Global -> String
---mainClass g = (g.thisPack.className g).base
---
------ the name of the interface that serves as namespace for this main class
---constClass g = mainClass g ++ "C"
---
---pass = do
---    g <- getST
---
---
---    U.print "final public class "
---    U.print (mainClass g)
---    U.println " {"
---    let vals = values g.thisTab
+--- the main class name for this package
+mainClass :: Global -> String
+mainClass g = (g.thisPack.className g).base
+
+--- the name of the interface that serves as namespace for this main class
+constClass g = mainClass g ++ "C"
+
+pass = do
+    g <- getST
+
+
+    U.print "final public class "
+    U.print (mainClass g)
+    U.println " {"
+    let vals = values g.thisTab
 --
 --    makeConstants
 --
---    mapSt (symCode Nil) (sortBy (comparing Symbol.name) [ s | s@SymT {sid} <- vals ])
---        >>= ppSS
+    mapSt (symCode Nil) (sortBy (comparing Symbol.name) [ s | s@SymT {sid} <- vals ])
+        >>= ppSS
 --    mapSt (symCode Nil) (sortBy (comparing Symbol.name) [ s | s@SymC {sid} <- vals ])
 --        >>= ppSS
 --    mapSt (symCode Nil) (sortBy (comparing Symbol.name) [ s | s@SymI {sid} <- vals ])
@@ -585,12 +642,14 @@ strict x = case boxed x of
 --
 --    invokeMain <- genMain
 --    ppSS [invokeMain, toMaybe]
---    U.println "}"
---    -- pp (anno theClass)
---    stio ("java class", 1)
---
---ppSS xss = foreach (concat xss) (pp • anno)
---printCode sym = do
+    U.println "}"
+
+    stio ("java7 class", 1)
+
+-- print lists of lists of annotatable items
+ppSS xss = foreach (concat xss) (pp • anno)
+
+-- printCode sym = do
 --    defs <- symCode Nil sym
 --    foreach defs (pp • anno)
 --
@@ -862,136 +921,110 @@ strict x = case boxed x of
 --    stio [result]
 --conCode symt cons nocon = error "conCode: no Con"
 --
---{--
--- * Code for data types
--- *
--- * - Native types create a class @TName@ that acts as namespace for
--- *   member definitions.
--- * - Enumerations create a class @Tname@ that contains final Boxed.Int Con = Boxed.Int.mk(cid)
--- * - Algebraic types create an interface @Tname@ that extends @Value@ and @Lazy@ and contains
--- *   an abstract method @_Con@ to get the variant associated with @Con@.
--- -}
---symCode binds (sym@SymT {enum=true}) = do
---    g <- getST
---    let vals = sortBy (comparing Symbol.name) (values sym.env)
---        cons = [ con | con@SymD {sid} <- vals ]
---        other = [ sym | sym <- vals, not (Symbol.{flds?} sym)]
---
---    subDefs <- mapSt (symCode binds) other
---
---    let jtype = Ref {jname = U.javaName g sym.name, targs = []}     -- TName
---        result = JClass {attr = attrs [JFinal, JPublic, JStatic], jtype,
---                        extend = Nothing,
---                        implement = [],
---                        defs = (constr : conDefs) ++ concat subDefs}
---        constr = JConstr { attr = attrs [JPrivate], jtype, args=[], body = JBlock []}
---        conDefs = [ JMember {attr = attrs [JPublic, JStatic, JFinal],
---                        jtype = Ref (JName "" "Boxed.Int") [],
---                        name = mangled name.base,
---                        init = Just (JInvoke (JStMem (JName "Boxed.Int" "mk") [])
---                                             [JAtom (show cid)])}
---                      | SymD {name, cid} <- cons ]
---    stio [JComment (nice sym g), result]
---
---
---symCode binds (sym@SymT {product=true, newt=true}) = do
---    g <- getST
---
---    let vals = sortBy (comparing Symbol.name) (values sym.env)
---        other = [ sym | sym <- vals, not (Symbol.{flds?} sym)]
---
---    subDefs <- mapSt (symCode binds) other
---
---    let jtype  = Ref (U.javaName g sym.name) []
---        defs   = concat subDefs
---        result = JClass {attr = attrs [JAbstract, JPublic, JStatic], jtype,
---                         extend = Nothing, implement = [], defs}
---    stio [JComment (nice sym g), result]
---
---
---symCode binds (sym@SymT {product=true}) = do                    -- product
---    g <- getST
---
---    let vals = sortBy (comparing Symbol.name) (values sym.env)
---        other = [ sym | sym <- vals, not (Symbol.{flds?} sym)]
---    subDefs <- mapSt (symCode binds) other
---    symjt   <- sigmaJT sym.typ
---
---    let jtype  = symjt.{jname = U.javaName g sym.name}
---        -- tyapp  = fold mkTyApp (jtype) jtype.targs
---        -- mkTyApp t1 t2 = Ref (JName "" "TyApp") [t1, t2]
---        symd   = head [ con | con@SymD {sid} <- vals ]            -- constructor
---        (_, argtys) = U.returnType symd.typ.rho
---        coargs = (map targ • take (length sym.typ.bound) • filter (`notElem` sym.typ.bound))
---                     U.allBinders
---        struct      = symd.strsig.isStrict
---    funty      <- sigmaJT symd.typ
---    ftypes     <- mapSt subSigmaJT (map ConField.typ symd.flds)
---    argjts     <- mapSt subSigmaJT argtys
---    let arity  = length symd.flds
---        ext | struct = Nothing
---            | otherwise  = Just (Ref {jname=JName "" ("Product" ++ show arity), targs = ftypes})
---        imp    = [jtValue, lazy jtype]
---        defs = [comment, constr, cMethod symd.cid,
---                    atomMethod "_v" jtype "this",
---                    atomMethod "_e" jtype "this",
---                    single, make, cclass, nMethod, coerce] ++ members ++ concat subDefs
---        comment = JComment (nice symd g)
---        constrargs = [ (attrFinal, ty, (lazy jt), n) |
---                            ((ty, jt), n) <- zip (zip argtys argjts) argNames ]
---        args   = take arity (map JAtom argNames)
---        structargs = [ (attrFinal, ty, strict jt, n) |
---                            (jt, (ty, n)) <- zip argjts (zip argtys argNames) ]
---        rbinds = [ Bind RLazy sig jt (JAtom n) | (_,sig,jt,n) <- constrargs ]
---        sargs = map (Binding.jex • strictBind) rbinds
---        rargs = if struct then sargs else args
---        constr = JConstr {attr = attrs [JPrivate], jtype = jtype,
---                            args = if struct then structargs else constrargs,
---                            body = JBlock super}
---        super
---            | struct = take (length args) (zipWith JAssign
---                                                    (map JAtom memNames)
---                                                    (map JAtom argNames))
---            | otherwise  = [JEx (JInvoke (JAtom "super") args)]
---        single = JMember {attr = attrs [JPrivate, JStatic],
---                                        jtype = erased cclass.jtype,
---                                        name = "_single",
---                                        init = Just (JNew (Ref (JName "" "Construct") []) [])}
---        coerce = JMethod {attr = attrs [JUnchecked, JPublic, JFinal],
---                                gargs = coargs, jtype = jtype.{targs=coargs},
---                                name = "coerce", args = [],
---                                body = JBlock [JReturn (JCast jtype.{targs=coargs} (JAtom "this"))]}
---        make    | struct     = JMethod {attr = attrs [JPublic, JFinal, JStatic],
---                        gargs = jtype.targs, jtype, name = "mk",
---                        args = structargs,
---                        body = JBlock [JReturn (JNew jtype args)]}
---                | otherwise = JMethod {attr = attrs [JPublic, JFinal, JStatic],
---                        gargs = jtype.targs, jtype, name = "mk",
---                        args = constrargs,
---                        body = JBlock [JReturn (JNew jtype args)]}
---        cclass = JClass {attr = attrs [JPublic, JStatic],
---                                    jtype = Ref (JName "" "Construct") jtype.targs,
---                                    extend = Just funty,
---                                    implement = [],
---                                    defs = [rMethod]}
---        worker  = (workerMethod g symd).{targs = jtype.targs}
---        rMethod = JMethod {attr = attrs [JPublic, JFinal], gargs = [], jtype, name = "r",
---                            args = reverse constrargs,
---                            body = JBlock [JReturn (JInvoke worker rargs)]}
---        nMethod = JMethod {attr = attrs [JUnchecked, JPublic, JFinal, JStatic],
---                            gargs = jtype.targs, jtype = cclass.jtype, name = "n",
---                            args = [],
---                            body = JBlock [JReturn (JCast cclass.jtype (JAtom "_single"))]}
---        members | struct =  uMethod : zipWith member argjts memNames
---                | otherwise = []
---                where uMethod = atomMethod "_u" (Nativ "boolean" []) "false"
---        member jt name = JMember {attr = attrs [JFinal, JPublic],
---                                    jtype = strict jt,
---                                    name, init = Nothing}
---        result = JClass {attr = attrs [JFinal, JPublic, JStatic], jtype,
---                         extend = ext, implement = imp, defs}
---    stio [JComment (nice sym g), result]
---
+{--
+ * Code for data types
+ *
+ * - Native types create a class @TName@ that acts as namespace for
+ *   member definitions.
+ * - Enumerations create a class @TName@ that contains final Boxed.Int DCon = Boxed.Int.mk(cid)
+ * - Algebraic types create an interface @TName@ that extends @Val@
+ *   implements @Lazy<Val>@ and contains
+ *   an abstract method @DCon@ to get the variant associated with @DCon@.
+ -}
+symCode binds (sym@SymT {enum=true}) = do
+    g <- getST
+    let vals  = sortBy (comparing Symbol.name) (values sym.env)
+        cons  = [ con | con@SymD {sid} <- vals ]                    -- constructors
+        other = [ sym | sym <- vals, not (Symbol.{flds?} sym)]      -- non constructors
+
+    subDefs <- mapSt (symCode binds) other
+
+    let jtype = Ref {jname = U.javaName g sym.name, targs = []}     -- TName
+        result = JClass {attr = attrTop, jtype,
+                        extend = Nothing,
+                        implement = [],
+                        defs = (constr : conDefs) ++ concat subDefs}
+        constr = JConstr { attr = attrs [JPrivate], jtype, args=[], body = JBlock []}
+        conDefs = [ JMember {attr = attrTop,
+                        jtype = Ref (JName "" "Box.Int") [],
+                        name = mangled name.base,
+                        init = Just (JInvoke (JStMem (JName "Box.Int" "mk") [])
+                                             [JAtom (show cid)])}
+                      | SymD {name, cid} <- cons ]
+    stio [JComment (nice sym g), result]
+
+
+symCode binds (sym@SymT {product=true, newt=true}) = do
+    g <- getST
+
+    let vals = sortBy (comparing Symbol.name) (values sym.env)
+        other = [ sym | sym <- vals, not (Symbol.{flds?} sym)]      -- sub definitions
+
+    subDefs <- mapSt (symCode binds) other
+
+    let jtype  = Ref (U.javaName g sym.name) []
+        defs   = concat subDefs
+        result = JClass {attr = attrs [JAbstract, JPublic, JStatic], jtype,
+                         extend = Nothing, implement = [], defs}
+    stio [JComment (nice sym g), result]
+
+
+symCode binds (sym@SymT {product=true}) = do                    -- product
+    g <- getST
+
+    let vals = sortBy (comparing Symbol.name) (values sym.env)
+        other = [ sym | sym <- vals, not (Symbol.{flds?} sym)]
+    subDefs <- mapSt (symCode binds) other
+    symjt   <- sigmaJT sym.typ
+
+    let jtype  = symjt.{jname = U.javaName g sym.name}
+        symd   = head [ con | con@SymD {sid} <- vals ]            -- constructor
+        (_, argtys) = U.returnType symd.typ.rho
+        struct      = symd.strsig.isStrict
+    funty      <- sigmaJT symd.typ
+    ftypes     <- mapSt sigmaJT (map ConField.typ symd.flds)        -- field types
+    argjts     <- mapSt sigmaJT argtys
+    let arity  = length symd.flds
+        ext | struct     = jtVal                            -- extends Val/ProdN<...,...,...>
+            | otherwise  = Ref {jname=JName "" ("Prod" ++ show arity), targs = []}
+        imp        = [lazyVal]                              -- implements Lazy<Val>
+        defs       = [comment, constr, -- cMethod symd.cid,
+                        -- atomMethod "_v" jtype "this",
+                        -- atomMethod "_e" jtype "this",
+                        make] ++ members ++ concat subDefs
+        comment    = JComment (nice symd g)
+        constrargs = [ (attrFinal, ty, (lazy jt), n) |
+                            ((ty, jt), n) <- zip (zip argtys argjts) argNames ]
+        args       = take arity (map JAtom argNames)            -- arg1, arg2, arg3 ...
+        structargs = map (\(a,b,c,d) -> (a,b, strict c, d)) constrargs
+        rbinds = [ Bind RLazy sig jt (JAtom n) | (_,sig,jt,n) <- constrargs ]
+        sargs = map (Binding.jex • strictBind) rbinds
+        rargs = if struct then sargs else args
+        constr = JConstr {attr = attrs [JPrivate], jtype = jtype,
+                            args = if struct then structargs else constrargs,
+                            body = JBlock super}
+        super
+            | struct = take (length args) (zipWith JAssign          -- m1 = arg1 ....
+                                                    (map JAtom memNames)
+                                                    (map JAtom argNames))
+            | otherwise  = [JEx (JInvoke (JAtom "super") args)]
+        make    | struct     = JMethod {attr = attrs [JPublic, JFinal, JStatic],
+                        gargs = jtype.targs, jtype, name = "mk",
+                        args = structargs,
+                        body = JBlock [JReturn (JNew jtype args)]}
+                | otherwise = JMethod {attr = attrs [JPublic, JFinal, JStatic],
+                        gargs = jtype.targs, jtype, name = "mk",
+                        args = constrargs,
+                        body = JBlock [JReturn (JNew jtype args)]}
+        members | struct = zipWith member argjts memNames
+                | otherwise = []
+        member jt name = JMember {attr = attrs [JFinal, JPublic],
+                                    jtype = strict jt,
+                                    name, init = Nothing}
+        result = JClass {attr = attrTop, jtype,
+                         extend = Just ext, implement = imp, defs}
+    stio [JComment (nice sym g), result]
+
 --symCode binds (sym@SymT {nativ=Nothing}) = do                   -- sum type
 --    g <- getST
 --    let vals = sortBy (comparing Symbol.name) (values sym.env)
@@ -1017,16 +1050,16 @@ strict x = case boxed x of
 --                            implement = [jtValue, lazy jtype],
 --                            defs = getCons ++ concat conDefs ++ concat funDefs ++ mClass}
 --    stio [JComment (nice sym g), result]
---
---symCode binds (sym@SymT {sid, nativ = Just _}) = do                               -- nativ
---    g <- getST
---    let vals = sortBy (comparing Symbol.name) (values sym.env)
---    subDefs <- mapSt (symCode binds) vals
---    let jtype = Ref {jname = U.javaName g sym.name, targs=[]}
---        result = JClass {attr = attrs [JStatic, JPublic, JFinal],
---                            jtype, extend = Nothing, implement = [],
---                            defs = concat subDefs}
---    stio [JComment (nice sym g), result]
+
+symCode binds (sym@SymT {sid, nativ = Just _}) = do                               -- nativ
+    g <- getST
+    let vals = sortBy (comparing Symbol.name) (values sym.env)
+    subDefs <- mapSt (symCode binds) vals
+    let jtype = Ref {jname = U.javaName g sym.name, targs=[]}
+        result = JClass {attr = attrTop,
+                            jtype, extend = Nothing, implement = [],
+                            defs = concat subDefs}
+    stio [JComment (nice sym g), result]
 --
 --{--
 -- * Code for type classes
@@ -1130,10 +1163,11 @@ strict x = case boxed x of
 --
 --symCode binds (sym@SymV {nativ = Just item}) = methClass sym
 --
------ unimplemented items produce a comment
---symCode binds sym = do
---    g <- getST
---    stio [JComment (nice sym g)]
+--- unimplemented items produce a comment and an error message
+symCode binds sym = do
+    g <- getST
+    U.error sym.pos ("Can't generate code for symbol " ++ nice sym g)
+    stio [JComment (nice sym g)]
 --
 --latinF = "ƒ"
 --
@@ -2226,59 +2260,6 @@ strict x = case boxed x of
 --genFunction sym rmode args binds = error "genFunction: no function"
 --
 --{--
--- * This data structure describes mode, java type and java expression associated with
--- * some frege item. The task of code generation is to create, combine and
--- * manipulate such bindings. Many code generating functions will take
--- * a ('Tree' 'Symbol' 'Binding') of current bindings as last parameter.
--- -}
---data Binding = !Bind {mode :: RMode, ftype :: Sigma, jtype :: JType, jex :: JExpr}
---instance Nice Binding where
---    nice (Bind {mode, ftype, jtype, jex}) g = "Bind {" ++ show mode ++ ", "
---                                            ++ ftype.nice g ++ ", "
---                                            ++ showJty jtype ++  ", "
---                                            ++ showJex jex ++ "}"
---
------ tell how strict this java type can get
---maxStrict jt = case strict jt of
---    Nativ _ _  -> RNative
---    _          -> RBoxed
---
------ bring a java expression to boxed mode
---toBoxed (bind@Bind {mode=RNative, jex = JExMem jx "j"}) = bind.{mode = RBoxed, jtype <- boxed, jex = jx}
---toBoxed (bind@Bind {mode=RNative, jtype}) = case boxed jtype of
---    bt@Ref (JName "" bx) t -> bind.{mode=RBoxed, jtype = bt,
---                                jex = JInvoke (JStMem (JName bx "mk") t) [bind.jex]}
---    other -> bind.{mode=RBoxed, jtype = other}      -- questionable whether this is right
---toBoxed (bind@Bind {mode=RLazy}) = bind.{mode=RBoxed, jtype <- boxed,
---                                    jex =JInvoke (JExMem bind.jex "_e") []}
---toBoxed bind = bind
---
------ bring a java expression to desired strictness mode
---toMode RLazy (bind@Bind {mode})
---    | mode == RNative = toBoxed bind
---    | otherwise = bind
---toMode RBoxed bind = toBoxed bind
---toMode RNative (bind@Bind {mode}) = case maxStrict bind.jtype of
---    RBoxed -> toBoxed bind
---    RNative
---        | mode == RLazy  =  bind.{mode=RNative, jtype <- strict,
---                                    jex = JExMem (toBoxed bind).jex "j"}
---        | mode == RBoxed =  bind.{mode=RNative, jtype <- strict,
---                                    jex = JExMem bind.jex "j"}
---        | otherwise = bind
---    _ -> error "toMode RNative: unexpected result from maxStrict"
---
---{--
--- *  make a binding strict
--- -}
---strictBind bind = toMode RNative bind
---boxedBind  bind = toBoxed bind
---notStrict (bind@Bind {mode=RNative}) = toBoxed bind
---notStrict bind = bind
---notLazy   (bind@Bind {mode=RLazy}) = toBoxed bind
---notLazy   bind = bind
---
---{--
 -- * [usage] @realize bind@
 -- *
 -- * code to create a local variable and an updated bind
@@ -2299,10 +2280,6 @@ strict x = case boxed x of
 --            nbind = bind.{jex = JAtom vname}
 --        stio (nbind, [sComment ("realize " ++ name ++ " bound to " ++ nice bind g), JLocal member])
 --
------ show a java expression
---showJex jex | cheap jex = PP.pretty 1000 (anno jex)
---            | otherwise = "complicated java expression"
---showJty jty = PP.pretty 1000 (anno jty)
 --
 ----- make a statement comment
 --sComment = (JLocal • JComment)

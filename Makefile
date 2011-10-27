@@ -261,7 +261,7 @@ RTDIR    = build/frege/rt
 RUNTIME  = build/frege/MD.class    $(COMPF)/JavaUtils.class \
 		$(RTDIR)/Value.class       $(RTDIR)/Lazy.class        $(RTDIR)/Unknown.class \
 		$(RTDIR)/Val.class         $(RTDIR)/Box.class \
-		$(RTDIR)/Lambda.class      $(RTDIR)/Result.class      /$(RTDIR)/MH.class \
+		$(RTDIR)/Lambda.class      $(RTDIR)/Result.class      $(RTDIR)/MH.class \
 		$(RTDIR)/Boxed.class       $(RTDIR)/Constant.class    $(RTDIR)/Ref.class \
 		$(RTDIR)/Fun.class         $(RTDIR)/Fun1.class        $(RTDIR)/Fun2.class \
 		$(RTDIR)/Fun3.class        $(RTDIR)/Fun4.class \
@@ -276,6 +276,15 @@ RUNTIME  = build/frege/MD.class    $(COMPF)/JavaUtils.class \
 		$(RTDIR)/Fun21.class       $(RTDIR)/Fun22.class \
 		$(RTDIR)/Fun23.class       $(RTDIR)/Fun24.class \
 		$(RTDIR)/Fun25.class       $(RTDIR)/Fun26.class \
+		$(RTDIR)/Prod1.class    $(RTDIR)/Prod2.class      $(RTDIR)/Prod3.class \
+		$(RTDIR)/Prod4.class    $(RTDIR)/Prod5.class      $(RTDIR)/Prod6.class \
+		$(RTDIR)/Prod7.class    $(RTDIR)/Prod8.class      $(RTDIR)/Prod9.class \
+		$(RTDIR)/Prod10.class   $(RTDIR)/Prod11.class     $(RTDIR)/Prod12.class \
+		$(RTDIR)/Prod13.class   $(RTDIR)/Prod14.class     $(RTDIR)/Prod15.class \
+		$(RTDIR)/Prod16.class   $(RTDIR)/Prod17.class     $(RTDIR)/Prod18.class \
+		$(RTDIR)/Prod19.class   $(RTDIR)/Prod20.class     $(RTDIR)/Prod21.class \
+		$(RTDIR)/Prod22.class   $(RTDIR)/Prod23.class     $(RTDIR)/Prod24.class \
+		$(RTDIR)/Prod25.class   $(RTDIR)/Prod26.class \
 		$(RTDIR)/Product1.class    $(RTDIR)/Product2.class      $(RTDIR)/Product3.class \
 		$(RTDIR)/Product4.class    $(RTDIR)/Product5.class      $(RTDIR)/Product6.class \
 		$(RTDIR)/Product7.class    $(RTDIR)/Product8.class      $(RTDIR)/Product9.class \
@@ -450,6 +459,58 @@ $(RTDIR)/Product24.class: frege/rt/Product24.java
 $(RTDIR)/Product25.class: frege/rt/Product25.java
 	$(JAVAC) -d build -cp build $?
 $(RTDIR)/Product26.class: frege/rt/Product26.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Prod1.class: frege/rt/Prod1.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Prod2.class: frege/rt/Prod2.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Prod3.class: frege/rt/Prod3.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Prod4.class: frege/rt/Prod4.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Prod5.class: frege/rt/Prod5.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Prod6.class: frege/rt/Prod6.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Prod7.class: frege/rt/Prod7.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Prod8.class: frege/rt/Prod8.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Prod9.class: frege/rt/Prod9.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Prod10.class: frege/rt/Prod10.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Prod11.class: frege/rt/Prod11.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Prod12.class: frege/rt/Prod12.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Prod13.class: frege/rt/Prod13.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Prod14.class: frege/rt/Prod14.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Prod15.class: frege/rt/Prod15.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Prod16.class: frege/rt/Prod16.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Prod17.class: frege/rt/Prod17.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Prod18.class: frege/rt/Prod18.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Prod19.class: frege/rt/Prod19.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Prod20.class: frege/rt/Prod20.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Prod21.class: frege/rt/Prod21.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Prod22.class: frege/rt/Prod22.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Prod23.class: frege/rt/Prod23.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Prod24.class: frege/rt/Prod24.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Prod25.class: frege/rt/Prod25.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Prod26.class: frege/rt/Prod26.java
 	$(JAVAC) -d build -cp build $?
 $(RTDIR)/SwingSupport.class: frege/rt/SwingSupport.java
 	$(JAVAC) -d build -cp build $?
