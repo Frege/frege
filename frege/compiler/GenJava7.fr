@@ -243,7 +243,8 @@ instance Anno JStmt where
 {--
  * A java expression
  -}
-data JExpr =
+type JExpr = JX
+data JX =
     JAtom {name :: String}              --- local variable, null, this, true, false, literal etc.
     | JNew JType [JExpr]                --- @new Foo(...)@
     | JNewClass JType [JExpr] [JDecl]   --- @new Foo(...) {...}@
@@ -256,6 +257,13 @@ data JExpr =
     | JUnop { op :: String, jex :: JExpr }              --- @!x@
     | JBin {j1 :: JExpr, op::String, j2 :: JExpr}       --- @a + b@
     | JQC {j1 :: JExpr, j2 :: JExpr, j3 :: JExpr}       --- a ? b : c
+    where
+        --- create a 'JAtom'
+        atom   = JAtom
+        invoke = flip JInvoke
+        new    = flip JNew
+        cast   = JCast
+
 
 
 junop = constructor (JUnop "!" (JAtom "null"))
@@ -391,9 +399,9 @@ showJex jex | cheap jex = PP.pretty 1000 (anno jex)
 showJty jty = PP.pretty 1000 (anno jty)
 
 
------ changes 'JName' of a 'Ref' so that it is suitable for the place where it is defined
---defining (t@Ref {jname}) = t.{jname <- JName.{qual=""}, targs <- map introduce}
---defining x = x
+--- changes 'JName' of a 'Ref' so that it is suitable for the place where it is defined
+defining (t@Ref {jname}) = t.{jname <- JName.{qual=""}}   --, targs <- map introduce-}
+defining x = x
 ----- like defining, but suitable for type classes, TArgs will not extend Lazy
 --definingTC (t@Ref {jname}) = t.{jname <- JName.{qual=""}}
 --definingTC x = x
@@ -496,6 +504,7 @@ memNames = xxxNames "mem"
 
 --- the @Val@ type
 jtVal    = Ref {jname = JName "" "Val", targs = []}
+
 --- the @Lazy<Val>@ type
 lazyVal = lazy jtVal
 
@@ -780,17 +789,17 @@ ppSS xss = foreach (concat xss) (pp • anno)
 --                            args, body = JBlock stmts }
 --            stio [mMeth]
 --        sonst -> stio []
---
------ the @_c@ method
------ >final public int _c() { return n; }
---cMethod n = atomMethod "_c" (Nativ "int" []) (show n)
---{--
--- * [usage] @atomMethod name type atom@
--- * [returns] a 'JMethod' of the form @final public /type/ /name/() { return /atom/; }@
--- -}
---atomMethod s jt atom = JMethod {attr = attrs [JFinal, JPublic], gargs=[], jtype = jt,
---                    name = s, args=[], body = JBlock [ JReturn (JAtom atom) ]}
---
+
+--- the @_c@ method
+--- >final public int _c() { return n; }
+cMethod n = atomMethod "_c" (Nativ "int" []) (show n)
+{--
+ * [usage] @atomMethod name type atom@
+ * [returns] a 'JMethod' of the form @final public /type/ /name/() { return /atom/; }@
+ -}
+atomMethod s jt atom = JMethod {attr = attrs [JFinal, JPublic], gargs=[], jtype = jt,
+                    name = s, args=[], body = JBlock [ JReturn (JAtom atom) ]}
+
 ----- returns @SuppressWarnings("unchecked") public final <x,y> T<x,y> coerce() { return (T<x,y>) this; }@
 --coerceMethod typ = JMethod { attr = attrs [JUnchecked, JPublic, JFinal],
 --                    gargs = JType.targs typ,
@@ -798,128 +807,106 @@ ppSS xss = foreach (concat xss) (pp • anno)
 --                    name = "coerce", args = [],
 --                    body = JBlock [JReturn (JCast typ (JAtom "this"))]}
 --
---{--
--- * [usage] @conGetter qname@
--- * [return] the name of the method that gets the variant
--- * [example] @conGetter (MName tname "Con")@ evaluates to @"_Con"@
--- -}
---conGetter (MName tname base) = "_" ++ mangled base
---conGetter _ = error "conGetter: no member"
---
---{--
--- * [usage] @variantType g jtype symd@
--- * [return] the type of the variant, i.e. @tMaybe.dJust<a>@, if jtype is the jt of the type
--- -}
---variantType :: Global -> JType -> Symbol -> JType
---variantType g jtype symd = jtype.{jname = U.javaName g (Symbol.name symd)}
---
---
---{--
--- * Code for data constructors
--- *
--- * - For nullary constructors, a subclass of @Constant@ is derived that contains a singleton and
--- * an appropriate @mk@ method.
--- * - For non-strict constructors with arity > 0, a subclass of @Product@/n/
--- *   with a static @mk@ method is derived.
--- * - For strict constructors, the members are generated directly.
--- * - For constructors with arity > 0 a singleton @Fun@/n/ that calls the
--- *   @mk@ method is created, also a static @n@ method to get the function.
--- -}
---conCode symt cons (sym@SymD {flds, cid}) = do       -- nullary
---    g <- getST
---    symtjt     <-  sigmaJT (Symbol.typ symt)
---
---
---    let jtype       = variantType g symtjt sym
---        (_, argtys) = U.returnType sym.typ.rho
---        struct      = sym.strsig.isStrict
---    argjts <- mapSt subSigmaJT argtys
---    funty  <- sigmaJT sym.typ
---
---    let djtype = defining jtype
---        nogen  = erased jtype
---        arity  = length flds
---        comment = JComment (nice sym g)
---        result = sumCon
---        sumCon = JClass {attr = attrs [JStatic, JPublic, JFinal],
---                            jtype = djtype, extend = ext, implement = imp, defs}
---        !ext | arity == 0 = Just (Ref {jname=JName "" "Constant", targs=[]})
---             | struct     = Nothing
---             | otherwise  = Just (Ref {jname=JName "" ("Product" ++ show arity),
---                                      targs=argjts})
---        imp = [symtjt]
---
---        defs = [comment, constr, cMethod cid,
---                    atomMethod "_v" jtype "this",
---                    atomMethod "_e" jtype "this",
---                    single, make] ++ fun ++ getters ++ members
---        !single | arity == 0 = JMember {attr = attrs [JPrivate, JStatic],
---                                        jtype = nogen,
---                                        name = "single",
---                                        init = Just (JNew nogen [])}
---                | otherwise = JMember {attr = attrs [JPrivate, JStatic],
---                                        jtype = erased cclass.jtype,
---                                        name = "single",
---                                        init = Just (JNew (Ref (JName "" "Construct") []) [])}
---
---        cclass = JClass {attr = attrs [JPublic, JStatic],
---                                    jtype = Ref (JName "" "Construct") jtype.targs,
---                                    extend = Just funty,
---                                    implement = [],
---                                    defs = [rMethod]}
---        worker  = (workerMethod g sym).{targs = jtype.targs}
---        rMethod = JMethod {attr = attrs [JPublic, JFinal], gargs = [], jtype, name = "r",
---                            args = reverse constrargs,
---                            body = JBlock [JReturn (JInvoke worker rargs)]}
---        nMethod = JMethod {attr = attrs [JUnchecked, JPublic, JFinal, JStatic],
---                            gargs = jtype.targs, jtype = cclass.jtype, name = "n",
---                            args = [],
---                            body = JBlock [JReturn (JCast cclass.jtype (JAtom "single"))]}
---        !fun | arity == 0 = []
---            | otherwise = [cclass, nMethod]
---
---        !make | arity == 0 = JMethod {attr = attrs [JUnchecked, JPublic, JFinal, JStatic],
---                                    gargs = jtype.targs, jtype, name = "mk",
---                                    args = [],
---                                    body = JBlock [JReturn (JCast jtype (JAtom "single"))]}
---              | struct     = JMethod {attr = attrs [JPublic, JFinal, JStatic],
---                                    gargs = jtype.targs, jtype, name = "mk",
---                                    args = structargs,
---                                    body = JBlock [JReturn (JNew jtype args)]}
---              | otherwise  = JMethod {attr = attrs [JPublic, JFinal, JStatic],
---                                    gargs = jtype.targs, jtype, name = "mk",
---                                    args = constrargs,
---                                    body = JBlock [JReturn (JNew jtype args)]}
---
---        constrargs = [ (attrFinal, ty, lazy jt, n) |
---                            (jt, (ty, n)) <- zip argjts (zip argtys argNames) ]
---        args = take arity (map JAtom argNames)
---        structargs = [ (attrFinal, ty, strict jt, n) |
---                            (jt, (ty, n)) <- zip argjts (zip argtys argNames) ]
---        rbinds = [ Bind RLazy sig jt (JAtom n) | (_,sig,jt,n) <- constrargs ]
---        sargs = map (Binding.jex • strictBind) rbinds
---        rargs = if struct then sargs else args
---        constr = JConstr {attr = attrs [JPrivate], jtype = jtype,
---                            args = if struct then structargs else constrargs,
---                            body = JBlock super}
---        !super | arity == 0 = []
---               | struct = take (length args) (zipWith JAssign
---                                                    (map JAtom memNames)
---                                                    (map JAtom argNames))
---               | otherwise = [JEx (JInvoke (JAtom "super") args)]
---        getters = -- if symt.product then [] else
---                    atomMethod (conGetter sym.name) jtype "this" :
---                    [ atomMethod (conGetter (Symbol.name con))
---                                 (variantType g symtjt con) "null"
---                         | con <- cons, Symbol.sid con != sym.sid ]  -- other constructors
---        members | struct =  uMethod : zipWith member argjts memNames
---                | otherwise = []
---                where uMethod = atomMethod "_u" (Nativ "boolean" []) "false"
---        member jt name = JMember {attr = attrs [JFinal, JPublic],
---                                    jtype = strict jt,
---                                    name, init = Nothing}
---    stio [result]
---conCode symt cons nocon = error "conCode: no Con"
+{--
+ * [usage] @conGetter qname@
+ * [return] the name of the method that gets the variant
+ * [example] @conGetter (MName tname "Con")@ evaluates to @"_Con"@
+ -}
+conGetter (MName tname base) = "_" ++ mangled base
+conGetter _ = error "conGetter: no member"
+
+
+{--
+ * [usage] @variantType g jtype symd@
+ * [return] the type of the variant, i.e. @tMaybe.dJust<a>@, if jtype is the jt of the type
+ -}
+variantType :: Global -> JType -> Symbol -> JType
+variantType g jtype symd = jtype.{jname = U.javaName g (Symbol.name symd)}
+
+
+{--
+  Code for data constructors
+
+  - For nullary constructors, a subclass of @Val@ is derived that contains a singleton and
+    an appropriate @mk@ method.
+  - For non-strict constructors with arity > 0, a subclass of @Prod@/n/
+    with a static @mk@ method is derived.
+  - For strict constructors, the members are generated directly.
+ -}
+conCode symt cons (sym@SymD {flds, cid}) = do
+    g <- getST
+    symtjt <- sigmaJT (Symbol.typ symt)
+
+
+    let jtype       = variantType g symtjt sym
+        (_, argtys) = U.returnType sym.typ.rho
+        struct      = sym.strsig.isStrict
+    argjts <- mapSt sigmaJT argtys
+    funty  <- sigmaJT sym.typ
+
+    let djtype = defining jtype
+        arity  = length flds
+        comment = JComment (nice sym g)
+        result = sumCon
+        sumCon = JClass {attr = attrTop,
+                            jtype = djtype, extend = ext, implement = imp, defs}
+        !ext | arity == 0 = Just jtVal
+             | struct     = Nothing
+             | otherwise  = Just (Ref {jname=JName "" ("Prod" ++ show arity),
+                                      targs=[]})
+        imp = [symtjt]
+
+        defs = [comment, constr, cMethod cid, make]
+                 ++ single ++ getters ++ members
+        single | arity == 0 = [JMember {attr = attrs [JFinal, JPrivate, JStatic],
+                                        jtype = djtype,
+                                        name = "single",
+                                        init = Just (JX.new [] jtype)}]
+               | otherwise = []
+        worker  = (workerMethod g sym).{targs = jtype.targs}
+
+
+        !make | arity == 0 = JMethod {attr = attrs [JUnchecked, JPublic, JFinal, JStatic],
+                                    gargs = jtype.targs, jtype = djtype, name = "mk",
+                                    args = [],
+                                    body = JBlock [JReturn (JAtom "single")]}
+              | struct     = JMethod {attr = attrs [JPublic, JFinal, JStatic],
+                                    gargs = jtype.targs, jtype = djtype, name = "mk",
+                                    args = structargs,
+                                    body = JBlock [JReturn (JNew jtype args)]}
+              | otherwise  = JMethod {attr = attrs [JPublic, JFinal, JStatic],
+                                    gargs = jtype.targs, jtype = djtype, name = "mk",
+                                    args = constrargs,
+                                    body = JBlock [JReturn (JNew jtype args)]}
+
+        constrargs = [ (attrFinal, ty, lazy jt, n) |
+                            (jt, (ty, n)) <- zip argjts (zip argtys argNames) ]
+        args = take arity (map JAtom argNames)
+        structargs = [ (attrFinal, ty, strict jt, n) |
+                            (jt, (ty, n)) <- zip argjts (zip argtys argNames) ]
+        rbinds = [ Bind RLazy sig jt (JAtom n) | (_,sig,jt,n) <- constrargs ]
+        sargs = map (Binding.jex • strictBind) rbinds
+        rargs = if struct then sargs else args
+        constr = JConstr {attr = attrs [JPrivate], jtype = djtype,
+                            args = if struct then structargs else constrargs,
+                            body = JBlock super}
+        !super | arity == 0 = []
+               | struct = take (length args) (zipWith JAssign
+                                                    (map JAtom memNames)
+                                                    (map JAtom argNames))
+               | otherwise = [JEx (JInvoke (JAtom "super") args)]
+        getters = -- if symt.product then [] else
+                    atomMethod (conGetter sym.name) jtype "this" :
+                    [ atomMethod (conGetter (Symbol.name con))
+                                 (variantType g symtjt con) "null"
+                         | con <- cons, Symbol.sid con != sym.sid ]  -- other constructors
+        members | struct =  zipWith member argjts memNames
+                | otherwise = []
+        member jt name = JMember {attr = attrs [JFinal, JPublic],
+                                    jtype = strict jt,
+                                    name, init = Nothing}
+    stio [result]
+conCode symt cons nocon = error "conCode: no Con"
 --
 {--
  * Code for data types
@@ -948,8 +935,9 @@ symCode binds (sym@SymT {enum=true}) = do
         conDefs = [ JMember {attr = attrTop,
                         jtype = Ref (JName "" "Box.Int") [],
                         name = mangled name.base,
-                        init = Just (JInvoke (JStMem (JName "Box.Int" "mk") [])
-                                             [JAtom (show cid)])}
+                        init = Just (JX.invoke [JX.atom (show cid)]
+                                                (JStMem (JName "Box.Int" "mk") [])
+                                             )}
                       | SymD {name, cid} <- cons ]
     stio [JComment (nice sym g), result]
 
@@ -1007,11 +995,11 @@ symCode binds (sym@SymT {product=true}) = do                    -- product
             | struct = take (length args) (zipWith JAssign          -- m1 = arg1 ....
                                                     (map JAtom memNames)
                                                     (map JAtom argNames))
-            | otherwise  = [JEx (JInvoke (JAtom "super") args)]
+            | otherwise  = [(JEx • JX.invoke args • JX.atom) "super"]
         make    | struct     = JMethod {attr = attrs [JPublic, JFinal, JStatic],
                         gargs = jtype.targs, jtype, name = "mk",
                         args = structargs,
-                        body = JBlock [JReturn (JNew jtype args)]}
+                        body = JBlock [(JReturn • JX.new args) jtype]}
                 | otherwise = JMethod {attr = attrs [JPublic, JFinal, JStatic],
                         gargs = jtype.targs, jtype, name = "mk",
                         args = constrargs,
@@ -1025,31 +1013,31 @@ symCode binds (sym@SymT {product=true}) = do                    -- product
                          extend = Just ext, implement = imp, defs}
     stio [JComment (nice sym g), result]
 
---symCode binds (sym@SymT {nativ=Nothing}) = do                   -- sum type
---    g <- getST
---    let vals = sortBy (comparing Symbol.name) (values sym.env)
---        cons = [ con | con@SymD {sid} <- vals ]
---        funs = [ sym | sym@SymV {sid} <- vals, not (Symbol.{flds?} sym), Symbol.depth sym > 0]
---        cafs = [ sym | sym@SymV {sid} <- vals, not (Symbol.{flds?} sym), Symbol.depth sym == 0]
---    funDefs <- mapSt (symCode binds) funs
---    cafDefs <- mapSt (symCode binds) cafs
---    conDefs <- mapSt (conCode sym cons) cons
---    symjt   <- sigmaJT sym.typ
---    let jtype = symjt.{jname = U.javaName g sym.name}
---        getCons = [JMethod {attr = attrs [JPublic], gargs=[],
---                            jtype = variantType g jtype con,
---                            name = conGetter (Symbol.name con),
---                            args = [], body = JEmpty}
---            | con <- cons ]
---        mClass | null cafDefs = []
---               | otherwise    = [JClass {attr = attrs [JPublic, JStatic, JFinal],
---                                    jtype = Ref (JName "" "m") [],
---                                    extend = Nothing, implement = [],
---                                    defs = concat cafDefs}]
---        result = JInterface {attr = attrs [JPublic], jtype,
---                            implement = [jtValue, lazy jtype],
---                            defs = getCons ++ concat conDefs ++ concat funDefs ++ mClass}
---    stio [JComment (nice sym g), result]
+symCode binds (sym@SymT {nativ=Nothing}) = do                   -- sum type
+    g <- getST
+    let vals = sortBy (comparing Symbol.name) (values sym.env)
+        cons = [ con | con@SymD {sid} <- vals ]
+        funs = [ sym | sym@SymV {sid} <- vals, not (Symbol.{flds?} sym), Symbol.depth sym > 0]
+        cafs = [ sym | sym@SymV {sid} <- vals, not (Symbol.{flds?} sym), Symbol.depth sym == 0]
+    funDefs <- mapSt (symCode binds) funs
+    cafDefs <- mapSt (symCode binds) cafs
+    conDefs <- mapSt (conCode sym cons) cons
+    symjt   <- sigmaJT sym.typ
+    let jtype = symjt.{jname = U.javaName g sym.name}
+        getCons = [JMethod {attr = attrs [JPublic], gargs=[],
+                            jtype = variantType g jtype con,
+                            name = conGetter (Symbol.name con),
+                            args = [], body = JEmpty}
+            | con <- cons ]
+        mClass | null cafDefs = []
+               | otherwise    = [JClass {attr = attrs [JPublic, JStatic, JFinal],
+                                    jtype = Ref (JName "" "m") [],
+                                    extend = Nothing, implement = [],
+                                    defs = concat cafDefs}]
+        result = JInterface {attr = attrs [JPublic], jtype,
+                            implement = [lazyVal],
+                            defs = getCons ++ concat conDefs ++ mClass ++ concat funDefs}
+    stio [JComment (nice sym g), result]
 
 symCode binds (sym@SymT {sid, nativ = Just _}) = do                               -- nativ
     g <- getST
@@ -1303,21 +1291,21 @@ symCode binds sym = do
 --
 --
 --
---{--
--- * return the method name of the worker function for the given symbol
--- -}
---workerMethod g (sym@SymD {name}) = case U.javaName g name of
---        jname -> JStMem (U.memberOf jname "mk") []
----- workerMethod g (sym@SymV {name, nativ=Just item}) =
---workerMethod g (sym@SymV {name})
---    | sym.rkind `band` 6 == 0 = JAtom "r"
---    | Local _ <- name = JAtom "w"
---    | null sym.typ.rho.context = case U.javaName g name of
---        jname -> JStMem (U.memberOf jname "w") []
---    | otherwise = JAtom "w"
---workerMethod g _ = error "workerMethod: no SymV"
---
---
+{--
+ * return the method name of the worker function for the given symbol
+ -}
+workerMethod g (sym@SymD {name}) = case U.javaName g name of
+        jname -> JStMem (U.memberOf jname "mk") []
+-- workerMethod g (sym@SymV {name, nativ=Just item}) =
+workerMethod g (sym@SymV {name})
+    | sym.rkind `band` 6 == 0 = JAtom "r"
+    | Local _ <- name = JAtom "w"
+    | null sym.typ.rho.context = case U.javaName g name of
+        jname -> JStMem (U.memberOf jname "w") []
+    | otherwise = JAtom "w"
+workerMethod g _ = error "workerMethod: no SymV"
+
+
 --{--
 -- * @makeConstraintDef (Ctx cname tau) "ctx3"@ = final Ccname<tau> ctx3
 -- -}
