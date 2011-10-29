@@ -74,7 +74,7 @@ public final class MH extends Box<MethodHandle> {
     }
 
     /**
-        <p> wrapper for <code>java.lang.invoke.MethodHandles.Lookup.findVirtual(Class,String,MethodType)</code></p>
+        <p> wrapper for {@link java.lang.invoke.MethodHandles.Lookup#findVirtual}</p>
         @return the desired method handle
     */
     final static public java.lang.invoke.MethodHandle findVirtual(final Class<?> in,
@@ -91,7 +91,7 @@ public final class MH extends Box<MethodHandle> {
     }
 
     /**
-        <p> wrapper for <code>java.lang.invoke.MethodHandles.Lookup.findGetter(Class,String,Class)</code></p>
+        <p> wrapper for {@link java.lang.invoke.MethodHandles.Lookup#findGetter}</p>
         @return the desired method handle
     */
     final static public java.lang.invoke.MethodHandle  findGetter(final Class<?> in,
