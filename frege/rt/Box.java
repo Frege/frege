@@ -87,6 +87,17 @@ public class Box<T>  extends Val {
     
 
     public String toString() { return j.toString(); }
+    
+    /**
+     * evaluate a {@link Lazy} {@link Val} to Boxed form
+     */
+    @SuppressWarnings("unchecked")
+    final public static <V> Box<V> boxed(Lazy<Val> lazy) {
+        return (Box<V>) lazy._e();
+    }
+    // @SuppressWarnings("unchecked")
+    final public static <V> V strict(Lazy<Val> lazy) { return Box.<V>boxed(lazy).j; }
+     
 
     /**
      * <p> Create an array with T elements. </p>
