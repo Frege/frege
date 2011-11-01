@@ -117,7 +117,7 @@ public final class MH extends Box<MethodHandle> {
         g :: (Int -> Int) -> Int -> (Int -> Int)
         g h i j = (h i) + j
         
-        sum = fold (0+) g [1,2,3]
+        sum = fold g (0+) [1,2,3]
         </pre>
         
         <p> But in fold, (f s) could already be a function.

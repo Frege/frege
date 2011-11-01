@@ -57,7 +57,7 @@ protected version = v "$Revision$" where
     v _ = 0
 
 
-import frege.List (Tree, values, keys, each, insert, lookup)
+import frege.List (Tree, values, keys, each, insert, lookup, insertkv)
 
 import frege.compiler.Data          as D
 import frege.compiler.Utilities     as U()
@@ -258,12 +258,36 @@ data JX =
     | JBin {j1 :: JExpr, op::String, j2 :: JExpr}       --- @a + b@
     | JQC {j1 :: JExpr, j2 :: JExpr, j3 :: JExpr}       --- a ? b : c
     where
+        ---  Syntactic precedence of java constructs
+        ---  Higher numbers mean more tight binding.
+        prec JQC{}     = 1
+        prec JBin{}    = 2
+        prec JUnop{}   = 3
+        prec JCast{}   = 4
+        prec JExMemG{} = 9
+        prec JExMem{}  = 9
+        prec JStMem{}  = 9
+        prec JInvoke{} = 9
+        prec JAtom{}   = 9
+        prec JNew{}    = 7
+        prec JNewClass{} = 7
+        prec JNewArray{} = 7
+        --- print @x@ or @(x)@ depending on relative precedences
+        subex :: JExpr -> JExpr -> PP.DOCUMENT
+        subex e x | prec x < prec e = text "(" <> anno x <> text ")"
+                  | otherwise                      = anno x
         --- create a 'JAtom'
         atom   = JAtom
+        --- @invoke args expr@ ---> expr.(args)
         invoke = flip JInvoke
+        --- @new args type@    ---> new type(args)
         new    = flip JNew
+        --- @cast type expr@   ---> (type) expr
         cast   = JCast
+        --- @xmem "name" expr@  ---> expr.name
         xmem   = flip JExMem
+        --- @static X.y@ ---> X.y
+        static = flip JStMem []
 
 
 
@@ -273,9 +297,6 @@ data JX =
 --paren j | constructor j >= junop = text "(" <> anno j <> text ")"
 --        | otherwise = anno j
 
-subex :: JExpr -> JExpr -> PP.DOCUMENT
-subex e x | constructor x >= constructor e = text "(" <> anno x <> text ")"
-          | otherwise                      = anno x
 
 instance Anno JExpr where
     anno (JAtom {name}) = text name
@@ -289,20 +310,20 @@ instance Anno JExpr where
                             <>  text "[" <> anno ex <> text "]"
     anno (JInvoke (JStMem (JName a b) gs) exs) = text a <~/> PP.nest 4 (
                                     text "." <> annoGenerics gs <> text b <> annoArgList exs)
-    anno (e@JInvoke (JExMem jex s) exs) = subex e jex <~/> PP.nest 4 (
+    anno (e@JInvoke (JExMem jex s) exs) = e.subex jex <~/> PP.nest 4 (
                                     text "." <> text s <> annoArgList exs)
-    anno (e@JInvoke (JExMemG jex s gs) exs) = subex e jex <~/> PP.nest 4 (
+    anno (e@JInvoke (JExMemG jex s gs) exs) = e.subex jex <~/> PP.nest 4 (
                                     text "." <> annoGenerics gs <> text s <> annoArgList exs)
-    anno (e@JInvoke x exs) = subex e x <> annoArgList exs
-    anno (e@JCast jt x) = text "(" <> jt.anno <> text ")" <> subex e x
+    anno (e@JInvoke x exs) = e.subex x <> annoArgList exs
+    anno (e@JCast jt x) = text "(" <> jt.anno <> text ")" <> e.subex x
     anno (JStMem (JName a b) gs) = text a <> text "." <> annoGenerics gs <> text b
-    anno (e@JExMemG jex s gs) = subex e jex <> text "." <> annoGenerics gs <> text s
-    anno (e@JExMem jex s)     = subex e jex <> text "." <> text s
-    anno (un@JUnop op j1) = text op <+> subex un j1
-    anno (bin@JBin j1 op j2) = subex bin j1 <+> text op <+> subex bin j2
-    anno (jqc@JQC j1 j2 j3) = subex jqc j1
-                        <+> PP.nest 4    (text "?" <+> subex jqc j2
-                                    <+/> (text ":" <+> subex jqc j3))
+    anno (e@JExMemG jex s gs) = e.subex jex <> text "." <> annoGenerics gs <> text s
+    anno (e@JExMem jex s)     = e.subex jex <> text "." <> text s
+    anno (un@JUnop op j1) = text op <+> un.subex j1
+    anno (bin@JBin j1 op j2) = bin.subex j1 <+> text op <+> bin.subex j2
+    anno (jqc@JQC j1 j2 j3) = jqc.subex j1
+                        <+> PP.nest 4    (text "?" <+> jqc.subex j2
+                                    <+/> (text ":" <+> jqc.subex j3))
 
 {--
  * Check if a 'JExpr' is cheap enough so that we can save a local variable
@@ -584,7 +605,7 @@ constClass g = mainClass g ++ "C"
 flLigatur = "ﬂ"
 fiLigatur = "ﬁ"
 
-{-
+{--
     create a lazy method for the given symbol
 -}
 lazyMeth :: Symbol -> StG JDecl
@@ -620,6 +641,26 @@ lazyMeth sym | sym.{flds?} || sym.{rkind?} = do
                             jtype, args, body }
         stio result
 lazyMeth sym = error "lazyMeth: no SymV"
+
+{--
+    Require that there be a message handle for a symbol at runtime and return a 'Binding' for that handle.
+    The message handle will invoke the wrapper method of the symbol.
+-}
+reqMH :: Symbol -> StG Binding
+reqMH sym = do
+        g <- getST
+        case lookup g.gen.mhs sym of
+            Just jname -> stio (bind jname)
+            Nothing -> case wrapperMethod g sym of
+                JName clazz base
+                    | clazz == mainClass g = enternew (JName clazz (fiLigatur ++ base))
+                other = enternew other.{qual = mainClass g,
+                                        base <- ((fiLigatur ++ show sym.sid)++)}
+    where
+        bind jname = Bind {mode=RBoxed, ftype=sym.typ, jtype=jtFun, jex=JX.static jname}
+        enternew jname = do
+            changeST Global.{gen <- GenSt.{mhs <- insertkv sym jname}}
+            stio (bind jname)
 
 pass :: StG (String, Int)
 pass = do
@@ -1259,41 +1300,41 @@ abstractFun _ _ = undefined
   4. substitute it in instace member type
   5. reconstruct forall bound in instance member type
  -}
---fakeInstSigma (symc@SymC{supers}) (symi@SymI{sid}) (sym@SymV{typ}) = do
---    g <- getST
---    let symjsb      = sym.typ.bound
---        instjsb     = symi.typ.bound
---
---    let newvars = [ TVar {pos=sym.pos, var} |
---                        var <- U.allBinders,
---                        var `notElem` instjsb,
---                        var `notElem` symjsb ]
---        tree1 = Tree.fromList (zip symjsb newvars)
---    rho1 <- U.substRho tree1 sym.typ.rho
---    U.logmsg TRACEG sym.pos ("renamed  " ++ nicer sym.typ g ++ "  to  " ++ nicer rho1 g)
---
---    let classes = symc.name:symc.supers
---        memc = head [ sym | c <- classes, sym <- ((MName c sym.name.base).findit g).toList ]
---    symc <- U.findC memc.name.tynm
---    let clas = symc.tau
---        tree2 = U.unifySigma g memc.typ (ForAll [] rho1.{context=[]})
---        itau    = unJust (tree2.lookupS clas.var)       -- member type MUST mention it, see Classes.fr
---        sigma2a = ForAll [] (RhoTau [] itau)
---        validSigma rho = ForAll (U.freeTVars [] rho) rho
---        sigma2 = validSigma sigma2a.rho
---    U.logmsg TRACEG sym.pos ("class var  " ++ clas.var
---            ++ "  in  " ++ nicer memc.typ g
---            ++ " corresponds to  " ++ nicer sigma2 g)
---
---    let tree3 = U.unifySigma g sigma2 symi.typ
---    rho4   <- U.substRho tree3 rho1
---
---    let sigma4 = validSigma rho4      -- provide type variables
---        bound  = filter (`elem` sigma4.bound) instjsb ++ filter (`notElem` instjsb) sigma4.bound
---        sigma5 = ForAll bound rho4      -- binds in correct order
---    U.logmsg TRACEG sym.pos ("fake type is  " ++ nicer sigma5 g)
---    stio sym.{typ=sigma5}
---fakeInstSigma _ _ _ = error "fakeInstSigma: bad args"
+fakeInstSigma (symc@SymC{supers}) (symi@SymI{sid}) (sym@SymV{typ}) = do
+    g <- getST
+    let symjsb      = sym.typ.bound
+        instjsb     = symi.typ.bound
+
+    let newvars = [ TVar {pos=sym.pos, var} |
+                        var <- U.allBinders,
+                        var `notElem` instjsb,
+                        var `notElem` symjsb ]
+        tree1 = Tree.fromList (zip symjsb newvars)
+    rho1 <- U.substRho tree1 sym.typ.rho
+    U.logmsg TRACEG sym.pos ("renamed  " ++ nicer sym.typ g ++ "  to  " ++ nicer rho1 g)
+
+    let classes = symc.name:symc.supers
+        memc = head [ sym | c <- classes, sym <- ((MName c sym.name.base).findit g).toList ]
+    symc <- U.findC memc.name.tynm
+    let clas = symc.tau
+        tree2 = U.unifySigma g memc.typ (ForAll [] rho1.{context=[]})
+        itau    = unJust (tree2.lookupS clas.var)       -- member type MUST mention it, see Classes.fr
+        sigma2a = ForAll [] (RhoTau [] itau)
+        validSigma rho = ForAll (U.freeTVars [] rho) rho
+        sigma2 = validSigma sigma2a.rho
+    U.logmsg TRACEG sym.pos ("class var  " ++ clas.var
+            ++ "  in  " ++ nicer memc.typ g
+            ++ " corresponds to  " ++ nicer sigma2 g)
+
+    let tree3 = U.unifySigma g sigma2 symi.typ
+    rho4   <- U.substRho tree3 rho1
+
+    let sigma4 = validSigma rho4      -- provide type variables
+        bound  = filter (`elem` sigma4.bound) instjsb ++ filter (`notElem` instjsb) sigma4.bound
+        sigma5 = ForAll bound rho4      -- binds in correct order
+    U.logmsg TRACEG sym.pos ("fake type is  " ++ nicer sigma5 g)
+    stio sym.{typ=sigma5}
+fakeInstSigma _ _ _ = error "fakeInstSigma: bad args"
 
 instFun :: Symbol -> Symbol -> QName -> StG [JDecl]
 instFun symc symt mname = do
@@ -1302,7 +1343,7 @@ instFun symc symt mname = do
     -- cmem  <-  U.findV (MName (Symbol.name symc) (QName.base mname))
     sym   <-  U.findV mname
     let orig = sym                                          -- save for later
-    -- sym   <-  fakeInstSigma symc symt sym
+    sym   <-  fakeInstSigma symc symt sym
 
     -- let bndsV = sym.typ.bound
     --    bndsI = (Symbol.typ symt).bound
@@ -1316,7 +1357,7 @@ instFun symc symt mname = do
         implies = impliesG g
         -- funtyp = ForAll bnds ((fst • U.returnTypeN 0) sym.typ.rho)
         ctxs = [ ctx | ctx <- sym.typ.rho.context,
-                    not (any (`implies` ctx) symt.typ.rho.context)]
+                       not (any (`implies` ctx) symt.typ.rho.context)]
         ourCtxNms = drop symt.typ.rho.context.length ctxNames   -- ctx3, ctx4, ....
     -- unless (null unmentioned) do
     --    U.warn sym.pos ("type of " ++ sym.nice g ++ " :: " ++ nicer sym.typ g
@@ -1327,14 +1368,11 @@ instFun symc symt mname = do
             Just (v@Vbl {name=MName cname bs})
                 | cname `elem` (symc.name:symc.supers),
                   Just (meth@SymV{}) <- v.name.findit g,    -- just class method
-                  isJust meth.nativ `or` isJust meth.expr = Just meth
-            other -> Nothing
-    -- let set = unJust (unJust sym.expr).typ
+                  isJust meth.nativ `or` isJust meth.expr = meth
+            other -> sym -- instance method
 
-    {- instMe <- case cmeth of
-        Just meth -> compiling sym (instSym0 false false sym.pos meth sym.typ)
-        other     -> compiling sym (instSym sym.pos orig sym.typ)
-    -}
+    mhbind <- reqMH cmeth
+
 
     let constrformal = map (curry (makeConstraintArg g)) (zip ctxs ourCtxNms)
     sjt          <- sigmaJT sym.typ
@@ -1346,7 +1384,11 @@ instFun symc symt mname = do
                             name = latinF ++ mangled sym.name.base,
                             args = constrformal,
                             body = JBlock ([JReturn impl])}
-        impl = JX.atom "null" -- (toBoxed instMe).jex
+        impl
+            | null constrargs = mhbind.jex
+            | otherwise = JX.new [bindto] jtFun
+            where bindto = fold app (JX.xmem "j" mhbind.jex) constrargs -- mh.j.bindTo(ctx1) ...
+        app x a = (JX.invoke [a] • JX.xmem "bindTo") x
     stio [JComment ((nice sym g) ++ " :: " ++ nice sym.typ g), result]
 
 
