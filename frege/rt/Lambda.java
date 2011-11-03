@@ -48,5 +48,17 @@ public abstract class Lambda {
     /**
      * <P>get a {@link java.lang.invoke.MethodHandle} that invokes this Lambdas worker</P>
      */
-    public abstract java.lang.invoke.MethodHandle handle();
+    public MH handle() {
+        try {
+            return MH.mk (
+                      java.lang.invoke.MethodHandles.lookup().bind(
+                            this,
+                            "eval",
+                            java.lang.invoke.MethodType.methodType(Val.class, Lazy.class)
+                        )
+                    );
+        } catch (Exception e) {
+            throw new Error("Can't make MH for lambda", e);
+        }
+    }
 }
