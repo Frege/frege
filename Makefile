@@ -205,7 +205,7 @@ CLASSES  =       $(COMPF1)/Scanner.class   $(COMPF1)/Classtools.class \
 		$(COMPF1)/Transdef.class   $(COMPF1)/TCUtil.class   \
 		$(COMPF1)/TAlias.class    $(COMPF1)/Classes.class \
 		$(COMPF1)/Transform.class $(COMPF1)/Typecheck.class \
-		$(COMPF1)/GenMeta.class   $(COMPF1)/GenJava.class $(COMPF1)/GenJava7.class
+		$(COMPF1)/GenMeta.class   $(COMPF1)/GenJava7.class $(COMPF1)/GenJava.class
 
 PRE1 = $(DIR1)/Prelude.class $(DIR1)/IO.class $(DIR1)/List.class $(DIR1)/Tuples.class
 
@@ -312,7 +312,7 @@ docu:       $(TOOLSF)/Doc.class \
 			$(DOCF)/Fixdefs.html    $(DOCF)/Import.html     $(DOCF)/Enter.html \
 			$(DOCF)/TAlias.html     $(DOCF)/Transdef.html   $(DOCF)/Classes.html \
 			$(DOCF)/Transform.html  $(DOCF)/Typecheck.html  $(DOCF)/TCUtil.html \
-			$(DOCF)/GenMeta.html    $(DOCF)/GenJava.html    $(DOCF)/GenJava7.html \
+			$(DOCF)/GenMeta.html    $(DOCF)/GenJava7.html    $(DOCF)/GenJava.html \
 			$(DOC)/lib/PP.html      $(DOC)/lib/ForkJoin.html \
 			$(DOC)/lib/Random.html  $(DOC)/lib/QuickCheck.html \
 			$(DOC)/tools/YYgen.html \

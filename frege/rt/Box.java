@@ -195,6 +195,150 @@ public class Box<T>  extends Val {
     }
 
     /**
+     * <p> Box primitive byte </p>
+     */
+    public final static class Byte extends Val {
+        private Byte(int c) { j = (byte)c; }
+        /** a cache for small ints */
+        private final static Byte[] small = new Byte[256];
+        static { for (int i=0; i < 128; i++) small[i] = new Byte(i); }
+        /** the primitive byte value boxed by this instance */
+        final public byte   j;
+        /**
+         * <p> box an int value </p>
+         *
+         * @return the boxed byte
+         */
+        final public static Byte mk(int c) {
+            if (c >= 0 && c < 128) return small[c];
+            return new Byte((byte)c);
+        }
+        /** <p>The int value. This is so that one can imagine that Int is
+         * declared as <code> data Int = 0 | 1 | 2 ... | -maxint | ... | -1</p>
+         * @return 0
+         */
+        final public int       _c() { return j; }
+
+        public String toString() { return "" + j; }
+
+        /**
+         * <p> Access array element. </p>
+         * @param arr the int array
+         * @param i   the index
+         * @return <code>arr[i]</code>
+         */
+        public static final int arrayGet(int[] arr, int i) { return arr[i]; }
+        /**
+         * <p> Get array length. </p>
+         * @param arr the byte array
+         * @return <code>arr.length</code>
+         */
+        public static final int arrayLen(byte[] arr) { return arr.length; }
+        /**
+         * <p> Create an array of type int[]. </p>
+         * @param size the size of the array
+         */
+        @SuppressWarnings("unchecked")
+        final public static byte[] arrayNew(int size) { return  new byte[size]; }
+
+        /**
+         * <p> Update array nondestructively. </p>
+         * @param arr the array
+         * @param i   index into arr
+         * @param v   new value to set at index i
+         * @return a new array that looks like the old one except that there is value v at index i
+         */
+        final public static byte[] arrayUpd(byte[] arr, int i, int v) {
+                byte[] r = arr.clone();
+                r[i] = (byte) v;
+                return r;
+        }
+        /**
+         * <p> Update array destructively. This method is <b>not</b> pure! </p>
+         * @param arr the array
+         * @param i   index into arr
+         * @param v   new value to set at index i
+         *
+         * <p>Changes the passed array, therefore it is not pure. Because the return type
+         * is <code>void</code> there is no way to make the frege compiler believe it is pure.</p>
+         */
+        final public static void arraySet(byte[] arr, int i, int v) { arr[i] = (byte) v; }
+    }
+    
+    
+    /**
+     * <p> Box primitive short </p>
+     */
+    public final static class Short extends Val {
+        private Short(short c) { j = c; }
+        /** a cache for small ints */
+        private final static Short[] small = new Short[256];
+        static { for (int i=0; i < 256; i++) small[i] = new Short((short)i); }
+        /** the primitive int value boxed by this instance */
+        final public short   j;
+        /**
+         * <p> box a short value </p>
+         *
+         * @return the boxed int
+         */
+        final public static Short mk(short c) {
+            if (c >= 0 && c < 256) return small[c];
+            return new Short(c);
+        }
+        /** <p>The int value. This is so that one can imagine that Short is
+         * declared as <code> data Short = 0 | 1 | 2 ... | -maxshort | ... | -1</p>
+         * @return 0
+         */
+        final public int       _c() { return j; }
+
+        public String toString() { return "" + j; }
+
+        /**
+         * <p> Access array element. </p>
+         * @param arr the int array
+         * @param i   the index
+         * @return <code>arr[i]</code>
+         */
+        public static final short arrayGet(short[] arr, int i) { return arr[i]; }
+        /**
+         * <p> Get array length. </p>
+         * @param arr the int array
+         * @return <code>arr.length</code>
+         */
+        public static final int arrayLen(short[] arr) { return arr.length; }
+        /**
+         * <p> Create an array of type int[]. </p>
+         * @param size the size of the array
+         */
+        @SuppressWarnings("unchecked")
+        final public static short[] arrayNew(int size) { return  new short[size]; }
+
+        /**
+         * <p> Update array nondestructively. </p>
+         * @param arr the array
+         * @param i   index into arr
+         * @param v   new value to set at index i
+         * @return a new array that looks like the old one except that there is value v at index i
+         */
+        final public static short[] arrayUpd(short[] arr, int i, short v) {
+                short[] r = arr.clone();
+                r[i] = v;
+                return r;
+        }
+        /**
+         * <p> Update array destructively. This method is <b>not</b> pure! </p>
+         * @param arr the array
+         * @param i   index into arr
+         * @param v   new value to set at index i
+         *
+         * <p>Changes the passed array, therefore it is not pure. Because the return type
+         * is <code>void</code> there is no way to make the frege compiler believe it is pure.</p>
+         */
+        final public static void arraySet(short[] arr, int i, short v) { arr[i] = v; }
+    }
+    
+
+    /**
      * <p> Box primitive int </p>
      */
     public final static class Int extends Val {

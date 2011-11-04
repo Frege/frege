@@ -52,8 +52,7 @@ import java.lang.invoke.MethodType;
  */
 
 public final class MH extends Box<MethodHandle> {
-    public MH(MethodHandle it) { super(it); }
-    
+    public MH(MethodHandle it) { super(it); } 
      
     /**
         <p> wrapper for {@link java.lang.invoke.MethodHandles.Lookup#findStatic}</p>
@@ -69,7 +68,7 @@ public final class MH extends Box<MethodHandle> {
                 MethodHandles.lookup().findStatic(in, name, type);
         }
         catch (Exception e) {
-            throw new Error("Can't get method handle for " + in.getName() + "." + name, e);
+            throw new Error("Can't get method handle for static method " + in.getName() + "." + name, e);
         }
     }
 
@@ -90,6 +89,23 @@ public final class MH extends Box<MethodHandle> {
         }
     }
 
+    /**
+        <p> wrapper for {@link java.lang.invoke.MethodHandles.Lookup#findStaticGetter}</p>
+        @return the desired method handle
+    */
+    final static public java.lang.invoke.MethodHandle  findStaticGetter(final Class<?> in,
+                                        final String name,
+                                        final Class<?> type) {
+        try {
+            return 
+                java.lang.invoke.MethodHandles.lookup().findStaticGetter(in, name, type);
+        }
+        catch (Exception e) {
+            // System.err.println(e.getMessage());
+            throw new Error("Can't get method handle for static field " + in.getName() + "." + name, e);
+        }
+    }
+    
     /**
         <p> wrapper for {@link java.lang.invoke.MethodHandles.Lookup#findGetter}</p>
         @return the desired method handle
