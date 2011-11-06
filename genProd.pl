@@ -9,7 +9,7 @@ my $j;
 while ($n < 27) {
     open J, ">frege/rt/Prod$n.java" or die "can't open $!";
     #my @targs = map { "T$_" } (1..$n);                  # T1, T2, T3
-    my @nargs = map {"final Lazy<Val> arg$_" } (1..$n); # final Lazy<T1> arg1, ...
+    my @nargs = map {"final Lazy<FV> arg$_" } (1..$n); # final Lazy<T1> arg1, ...
     my $cnargs = join (",", @nargs);                    # "final ... arg1, ...."
     my @args  = map { "arg$_" } (1..$n);                # arg1, arg2
     my $crargs = join(",", reverse @args);              # "arg2, arg1"
@@ -19,7 +19,7 @@ while ($n < 27) {
     my $p = $n-1;
     #my @ptargs = @targs; shift @ptargs;
     #my $cptargs = join(",", @ptargs);
-    my @pargs = map { "final Lazy<Val> arg$_" } (2..$n);
+    my @pargs = map { "final Lazy<FV> arg$_" } (2..$n);
     #my @rpargs = reverse @pargs;
     #my $crpargs = join(",", @rpargs);
     print J <<'LIZENZ';
@@ -73,7 +73,7 @@ TEXT
  * <p> Base class for values constructed with $n-ary constructors. </p>
  *
  * <p> This will be extended by constructors of sum types and by product types.
- *  Subclasses can overwrite the {\@link Value#_c} method.
+ *  Subclasses can overwrite the {\@link FV#constructor} method.
  * </p>
  *
  * <p> Note that Prod<sub><em>$n</em></sub> is not a subclass of Prod<sub><em>$p</em></sub>! </p>
@@ -83,7 +83,7 @@ TEXT
     for ($j = 1; $j <= $n; $j++) {
         print J <<"TEXT";
     /** <p>Field $j </p> */
-    public final Lazy<Val> mem$j;
+    public final Lazy<FV> mem$j;
 TEXT
     }
     print J <<"TEXT";

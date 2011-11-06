@@ -43,18 +43,18 @@ package frege.rt;
  * <p> Base class for values constructed with 2-ary constructors. </p>
  *
  * <p> This will be extended by constructors of sum types and by product types.
- *  Subclasses can overwrite the {@link Value#_c} method.
+ *  Subclasses can overwrite the {@link FV#constructor} method.
  * </p>
  *
  * <p> Note that Prod<sub><em>2</em></sub> is not a subclass of Prod<sub><em>1</em></sub>! </p>
  */
 public class Prod2 extends Val {
     /** <p>Field 1 </p> */
-    public final Lazy<Val> mem1;
+    public final Lazy<FV> mem1;
     /** <p>Field 2 </p> */
-    public final Lazy<Val> mem2;
+    public final Lazy<FV> mem2;
     /** <p> Constructor. </p> */
-    protected Prod2(final Lazy<Val> arg1,final Lazy<Val> arg2) {
+    protected Prod2(final Lazy<FV> arg1,final Lazy<FV> arg2) {
         mem1 = arg1;
         mem2 = arg2;
     }

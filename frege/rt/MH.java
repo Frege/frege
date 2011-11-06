@@ -49,11 +49,76 @@ import java.lang.invoke.MethodType;
 /**
  * <p> Wrapper for {@link MethodHandle} and utilities that deal with MethodHandles. </p>
  *
+ * <p> A {@link MH} that holds a non satisfied {@link MethodHandle} evaluates to itself.
+ * However, if all arguments are supplied evaluation will cause invocation of the
+ * {@link MethodHandle}. </p> 
  */
 
-public final class MH extends Box<MethodHandle> {
-    public MH(MethodHandle it) { super(it); } 
-     
+public final class MH extends Unknown<FV> implements FV {
+    /** <p> required to qualify as {@link FV} */
+    public final int constructor() { return 0; }
+    /** <p> Tells how many arguments we need before we can invoke.</p> */
+    public final int arity;
+    /** <p> The {@link MethodHandle}.</p> */
+    public final MethodHandle j;
+    
+    /** <p> Create a MH from a {@link MethodHandle}, takes arity from type </p> */
+    public MH(final MethodHandle it) { 
+        j = it; 
+        arity = it.type().parameterCount();
+        if (arity > 0) result = this;       // prevent evaluation
+    }
+    
+    /** <p> Create a MH from a {@link MethodHandle} with a given arity. </p> */
+    public MH(MethodHandle it, int ari) {
+        j = it; 
+        arity = ari;
+        if (arity > 0) result = this;       // prevent evaluation
+    }
+
+    /** <p> Evaluation of a MH</p>
+        <p> If the arity is not 0, it evaluates to itself. </p>
+        <p> If the arity is 0, it evaluates the result of the invokation of the MethodHandle </p>
+    */
+    @Override public final Lazy<FV> _v() {
+        // if (arity > 0) return this;
+        // if (result
+        try {
+            return (Lazy<FV>) j.invokeExact(); 
+        } catch (Throwable e) {
+            throw new Error("MethodHandle evaluation error", e);
+        }
+    }
+
+    /**
+        <p> Apply a MethodHandle to an argument and compute a result.</p>
+        
+        <p> This is used when an unknown function must be applied. For example consider</p>
+        <pre>
+        fold f s (x:xs) = fold f (f s x) xs
+        
+        g :: (Int -> Int) -> Int -> (Int -> Int)
+        g h i j = (h i) + j
+        
+        sum = fold g (0+) [1,2,3]
+        </pre>
+        
+        <p> But in fold, (f s) could already be a function.
+        If so, we must evaluate it and only then apply the next argument.
+        Therefore the common idiom is</p>
+        <pre>
+               // code for  f s x
+               new MH(f).apply(s)._e().apply(x)
+        </pre>
+        
+    */
+    final public Lazy<FV> apply(final Lazy<FV> v) {
+        final MethodHandle r = j.bindTo(v);
+        return new MH(r, arity-1);
+    }
+
+
+    
     /**
         <p> wrapper for {@link java.lang.invoke.MethodHandles.Lookup#findStatic}</p>
         <p> Throw a {@link Error} if something goes wrong as this must never happen in a
@@ -123,59 +188,13 @@ public final class MH extends Box<MethodHandle> {
         }
     }
     
-    /**
-        <p> Apply a MethodHandle to an argument and compute a result.</p>
-        
-        <p> This is used when an unknown function must be applied. For example consider</p>
-        <pre>
-        fold f s (x:xs) = fold f (f s x) xs
-        
-        g :: (Int -> Int) -> Int -> (Int -> Int)
-        g h i j = (h i) + j
-        
-        sum = fold g (0+) [1,2,3]
-        </pre>
-        
-        <p> But in fold, (f s) could already be a function.
-        If so, we must evaluate it and only then apply the next argument.
-        Therefore the common idiom is</p>
-        <pre>
-               // code for  f s x
-               new MH(f).apply(s)._e().apply(x)
-        </pre>
-        
-    */
-    final public Lazy<Val> apply(final Lazy<Val> v) {
-        final MethodHandle r = j.bindTo(v);
-        if (r.type().parameterCount() == 0)
-            return Result.mk(r);
-        return new MH(r);
-    }
-    /*
-        <p> wrapper for <code>java.lang.invoke.MethodHandles.Lookup.bind(Object,String,MethodType)</code></p>
-        @return the desired boxed method handle
-    **
-    final static public Fun bind(final Lambda lam,
-                                        final String name,
-                                        final java.lang.invoke.MethodType type) {
-        try {
-            return new Fun (
-                java.lang.invoke.MethodHandles.lookup().in(lam.getClass()).bind(lam, name, type)
-            );
-        }
-        catch (Exception e) {
-            // System.err.println(e.getMessage());
-            throw new Error("Can't make Boxed.Fun for " + lam.getClass().getName() + "." + name, e);
-        }
-    }
-    */
 
-    public final static java.lang.invoke.MethodHandle unboxObject = findGetter(Boxed.class, "j", Object.class);
+    public final static java.lang.invoke.MethodHandle unboxObject = findGetter(Box.class, "j", Object.class);
     public final static java.lang.invoke.MethodHandle unboxRef(final Class<?> result) {
-        return unboxObject.asType(java.lang.invoke.MethodType.methodType(result, Boxed.class));
+        return unboxObject.asType(java.lang.invoke.MethodType.methodType(result, Box.class));
     }
     // public final static java.lang.invoke.MethodHandle unboxFun = findGetter(Boxed.class,     "j", java.lang.invoke.MethodHandle.class);
-    public final static java.lang.invoke.MethodHandle unboxInt = findGetter(Boxed.Int.class, "j", int.class);
+    public final static java.lang.invoke.MethodHandle unboxInt = findGetter(Box.Int.class, "j", int.class);
 
 }
 

@@ -43,46 +43,46 @@ package frege.rt;
  * <p> Base class for values constructed with 16-ary constructors. </p>
  *
  * <p> This will be extended by constructors of sum types and by product types.
- *  Subclasses can overwrite the {@link Value#_c} method.
+ *  Subclasses can overwrite the {@link FV#constructor} method.
  * </p>
  *
  * <p> Note that Prod<sub><em>16</em></sub> is not a subclass of Prod<sub><em>15</em></sub>! </p>
  */
 public class Prod16 extends Val {
     /** <p>Field 1 </p> */
-    public final Lazy<Val> mem1;
+    public final Lazy<FV> mem1;
     /** <p>Field 2 </p> */
-    public final Lazy<Val> mem2;
+    public final Lazy<FV> mem2;
     /** <p>Field 3 </p> */
-    public final Lazy<Val> mem3;
+    public final Lazy<FV> mem3;
     /** <p>Field 4 </p> */
-    public final Lazy<Val> mem4;
+    public final Lazy<FV> mem4;
     /** <p>Field 5 </p> */
-    public final Lazy<Val> mem5;
+    public final Lazy<FV> mem5;
     /** <p>Field 6 </p> */
-    public final Lazy<Val> mem6;
+    public final Lazy<FV> mem6;
     /** <p>Field 7 </p> */
-    public final Lazy<Val> mem7;
+    public final Lazy<FV> mem7;
     /** <p>Field 8 </p> */
-    public final Lazy<Val> mem8;
+    public final Lazy<FV> mem8;
     /** <p>Field 9 </p> */
-    public final Lazy<Val> mem9;
+    public final Lazy<FV> mem9;
     /** <p>Field 10 </p> */
-    public final Lazy<Val> mem10;
+    public final Lazy<FV> mem10;
     /** <p>Field 11 </p> */
-    public final Lazy<Val> mem11;
+    public final Lazy<FV> mem11;
     /** <p>Field 12 </p> */
-    public final Lazy<Val> mem12;
+    public final Lazy<FV> mem12;
     /** <p>Field 13 </p> */
-    public final Lazy<Val> mem13;
+    public final Lazy<FV> mem13;
     /** <p>Field 14 </p> */
-    public final Lazy<Val> mem14;
+    public final Lazy<FV> mem14;
     /** <p>Field 15 </p> */
-    public final Lazy<Val> mem15;
+    public final Lazy<FV> mem15;
     /** <p>Field 16 </p> */
-    public final Lazy<Val> mem16;
+    public final Lazy<FV> mem16;
     /** <p> Constructor. </p> */
-    protected Prod16(final Lazy<Val> arg1,final Lazy<Val> arg2,final Lazy<Val> arg3,final Lazy<Val> arg4,final Lazy<Val> arg5,final Lazy<Val> arg6,final Lazy<Val> arg7,final Lazy<Val> arg8,final Lazy<Val> arg9,final Lazy<Val> arg10,final Lazy<Val> arg11,final Lazy<Val> arg12,final Lazy<Val> arg13,final Lazy<Val> arg14,final Lazy<Val> arg15,final Lazy<Val> arg16) {
+    protected Prod16(final Lazy<FV> arg1,final Lazy<FV> arg2,final Lazy<FV> arg3,final Lazy<FV> arg4,final Lazy<FV> arg5,final Lazy<FV> arg6,final Lazy<FV> arg7,final Lazy<FV> arg8,final Lazy<FV> arg9,final Lazy<FV> arg10,final Lazy<FV> arg11,final Lazy<FV> arg12,final Lazy<FV> arg13,final Lazy<FV> arg14,final Lazy<FV> arg15,final Lazy<FV> arg16) {
         mem1 = arg1;
         mem2 = arg2;
         mem3 = arg3;

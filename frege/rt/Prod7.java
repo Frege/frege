@@ -43,28 +43,28 @@ package frege.rt;
  * <p> Base class for values constructed with 7-ary constructors. </p>
  *
  * <p> This will be extended by constructors of sum types and by product types.
- *  Subclasses can overwrite the {@link Value#_c} method.
+ *  Subclasses can overwrite the {@link FV#constructor} method.
  * </p>
  *
  * <p> Note that Prod<sub><em>7</em></sub> is not a subclass of Prod<sub><em>6</em></sub>! </p>
  */
 public class Prod7 extends Val {
     /** <p>Field 1 </p> */
-    public final Lazy<Val> mem1;
+    public final Lazy<FV> mem1;
     /** <p>Field 2 </p> */
-    public final Lazy<Val> mem2;
+    public final Lazy<FV> mem2;
     /** <p>Field 3 </p> */
-    public final Lazy<Val> mem3;
+    public final Lazy<FV> mem3;
     /** <p>Field 4 </p> */
-    public final Lazy<Val> mem4;
+    public final Lazy<FV> mem4;
     /** <p>Field 5 </p> */
-    public final Lazy<Val> mem5;
+    public final Lazy<FV> mem5;
     /** <p>Field 6 </p> */
-    public final Lazy<Val> mem6;
+    public final Lazy<FV> mem6;
     /** <p>Field 7 </p> */
-    public final Lazy<Val> mem7;
+    public final Lazy<FV> mem7;
     /** <p> Constructor. </p> */
-    protected Prod7(final Lazy<Val> arg1,final Lazy<Val> arg2,final Lazy<Val> arg3,final Lazy<Val> arg4,final Lazy<Val> arg5,final Lazy<Val> arg6,final Lazy<Val> arg7) {
+    protected Prod7(final Lazy<FV> arg1,final Lazy<FV> arg2,final Lazy<FV> arg3,final Lazy<FV> arg4,final Lazy<FV> arg5,final Lazy<FV> arg6,final Lazy<FV> arg7) {
         mem1 = arg1;
         mem2 = arg2;
         mem3 = arg3;

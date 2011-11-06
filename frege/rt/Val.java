@@ -45,21 +45,22 @@ package frege.rt;
  * Designates an evaluated frege value or function.
  * This is the base class of all non-lazy frege values in the Java7 code generation.
  */
-public class Val implements Value, Lazy<Val> {
-    /**
+public class Val implements FV {
+    /*
      * <p> Applies this Val to another Val. </p>
      * <p> This only makes sense when this FunVal is actually a function </p>
-     */
+     
      public Lazy<Val> apply(Lazy<Val> it) {
         throw new Error("cannot apply a " + this.getClass().getName());
      }
+     */
      
     /**
      * <p> 0 for most frege values, override if not so. </p>
      *
      * @return 0
      */
-    public int     _c() { return 0; }
+    public int     constructor() { return 0; }
     /**
      * <p> Always this instance. </p>
      *

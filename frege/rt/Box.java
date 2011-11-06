@@ -85,18 +85,28 @@ public class Box<T>  extends Val {
      */
     final public static<T> Box<T> mk(T ref) { return new Box<T>(ref); }
     
+    
 
     public String toString() { return j.toString(); }
     
     /**
-     * evaluate a {@link Lazy} {@link Val} to Boxed form
+     * evaluate a {@link FV} to Boxed form
      */
     @SuppressWarnings("unchecked")
-    final public static <V> Box<V> boxed(Lazy<Val> lazy) {
-        return (Box<V>) lazy._e();
+    final public static <V> Box<V> box(FV value) {
+        return (Box<V>) value;
     }
+    
+    /**
+     * coerce a lazy FV to another type
+     */
+    @SuppressWarnings("unchecked")
+    final public static <V> Lazy<V> as(Lazy<FV> val) {
+        return (Lazy<V>) val;
+    }
+    
     // @SuppressWarnings("unchecked")
-    final public static <V> V strict(Lazy<Val> lazy) { return Box.<V>boxed(lazy).j; }
+    // final public static <V> V strict(Lazy<Val> lazy) { return Box.<V>boxed(lazy).j; }
      
 
     /**
