@@ -51,28 +51,88 @@ package frege.rt;
 public class Prod12 extends Val {
     /** <p>Field 1 </p> */
     public final Lazy<FV> mem1;
+    public final static Lazy<FV> get1(Lazy<FV> p) {
+        return ((Prod12) p._e()).mem1;
+    }
+    public final static MH mhget1 = new MH (
+        MH.findStatic(Prod12.class, "get1", MH.mtLL));
     /** <p>Field 2 </p> */
     public final Lazy<FV> mem2;
+    public final static Lazy<FV> get2(Lazy<FV> p) {
+        return ((Prod12) p._e()).mem2;
+    }
+    public final static MH mhget2 = new MH (
+        MH.findStatic(Prod12.class, "get2", MH.mtLL));
     /** <p>Field 3 </p> */
     public final Lazy<FV> mem3;
+    public final static Lazy<FV> get3(Lazy<FV> p) {
+        return ((Prod12) p._e()).mem3;
+    }
+    public final static MH mhget3 = new MH (
+        MH.findStatic(Prod12.class, "get3", MH.mtLL));
     /** <p>Field 4 </p> */
     public final Lazy<FV> mem4;
+    public final static Lazy<FV> get4(Lazy<FV> p) {
+        return ((Prod12) p._e()).mem4;
+    }
+    public final static MH mhget4 = new MH (
+        MH.findStatic(Prod12.class, "get4", MH.mtLL));
     /** <p>Field 5 </p> */
     public final Lazy<FV> mem5;
+    public final static Lazy<FV> get5(Lazy<FV> p) {
+        return ((Prod12) p._e()).mem5;
+    }
+    public final static MH mhget5 = new MH (
+        MH.findStatic(Prod12.class, "get5", MH.mtLL));
     /** <p>Field 6 </p> */
     public final Lazy<FV> mem6;
+    public final static Lazy<FV> get6(Lazy<FV> p) {
+        return ((Prod12) p._e()).mem6;
+    }
+    public final static MH mhget6 = new MH (
+        MH.findStatic(Prod12.class, "get6", MH.mtLL));
     /** <p>Field 7 </p> */
     public final Lazy<FV> mem7;
+    public final static Lazy<FV> get7(Lazy<FV> p) {
+        return ((Prod12) p._e()).mem7;
+    }
+    public final static MH mhget7 = new MH (
+        MH.findStatic(Prod12.class, "get7", MH.mtLL));
     /** <p>Field 8 </p> */
     public final Lazy<FV> mem8;
+    public final static Lazy<FV> get8(Lazy<FV> p) {
+        return ((Prod12) p._e()).mem8;
+    }
+    public final static MH mhget8 = new MH (
+        MH.findStatic(Prod12.class, "get8", MH.mtLL));
     /** <p>Field 9 </p> */
     public final Lazy<FV> mem9;
+    public final static Lazy<FV> get9(Lazy<FV> p) {
+        return ((Prod12) p._e()).mem9;
+    }
+    public final static MH mhget9 = new MH (
+        MH.findStatic(Prod12.class, "get9", MH.mtLL));
     /** <p>Field 10 </p> */
     public final Lazy<FV> mem10;
+    public final static Lazy<FV> get10(Lazy<FV> p) {
+        return ((Prod12) p._e()).mem10;
+    }
+    public final static MH mhget10 = new MH (
+        MH.findStatic(Prod12.class, "get10", MH.mtLL));
     /** <p>Field 11 </p> */
     public final Lazy<FV> mem11;
+    public final static Lazy<FV> get11(Lazy<FV> p) {
+        return ((Prod12) p._e()).mem11;
+    }
+    public final static MH mhget11 = new MH (
+        MH.findStatic(Prod12.class, "get11", MH.mtLL));
     /** <p>Field 12 </p> */
     public final Lazy<FV> mem12;
+    public final static Lazy<FV> get12(Lazy<FV> p) {
+        return ((Prod12) p._e()).mem12;
+    }
+    public final static MH mhget12 = new MH (
+        MH.findStatic(Prod12.class, "get12", MH.mtLL));
     /** <p> Constructor. </p> */
     protected Prod12(final Lazy<FV> arg1,final Lazy<FV> arg2,final Lazy<FV> arg3,final Lazy<FV> arg4,final Lazy<FV> arg5,final Lazy<FV> arg6,final Lazy<FV> arg7,final Lazy<FV> arg8,final Lazy<FV> arg9,final Lazy<FV> arg10,final Lazy<FV> arg11,final Lazy<FV> arg12) {
         mem1 = arg1;

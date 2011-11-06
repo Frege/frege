@@ -112,11 +112,13 @@ public final class MH extends Unknown<FV> implements FV {
         </pre>
         
     */
-    final public Lazy<FV> apply(final Lazy<FV> v) {
+    final public MH apply(Object v) {
         final MethodHandle r = j.bindTo(v);
         return new MH(r, arity-1);
     }
 
+    /** <p> an often used {@link MethodType} for Lazy method(Lazy) </p> */
+    final public static MethodType mtLL = MethodType.methodType(Lazy.class, Lazy.class);
 
     
     /**

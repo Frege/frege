@@ -51,14 +51,39 @@ package frege.rt;
 public class Prod5 extends Val {
     /** <p>Field 1 </p> */
     public final Lazy<FV> mem1;
+    public final static Lazy<FV> get1(Lazy<FV> p) {
+        return ((Prod5) p._e()).mem1;
+    }
+    public final static MH mhget1 = new MH (
+        MH.findStatic(Prod5.class, "get1", MH.mtLL));
     /** <p>Field 2 </p> */
     public final Lazy<FV> mem2;
+    public final static Lazy<FV> get2(Lazy<FV> p) {
+        return ((Prod5) p._e()).mem2;
+    }
+    public final static MH mhget2 = new MH (
+        MH.findStatic(Prod5.class, "get2", MH.mtLL));
     /** <p>Field 3 </p> */
     public final Lazy<FV> mem3;
+    public final static Lazy<FV> get3(Lazy<FV> p) {
+        return ((Prod5) p._e()).mem3;
+    }
+    public final static MH mhget3 = new MH (
+        MH.findStatic(Prod5.class, "get3", MH.mtLL));
     /** <p>Field 4 </p> */
     public final Lazy<FV> mem4;
+    public final static Lazy<FV> get4(Lazy<FV> p) {
+        return ((Prod5) p._e()).mem4;
+    }
+    public final static MH mhget4 = new MH (
+        MH.findStatic(Prod5.class, "get4", MH.mtLL));
     /** <p>Field 5 </p> */
     public final Lazy<FV> mem5;
+    public final static Lazy<FV> get5(Lazy<FV> p) {
+        return ((Prod5) p._e()).mem5;
+    }
+    public final static MH mhget5 = new MH (
+        MH.findStatic(Prod5.class, "get5", MH.mtLL));
     /** <p> Constructor. </p> */
     protected Prod5(final Lazy<FV> arg1,final Lazy<FV> arg2,final Lazy<FV> arg3,final Lazy<FV> arg4,final Lazy<FV> arg5) {
         mem1 = arg1;

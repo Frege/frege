@@ -84,6 +84,11 @@ TEXT
         print J <<"TEXT";
     /** <p>Field $j </p> */
     public final Lazy<FV> mem$j;
+    public final static Lazy<FV> get$j(Lazy<FV> p) {
+        return ((Prod$n) p._e()).mem$j;
+    }
+    public final static MH mhget$j = new MH (
+        MH.findStatic(Prod$n.class, "get$j", MH.mtLL));
 TEXT
     }
     print J <<"TEXT";

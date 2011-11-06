@@ -7,7 +7,7 @@
 
 .SUFFIXES: .class .fr
 
-JAVAC = javac
+JAVAC = javac -encoding UTF-8
 YACC = pbyacc
 JAVA = java7 "-Dfrege.javac=javac -J-Xmx512m" -Dfrege.parallel=false
 JAVAP = $(JAVA) -Dfrege.inPrelude=true

@@ -51,6 +51,11 @@ package frege.rt;
 public class Prod1 extends Val {
     /** <p>Field 1 </p> */
     public final Lazy<FV> mem1;
+    public final static Lazy<FV> get1(Lazy<FV> p) {
+        return ((Prod1) p._e()).mem1;
+    }
+    public final static MH mhget1 = new MH (
+        MH.findStatic(Prod1.class, "get1", MH.mtLL));
     /** <p> Constructor. </p> */
     protected Prod1(final Lazy<FV> arg1) {
         mem1 = arg1;
