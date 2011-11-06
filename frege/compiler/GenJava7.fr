@@ -274,7 +274,9 @@ data JX =
         prec JNewArray{} = 7
         --- print @x@ or @(x)@ depending on relative precedences
         subex :: JExpr -> JExpr -> PP.DOCUMENT
-        subex e x | prec x < prec e = text "(" <> anno x <> text ")"
+        subex e x
+                  | prec e == 2 && prec x <= 2 = text "(" <> anno x <> text ")"
+                  | prec x < prec e = text "(" <> anno x <> text ")"
                   | otherwise                      = anno x
         --- create a 'JAtom'
         atom   = JAtom
@@ -396,9 +398,14 @@ toBoxed (bind@Bind {mode=RNative, jtype}) = case boxed jtype of
     other -> bind.{mode=RBoxed, jtype = other}      -- questionable whether this is right
 toBoxed (bind@Bind {mode=RLazy}) = bind.{mode=RBoxed, jtype = bxtype, jex <- cast}
                         where bxtype = boxed bind.jtype
+                              boxfun = JStMem (U.memberOf jtString.jname "box") []
                               cast
                                 | Ref v [] <- bxtype,
-                                  v == jtValue.jname = (JX.invoke [] • JX.xmem "_e")
+                                  v == jtValue.jname
+                                            = (JX.invoke [] • JX.xmem "_e")
+                                | Ref v (_:_) <- bxtype,
+                                  v == jtString.jname
+                                            = JInvoke boxfun.{targs = bxtype.targs} • (:[]) • JX.invoke [] • JX.xmem "_e"
                                 | otherwise = (JX.cast bxtype • JX.invoke [] • JX.xmem "_e")
 toBoxed bind = bind
 
@@ -772,8 +779,9 @@ genLocalMH (sym@SymV {name = Local _})
                 | otherwise   = case boxed jrty of
                     Ref {jname} -> U.memberOf jname "class"
                     other       -> Prelude.error "boxed must return Ref"
-            lookup     = JName "java.lang.invoke.MethodHandles" "lookup"
-            bind       = (JX.xmem "bind" • JX.invoke [] • JX.static) lookup
+            lookup     = JAtom "where"
+            jtLookup   = Nativ "java.lang.invoke.MethodHandles.Lookup" []
+            bind       = JX.xmem "bind" lookup
             methodType = JName "java.lang.invoke.MethodType" "methodType"
             symJname   = wrapperMethod g sym
             this       = JX.atom "this"
@@ -789,10 +797,10 @@ genLocalMH (sym@SymV {name = Local _})
                         ])]
         stio JMethod { attr = attrs [JPublic],
                        jtype = jtMethodHandle,
-                       args = [], gargs = [],
+                       args = [(attrFinal, U.pSigma, jtLookup, "where")], gargs = [],
                        name = "handle", body = JBlock [try, catch]}
     | otherwise = error ("Can't generate handle() for CAF " ++ sym.name.base)
-
+genLocalMH sym  = error ("Can't generate handle() for non Var " ++ sym.name.base)
 {--
     Make a method handle for a top level value
 -}
@@ -835,6 +843,12 @@ pass = do
     U.print (mainClass g)
     U.println " {"
     let vals = values g.thisTab
+
+    -- we need our own lookup to get the MethodHandles inside of Lambda
+    U.println ""
+    U.print "final public static java.lang.invoke.MethodHandles.Lookup where "
+    U.println " = java.lang.invoke.MethodHandles.lookup();"
+    U.println ""
 
     let cClass = JMember {
             attr = attrTop,
@@ -918,8 +932,8 @@ pass = do
                             (JInvoke (JStMem (JName "tMaybe.dJust" "mk")    []) [boxArg])
                 boxArg = JInvoke (JStMem (U.memberOf boxclass "mk") []) [JAtom "arg"]
 
-    -- invokeMain <- genMain
-    ppSS [{- invokeMain, -} toMaybe]
+    invokeMain <- genMain
+    ppSS [invokeMain, toMaybe]
     U.println "}"
 
     stio ("java7 class", 1)
@@ -997,58 +1011,72 @@ makeConstants = do
                 bb = toBoxed nb
             stio it
 
---
---genMain = do
---    g <- getST
---    case (VName g.thisPack "main").findit g of
---        Just sym | sym.name.pack == g.thisPack = do         -- we have a main
---            let tc n = TCon {pos=sym.pos, name = TName pPreludeBase n}
---                tauSig tau = ForAll [] (RhoTau [] tau)
---                sarrTau = tauSig (TApp (tc "StringArray") (tc "Immutable"))
---            sarrJT <- sigmaJT sarrTau
---            let args = [(attrFinal, sarrTau, strict sarrJT, "argv")]
---            let st   = (tc "ST").name
---                stpu = MName st "performUnsafe"
---                sarr = (tc "StringArray").name
---                toli = MName sarr "toList"
---            vstpu <- U.findV stpu
---            vtoli <- U.findV toli
---            let avb = toBoxed (argBind (head args))
---                slist = TApp (tc "[]") (tc "String")
---                sig1 = ForAll [] (RhoFun [] (sarrTau) (RhoTau [] slist))
---            btoli <- instSym sym.pos vtoli sig1
---            let  apparg = JInvoke (JExMem btoli.jex "a") [avb.jex]
---            bmain <- instSym sym.pos sym mainSigma
---            let applist = JInvoke (JExMem bmain.jex "a") [apparg]
---                iovoid = TApp (TApp (tc "ST") (tc "RealWorld")) (tc "()")
---                sig2 = ForAll [] (RhoFun [] (tauSig iovoid) (RhoTau [] (tc "()")))
---            bperf <- instSym sym.pos vstpu sig2
---            let appio = JInvoke (JExMem bperf.jex "a") [applist]
---                -- appe  = JInvoke (JExMem appio "_e") []
---                appe  = JInvoke (JStMem (JName "frege.RT" "fjMain") []) [appio]
---                gettime s = JMember {attr = attrFinal, jtype = Nativ "long" [], name=s,
---                            init = Just (JInvoke
---                                (JStMem (JName "java.lang.System" "nanoTime") [])
---                                [])}
---                stmts = [ JLocal (gettime "t1"), JEx appe, JLocal (gettime "t2"), times ]
---                times = JEx (JInvoke (JStMem (JName "java.lang.System.err" "println") [])
---                                [ex1])
---                ex1 = JBin (JAtom "\"runtime \"") "+" ex2
---                ex2 = JBin ex3 "+" (JAtom "\" wallclock seconds.\"")
---                ex3 = JBin ex4 "/" (JAtom "1e3")
---                ex4 = JBin ex5 "/" (JAtom "1000000")
---                ex5 = JBin ex6 "+" (JAtom "500000")
---                ex6 = JBin (JAtom "t2") "-" (JAtom "t1")
---                mMeth = JMethod {attr = attrs [JPublic, JStatic], gargs = [],
---                            jtype = Nativ "void" [],        -- sure thing :)
---                            name  = "main",
---                            args, body = JBlock stmts }
---            stio [mMeth]
---        sonst -> stio []
+
+genMain = do
+    g <- getST
+    case (VName g.thisPack "main").findit g of
+        Just sym | sym.name.pack == g.thisPack = do         -- we have a main
+            let tc n = TCon {pos=sym.pos, name = TName pPreludeBase n}
+                tauSig tau = ForAll [] (RhoTau [] tau)
+                sarrTau = tauSig (TApp (tc "StringArray") (tc "Immutable"))
+            sarrJT <- sigmaJT sarrTau
+            let args = [(attrFinal, sarrTau, strict sarrJT, "argv")]
+            let st   = (tc "ST").name
+                stpu = MName st "performUnsafe"
+                sarr = (tc "StringArray").name
+                toli = MName sarr "toList"
+            vstpu <- U.findV stpu
+            vtoli <- U.findV toli
+            let avb = argBind (head args)
+                slist = TApp (tc "[]") (tc "String")
+                sig1 = ForAll [] (RhoFun [] (sarrTau) (RhoTau [] slist))
+            (_, btoli) <- instSymDirect sym.pos vtoli sig1
+            let  apparg = JInvoke btoli.jex [avb.jex]
+            (_, bmain) <- instSymDirect sym.pos sym mainSigma
+            let applist = JInvoke bmain.jex [apparg]
+                iovoid = TApp (TApp (tc "ST") (tc "RealWorld")) (tc "()")
+                sig2 = ForAll [] (RhoFun [] (tauSig iovoid) (RhoTau [] (tc "()")))
+            (_, bperf) <- instSymDirect sym.pos vstpu sig2
+            let appio = JCast jtFun (JInvoke bperf.jex [applist])
+                -- appe  = JInvoke (JExMem appio "_e") []
+                appe  = JInvoke (JStMem (JName "frege.RT" "fjMain") []) [appio]
+                gettime s = JMember {attr = attrFinal, jtype = Nativ "long" [], name=s,
+                            init = Just (JInvoke
+                                (JStMem (JName "java.lang.System" "nanoTime") [])
+                                [])}
+                stmts = [ JLocal (gettime "t1"), JEx appe, JLocal (gettime "t2"), times ]
+                times = JEx (JInvoke (JStMem (JName "java.lang.System.err" "println") [])
+                                [ex1])
+                ex1 = JBin (JAtom "\"runtime \"") "+" ex2
+                ex2 = JBin ex3 "+" (JAtom "\" wallclock seconds.\"")
+                ex3 = JBin ex4 "/" (JAtom "1e3")
+                ex4 = JBin ex5 "/" (JAtom "1000000")
+                ex5 = JBin ex6 "+" (JAtom "500000")
+                ex6 = JBin (JAtom "t2") "-" (JAtom "t1")
+                mMeth = JMethod {attr = attrs [JPublic, JStatic], gargs = [],
+                            jtype = Nativ "void" [],        -- sure thing :)
+                            name  = "main",
+                            args, body = JBlock stmts }
+            stio [mMeth]
+        sonst -> stio []
 
 --- the @constructor@ method
 --- >final public int constructor() { return n; }
 cMethod n = atomMethod "constructor" (Nativ "int" []) (show n)
+
+--- the @_u@ method
+--- >final public boolean _u() { return false; }
+uMethod = atomMethod "_u" (Nativ "boolean" []) "false"
+
+--- the @_v@ method
+--- >final public Lazy<FV> _v() { return this; }
+vMethod = atomMethod "_v" (lazy jtValue) "this"
+
+--- the @_e@ method
+--- >final public FV _e() { return this; }
+eMethod = atomMethod "_e" jtValue "this"
+
+
 {--
  * [usage] @atomMethod name type atom@
  * [returns] a 'JMethod' of the form @final public /type/ /name/() { return /atom/; }@
@@ -1120,7 +1148,7 @@ conCode symt cons (sym@SymD {flds, cid}) = do
                                         name = "single",
                                         init = Just (JX.new [] jtype)}]
                | otherwise = []
-        wrapmk | struct = [wrapper]
+        wrapmk | struct = [wrapper, uMethod, vMethod, eMethod]
                | otherwise = []
         worker  = workerMethod g sym
 
@@ -1277,10 +1305,9 @@ symCode binds (sym@SymT {nativ=Nothing}) = do                   -- sum type
     g <- getST
     let vals = sortBy (comparing Symbol.name) (values sym.env)
         cons = [ con | con@SymD {sid} <- vals ]
-        funs = [ sym | sym@SymV {sid} <- vals, not (Symbol.{flds?} sym), Symbol.depth sym > 0]
-        cafs = [ sym | sym@SymV {sid} <- vals, not (Symbol.{flds?} sym), Symbol.depth sym == 0]
+        funs = [ sym | sym@SymV {sid} <- vals, not (Symbol.{flds?} sym)]
     funDefs <- mapSt (symCode binds) funs
-    cafDefs <- mapSt (symCode binds) cafs
+    -- cafDefs <- mapSt (symCode binds) cafs
     conDefs <- mapSt (conCode sym cons) cons
     symjt   <- sigmaJT sym.typ
     let jtype = symjt.{jname = U.javaName g sym.name}
@@ -1289,14 +1316,14 @@ symCode binds (sym@SymT {nativ=Nothing}) = do                   -- sum type
                             name = conGetter (Symbol.name con),
                             args = [], body = JEmpty}
             | con <- cons ]
-        mClass | null cafDefs = []
+        mClass | null funs = []
                | otherwise    = [JClass {attr = attrs [JPublic, JStatic, JFinal],
                                     jtype = Ref (JName "" "m") [],
                                     extend = Nothing, implement = [],
-                                    defs = concat cafDefs}]
+                                    defs = concat funDefs}]
         result = JInterface {attr = attrs [JPublic], jtype,
                             implement = [jtValue, lazyVal],
-                            defs = getCons ++ concat conDefs ++ mClass ++ concat funDefs}
+                            defs = getCons ++ concat conDefs ++ mClass}
     stio [JComment (nice sym g), result]
 
 symCode binds (sym@SymT {sid, nativ = Just _}) = do                               -- nativ
@@ -1578,9 +1605,10 @@ workerMethod g _ = error "workerMethod: no SymV"
 --}
 wrapperMethod g (sym@SymD {strsig, flds})
     | null flds || not strsig.isStrict = workerMethod g sym
+    | otherwise = (workerMethod g sym).{base <- (flLigatur ++)}
 wrapperMethod g (sym@SymV {strsig, nativ, depth, rkind})
-    | Just _ <- nativ = flName
     | depth == 0 = workerMethod g sym
+    | Just _ <- nativ = flName
     | S x <- strsig, length x > 0, any Strictness.isStrict x = flName
     | wmode rkind == RNative = flName
     | otherwise = workerMethod g sym
@@ -1758,27 +1786,39 @@ funCode nofun binds = error "funClass: no function"
 {--
     Create @final Lambda123 name = new Lambda123() { ... }
  -}
-innerFun (sym@SymV {expr = Just x}) binds = do
+innerFun (symc@SymV {expr = Just x}) binds = do
     g <- getST
-    U.logmsg TRACEG sym.pos("innerFun: " ++ nice sym.name g ++ " :: "
-             ++ nice sym.typ.rho g ++ ", depth=" ++ show sym.depth)
+    U.logmsg TRACEG symc.pos ("innerFun: " ++ nice symc.name g ++ " :: "
+             ++ nice symc.typ.rho g ++ ", depth=" ++ show symc.depth)
+    rho <- TC.zonkRho symc.typ.rho
 
     let argNames = drop (fold (+) 0 (map Symbol.depth g.genEnv)) GenJava7.argNames
-        ctxNames = drop (fold (+) 0 (map (length • Rho.context • Sigma.rho • Symbol.typ) g.genEnv)) GenJava7.ctxNames
+        envCtx   = envCtxs g
+        ctxNames = drop (length envCtx) GenJava7.ctxNames
+        implies = impliesG g
+        ctxs = [ ctx | ctx <- rho.context,
+                       hasVars (Context.tau ctx),
+                       not (any (`implies` ctx) envCtx)]
+        sym = symc.{typ <- Sigma.{rho <- Rho.{context = []}}}
         argAttr = if (sym.rkind `band` T.rkTail) == 0 then attrFinal else 0
         bnds = sym.typ.bound                        -- [a,b,c]
         (rty, atys) = U.returnTypeN sym.depth sym.typ.rho
+        hasVars (TVar{}) = true
+        hasVars (TCon{}) = false
+        hasVars (TFun a b) = hasVars a || hasVars b
+        hasVars (TApp a b) = hasVars a || hasVars b
+        hasVars (Meta{}) = true
+
+    U.changeSym sym
+    unless (null ctxs) do
+        U.error sym.pos (nice sym g ++ " has context " ++ U.nicerctx ctxs g)
 
     rjt  <- rhoJT rty
     ajts <- mapSt sigmaJT atys
-    -- extend      <- sigmaJT sym.typ
-    -- constraints <- mapSt  (curry makeConstraintDef) (zip sym.typ.rho.context ctxNames)
-    -- constrargs  <- mapSt  (curry makeConstraintArg) (zip sym.typ.rho.context argNames)
     workerArgs <- argDef argAttr sym.strsig atys argNames
-    -- uArgs      <- argDef argAttr U atys argNames
 
 
-    let constrargs = map (curry (makeConstraintArg g)) (zip sym.typ.rho.context ctxNames)
+    let constrargs = map (curry (makeConstraintArg g)) (zip ctxs ctxNames)
         modew = wmode sym.rkind
 
     let
@@ -2277,7 +2317,7 @@ wrapCode jreturn rtau (sym@SymV {nativ = Just item}) abinds
         tjt     <- tauJT tuple
         fjt     <- rhoJT frho
         let ret     = jreturn (JNew jtFun [mkST])
-            mkST    = (JX.invoke [] • JX.xmem "handle") fun -- JInvoke (JStMem (JName "Prelude.TST" "mk") [sjt, ajt]) [fun]
+            mkST    = (JX.invoke [JAtom "where"] • JX.xmem "handle") fun -- JInvoke (JStMem (JName "Prelude.TST" "mk") [sjt, ajt]) [fun]
             fun     = JNewClass lambda [] [rMethod]
             lambda  = Ref (JName "" "Lambda") []
             rMethod = JMethod {attr = attrs [JFinal, JPublic], gargs=[],
@@ -3141,12 +3181,12 @@ resolveConstraint pos (ctx@Ctx {cname, tau}) = do
                             -- jrho   = rhoJT g rho
                             jitargs0 = [ RhoTau [] t
                                             | v <- inst.typ.bound, t <- (tree.lookupS v).toList]
-                            jitargs = if csym.vkind > 0 then rho : jitargs0 else jitargs0
-                        jitjts     <- mapSt rhoJT jitargs
+                        --  jitargs = if csym.vkind > 0 then rho : jitargs0 else jitargs0
+                        -- jitjts     <- mapSt rhoJT jitargs
                         let jit    = Ref jiname []              -- jitjts
-                            jex    = if null subctx
+                            jex    = {- if null subctx
                                 then JInvoke (JStMem (U.memberOf jiname "ƒNew") jitjts) []
-                                else JNew jit args
+                                else -} JNew jit args
                         U.logmsg TRACEG pos ("makeCtx: " ++ showJex jex)
                         stio jex
                     [] -> do
@@ -3201,8 +3241,7 @@ instSymDirect pos sym sigma = do
 
 
 
---- convenience method for normal instantiation
---- instSym p sy sig = instSym0 false p sy sig
+
 {--
  * instantiate a symbol at a given type
  -}
@@ -3277,7 +3316,7 @@ instSym pos sym sigma = do
                     bind = Bind RBoxed sigma jt func
                 stio bind
         SymV {name = Local _, expr = Just _, depth} | depth > 0 = do
-                let inst = JX.invoke [] (JX.xmem "handle" it)
+                let inst = JX.invoke [JAtom "where"] (JX.xmem "handle" it)
                     it = JX.static jname
                     bind = Bind RNative sigma (strict jt) inst
                 stio (applied bind ctxs)
@@ -3326,7 +3365,7 @@ genExpr _ rm (Vbl {pos, name, typ = Just sigma}) binds
         sym <- U.findV name
         case lookup binds sym of
             Just (b@Bind{mode=RNative, jtype=Nativ #^Lambda\d+$# _}) = let
-                    handle = b.{jtype = jtMethodHandle, jex <- JX.invoke [] • JX.xmem "handle"}
+                    handle = b.{jtype = jtMethodHandle, jex <- JX.invoke [JAtom "where"] • JX.xmem "handle"}
                 in stio (toMode rm handle)
             Just b = stio (toMode rm b)
             Nothing | Just _ <- sym.expr -- , sym.anno, length sym.typ.rho.context > 0

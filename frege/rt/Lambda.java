@@ -36,6 +36,7 @@
 
 package frege.rt;
 import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
 
 // $Author$
 // $Date$
@@ -49,13 +50,13 @@ public abstract class Lambda {
     /**
      * <P>get a {@link java.lang.invoke.MethodHandle} that invokes this Lambdas worker</P>
      */
-    public MethodHandle handle() {
+    public MethodHandle handle(final MethodHandles.Lookup lookup) {
         try {
             return /*new MH*/ (
-                      java.lang.invoke.MethodHandles.lookup().bind(
+                      lookup.bind(
                             this,
                             "eval",
-                            java.lang.invoke.MethodType.methodType(Lazy.class, Lazy.class)
+                            MH.mtLL      // Lazy -> Lazy
                         )
                     );
         } catch (Exception e) {
