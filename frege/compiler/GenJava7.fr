@@ -756,7 +756,13 @@ reqMH sym = do
 --}
 genMHs = do
         g <- getST
-        mapSt (curry genMH) (each g.gen.mhs)
+        members <- mapSt (curry genMH) (each g.gen.mhs)
+        let vars = map JDecl.{init=Nothing} members         -- just the vars
+            assigns = [ JAssign (JAtom name) code | JMember {name, init = Just code} <- members]
+            initfi = JMethod {attr = attrs [JPrivate, JStatic], gargs = [],
+                        jtype = Nativ "void" [],
+                        name = "initﬁ", args = [], body = JBlock assigns}
+        stio (vars ++ [initfi])
 
 {--
     Make the @handle()@ method  accesses the @call(...)@ method of a Lambda
@@ -831,7 +837,7 @@ genMH sym nm = do
         mtyp       = if caf then head mtargs
                             else (JX.invoke mtargs • JX.static) methodType
         code = JNew jtFun [ (JX.invoke [clazz, name, mtyp] • JX.static) findStatic ]
-    stio JMember { attr=attrTop, jtype=jtFun, name=nm.base, init=Just code}
+    stio JMember { attr = attrs [JPrivate, JStatic], jtype=jtFun, name=nm.base, init=Just code}
 
 
 pass :: StG (String, Int)
@@ -844,12 +850,6 @@ pass = do
     U.println " {"
     let vals = values g.thisTab
 
-    -- we need our own lookup to get the MethodHandles inside of Lambda
-    U.println ""
-    U.print "final public static java.lang.invoke.MethodHandles.Lookup where "
-    U.println " = java.lang.invoke.MethodHandles.lookup();"
-    U.println ""
-
     let cClass = JMember {
             attr = attrTop,
             jtype = cType,
@@ -857,6 +857,14 @@ pass = do
             init = Just (JNew cType []) }
         cType = Ref (JName "" (constClass g)) []
     pp (anno cClass)
+
+    -- we need our own lookup to get the MethodHandles inside of Lambda
+    U.println ""
+    U.println "final public static java.lang.invoke.MethodHandles.Lookup where"
+    U.println "                  = java.lang.invoke.MethodHandles.lookup();"
+    U.println ""
+    U.println "static { initﬁ(); }  // initialize method handles"
+    U.println ""
 
     mapSt (symCode Nil) (sortBy (comparing Symbol.name) [ s | s@SymT {sid} <- vals ])
         >>= ppSS
@@ -1154,15 +1162,15 @@ conCode symt cons (sym@SymD {flds, cid}) = do
 
 
         !make | arity == 0 = JMethod {attr = attrs [JUnchecked, JPublic, JFinal, JStatic],
-                                    gargs = jtype.targs, jtype = djtype, name = "mk",
+                                    gargs = [], jtype = symtjt, name = "mk",
                                     args = [],
                                     body = JBlock [JReturn (JAtom "single")]}
               | struct     = JMethod {attr = attrs [JPublic, JFinal, JStatic],
-                                    gargs = jtype.targs, jtype = djtype, name = "mk",
+                                    gargs = [], jtype = symtjt, name = "mk",
                                     args = structargs,
                                     body = JBlock [JReturn (JNew jtype args)]}
               | otherwise  = JMethod {attr = attrs [JPublic, JFinal, JStatic],
-                                    gargs = jtype.targs, jtype = djtype, name = "mk",
+                                    gargs = [], jtype = symtjt, name = "mk",
                                     args = constrargs,
                                     body = JBlock [JReturn (JNew jtype args)]}
 
@@ -1727,7 +1735,8 @@ cafCode (sym@SymV {depth = 0, expr = Just x}) binds = do
         newu  = JNewClass utype [] [vMeth]          -- new Unknown<R>() { ... }
         theU
             | rlazy = newu
-            | otherwise = (JCast rtype • JX.invoke [] • JX.xmem "_e") newu
+            | otherwise = (toBoxed (Bind RLazy symtyp (lazy jtype) newu)).jex
+                                -- (JCast rtype • JX.invoke [] • JX.xmem "_e") newu
         -- fcode = if rlazy then [JReturn newu] else scode
         vMeth = JMethod { attr = attrs [JPublic, JFinal],
                           gargs = [],
@@ -3269,10 +3278,14 @@ instSym pos sym sigma = do
 
     let (_, ss) = U.returnType sym.typ.rho
         applied bnd [] = bnd
-        applied bnd xs = fold app bnd xs
-            where app (b@Bind {}) arg = b.{jex <- JX.invoke [arg] • JX.xmem "apply"}
-                                         .{jex <- JX.invoke []    • JX.xmem "call"}
-                                         .{jex <- JCast jtFun}
+        applied bnd [x] = (toBoxed bnd).{
+                            jex <- JX.invoke [x] • JX.xmem "apply",
+                            jtype <- lazy, mode = RLazy}
+        applied bnd xs = toBoxed bnd.{mode=RNative, jtype = jtMethodHandle, jex = fold app nmh xs}
+            where
+                nmh = JX.xmem "j" (toBoxed bnd).jex
+                app nmh arg = (JX.invoke [arg] • JX.xmem "bindTo") nmh
+
 
 
     case sym of
@@ -3325,31 +3338,11 @@ instSym pos sym sigma = do
                 stio (applied mhbind.{ftype=sigma} ctxs)
         _ -> error "instSym: no var/con"
 
---adaptHigherPolymorphic a (ForAll bnd _)
---    | null bnd = stio a
---    | otherwise = do
---            g  <- getST
---            -- replace all bound tyvars with Void in type of expression
---            let replace = Tree.fromList [ (b, voidTau) | b <- bnd ]
---            case Expr.typ a of
---                Just sigma -> do
---                    U.logmsg TRACEG (getpos a) ("adaptHP: substitute "
---                        ++ joined "," bnd ++ " with " ++ nicer voidTau g
---                        ++ " in " ++ nice a g ++ " :: " ++ nicer sigma g)
---                    -- sigma <- U.substSigma replace sigma
---                    a <- U.mapEx true (adapt (U.substSigma replace)) a
---                    U.logmsg TRACEG (getpos a) ("adaptHP: result "
---                        ++ nicer (unJust a.typ) g)
---                    stio a
---                Nothing -> -- cannot really happen, but keep case checker happy
---                    stio a
---    where
---        adapt f ex = case Expr.typ ex of
---            Just sigma -> do
---                sigma <- f sigma
---                stio (Left ex.{typ=Just sigma})
---            Nothing -> stio (Left ex)
 
+apply :: Binding -> Binding -> Binding
+apply x b = x.{mode=RLazy, jex=JInvoke (JExMem xe.jex "apply") [ns.jex]}
+    where ns = notStrict b
+          xe = notLazy x
 
 {--
  * [usage] @genExpr rflag rmode expression binds@
@@ -3448,8 +3441,11 @@ genExpr rflg rm (app@App a b (Just sigma)) binds = do
                             if struct && islazy
                                 then do
                                     dbind <- instSym pos sym csigma
-                                    let jx = dbind.jex
-                                        call = Bind RBoxed sigma sjt (JInvoke jx (map Binding.jex abinds))
+                                    let jx = JX.xmem "j" dbind.jex
+                                        bindto mh arg = (JX.invoke [arg] • JX.xmem "bindTo") mh
+                                        mh = fold bindto jx (map Binding.jex abinds)
+                                        bmh = toBoxed (Bind RNative sigma jtMethodHandle mh)
+                                        call = bmh.{jtype = lazy sjt}
                                     result call
                                 else do
                                     (ctxs, dbind) <- instSymDirect pos sym csigma
@@ -3594,14 +3590,6 @@ genExpr rflg rm (app@App a b (Just sigma)) binds = do
             stio (toMode rm result)
 
 
-        apply :: Binding -> Binding -> Binding
-        apply x b
-            | x.mode == RNative = (toBoxed bindTo).{mode = RLazy}
-            | otherwise         = x.{mode=RLazy, jex=JInvoke (JExMem xe.jex "apply") [ns.jex]}
-            where ns = notStrict b
-                  xe = notLazy x
-                  bindTo = x.{jex <- (JX.invoke [ns.jex] • JX.xmem "bindTo")}
-
 --        adaptHigherPolymorphicS []     _                 = stio []
 --        adaptHigherPolymorphicS args   []                = stio args
 --        adaptHigherPolymorphicS (a:as) (t:ts) = do
@@ -3615,14 +3603,16 @@ genExpr rflg RLazy (ifte@Ifte c t e (Just sigma)) binds = do
     cbind <- genExpr false RLazy c binds
     tbind <- genExpr false RLazy t binds
     ebind <- genExpr false RLazy e binds
+
+    let lif = VName pPreludeBase "lazyif"
+    isym  <- U.findV lif
+    ibind <- reqMH isym
+
     let rrho = U.tauRho sigma.rho
     rjt  <- rhoJT rrho
-    let lif = VName pPreludeBase "lazyif"
-        jif = U.javaName g lif
-        ifn = JStMem (U.memberOf jif "n") [rjt]
-        ifna = JExMem (JInvoke ifn []) "a"
-        jex = JInvoke ifna [cbind.jex, tbind.jex, ebind.jex]
-    stio (Bind RLazy sigma (lazy rjt) jex)
+
+    let res = fold apply ibind [cbind, tbind, ebind]
+    stio res.{ftype=sigma, jtype=lazy rjt}
 
 genExpr _ rm (ifte@Ifte c t e (Just sigma)) binds = do
     -- g <- getST

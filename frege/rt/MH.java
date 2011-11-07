@@ -54,13 +54,17 @@ import java.lang.invoke.MethodType;
  * {@link MethodHandle}. </p> 
  */
 
-public final class MH extends Unknown<FV> implements FV {
+public final class MH extends Unknown<FV> implements FV, App {
     /** <p> required to qualify as {@link FV} */
     public final int constructor() { return 0; }
     /** <p> Tells how many arguments we need before we can invoke.</p> */
     public final int arity;
     /** <p> The {@link MethodHandle}.</p> */
     public final MethodHandle j;
+    
+    public String toString() {
+        return "MH{arity=" + arity + ", j=" + j.toString() + "}";
+    }
     
     /** <p> Create a MH from a {@link MethodHandle}, takes arity from type </p> */
     public MH(final MethodHandle it) { 
@@ -84,8 +88,9 @@ public final class MH extends Unknown<FV> implements FV {
         // if (arity > 0) return this;
         // if (result
         try {
-            return (Lazy<FV>) j.invokeExact(); 
+            return (Lazy<FV>) j.invoke/*Exact*/(); 
         } catch (Throwable e) {
+            // e.printStackTrace();
             throw new Error("MethodHandle evaluation error", e);
         }
     }
