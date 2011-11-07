@@ -117,7 +117,7 @@ public final class MH extends Unknown<FV> implements FV, App {
         </pre>
         
     */
-    final public MH apply(Object v) {
+    final public MH apply(Lazy<FV> v) {
         final MethodHandle r = j.bindTo(v);
         return new MH(r, arity-1);
     }

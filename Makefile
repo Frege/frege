@@ -260,9 +260,18 @@ runtime: $(RUNTIME)  doc/index.html
 RTDIR    = build/frege/rt
 RUNTIME  = build/frege/MD.class    $(COMPF)/JavaUtils.class \
 		$(RTDIR)/Lazy.class        $(RTDIR)/Value.class       $(RTDIR)/FV.class \
-		$(RTDIR)/Unknown.class \
+		$(RTDIR)/Unknown.class     $(RTDIR)/App.class \
 		$(RTDIR)/Val.class         $(RTDIR)/Box.class \
 		$(RTDIR)/Lambda.class      $(RTDIR)/MH.class \
+		$(RTDIR)/Lam1.class        $(RTDIR)/Lam2.class      $(RTDIR)/Lam3.class \
+		$(RTDIR)/Lam4.class        $(RTDIR)/Lam5.class      $(RTDIR)/Lam6.class \
+		$(RTDIR)/Lam7.class        $(RTDIR)/Lam8.class      $(RTDIR)/Lam9.class \
+		$(RTDIR)/Lam10.class        $(RTDIR)/Lam11.class      $(RTDIR)/Lam12.class \
+		$(RTDIR)/Lam13.class        $(RTDIR)/Lam14.class      $(RTDIR)/Lam15.class \
+		$(RTDIR)/Lam16.class        $(RTDIR)/Lam17.class      $(RTDIR)/Lam18.class \
+		$(RTDIR)/Lam19.class        $(RTDIR)/Lam20.class      $(RTDIR)/Lam21.class \
+		$(RTDIR)/Lam22.class        $(RTDIR)/Lam23.class      $(RTDIR)/Lam24.class \
+		$(RTDIR)/Lam25.class        $(RTDIR)/Lam26.class \
 		$(RTDIR)/Boxed.class       $(RTDIR)/Constant.class    $(RTDIR)/Ref.class \
 		$(RTDIR)/Fun.class         $(RTDIR)/Fun1.class        $(RTDIR)/Fun2.class \
 		$(RTDIR)/Fun3.class        $(RTDIR)/Fun4.class \
@@ -341,6 +350,58 @@ $(RTDIR)/MH.class: frege/rt/MH.java
 	$(JAVAC) -d build -cp build $?
 $(RTDIR)/FV.class: frege/rt/FV.java
 	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Lam1.class: frege/rt/Lam1.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Lam2.class: frege/rt/Lam2.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Lam3.class: frege/rt/Lam3.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Lam4.class: frege/rt/Lam4.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Lam5.class: frege/rt/Lam5.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Lam6.class: frege/rt/Lam6.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Lam7.class: frege/rt/Lam7.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Lam8.class: frege/rt/Lam8.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Lam9.class: frege/rt/Lam9.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Lam10.class: frege/rt/Lam10.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Lam11.class: frege/rt/Lam11.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Lam12.class: frege/rt/Lam12.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Lam13.class: frege/rt/Lam13.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Lam14.class: frege/rt/Lam14.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Lam15.class: frege/rt/Lam15.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Lam16.class: frege/rt/Lam16.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Lam17.class: frege/rt/Lam17.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Lam18.class: frege/rt/Lam18.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Lam19.class: frege/rt/Lam19.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Lam20.class: frege/rt/Lam20.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Lam21.class: frege/rt/Lam21.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Lam22.class: frege/rt/Lam22.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Lam23.class: frege/rt/Lam23.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Lam24.class: frege/rt/Lam24.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Lam25.class: frege/rt/Lam25.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Lam26.class: frege/rt/Lam26.java
+	$(JAVAC) -d build -cp build $?
 $(RTDIR)/Boxed.class: frege/rt/Boxed.java
 	$(JAVAC) -d build -cp build $?
 $(RTDIR)/Value.class: frege/rt/Value.java
@@ -352,6 +413,8 @@ $(RTDIR)/Lazy.class: frege/rt/Lazy.java
 $(RTDIR)/Ref.class: frege/rt/Ref.java
 	$(JAVAC) -d build -cp build $?
 $(RTDIR)/Array.class: frege/rt/Array.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/App.class: frege/rt/App.java
 	$(JAVAC) -d build -cp build $?
 $(RTDIR)/Unknown.class: frege/rt/Unknown.java
 	$(JAVAC) -d build -cp build $?
