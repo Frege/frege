@@ -45,7 +45,7 @@ package frege.rt;
  * <p> See {@link Lam1} for a general discussion of untyped function values. </p>
  *
  */
-public abstract class Lam25 implements App {
+public abstract class Lam25 implements Lambda {
    /**
      * <p>Apply this function to an argument.</p>
      *
@@ -74,7 +74,7 @@ public abstract class Lam25 implements App {
      * to repeated invokation of the single argument form since intermediate
      * closure creation is saved.
      *
-     * @return an instance of type <tt>Unknown&lt;T26&gt;</tt>
+     * @return an instance of type <tt>Unknown&lt;FV&gt;</tt>
      */
     final public Unknown<FV> apply(final Lazy<FV> arg1,final Lazy<FV> arg2,final Lazy<FV> arg3,final Lazy<FV> arg4,final Lazy<FV> arg5,final Lazy<FV> arg6,final Lazy<FV> arg7,final Lazy<FV> arg8,final Lazy<FV> arg9,final Lazy<FV> arg10,final Lazy<FV> arg11,final Lazy<FV> arg12,final Lazy<FV> arg13,final Lazy<FV> arg14,final Lazy<FV> arg15,final Lazy<FV> arg16,final Lazy<FV> arg17,final Lazy<FV> arg18,final Lazy<FV> arg19,final Lazy<FV> arg20,final Lazy<FV> arg21,final Lazy<FV> arg22,final Lazy<FV> arg23,final Lazy<FV> arg24,final Lazy<FV> arg25) {
         return new Unknown<FV> () {

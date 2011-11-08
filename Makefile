@@ -43,8 +43,8 @@ TOOLSF  = $(DIR)/tools
 COMPS   = frege/compiler
 
 
-FREGE    = $(JAVA) -Xss30m -Xmx800m -cp build
-FREGEP   = $(JAVAP) -Xss30m -Xmx800m -cp build
+FREGE    = $(JAVA) -Xss30m -Xmx1100m -cp build
+FREGEP   = $(JAVAP) -Xss30m -Xmx1100m -cp build
 FREGECJ  = $(FREGE) -jar fregec.jar -fp build -d build -nocp -hints
 FREGECJP = $(FREGEP) -jar fregec.jar -fp build -d build -nocp -hints
 FREGECC  = $(FREGE) frege.compiler.Main  -d build -hints
@@ -53,8 +53,8 @@ FREGEC0  = $(FREGECJ) -prefix a
 FREGEC0P = $(FREGECJP) -prefix a
 FREGEC1  = $(FREGE) afrege.compiler.Main -d build -hints -prefix b -mh
 FREGEC1P = $(FREGEP) afrege.compiler.Main -d build -hints -prefix b -mh
-FREGEC2  = $(FREGE) -server bfrege.compiler.Main -d build -hints
-FREGEC2P = $(FREGEP) -server bfrege.compiler.Main -d build -hints
+FREGEC2  = $(FREGE) -server bfrege.compiler.Main -d build -hints -mh
+FREGEC2P = $(FREGEP) -server bfrege.compiler.Main -d build -hints -mh
 FREGEC3  = $(FREGECJ) -prefix c
 FREGEC3P = $(FREGECJP) -prefix c
 GENDOC   = $(FREGE)  frege.tools.Doc -d doc
@@ -260,7 +260,7 @@ runtime: $(RUNTIME)  doc/index.html
 RTDIR    = build/frege/rt
 RUNTIME  = build/frege/MD.class    $(COMPF)/JavaUtils.class \
 		$(RTDIR)/Lazy.class        $(RTDIR)/Value.class       $(RTDIR)/FV.class \
-		$(RTDIR)/Unknown.class     $(RTDIR)/App.class \
+		$(RTDIR)/Unknown.class \
 		$(RTDIR)/Val.class         $(RTDIR)/Box.class \
 		$(RTDIR)/Lambda.class      $(RTDIR)/MH.class \
 		$(RTDIR)/Lam1.class        $(RTDIR)/Lam2.class      $(RTDIR)/Lam3.class \
@@ -413,8 +413,6 @@ $(RTDIR)/Lazy.class: frege/rt/Lazy.java
 $(RTDIR)/Ref.class: frege/rt/Ref.java
 	$(JAVAC) -d build -cp build $?
 $(RTDIR)/Array.class: frege/rt/Array.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/App.class: frege/rt/App.java
 	$(JAVAC) -d build -cp build $?
 $(RTDIR)/Unknown.class: frege/rt/Unknown.java
 	$(JAVAC) -d build -cp build $?

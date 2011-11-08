@@ -90,7 +90,7 @@ TEXT
  * <p> See {\@link Lam1} for a general discussion of untyped function values. </p>
  *
  */
-public abstract class Lam$n implements App {
+public abstract class Lam$n implements Lambda {
    /**
      * <p>Apply this function to an argument.</p>
      *
@@ -119,7 +119,7 @@ public abstract class Lam$n implements App {
      * to repeated invokation of the single argument form since intermediate
      * closure creation is saved.
      *
-     * \@return an instance of type <tt>Unknown&lt;$rt&gt;</tt>
+     * \@return an instance of type <tt>Unknown&lt;FV&gt;</tt>
      */
     final public Unknown<FV> apply($cnargs) {
         return new Unknown<FV> () {

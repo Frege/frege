@@ -54,7 +54,7 @@ import java.lang.invoke.MethodType;
  * {@link MethodHandle}. </p> 
  */
 
-public final class MH extends Unknown<FV> implements FV, App {
+public final class MH extends Unknown<FV> implements FV, Lambda {
     /** <p> required to qualify as {@link FV} */
     public final int constructor() { return 0; }
     /** <p> Tells how many arguments we need before we can invoke.</p> */
@@ -74,7 +74,7 @@ public final class MH extends Unknown<FV> implements FV, App {
     }
     
     /** <p> Create a MH from a {@link MethodHandle} with a given arity. </p> */
-    public MH(MethodHandle it, int ari) {
+    public MH(final MethodHandle it, final int ari) {
         j = it; 
         arity = ari;
         if (arity > 0) result = this;       // prevent evaluation
@@ -84,11 +84,11 @@ public final class MH extends Unknown<FV> implements FV, App {
         <p> If the arity is not 0, it evaluates to itself. </p>
         <p> If the arity is 0, it evaluates the result of the invokation of the MethodHandle </p>
     */
-    @Override public final Lazy<FV> _v() {
+    @Override public Lazy<FV> _v() {
         // if (arity > 0) return this;
         // if (result
         try {
-            return (Lazy<FV>) j.invoke/*Exact*/(); 
+            return (Lazy<FV>) j.invokeExact(); 
         } catch (Throwable e) {
             // e.printStackTrace();
             throw new Error("MethodHandle evaluation error", e);

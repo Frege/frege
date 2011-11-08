@@ -282,7 +282,10 @@ public class RT {
      *
      *  @param action a {@link frege.rt.Unknown} value to be evaluated in a fork/join context
      */
-    public static<V> void fjMain(final java.util.concurrent.Callable<V> action) {
+    public static<V> void fjMain(final Lazy<V> val) {
+        java.util.concurrent.Callable<V> action = new java.util.concurrent.Callable<V> () {
+            public V call() { return val._e(); }
+        };
         // Check if parallel execution is prohibited
         // This is the case when the VM was started with -Dfrege.parallel=x
         // and x is not equal, ignoring case, to the string "true".
@@ -293,7 +296,7 @@ public class RT {
             try {
                 action.call();
             } catch (Exception ex) {
-                ex.printStackTrace();
+                throw new Error(ex);        // ex.printStackTrace();
             }
             return;
         }
@@ -304,7 +307,7 @@ public class RT {
                 .submit(action)
                 .get();
         } catch (Exception ex) {
-            ex.printStackTrace();
+            throw new Error(ex);
         }        
         return;
     }

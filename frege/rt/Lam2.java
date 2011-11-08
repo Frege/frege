@@ -55,7 +55,7 @@ package frege.rt;
  * of the type variables, see below.</p>
  *
  */
-public abstract class Lam2 implements App {
+public abstract class Lam2 implements Lambda {
     /**
      * <p>Apply this function to an argument.</p>
      *
@@ -69,6 +69,26 @@ public abstract class Lam2 implements App {
             final public Lazy<FV> eval(final Lazy<FV> arg2) { return Lam2.this.eval(arg2, arg1); }
         };
     }
+    
+    /**
+     * <p>Apply this function to all its arguments at once.</p>
+     *
+     * <p> This method creates an instance of {@link Unknown} that,
+     * when evaluated, invokes the {@link Lam2#eval} method of this
+     * function.</p>
+     *
+     * Use of this method is preferrable if all arguments are known compared
+     * to repeated invokation of the single argument form since intermediate
+     * closure creation is saved.
+     *
+     * @return an instance of type <tt>Unknown&lt;FV&gt;</tt>
+     */
+    final public Unknown<FV> apply(final Lazy<FV> arg1,final Lazy<FV> arg2) {
+        return new Unknown<FV> () {
+            final public Lazy<FV> _v() { return Lam2.this.eval(arg2,arg1); }
+        };
+    }
+    
     /**
      * <p> Run the function. </p>
      *

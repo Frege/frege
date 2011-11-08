@@ -390,9 +390,10 @@ maxStrict jt = case strict jt of
 
 --- bring a java expression to boxed mode
 toBoxed (bind@Bind {mode=RNative, jex = JExMem jx "j"}) = bind.{mode = RBoxed, jtype <- boxed, jex = jx}
-toBoxed (bind@Bind {mode=RNative, jtype}) = case boxed jtype of
+toBoxed (bind@Bind {mode=RNative, jtype = Nativ nx _}) = case boxed bind.jtype of
     bt@Ref jn t
-        | jn == jtFun.jname = bind.{mode=RBoxed, jtype = bt, jex = JNew bt [bind.jex]}
+        | nx == jtMethodHandle.typ = bind.{mode=RBoxed, jtype = bt, jex = JNew jtMH [bind.jex]}
+        | jn == jtFun.jname        = bind.{mode=RBoxed, jtype = bt}
         | JName "" bx <- jn = bind.{mode=RBoxed, jtype = bt,
                                         jex = JInvoke (JStMem (JName bx "mk") t) [bind.jex]}
     other -> bind.{mode=RBoxed, jtype = other}      -- questionable whether this is right
@@ -598,7 +599,8 @@ jtValue  = Ref {jname = JName "" "FV", targs = []}
 lazyVal = lazy jtValue
 
 --- the @MH@ type, which is a boxed @MethodHandle@
-jtFun    = Ref {jname = JName "" "MH", targs = []}
+jtFun    = Ref {jname = JName "" "Lambda", targs = []}
+jtMH     = Ref {jname = JName "" "MH", targs = []}
 
 --- a plain @MethodHandle@
 jtMethodHandle = Nativ "java.lang.invoke.MethodHandle" []
@@ -615,6 +617,7 @@ jtLazy   = Lazy
 --- create the boxed form of a java type
 boxed (Lazy x) = x
 boxed (Nativ "java.lang.invoke.MethodHandle" []) = jtFun
+boxed (Nativ #^Lam(bda)?\d+$# [])                = jtFun
 boxed (Nativ "boolean" []) = Ref {jname = JName "" "Box.Bool", targs = []}
 boxed (Nativ "byte" [])    = Ref {jname = JName "" "Box.Byte", targs = []}
 boxed (Nativ "short" [])   = Ref {jname = JName "" "Box.Short", targs = []}
@@ -709,9 +712,9 @@ lazyMeth sym | sym.{flds?} || sym.{rkind?} = do
             args        = constrargs ++ argdefs
             rm          = if sym.{flds?} then RBoxed else rmode sym.rkind
             wm          = if sym.{flds?} then RBoxed else wmode sym.rkind
-            jtype
-                | RLazy <- rm = lazy jrty
-                | otherwise   = boxed jrty
+            jtype       = lazy jrty     -- else MethodHandle.invokeExact will fail
+--                | RLazy <- rm = lazy jrty
+--                | otherwise   = boxed jrty
             wtype       = case wm of
                 RLazy   -> lazy jrty
                 RBoxed  -> boxed jrty
@@ -746,7 +749,7 @@ reqMH sym = do
                 other = enternew other.{qual = mainClass g,
                                         base <- ((fiLigatur ++ show sym.sid)++)}
     where
-        bind jname = Bind {mode=RBoxed, ftype=sym.typ, jtype=jtFun, jex=JX.static jname}
+        bind jname = Bind {mode=RBoxed, ftype=sym.typ, jtype=jtMH, jex=JX.static jname}
         enternew jname = do
             changeST Global.{gen <- GenSt.{mhs <- insertkv sym jname}}
             stio (bind jname)
@@ -823,11 +826,11 @@ genMH sym nm = do
         ctxClass (Ctx {cname}) = JX.static (U.memberOf (U.javaName g cname) "class")
         args        = take (length sigmas) (repeat (JX.atom "Lazy.class"))
         rm          = if sym.{flds?} then RBoxed else rmode sym.rkind
-        jtype
-            | RLazy <- rm = JName "Lazy" "class"
-            | otherwise   = case boxed jrty of
-                Ref {jname} -> U.memberOf jname "class"
-                other       -> Prelude.error "boxed must return Ref"
+        jtype       = JName "Lazy" "class"
+--            | RLazy <- rm = JName "Lazy" "class"
+--            | otherwise   = case boxed jrty of
+--                Ref {jname} -> U.memberOf jname "class"
+--                other       -> Prelude.error "boxed must return Ref"
         findStatic = JName "MH" (if caf then "findStaticGetter" else "findStatic")
         methodType = JName "java.lang.invoke.MethodType" "methodType"
         symJname   = wrapperMethod g sym
@@ -836,8 +839,8 @@ genMH sym nm = do
         mtargs     = JX.static jtype : (constraints ++ args)
         mtyp       = if caf then head mtargs
                             else (JX.invoke mtargs • JX.static) methodType
-        code = JNew jtFun [ (JX.invoke [clazz, name, mtyp] • JX.static) findStatic ]
-    stio JMember { attr = attrs [JPrivate, JStatic], jtype=jtFun, name=nm.base, init=Just code}
+        code = JNew jtMH [ (JX.invoke [clazz, name, mtyp] • JX.static) findStatic ]
+    stio JMember { attr = attrs [JPrivate, JStatic], jtype=jtMH, name=nm.base, init=Just code}
 
 
 pass :: StG (String, Int)
@@ -1041,11 +1044,13 @@ genMain = do
             (_, btoli) <- instSymDirect sym.pos vtoli sig1
             let  apparg = JInvoke btoli.jex [avb.jex]
             (_, bmain) <- instSymDirect sym.pos sym mainSigma
-            let applist = JInvoke bmain.jex [apparg]
+            let applist = (JCast jtFun
+                            • JX.invoke [] • JX.xmem "_e"
+                            • JX.invoke [apparg]) bmain.jex
                 iovoid = TApp (TApp (tc "ST") (tc "RealWorld")) (tc "()")
                 sig2 = ForAll [] (RhoFun [] (tauSig iovoid) (RhoTau [] (tc "()")))
             (_, bperf) <- instSymDirect sym.pos vstpu sig2
-            let appio = JCast jtFun (JInvoke bperf.jex [applist])
+            let appio = {- JCast jtFun -} (JInvoke bperf.jex [applist])
                 -- appe  = JInvoke (JExMem appio "_e") []
                 appe  = JInvoke (JStMem (JName "frege.RT" "fjMain") []) [appio]
                 gettime s = JMember {attr = attrFinal, jtype = Nativ "long" [], name=s,
@@ -1157,7 +1162,8 @@ conCode symt cons (sym@SymD {flds, cid}) = do
                                         init = Just (JX.new [] jtype)}]
                | otherwise = []
         wrapmk | struct = [wrapper, uMethod, vMethod, eMethod]
-               | otherwise = []
+               | arity == 0 = []
+               | otherwise = [wrapper]
         worker  = workerMethod g sym
 
 
@@ -1301,7 +1307,7 @@ symCode binds (sym@SymT {product=true}) = do                    -- product
                         args = constrargs,
                         body = JBlock [JReturn (JNew jtype args)]}
         members | struct = wrapper : zipWith member argjts memNames
-                | otherwise = []
+                | otherwise = [wrapper]
         member jt name = JMember {attr = attrs [JFinal, JPublic],
                                     jtype = strict jt,
                                     name, init = Nothing}
@@ -1478,10 +1484,11 @@ abstractFun symc (sym@SymV {sid}) = do
         funtyp = ForAll bnds ((fst • U.returnTypeN 0) sym.typ.rho)
 
     let constrformal = map (curry (makeConstraintArg g)) (zip ctxs ctxNames)
+        cafMeth = null ctxs && sym.depth == 0
     -- sjt          <- sigmaJT funtyp
     let    result = JMethod {attr = attrs [JPublic],
                             gargs = [],       -- map targ (filter (!=tauvar) bnds),
-                            jtype = jtFun,    -- if symc.vkind > 0 then erasedObj sjt else sjt,
+                            jtype = if cafMeth then lazy jtValue else jtFun,    -- if symc.vkind > 0 then erasedObj sjt else sjt,
                             name = latinF ++ mangled sym.name.base,
                             args = constrformal,
                             body = JEmpty}
@@ -1561,6 +1568,7 @@ instFun symc symt mname = do
         ctxs = [ ctx | ctx <- sym.typ.rho.context,
                        not (any (`implies` ctx) symt.typ.rho.context)]
         ourCtxNms = drop symt.typ.rho.context.length ctxNames   -- ctx3, ctx4, ....
+        isCAF = null ctxs && sym.depth == 0
     -- unless (null unmentioned) do
     --    U.warn sym.pos ("type of " ++ sym.nice g ++ " :: " ++ nicer sym.typ g
     --        ++ " does not mention type variables "
@@ -1573,11 +1581,14 @@ instFun symc symt mname = do
                   isJust meth.nativ `or` isJust meth.expr = meth
             other -> sym -- instance method
 
-    mhbind <- reqMH cmeth
+    mhbind <- if isCAF
+                then stio Bind {mode=RBoxed, ftype=sym.typ, jtype=jtValue,
+                                jex=JX.static (workerMethod g cmeth)}
+                else reqMH cmeth
 
 
     let constrformal = map (curry (makeConstraintArg g)) (zip ctxs ourCtxNms)
-    sjt          <- if sym.depth == 0 then return jtFun else sigmaJT sym.typ
+        sjt          = if isCAF then lazy jtValue else jtFun
     let constrargs   = map JAtom (take sym.typ.rho.context.length ctxNames)
         -- eosjt = erasedObj sjt
         result = JMethod {attr = attrs [JPublic, JFinal],
@@ -1588,7 +1599,7 @@ instFun symc symt mname = do
                             body = JBlock ([JReturn impl])}
         impl
             | null constrargs = mhbind.jex
-            | otherwise = JX.new [bindto] jtFun
+            | otherwise = JX.new [bindto] jtMH
             where bindto = fold app (JX.xmem "j" mhbind.jex) constrargs -- mh.j.bindTo(ctx1) ...
         app x a = (JX.invoke [a] • JX.xmem "bindTo") x
     stio [JComment ((nice sym g) ++ " :: " ++ nice sym.typ g), result]
@@ -1612,13 +1623,13 @@ workerMethod g _ = error "workerMethod: no SymV"
     this is the same as the worker.
 --}
 wrapperMethod g (sym@SymD {strsig, flds})
-    | null flds || not strsig.isStrict = workerMethod g sym
+    | null flds = workerMethod g sym
     | otherwise = (workerMethod g sym).{base <- (flLigatur ++)}
 wrapperMethod g (sym@SymV {strsig, nativ, depth, rkind})
     | depth == 0 = workerMethod g sym
     | Just _ <- nativ = flName
     | S x <- strsig, length x > 0, any Strictness.isStrict x = flName
-    | wmode rkind == RNative = flName
+    | wmode rkind != RLazy = flName
     | otherwise = workerMethod g sym
     where flName = (workerMethod g sym).{base <- (flLigatur ++)}
 wrapperMethod g _ = error "wrapperMethod: no SymD/SymV"
@@ -1837,7 +1848,7 @@ innerFun (symc@SymV {expr = Just x}) binds = do
                                 RNative -> strict rjt
         workerName = (workerMethod g sym).base
         letName    = U.javaName g sym.name
-        lambdaTyp  = Nativ "Lambda" []
+        lambdaTyp  = Nativ ("Lam"  ++ show sym.depth) []
         classTyp   = Nativ ("Lambda" ++ show sym.sid) []
         thisName   = "this"  ++ show sym.sid
         thisBind   = Bind RNative sym.typ classTyp (JAtom thisName)
@@ -1845,8 +1856,8 @@ innerFun (symc@SymV {expr = Just x}) binds = do
 
     stmts        <- compiling  sym (genFunction sym modew workerArgs innerbinds)
     lMethod      <- lazyMeth   sym
-    let flMethod = lMethod.{attr = attrs [JFinal, JPublic]}
-    handleMethod <- genLocalMH sym
+    let flMethod = lMethod.{attr = attrs [JFinal, JPublic], name = "eval", args <- reverse}
+    -- handleMethod <- genLocalMH sym
 
     let worker = JMethod {attr = attrs [JFinal, JPublic],
                           gargs = [],
@@ -1860,8 +1871,9 @@ innerFun (symc@SymV {expr = Just x}) binds = do
         letVar = JMember { attr = attrFinal, jtype = classTyp, name = letName.base,
                             init = Just (JNew classTyp []) }
         defs
-            | flMethod.name == worker.name = [worker, handleMethod]
-            | otherwise                    = [worker, flMethod, handleMethod]
+            | lMethod.name == worker.name,
+              sym.depth == 1 =  [worker.{name="eval"}]
+            | otherwise      =  [worker, flMethod]
         theClass = JClass { attr = attrFinal, jtype = classTyp,
                             extend = Just lambdaTyp,
                             implement = [], defs}
@@ -2325,10 +2337,10 @@ wrapCode jreturn rtau (sym@SymV {nativ = Just item}) abinds
             frho    = RhoFun [] ssig (RhoTau [] atau)   -- s -> a
         tjt     <- tauJT tuple
         fjt     <- rhoJT frho
-        let ret     = jreturn (JNew jtFun [mkST])
-            mkST    = (JX.invoke [JAtom "where"] • JX.xmem "handle") fun -- JInvoke (JStMem (JName "Prelude.TST" "mk") [sjt, ajt]) [fun]
+        let ret     = jreturn fun -- (JNew jtFun [mkST])
+            -- mkST    = (JX.invoke [JAtom "where"] • JX.xmem "handle") fun -- JInvoke (JStMem (JName "Prelude.TST" "mk") [sjt, ajt]) [fun]
             fun     = JNewClass lambda [] [rMethod]
-            lambda  = Ref (JName "" "Lambda") []
+            lambda  = Nativ "Lam1" []
             rMethod = JMethod {attr = attrs [JFinal, JPublic], gargs=[],
                                jtype = lazyVal, name = "eval",
                                args = [(attrFinal, ssig, lazy sjt, "_state")],
@@ -3241,7 +3253,10 @@ instSymDirect pos sym sigma = do
                     else stio (ctxs, Bind RBoxed sigma jt (JStMem (U.memberOf jname "mk") []))
         SymV {name = Local _, expr = Just _, depth} | depth > 0 = do
             let it = JX.static jname
-            stio (ctxs, Bind RBoxed sigma jt (JX.xmem "work" it))
+                work
+                    | depth == 1 && "work" == (wrapperMethod g sym).base = "eval"
+                    | otherwise = "work"
+            stio (ctxs, Bind RBoxed sigma jt (JX.xmem work it))
         SymV {name, depth, rkind} -> do
                 let wm   = workerMethod g sym
                 stio (ctxs, Bind RBoxed sigma jt (JStMem wm []))
@@ -3277,12 +3292,14 @@ instSym pos sym sigma = do
     ctxs     <- mapSt (resolveConstraint pos) contexts
 
     let (_, ss) = U.returnType sym.typ.rho
-        applied bnd [] = bnd
-        applied bnd [x] = (toBoxed bnd).{
-                            jex <- JX.invoke [x] • JX.xmem "apply",
-                            jtype <- lazy, mode = RLazy}
-        applied bnd xs = toBoxed bnd.{mode=RNative, jtype = jtMethodHandle, jex = fold app nmh xs}
+        applied :: Binding -> [JX] -> Binding
+        applied bnd [] = bnd.{jtype = rmodeJt bnd.mode jtFun}
+--        applied bnd [x] = (toBoxed bnd).{
+--                            jex <- JX.invoke [x] • JX.xmem "apply",
+--                            jtype <- lazy, mode = RLazy}
+        applied bnd xs = (toBoxed mhx).{jtype = jtFun}
             where
+                mhx = bnd.{mode=RNative, jtype = jtMethodHandle, jex = fold app nmh xs}
                 nmh = JX.xmem "j" (toBoxed bnd).jex
                 app nmh arg = (JX.invoke [arg] • JX.xmem "bindTo") nmh
 
@@ -3306,7 +3323,7 @@ instSym pos sym sigma = do
                                 stio bind
                             else do
                                 mhbind <- reqMH sym
-                                stio (Binding.{ftype=sigma} mhbind)
+                                stio (mhbind.{ftype=sigma, jtype = jtFun})
         SymV {name = MName clas m, depth, rkind} | Just (SymC {vkind,tau}) <- clas.findit g = do
                 g <- getST
                 U.logmsg TRACEG pos ("instSym: " ++ m ++ " depth=" ++
@@ -3328,11 +3345,11 @@ instSym pos sym sigma = do
                          | otherwise = JX.invoke ctxs item
                     bind = Bind RBoxed sigma jt func
                 stio bind
-        SymV {name = Local _, expr = Just _, depth} | depth > 0 = do
-                let inst = JX.invoke [JAtom "where"] (JX.xmem "handle" it)
-                    it = JX.static jname
-                    bind = Bind RNative sigma (strict jt) inst
-                stio (applied bind ctxs)
+--        SymV {name = Local _, expr = Just _, depth} | depth > 0 = do
+--                let inst = JX.invoke [JAtom "where"] (JX.xmem "handle" it)
+--                    it = JX.static jname
+--                    bind = Bind RNative sigma (strict jt) inst
+--                stio (applied bind ctxs)
         SymV {name, depth, rkind} -> do
                 (mhbind::Binding) <- reqMH sym
                 stio (applied mhbind.{ftype=sigma} ctxs)
@@ -3357,9 +3374,9 @@ genExpr _ rm (Vbl {pos, name, typ = Just sigma}) binds
     | Local nm <- name = do
         sym <- U.findV name
         case lookup binds sym of
-            Just (b@Bind{mode=RNative, jtype=Nativ #^Lambda\d+$# _}) = let
-                    handle = b.{jtype = jtMethodHandle, jex <- JX.invoke [JAtom "where"] • JX.xmem "handle"}
-                in stio (toMode rm handle)
+--            Just (b@Bind{mode=RNative, jtype=Nativ #^Lambda\d+$# _}) = let
+--                    handle = b.{jtype = jtMethodHandle, jex <- JX.invoke [JAtom "where"] • JX.xmem "handle"}
+--                in stio (toMode rm handle)
             Just b = stio (toMode rm b)
             Nothing | Just _ <- sym.expr -- , sym.anno, length sym.typ.rho.context > 0
                 = instSym sym.pos sym sigma
@@ -3528,12 +3545,16 @@ genExpr rflg rm (app@App a b (Just sigma)) binds = do
                                             stio (toMode rm b)
                             result
                 genDirect sym = do
+                    g <- getST
                     let callLazy = rm == RLazy `and` not tailcall
                     case lookup binds sym of
                         Just (b@Bind{mode=RNative, jtype=Nativ #^Lambda\d+$# _})
                             | callLazy = genAnon rm binds vbl args
                             | otherwise = genStraight sym bcall []
-                            where bcall = b.{jex <- JX.xmem "work"}
+                            where bcall = b.{jex <- JX.xmem work}
+                                  work | sym.depth == 1,
+                                         "work" == (wrapperMethod g sym).base = "eval"
+                                       | otherwise = "work"
                         Just b -> do        -- must be let bound because of depth > 0
                             genAnon rm binds vbl args
                         Nothing

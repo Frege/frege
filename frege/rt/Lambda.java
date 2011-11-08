@@ -35,8 +35,6 @@
     «•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•» */
 
 package frege.rt;
-import java.lang.invoke.MethodHandle;
-import java.lang.invoke.MethodHandles;
 
 // $Author$
 // $Date$
@@ -44,23 +42,13 @@ import java.lang.invoke.MethodHandles;
 // $Id$
 
 /**
- * <p> Base class for anonymous lambdas </p>
+ * <p> A thing that can be applied to something. </p> 
  */
-public abstract class Lambda {
+
+public interface Lambda extends FV {
     /**
-     * <P>get a {@link java.lang.invoke.MethodHandle} that invokes this Lambdas worker</P>
-     */
-    public MethodHandle handle(final MethodHandles.Lookup lookup) {
-        try {
-            return /*new MH*/ (
-                      lookup.bind(
-                            this,
-                            "eval",
-                            MH.mtLL      // Lazy -> Lazy
-                        )
-                    );
-        } catch (Exception e) {
-            throw new Error("Can't make MH for lambda", e);
-        }
-    }
+        <p> Apply this to an argument. </p>
+    */
+    public Lazy<FV> apply(Lazy<FV> v);
 }
+
