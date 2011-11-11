@@ -716,6 +716,7 @@ lazyClass sym | sym.{flds?} || sym.{rkind?} = do
 
         anonymousLazyClass = do
             g    <- getST
+            U.error sym.pos (nicer sym g ++ " must not ask for lazy class.")
             eval <- lazyMethod sym
             stio JMember { attr = attrTop, jtype = lamtype,
                            name = (wrapperInstance g sym).base,
@@ -755,12 +756,23 @@ lazyMethod sym | sym.{flds?} || sym.{rkind?} = do
                 | null sym.typ.rho.context = JX.static (workerMethod g sym)
                 | otherwise                = JAtom "work"
             arity = if sym.{depth?} then sym.depth else length sym.flds
+            isnative = sym.{nativ?} `and` isJust sym.nativ
             (rty, sigmas) = U.returnTypeN arity sym.typ.rho
+            (rtau, _)     = U.returnType sym.typ.rho
         jrty    <- rhoJT rty
         argdefs <- argDef attrFinal Strictness.U sigmas (take arity argNames)
-        let ctxs        = zip sym.typ.rho.context ctxNames
-            constrargs  = zipWith (makeConstraintArg g) sym.typ.rho.context ctxNames
-            args        = argdefs
+        wcode   <- if wrapped sym
+                   then wrapCode JReturn rtau sym (map argBind argdefs)
+                   else if isnative
+                        then do
+                                bind <- nativeCall sym (map argBind argdefs)
+                                stio [JReturn bind.jex]
+                        else stio []
+
+        -- special support for native functions, call directly into native code
+        let haswrapper  = arity > 0 `and` wrapped sym `or` (not (null sym.typ.bound))
+
+        let args        = argdefs
             rm          = if sym.{flds?} then RBoxed else rmode sym.rkind
             wm          = if sym.{flds?} then RBoxed else wmode sym.rkind
             jtype
@@ -773,125 +785,80 @@ lazyMethod sym | sym.{flds?} || sym.{rkind?} = do
             abinds
                 | S ss <- sym.strsig = zipWith adaptArg argdefs (ss ++ allLazy)
                 | otherwise          = map (notStrict • argBind) argdefs
-            -- cxs = map (JX.atom • snd) ctxs
+
             body = JBlock [(JReturn • bx • JX.invoke (map Binding.jex abinds)) jname]
+            rBody = if haswrapper then body -- JBlock [JReturn callWrapper]
+                    else case wcode of
+                            [JReturn x] = JBlock [JReturn (bx x)]
+                            _ -> JBlock wcode
             bx jex = (toMode rm (Bind {mode = wm,
                                         ftype = ForAll [] rty,
                                         jtype = wtype, jex})).jex
-        let result = JMethod { attr = attrs [JFinal, JPublic],
+            result = JMethod { attr = attrs [JFinal, JPublic],
                             gargs = [],
                             name = "eval",
-                            jtype, args = reverse args, body }
+                            jtype, args = reverse args,
+                            body = if isnative then rBody else body }
         stio result
 lazyMethod sym = error "lazyMeth: no SymV"
 
---{--
---    Require that there be a message handle for a symbol at runtime and return a 'Binding' for that handle.
---    The message handle will invoke the wrapper method of the symbol.
----}
---reqMH :: Symbol -> StG Binding
---reqMH sym = do
---        g <- getST
---        case lookup g.gen.mhs sym of
---            Just jname -> stio (bind jname)
---            Nothing -> case wrapperMethod g sym of
---                JName clazz base
---                    | clazz == mainClass g = enternew (JName clazz (fiLigatur ++ base))
---                other = enternew other.{qual = mainClass g,
---                                        base <- ((fiLigatur ++ show sym.sid)++)}
---    where
---        bind jname = Bind {mode=RBoxed, ftype=sym.typ, jtype=jtMH, jex=JX.static jname}
---        enternew jname = do
---            changeST Global.{gen <- GenSt.{mhs <- insertkv sym jname}}
---            stio (bind jname)
---
---{--
---    Generate the MH required in the cache
-----}
---genMHs = do
---        g <- getST
---        members <- mapSt (curry genMH) (each g.gen.mhs)
---        let vars = map JDecl.{init=Nothing} members         -- just the vars
---            assigns = [ JAssign (JAtom name) code | JMember {name, init = Just code} <- members]
---            initfi = JMethod {attr = attrs [JPrivate, JStatic], gargs = [],
---                        jtype = Nativ "void" [],
---                        name = "initﬁ", args = [], body = JBlock assigns}
---        stio (vars ++ [initfi])
---
---{--
---    Make the @handle()@ method  accesses the @call(...)@ method of a Lambda
-----}
---genLocalMH :: Symbol -> StG JDecl
---genLocalMH (sym@SymV {name = Local _})
---    | sym.depth > 0 = do
---        g <- getST
---
---        let  (rty, sigmas) = U.returnType sym.typ.rho
---
---        jrty    <- tauJT rty             -- principal return type of wrapperMethod
---
---        let constraints = map ctxClass sym.typ.rho.context
---            ctxClass (Ctx {cname}) = JX.static (U.memberOf (U.javaName g cname) "class")
---            args        = take (length sigmas) (repeat (JX.atom "Lazy.class"))
---            rm          = rmode sym.rkind
---            jtype
---                | RLazy <- rm = JName "Lazy" "class"
---                | otherwise   = case boxed jrty of
---                    Ref {jname} -> U.memberOf jname "class"
---                    other       -> Prelude.error "boxed must return Ref"
---            lookup     = JAtom "where"
---            jtLookup   = Nativ "java.lang.invoke.MethodHandles.Lookup" []
---            bind       = JX.xmem "bind" lookup
---            methodType = JName "java.lang.invoke.MethodType" "methodType"
---            symJname   = wrapperMethod g sym
---            this       = JX.atom "this"
---            name       = JX.atom (show symJname.base)
---            mtargs     = JX.static jtype : (constraints ++ args)
---            mtyp       = (JX.invoke mtargs • JX.static) methodType
---            code       = JX.invoke [this, name, mtyp] bind
---            try        = JBlockX "try" [JReturn code]
---            catch      = JBlockX "catch (Exception ex)" [
---                            JThrow (JNew (Nativ "Error" []) [
---                                JAtom (show "Can't bind lambda worker: "),
---                                JAtom "ex"
---                        ])]
---        stio JMethod { attr = attrs [JPublic],
---                       jtype = jtMethodHandle,
---                       args = [(attrFinal, U.pSigma, jtLookup, "where")], gargs = [],
---                       name = "handle", body = JBlock [try, catch]}
---    | otherwise = error ("Can't generate handle() for CAF " ++ sym.name.base)
---genLocalMH sym  = error ("Can't generate handle() for non Var " ++ sym.name.base)
---{--
---    Make a method handle for a top level value
----}
---genMH :: Symbol -> JName -> StG JDecl
---genMH sym nm = do
---    g <- getST
---
---    let  (rty, sigmas) = U.returnType sym.typ.rho
---         caf           = null sigmas && null sym.typ.rho.context
---    jrty    <- tauJT rty                            -- principal return type of wrapperMethod
---
---    -- argdefs <- argDef attrFinal Strictness.U sigmas (take (length sigmas) argNames)
---    let constraints = map ctxClass sym.typ.rho.context
---        ctxClass (Ctx {cname}) = JX.static (U.memberOf (U.javaName g cname) "class")
---        args        = take (length sigmas) (repeat (JX.atom "Lazy.class"))
---        rm          = if sym.{flds?} then RBoxed else rmode sym.rkind
---        jtype       = JName "Lazy" "class"
-----            | RLazy <- rm = JName "Lazy" "class"
-----            | otherwise   = case boxed jrty of
-----                Ref {jname} -> U.memberOf jname "class"
-----                other       -> Prelude.error "boxed must return Ref"
---        findStatic = JName "MH" (if caf then "findStaticGetter" else "findStatic")
---        methodType = JName "java.lang.invoke.MethodType" "methodType"
---        symJname   = wrapperMethod g sym
---        clazz      = JX.static symJname.{base="class"}
---        name       = JX.atom (show symJname.base)
---        mtargs     = JX.static jtype : (constraints ++ args)
---        mtyp       = if caf then head mtargs
---                            else (JX.invoke mtargs • JX.static) methodType
---        code = JNew jtMH [ (JX.invoke [clazz, name, mtyp] • JX.static) findStatic ]
---    stio JMember { attr = attrs [JPrivate, JStatic], jtype=jtMH, name=nm.base, init=Just code}
+{--
+    Require that there be an instance of a Lambda suitable to call
+    the symbol lazily at runtime and return a 'Binding' for that handle.
+-}
+reqLam :: Symbol -> StG Binding
+reqLam sym = do
+        g <- getST
+        case lookup g.gen.mhs sym of
+            Just jname -> stio (bind jname)
+            Nothing -> case wrapperInstance g sym of
+                JName clazz base
+                    | clazz == mainClass g = enternew (JName clazz (fiLigatur ++ base))
+                other = enternew other.{qual = mainClass g,
+                                        base <- ((fiLigatur ++ show sym.sid)++)}
+    where
+        bind jname = Bind {mode=RBoxed, ftype=sym.typ, jtype=jtFun, jex=JX.static jname}
+        enternew jname = do
+            changeST Global.{gen <- GenSt.{mhs <- insertkv sym jname}}
+            stio (bind jname)
+
+{--
+    Generate the anonymous Lambdas required in the cache
+--}
+genAnonLams = do
+        g <- getST
+
+        let symjn = each g.gen.mhs
+
+        classes <- mapSt anonLazyClass (map fst symjn)
+        let vars    = [ JMember {attr = attrs [JPrivate, JStatic],
+                                 jtype = cls.jtype, name  = jname.base, init = Nothing } |
+                            (cls::JDecl, jname::JName) <- zip classes (map snd symjn)]
+            assigns = [ (JAtom jname.base) `JAssign` (JNew cls.jtype []) |
+                            (cls::JDecl, jname::JName) <- zip classes (map snd symjn)]
+            initfi = JMethod {attr = attrs [JPrivate, JStatic], gargs = [],
+                        jtype = Nativ "void" [],
+                        name = "initﬁ", args = [], body = JBlock assigns}
+        stio (classes ++ vars ++ [initfi])
+
+{--
+    Create a class derived from Lambda for the symbol
+    > class L123 extends Lam5 { public final T eval(...) { ... } }
+--}
+anonLazyClass :: Symbol -> StG JDecl
+anonLazyClass sym = do
+        let ari
+                | sym.{depth?} = sym.depth
+                | sym.{flds?}  = length sym.flds
+                | otherwise    = 0                  -- generate wrong code instead of aborting
+            lamtype            = Nativ ("Lam" ++ show ari) []
+            cltype             = Nativ ("L" ++ show sym.sid) []
+
+        g    <- getST
+        eval <- lazyMethod sym
+        stio JClass  { attr = attrTop, jtype = cltype, extend = Just lamtype,
+                       implement = [], defs = [eval] }
+
 
 
 pass :: StG (String, Int)
@@ -912,13 +879,10 @@ pass = do
         cType = Ref (JName "" (constClass g)) []
     pp (anno cClass)
 
-    -- we need our own lookup to get the MethodHandles inside of Lambda
---    U.println ""
---    U.println "final public static java.lang.invoke.MethodHandles.Lookup where"
---    U.println "                  = java.lang.invoke.MethodHandles.lookup();"
---    U.println ""
---    U.println "static { initﬁ(); }  // initialize method handles"
---    U.println ""
+    -- we pre-initialize the anonymous lambdas we need
+    U.println ""
+    U.println "static { initﬁ(); }  // initialize functions needed lazily"
+    U.println ""
 
     mapSt (symCode Nil) (sortBy (comparing Symbol.name) [ s | s@SymT {sid} <- vals ])
         >>= ppSS
@@ -929,9 +893,8 @@ pass = do
     mapSt (symCode Nil) (sortBy (comparing Symbol.name) [ s | s@SymV {sid} <- vals ])
         >>= ppSS
 
-    -- method handles
---    mhs <- genMHs
---    foreach mhs (pp • anno)
+    -- anonymous lambdas
+    genAnonLams >>= mapM_ (pp • anno)
 
     -- constants
     makeConstants
@@ -1191,7 +1154,7 @@ conCode symt cons (sym@SymD {flds, cid}) = do
         struct      = sym.strsig.isStrict
     argjts  <- mapSt sigmaJT argtys
     funty   <- sigmaJT sym.typ
-    wrapper <- lazyClass sym
+    -- wrapper <- lazyClass sym
 
     let djtype = defining jtype
         arity  = length flds
@@ -1212,9 +1175,9 @@ conCode symt cons (sym@SymD {flds, cid}) = do
                                         name = "single",
                                         init = Just (JX.new [] jtype)}]
                | otherwise = []
-        wrapmk | struct = [wrapper, uMethod, vMethod, eMethod]
+        wrapmk | struct = [{- wrapper,-} uMethod, vMethod, eMethod]
                | arity == 0 = []
-               | otherwise = [wrapper]
+               | otherwise = [{- wrapper,-}]
         worker  = workerMethod g sym
 
 
@@ -1324,7 +1287,7 @@ symCode binds (sym@SymT {product=true}) = do                    -- product
     funty      <- sigmaJT symd.typ
     ftypes     <- mapSt sigmaJT (map ConField.typ symd.flds)        -- field types
     argjts     <- mapSt sigmaJT argtys
-    wrapper    <- lazyClass symd
+    -- wrapper    <- lazyClass symd
     let arity  = length symd.flds
         ext | struct     = jtVal                            -- extends FV/ProdN<...,...,...>
             | otherwise  = Ref {jname=JName "" ("Prod" ++ show arity), targs = []}
@@ -1357,8 +1320,8 @@ symCode binds (sym@SymT {product=true}) = do                    -- product
                         gargs = jtype.targs, jtype, name = "mk",
                         args = constrargs,
                         body = JBlock [JReturn (JNew jtype args)]}
-        members | struct = wrapper : zipWith member argjts memNames
-                | otherwise = [wrapper]
+        members | struct = {- wrapper : -} zipWith member argjts memNames
+                | otherwise = [{- wrapper -}]
         member jt name = JMember {attr = attrs [JFinal, JPublic],
                                     jtype = strict jt,
                                     name, init = Nothing}
@@ -2017,7 +1980,9 @@ topFun (sym@SymV {expr = Just x}) binds = do
         workerName = if staticWorker then (workerMethod g sym).base else workName g sym
 
     stmts  <- compiling sym (genFunction sym modew workerArgs binds)
-    lClass <- lazyClass sym
+    lClass <- if staticWorker
+                then return (JComment "has static worker")
+                else lazyClass sym
 
     let worker = JMethod {attr = attrs [JFinal, JPublic, if staticWorker then JStatic else JPublic],
                           gargs = [],
@@ -2030,7 +1995,7 @@ topFun (sym@SymV {expr = Just x}) binds = do
             JClass  {}
                 | workerName == "work" = [lClass.{defs <- (++[worker])}]
                 | otherwise            = [lClass.{defs <- map modEval}]
-            _                          = [worker, lClass]
+            _                          = [lClass, worker]
           where
                 modEval item
                     | JMethod {name="eval"} <- item = item.{body = worker.body}
@@ -2230,6 +2195,8 @@ methClass _  = undefined
 wrapped (sym@SymV {nativ = Just item}) = niSpecial rty
     where
         (rty, sigmas) = U.returnType sym.typ.rho
+wrapped SymV {} = false
+wrapped SymD {} = false
 wrapped _ = error "wrapped: no symv"
 
 {--
@@ -2394,24 +2361,14 @@ methCode (sym@SymV {nativ = Just item})
                                     bind <- nativeCall sym (map argBind args)
                                     stio [jreturn bind.jex]
 
-        let lamtype     = Nativ ("Lam" ++ show arity) []
-            rBody       = if haswrapper then [JReturn callWrapper]
-                            else case wcode of
-                                [JReturn x] = [JReturn (toBoxed (bndWcode x)).jex]
-                                _ -> wcode
-            anonymousLazyClass = do
-                g    <- getST
-                eval <- lazyMethod sym
-                stio JMember { attr = attrTop, jtype = lamtype,
-                           name = (wrapperInstance g sym).base,
-                           init = Just (JNewClass lamtype [] [eval.{body = JBlock rBody}]) }
-        rClass        <- anonymousLazyClass
+
+        -- rClass        <- anonymousLazyClass
 
         let wrappers    = if haswrapper then [wrapper] else []
             wrapper     = JMethod {attr = attrs [JPublic, JStatic, JFinal],
                                 gargs = ftargs, jtype = strict rjt, name = name.base,
                                 args = wArgs, body = JBlock wcode}
-            defs        = rClass:wrappers
+            defs        = wrappers
             unex  [(JEx x)] = (toBoxed (bndWcode x)).jex
             unex  _ = error "unex: need list with 1 ex"
             member = JMember {attr = attrs [JPublic, JStatic, JFinal],
@@ -3195,7 +3152,7 @@ instSymDirect pos sym sigma = do
         SymV {name, depth, rkind}
             | Just wc <- wrapperClass g sym = do
                 let instx = (JX.xmem (workName g sym) • JX.invoke ctxs • JX.static)
-                                                                (wrapperInstance g sym)
+                                  (wrapperInstance g sym)
                 stio (Bind RBoxed sigma jt instx)
             | null ctxs = do
                 let wm   = workerMethod g sym
@@ -3257,9 +3214,9 @@ instSym pos sym sigma = do
                                 let jx = JX.invoke [] mkOrEnum
                                     bind = Bind RBoxed sigma jt jx
                                 stio bind
-                            else do
-                                let inst = wrapperInstance g sym
-                                stio (Bind RBoxed sigma jtFun (JX.static inst))
+                            else reqLam sym -- do
+                                -- let inst = wrapperInstance g sym
+                                -- stio (Bind RBoxed sigma jtFun (JX.static inst))
         SymV {name = MName clas m, depth, rkind} | Just (SymC {vkind,tau}) <- clas.findit g = do
                 g <- getST
                 U.logmsg TRACEG pos ("instSym: " ++ m ++ " depth=" ++
@@ -3279,9 +3236,9 @@ instSym pos sym sigma = do
             | Just wc <- wrapperClass g sym = do
                 let instx = (JX.invoke ctxs • JX.static) (wrapperInstance g sym)
                 stio (Bind RBoxed sigma jt instx)
-            | null ctxs = do
-                let wm   = wrapperInstance g sym
-                stio (Bind RBoxed sigma jt (JX.static wm))
+            | null ctxs = reqLam sym -- do
+                -- let wm   = wrapperInstance g sym
+                -- stio (Bind RBoxed sigma jt (JX.static wm))
         other -> U.fatal pos ("Can't instSym " ++ nice sym g)
 
 
