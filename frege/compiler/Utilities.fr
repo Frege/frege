@@ -405,12 +405,12 @@ showex lambdachar x global = showprec 17 x where
              rest | null as = "}"
                   | otherwise = "; ...}"
     showprec 17 (Let t _ e _)
-        | length kt >  1  = "let " ++ dspl (keys t) ++ " in " ++ showprec 17 e
+        | length kt >  1  = "let " ++ dspl kt ++ " in " ++ showprec 17 e
         | lambdachar != "\\" = "let " ++ head kt ++ "=" ++ sv (head vt) ++ " in ..."
         | length kt == 1  = "let " ++ head kt ++ "=" ++ sv (head vt) ++ " in " ++ showprec 17 e
         | otherwise = "let ... in " ++ showprec 17 e  -- Prelude.error "showprec empty let"
         where
-            kt = keys t
+            kt = map XS.unXS (keys t)
             vt = values t
             sv (vsym@SymV {expr})
                 | Just x <- expr = if lambdachar == "\\"
@@ -627,8 +627,8 @@ private enterWith insupd p n s = do
 
 
 {-- insert symbol, but make sure it does not exist yet -}
-private insertSym :: Symtab -> String -> Symbol -> StG Symtab
-private insertSym tab key value = case tab.lookupS key of
+private insertSym :: Symtab -> XS -> Symbol -> StG Symtab
+private insertSym tab key value = case tab.lookup key of
     Nothing -> stio (tab.insert key value)
     Just old  -> do
         g <- getST
@@ -643,12 +643,12 @@ private insertSym tab key value = case tab.lookupS key of
         stio (tab.insert key value)
 
 {-- update symbol, but make sure it does already exist -}
-private updateSym :: Symtab -> String -> Symbol -> StG Symtab
-private updateSym tab key value = case tab.lookupS key of
+private updateSym :: Symtab -> XS -> Symbol -> StG Symtab
+private updateSym tab key value = case tab.lookup key of
     Just _   -> stio (tab.update key value)
     Nothing  -> do
         qn <- inState (Symbol.nice value)
-        error value.pos ("cannot update " ++ qn ++ "  " ++ show (keys tab))
+        error value.pos ("cannot update " ++ qn ++ "  " ++ show (map XS.unXS (keys tab)))
         stio (tab.update key value)
 
 
@@ -719,8 +719,8 @@ changeSym sym = do
         g <- getST
         logmsg TRACE3 sym.pos ("changeSym " ++ show sym.sid ++ " " ++ sym.nice g)
         case sym.name of
-            TName p b -> updateGlobal p ("ty " ++ b) sym
-            VName p b -> updateGlobal p b sym
+            TName p b -> updateGlobal p sym.name.key sym
+            VName p b -> updateGlobal p sym.name.key sym
             MName t b -> do
                 g <- getST
                 let tsy = do a <- t.find g; a.follow g
@@ -729,17 +729,15 @@ changeSym sym = do
                         qn <- inState t.nice
                         error sym.pos ("namespace `" ++ qn ++ "` does not exist")
                     Just typ | typ.{env?} = do
-                                env <- updateSym typ.env b sym
-                                updateGlobal t.pack ("ty " ++ t.base) typ.{env}
+                                env <- updateSym typ.env sym.name.key sym
+                                updateGlobal t.pack t.key typ.{env}
                              | otherwise = fatal sym.pos ("no environment: " ++ t.nice g)
             Local s -> do
                 g <- getST
-                envDump
-                case (head g.env).lookupS s of
+                let k = sym.name.key
+                case (head g.env).lookup k of
                     Just found -> do
-                        -- logmsg TRACE3 sym.pos ("changeSym found " ++ show found.sid ++ " "
-                        --    ++ found.nice g)
-                        env <- updateSym (head g.env) s sym
+                        env <- updateSym (head g.env) k sym
                         changeTop (const env)
                     Nothing -> without (changeSym sym)
 
@@ -753,8 +751,8 @@ enterByName sym = do
         ++ (if sym.{expr?} `and` not (isPSigma sym.typ)
                 then " :: " ++ sym.typ.nicer g else ""))
     case sym.name of
-        TName p b -> insertGlobal p ("ty " ++ b) sym
-        VName p b -> insertGlobal p b sym
+        TName p b -> insertGlobal p sym.name.key sym
+        VName p b -> insertGlobal p sym.name.key sym
         MName t b -> do
             g <- getST
             let tsy = do a <- t.find g; a.follow g
@@ -763,15 +761,15 @@ enterByName sym = do
                     qn <- inState t.nice
                     error sym.pos ("namespace `" ++ qn ++ "` does not exist")
                 Just typ | typ.{env?} = do
-                            env <- insertSym typ.env b sym
-                            updateGlobal t.pack ("ty " ++ t.base) typ.{env}
+                            env <- insertSym typ.env sym.name.key sym
+                            updateGlobal t.pack (t.key) typ.{env}
                          | otherwise = fatal sym.pos ("no environment: " ++ t.nice g)
         Local s -> do
             g <- getST
-            env <- insertSym (head g.env) s sym
+            env <- insertSym (head g.env) sym.name.key sym
             logmsg TRACE3 sym.pos ("length env: " ++ show (length g.env)
-                                   ++ ", keys oldtop: " ++ show (keys (head g.env))
-                                   ++ ", keys newtop: " ++ show (keys env))
+                                   ++ ", keys oldtop: " ++ show (map XS.unXS (keys (head g.env)))
+                                   ++ ", keys newtop: " ++ show (map XS.unXS (keys env)))
             changeTop (const env)
 
 {- ############ find a specific symbol or die ############### -}
@@ -1247,7 +1245,9 @@ resolve3 fname pos ("", "", s) = do
         find x = QName.findit x g
         names = [local, mname, vname, tname]
         found = map find names
-        result = [ sym | Just sym <- found ]   -- canonical through findit
+        result = [ sym | Just sym <- found ]                -- canonical through findit
+--                                  (Symbol.name sym).base == s,
+--                                  res <- (sym.follow g).toList ]
     case result of
         [] -> do
                 error pos ("can't resolve `" ++ s ++ "`, did you mean `"
@@ -1707,14 +1707,32 @@ isJavaType _ = stio false
 arity sym = case returnType (Symbol.typ sym).rho of
     (_, xs) -> length xs
 
+
+base32str = "ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜËÏŸ".toLowerCase
+a32 = length base32str    -- 32
+
+genmh g = isOn (g::Global).options.flags GENMH
+base32 num
+    | num < 1 = "ß"
+    | otherwise = repljavakws (packed (code [] num))
+    where
+        code !xs 0 = xs
+        code !xs n = code (c:xs) r
+            where
+                !c = base32str.charAt (n `band` 31)
+                r = n `bshr` 5
+
+
 {--
  * [usage] @javaName g qname@
  * [return] a java identifier for the corresponding java object, if there is one
  * [requires] the named item must be in scope
  -}
-javaName g (Local (s@#^ƒ[0-9_]+$#)) = JName "" s        -- already uniq, avoid too long classnames
+javaName g (Local (s@#^ƒ[0-9_]+$#)) | !(genmh g) = JName "" s        -- already uniq, avoid too long classnames
 javaName g (q@Local s) = case QName.findit q g of
-    Just (SymV {sid}) -> JName "" (mangled s ++ "_" ++ show sid)
+    Just (SymV {sid})
+        | genmh g   = JName "" (mangled s)
+        | otherwise = JName "" (mangled s ++ "_" ++ show sid)
     other -> Prelude.error ("javaName: cannot find variable " ++ s)
     {-
 javaName g (TName prel x)
@@ -1754,6 +1772,7 @@ javaName g qname = case qname.findit g of
             other -> Prelude.error ("javaName: strange symbol " ++ nice sym g)
         Nothing -> Prelude.error ("javaName: cannot findit " ++ nice qname g)
     where
+        vid name | genmh g = mangled name
         vid name = case name =~ #\p{Lu}# of
             Just m -> let
                     x = m.match

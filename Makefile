@@ -47,8 +47,8 @@ FREGE    = $(JAVA) -Xss30m -Xmx1100m -cp build
 FREGEP   = $(JAVAP) -Xss30m -Xmx1100m -cp build
 FREGECJ  = $(FREGE) -jar fregec.jar -fp build -d build -nocp -hints
 FREGECJP = $(FREGEP) -jar fregec.jar -fp build -d build -nocp -hints
-FREGECC  = $(FREGE) frege.compiler.Main  -d build -hints
-FREGECCP = $(FREGEP) frege.compiler.Main  -d build -hints
+FREGECC  = $(FREGE) frege.compiler.Main  -d build -hints -mh
+FREGECCP = $(FREGEP) frege.compiler.Main  -d build -hints -mh
 FREGEC0  = $(FREGECJ) -prefix a
 FREGEC0P = $(FREGECJP) -prefix a
 FREGEC1  = $(FREGE) afrege.compiler.Main -d build -hints -prefix b -mh
@@ -125,7 +125,7 @@ $(LIBF)/ForkJoin.class: $(DIR)/Prelude.class frege/lib/ForkJoin.fr
 # The j library conatins native definitions from java and javax
 #
 $(LIBJ)/Lang.class: $(DIR)/Prelude.class frege/j/Lang.fr
-	$(FREGE) frege.compiler.Main  -d build -nowarn  frege/j/Lang.fr
+	$(FREGECC) frege/j/Lang.fr
 $(LIBJ)/Awt.class: $(LIBJ)/Util.class frege/j/Awt.fr
 	$(FREGECC) frege/j/Awt.fr
 $(LIBJ)/Swing.class: $(LIBJ)/Lang.class $(LIBJ)/Awt.class frege/j/Swing.fr

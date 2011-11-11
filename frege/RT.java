@@ -319,13 +319,12 @@ public class RT {
      * @param it A product of arity 2 that contains the value that must be evaluated in member m1
      * @return <tt>true</tt>
      */
-    public final static<V extends frege.rt.Lazy<V>, U extends frege.rt.Lazy<U>> 
-                    boolean fork(final frege.rt.Product2<V, U> it) {
+    public final static boolean fork(final frege.rt.Prod2 it) {
         if (java.util.concurrent.ForkJoinTask.inForkJoinPool()
-            && it.m1 instanceof frege.rt.Unknown
-            && it.m1._u()) {
-                final frege.rt.Unknown<V> u = (frege.rt.Unknown<V>) it.m1;
-                java.util.concurrent.ForkJoinTask.<V>adapt(u).fork();
+            && it.mem1 instanceof frege.rt.Unknown
+            && it.mem1._u()) {
+                final frege.rt.Unknown<FV> u = (frege.rt.Unknown<FV>) it.mem1;
+                java.util.concurrent.ForkJoinTask.<FV>adapt(u).fork();
                 return true;
         }
         return true;

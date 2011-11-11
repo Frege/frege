@@ -205,9 +205,15 @@ data Global = !Global {
         Nothing -> error ("no symtab for package " ++ show (g.thisPack.unpack g))
 
 --- the symbol table
-type Symtab = Tree String Symbol
--- an environment - a list of symbol tables - take care when a symtab is changed!
--- type Env = [Symtab]
+type Symtab = Tree KeyString Symbol
+type XS     = KeyString
+
+abstract data KeyString = XS String where
+    unXS (XS s) = tail s
+    global c s  = XS (c ++ s)
+    local s     = XS ("l" ++ s)
+
+derive Ord KeyString
 
 {--
  * A package name can not be read without resort to the global state,
@@ -305,21 +311,26 @@ data QName =
         getpack (MName (TName p _) _) = p
         getpack (MName _ _) = Prelude.error "illegal MName"
         getpack (Local _) = Pack.new ""
+
+        key (Local s)    = XS.local s
+        key (TName _ s)  = XS.global "T" s
+        key vmName       = XS.global prefix s
+            where   s      = vmName.base
+                    prefix = if (s.charAt 0).isLowerCase then "V" else "D"
         find :: QName -> Global -> Maybe Symbol
-        find (Local s)  g =  loop s g.env where
-            loop s []     = Nothing
-            loop s (e:es) = case Tree.lookupS e s of
-                Nothing -> loop s es
-                -- Just d | (MName _ _) <- Symbol.name d = Nothing   // guard against confusion with members
+        find (this@Local s)  g =  loop (key this) g.env where
+            loop k []     = Nothing
+            loop k (e:es) = case Tree.lookup e k of
+                Nothing -> loop k es
                 just    -> just
-        find (TName p s) g = case g.packages.lookup p of
-            Just env -> env.lookupS ("ty "++s)
+        find (this@TName p s) g = case g.packages.lookup p of
+            Just env -> env.lookup (key this)
             Nothing  -> Nothing
-        find (VName p s) g = case g.packages.lookup p of
-            Just env -> env.lookupS s
+        find (this@VName p s) g = case g.packages.lookup p of
+            Just env -> env.lookup (key this)
             Nothing  -> Nothing
-        find (MName t s) g = case findit t g of
-            Just sy | sy.{env?} = sy.env.lookupS s
+        find (this@MName t s) g = case findit t g of
+            Just sy | sy.{env?} = sy.env.lookup (key this)
             Just (SymA {typ}) = case instTSym typ g of
                 Just (sym::Symbol) -> find (MName sym.name s) g
                 Nothing  -> Nothing
@@ -335,10 +346,10 @@ data QName =
         our     (VName p  _) g = p.== (Global.thisPack g)
         our     (MName t  _) g = our t g
         our     (Local _)    g = true
-        javaq   (TName p  _) g = p.unpack g ++ "."
-        javaq   (VName p  _) g = p.unpack g ++ "."
-        javaq   (MName t  _) g = javaq t  g ++ "." ++ mangled t.base ++ "."
-        javaq   (Local _)    _ = ""
+--        javaq   (TName p  _) g = p.unpack g ++ "."
+--        javaq   (VName p  _) g = p.unpack g ++ "."
+--        javaq   (MName t  _) g = javaq t  g ++ "." ++ mangled t.base ++ "."
+--        javaq   (Local _)    _ = ""
         qual    (TName p  _)   = TName p
         qual    (VName p  _)   = VName p
         qual    (MName t  _)   = MName t
@@ -745,8 +756,8 @@ data ExprT q =
     | ConFS    { pos::Line, name::q, fields::[(String, ExprT q)],  typ::Maybe (SigmaT q) }
     | !App     { fun::ExprT q, arg::ExprT q,  typ::Maybe (SigmaT q)}
     | !Lit     { pos::Line, kind::Literalkind, value::String,  typ::Maybe (SigmaT q)}
-    | !Let     { env::Tree String Symbol, defs::[Definition], ex::ExprT q, typ::Maybe (SigmaT q)}
-    | !Lam     { env::Tree String Symbol, pat:: PatternT q,   ex::ExprT q, typ::Maybe (SigmaT q)}
+    | !Let     { env::Symtab, defs::[Definition], ex::ExprT q, typ::Maybe (SigmaT q)}
+    | !Lam     { env::Symtab, pat:: PatternT q,   ex::ExprT q, typ::Maybe (SigmaT q)}
     | !Ifte    { cnd::ExprT q, thn::ExprT q, els::ExprT q, typ::Maybe (SigmaT q)}
     | !Mem     { ex::ExprT q, member::String, typ::Maybe (SigmaT q)}
     | !Case    { ckind::CKind, ex::ExprT q, alts::[CAltT q], typ::Maybe (SigmaT q)}
@@ -758,7 +769,7 @@ type ExprS = ExprT String
 {--
  * case alternative
  -}
-data CAltT q = !CAlt {pos::Line, env::Tree String Symbol, pat::PatternT q, ex::ExprT q}
+data CAltT q = !CAlt {pos::Line, env::Symtab, pat::PatternT q, ex::ExprT q}
 type CAltS = CAltT String
 type CAlt  = CAltT QName
 
@@ -949,7 +960,7 @@ envDump = do
         cond = (1 `bshl` ord TRACEX) `band` g.options.flags
         levels = reverse (1..g.env.length)
         frame (n, st) = do
-            let nmid = [ (nm, Symbol.pos sym, Symbol.sid sym) | (nm, sym) <- each st ]
+            let nmid = [ (XS.unXS nm, Symbol.pos sym, Symbol.sid sym) | (nm, sym) <- each st ]
             g.stderr.println (show n ++ " " ++ show nmid)
             IO.return ()
     when (cond != 0) do
