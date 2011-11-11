@@ -54,15 +54,21 @@ public class Prod2 extends Val {
     public final static Lazy<FV> get1(Lazy<FV> p) {
         return ((Prod2) p._e()).mem1;
     }
-    public final static MH mhget1 = new MH (
-        MH.findStatic(Prod2.class, "get1", MH.mtLL));
+    public final static Lambda mhget1 = new Lam1 () {
+        public final Lazy<FV> eval(Lazy<FV> p) {
+            return ((Prod2) p._e()).mem1;
+        }
+    };
     /** <p>Field 2 </p> */
     public final Lazy<FV> mem2;
     public final static Lazy<FV> get2(Lazy<FV> p) {
         return ((Prod2) p._e()).mem2;
     }
-    public final static MH mhget2 = new MH (
-        MH.findStatic(Prod2.class, "get2", MH.mtLL));
+    public final static Lambda mhget2 = new Lam1 () {
+        public final Lazy<FV> eval(Lazy<FV> p) {
+            return ((Prod2) p._e()).mem2;
+        }
+    };
     /** <p> Constructor. </p> */
     protected Prod2(final Lazy<FV> arg1,final Lazy<FV> arg2) {
         mem1 = arg1;

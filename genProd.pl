@@ -87,8 +87,11 @@ TEXT
     public final static Lazy<FV> get$j(Lazy<FV> p) {
         return ((Prod$n) p._e()).mem$j;
     }
-    public final static MH mhget$j = new MH (
-        MH.findStatic(Prod$n.class, "get$j", MH.mtLL));
+    public final static Lambda mhget$j = new Lam1 () {
+        public final Lazy<FV> eval(Lazy<FV> p) {
+            return ((Prod$n) p._e()).mem$j;
+        }
+    };
 TEXT
     }
     print J <<"TEXT";
