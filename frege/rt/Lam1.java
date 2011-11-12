@@ -60,7 +60,7 @@ public abstract class Lam1 implements Lambda {
      * <p>Apply this function to an argument.</p>
      *
      * <p> This method creates an instance of {@link Unknown} that
-     * will pass the argument to the {@link Lam1#r} method of this function
+     * will pass the argument to the {@link Lam1#eval} method of this function
      * when evaluated. </p>
      *
      * @return a lazy value that promises to produce a

@@ -280,7 +280,7 @@ public class RT {
      *  with as little overhead as possible.
      *  </p>
      *
-     *  @param action a {@link frege.rt.Unknown} value to be evaluated in a fork/join context
+     *  @param val a {@link frege.rt.Lazy} value to be evaluated in a fork/join context
      */
     public static<V> void fjMain(final Lazy<V> val) {
         java.util.concurrent.Callable<V> action = new java.util.concurrent.Callable<V> () {

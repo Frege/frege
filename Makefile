@@ -61,7 +61,7 @@ GENDOC   = $(FREGE)  frege.tools.Doc -d doc
 
 # Prelude files in the order they must be compiled
 PRELUDE  =  frege/prelude/Base.fr frege/prelude/Native.fr  frege/prelude/Text.fr \
-            frege/contrib/dgronau/Math.fr
+            frege/contrib/dgronau/Math.fr # frege/contrib/dgronau/Floating.fr
 
 
 {frege/prelude}.fr{$(PREL1)}.class::
@@ -241,7 +241,12 @@ $(COMPF1)/GenJava7.class: $(COMPS)/GenJava7.fr
 	$(FREGEC0) $?
 $(COMPF1)/GenJava.class: $(COMPS)/GenJava.fr
 	$(FREGEC0) $?
-
+$(LIBF1)/Random.class: frege/lib/Random.fr
+	$(FREGEC0) $?
+$(LIBF1)/PP.class: frege/lib/PP.fr
+	$(FREGEC0) $?
+$(LIBF1)/QuickCheck.class: frege/lib/QuickCheck.fr
+	$(FREGEC0) $?
 
 PRE1 = $(DIR1)/Prelude.class $(DIR1)/IO.class $(DIR1)/List.class $(DIR1)/Tuples.class
 
@@ -613,7 +618,7 @@ docu:       $(TOOLSF)/Doc.class \
 
 
 doc/index.html: $(RUNTIME)
-	javadoc -private -sourcepath . -d doc frege frege.rt
+	javadoc -private -sourcepath . -d doc -encoding UTF-8 frege frege.rt
 
 
 #
