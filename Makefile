@@ -219,8 +219,29 @@ $(DIR1)/Tuples.class: frege/Tuples.fr
 	$(FREGEC0) $?
 $(COMPF1)/Fixdefs.class: $(COMPS)/Fixdefs.fr
 	$(FREGEC0) $?
-$(COMPF1)/Scanner.class: $(COMPS)/Scanner.fr
+$(COMPF1)/Import.class: $(COMPS)/Import.fr
 	$(FREGEC0) $?
+$(COMPF1)/Enter.class: $(COMPS)/Enter.fr
+	$(FREGEC0) $?
+$(COMPF1)/Transdef.class: $(COMPS)/Transdef.fr
+	$(FREGEC0) $?
+$(COMPF1)/TCUtil.class: $(COMPS)/TCUtil.fr
+	$(FREGEC0) $?
+$(COMPF1)/TAlias.class: $(COMPS)/TAlias.fr
+	$(FREGEC0) $?
+$(COMPF1)/Classes.class: $(COMPS)/Classes.fr
+	$(FREGEC0) $?
+$(COMPF1)/Transform.class: $(COMPS)/Transform.fr
+	$(FREGEC0) $?
+$(COMPF1)/Typecheck.class: $(COMPS)/Typecheck.fr
+	$(FREGEC0) $?
+$(COMPF1)/GenMeta.class: $(COMPS)/GenMeta.fr
+	$(FREGEC0) $?
+$(COMPF1)/GenJava7.class: $(COMPS)/GenJava7.fr
+	$(FREGEC0) $?
+$(COMPF1)/GenJava.class: $(COMPS)/GenJava.fr
+	$(FREGEC0) $?
+
 
 PRE1 = $(DIR1)/Prelude.class $(DIR1)/IO.class $(DIR1)/List.class $(DIR1)/Tuples.class
 
