@@ -217,7 +217,9 @@ $(DIR1)/List.class: frege/List.fr
 	$(FREGEC0) $?
 $(DIR1)/Tuples.class: frege/Tuples.fr
 	$(FREGEC0) $?
-$(COMPF1)/Fixdefs.class: $(COMPFS)/Fixdefs.fr
+$(COMPF1)/Fixdefs.class: $(COMPS)/Fixdefs.fr
+	$(FREGEC0) $?
+$(COMPF1)/Scanner.class: $(COMPS)/Scanner.fr
 	$(FREGEC0) $?
 
 PRE1 = $(DIR1)/Prelude.class $(DIR1)/IO.class $(DIR1)/List.class $(DIR1)/Tuples.class
