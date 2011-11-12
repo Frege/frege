@@ -208,6 +208,18 @@ CLASSES  =       $(COMPF1)/Scanner.class   $(COMPF1)/Classtools.class \
 		$(COMPF1)/Transform.class $(COMPF1)/Typecheck.class \
 		$(COMPF1)/GenMeta.class   $(COMPF1)/GenJava7.class $(COMPF1)/GenJava.class
 
+#
+# GNU make apparently does not understand our meta rules
+#
+$(DIR1)/IO.class: frege/IO.fr
+	$(FREGEC0) $?
+$(DIR1)/List.class: frege/List.fr
+	$(FREGEC0) $?
+$(DIR1)/Tuples.class: frege/Tuples.fr
+	$(FREGEC0) $?
+$(COMPF1)/Fixdefs.class: $(COMPFS)/Fixdefs.fr
+	$(FREGEC0) $?
+
 PRE1 = $(DIR1)/Prelude.class $(DIR1)/IO.class $(DIR1)/List.class $(DIR1)/Tuples.class
 
 
@@ -249,7 +261,6 @@ $(DIR0)/PreludeProperties.class: $(PRE0) $(LIBF0)/Random.class $(LIBF0)/QuickChe
 	$(FREGEC3)  frege/PreludeProperties.fr
 $(DIR0)/check1: $(PRE0)  $(DIR0)/PreludeProperties.class
 	$(JAVA) -cp build cfrege.PreludeProperties && echo Prelude Properties checked >$(DIR0)/check1
-
 
 
 #
@@ -310,29 +321,6 @@ RUNTIME  = build/frege/MD.class    $(COMPF)/JavaUtils.class \
 		build/frege/RT.class
 
 
-#
-#   Documentation
-#
-
-docu:       $(TOOLSF)/Doc.class \
-            $(DOC)/Prelude.html     $(DOC)/List.html        $(DOC)/IO.html \
-            $(DOC)/prelude/Text.html    $(DOC)/prelude/Base.html \
-            $(DOC)/prelude/Native.html \
-			$(DOCF)/Scanner.html    $(DOCF)/Classtools.html $(DOCF)/Data.html \
-			$(DOCF)/Utilities.html  $(DOCF)/Main.html       $(DOCF)/Grammar.html \
-			$(DOCF)/Fixdefs.html    $(DOCF)/Import.html     $(DOCF)/Enter.html \
-			$(DOCF)/TAlias.html     $(DOCF)/Transdef.html   $(DOCF)/Classes.html \
-			$(DOCF)/Transform.html  $(DOCF)/Typecheck.html  $(DOCF)/TCUtil.html \
-			$(DOCF)/GenMeta.html    $(DOCF)/GenJava7.html    $(DOCF)/GenJava.html \
-			$(DOC)/lib/PP.html      $(DOC)/lib/ForkJoin.html \
-			$(DOC)/lib/Random.html  $(DOC)/lib/QuickCheck.html \
-			$(DOC)/tools/YYgen.html \
-			$(DOC)/tools/Doc.html   $(DOC)/j/Lang.html      $(DOC)/j/Awt.html \
-			$(DOC)/j/Util.html      $(DOC)/j/Swing.html
-
-
-doc/index.html: $(RUNTIME)
-	javadoc -private -sourcepath . -d doc frege frege.rt
 
 
 build/frege/MD.class: frege/MD.java
@@ -579,6 +567,30 @@ $(RTDIR)/SwingSupport.class: frege/rt/SwingSupport.java
 	$(JAVAC) -d build -cp build $?
 $(RTDIR)/FregeCompiler.class: frege/rt/FregeCompiler.java
 	$(JAVAC) -d build -cp build $?
+
+#
+#   Documentation
+#
+
+docu:       $(TOOLSF)/Doc.class \
+            $(DOC)/Prelude.html     $(DOC)/List.html        $(DOC)/IO.html \
+            $(DOC)/prelude/Text.html    $(DOC)/prelude/Base.html \
+            $(DOC)/prelude/Native.html \
+			$(DOCF)/Scanner.html    $(DOCF)/Classtools.html $(DOCF)/Data.html \
+			$(DOCF)/Utilities.html  $(DOCF)/Main.html       $(DOCF)/Grammar.html \
+			$(DOCF)/Fixdefs.html    $(DOCF)/Import.html     $(DOCF)/Enter.html \
+			$(DOCF)/TAlias.html     $(DOCF)/Transdef.html   $(DOCF)/Classes.html \
+			$(DOCF)/Transform.html  $(DOCF)/Typecheck.html  $(DOCF)/TCUtil.html \
+			$(DOCF)/GenMeta.html    $(DOCF)/GenJava7.html    $(DOCF)/GenJava.html \
+			$(DOC)/lib/PP.html      $(DOC)/lib/ForkJoin.html \
+			$(DOC)/lib/Random.html  $(DOC)/lib/QuickCheck.html \
+			$(DOC)/tools/YYgen.html \
+			$(DOC)/tools/Doc.html   $(DOC)/j/Lang.html      $(DOC)/j/Awt.html \
+			$(DOC)/j/Util.html      $(DOC)/j/Swing.html
+
+
+doc/index.html: $(RUNTIME)
+	javadoc -private -sourcepath . -d doc frege frege.rt
 
 
 #
