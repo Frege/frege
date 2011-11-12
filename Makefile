@@ -43,8 +43,8 @@ TOOLSF  = $(DIR)/tools
 COMPS   = frege/compiler
 
 
-FREGE    = $(JAVA) -Xss30m -Xmx1100m -cp build
-FREGEP   = $(JAVAP) -Xss30m -Xmx1100m -cp build
+FREGE    = $(JAVA) -Xss30m -Xmx900m -cp build
+FREGEP   = $(JAVAP) -Xss30m -Xmx900m -cp build
 FREGECJ  = $(FREGE) -jar fregec.jar -fp build -d build -nocp -hints
 FREGECJP = $(FREGEP) -jar fregec.jar -fp build -d build -nocp -hints
 FREGECC  = $(FREGE) frege.compiler.Main  -d build -hints -mh
@@ -649,5 +649,5 @@ $(DOCF)/GenMeta.html: $(COMPF)/GenMeta.class
 	$(GENDOC) frege.compiler.GenMeta
 $(DOCF)/GenJava.html: $(COMPF)/GenJava.class
 	$(GENDOC) frege.compiler.GenJava
-$(DOCF)/GenJava.html: $(COMPF)/GenJava7.class
+$(DOCF)/GenJava7.html: $(COMPF)/GenJava7.class
 	$(GENDOC) frege.compiler.GenJava7
