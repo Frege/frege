@@ -468,7 +468,6 @@ coerce bind = do
                     other -> U.fatal 0 ("toBoxed " ++ nice bind.ftype g ++ " is " ++ showJty sjt ++ ", should be Ref")
   where
     boxfun = JStMem (U.memberOf jtString.jname "box") []
-    asfun  = JStMem (U.memberOf jtString.jname "as")  []
     asType ta (bind@Bind{})   = bind.{jtype = lazy ta}
                                       -- jex = JInvoke asfun.{targs=[ta]} [bind.jex]}
     box  jt (bind@Bind{})     = (toBoxed bind).{
@@ -1178,7 +1177,7 @@ conCode symt cons (sym@SymD {flds, cid}) = do
         wrapmk | struct = [{- wrapper,-} uMethod, vMethod, eMethod]
                | arity == 0 = []
                | otherwise = [{- wrapper,-}]
-        worker  = workerMethod g sym
+
 
 
         !make | arity == 0 = JMethod {attr = attrs [JUnchecked, JPublic, JFinal, JStatic],
@@ -1200,8 +1199,6 @@ conCode symt cons (sym@SymD {flds, cid}) = do
         structargs = [ (attrFinal, ty, strict jt, n) |
                             (jt, (ty, n)) <- zip argjts (zip argtys argNames) ]
         rbinds = [ Bind RLazy sig jt (JAtom n) | (_,sig,jt,n) <- constrargs ]
-        sargs = map (Binding.jex • strictBind) rbinds
-        rargs = if struct then sargs else args
         constr = JConstr {attr = attrs [JPrivate], jtype = djtype,
                             args = if struct then structargs else constrargs,
                             body = JBlock super}
@@ -1401,8 +1398,6 @@ symCode binds (sym@SymI {sid}) = do             -- instance definition
     csym <- U.findC sym.clas
 
     let bnds    = sym.typ.bound
-        i       = head ((filter (`notElem` bnds)) U.allBinders)
-        -- ijt     = targ i
         classes = sym.clas:csym.supers
         methods1 = case U.instTSym (Symbol.typ sym) g of
             Just (tsym@SymT {pos}) -> [ alias |
@@ -1422,11 +1417,7 @@ symCode binds (sym@SymI {sid}) = do             -- instance definition
         constrargs  = map  (curry (makeConstraintArg g)) (zip sym.typ.rho.context argNames)
 
 
-    let -- instjt = if csym.vkind > 0 then ijt else symjt
-        -- qms = take csym.vkind (repeat (TArg "?"))
-        singleton = null constraints
-        -- jtargs = if csym.vkind > 0 then (ijt:map targ bnds) else map targ bnds
-        jtype = Ref (U.javaName g sym.name) []          -- jtargs
+    let jtype = Ref (U.javaName g sym.name) []          -- jtargs
         etype = Ref (U.javaName g sym.clas) []          -- [instjt]
         constructor = JConstr {attr = attrs [JPublic],
                                 jtype = jtype,  -- if csym.vkind > 0 then erased jtype else jtype,
@@ -1435,19 +1426,6 @@ symCode binds (sym@SymI {sid}) = do             -- instance definition
                                                 (zipWith JAssign
                                                     (map JAtom ctxNames)
                                                     (map JAtom argNames)))}
---        singles = if singleton then [finst, fnew] else []
---        finst  = JMember {attr = attrs [JPrivate, JStatic, JFinal],
---                          jtype = jtype.{targs=[]},
---                          name = "ƒInstance",
---                          init = Just (JNew jtype.{targs=[]} [])}
---
---        fnew   = JMethod {attr = attrs [JUnchecked, JPublic, JStatic, JFinal],
---                            gargs = jtype.targs,
---                            jtype = jtype,
---                            name = "ƒNew",
---                            args = [],
---                            body = JBlock [castedFinst]}
---        castedFinst = JReturn (JCast jtype (JAtom "ƒInstance"))
 
         result = JClass {attr = attrs [JPublic, JFinal, JStatic], jtype,
                          extend = Nothing,
@@ -1490,14 +1468,9 @@ symCode binds sym = do
 
 abstractFun symc (sym@SymV {sid}) = do
     g <- getST
-    let bnds = sym.typ.bound
     let classCtx = Ctx {pos=0, cname = Symbol.name symc, tau = Symbol.tau symc, checked = false }
-        tauvar = case Symbol.tau symc of
-            TVar {var} -> var
-            _ -> ""
         ctxs = [ ctx | ctx <- sym.typ.rho.context,
                     not (TC.sameCtx ctx classCtx)]      -- filter out class context
-        funtyp = ForAll bnds ((fst • U.returnTypeN 0) sym.typ.rho)
 
     let constrformal = map (curry (makeConstraintArg g)) (zip ctxs ctxNames)
         cafMeth = {- null ctxs && -} sym.depth == 0
@@ -1567,20 +1540,11 @@ instFun symc symt mname = do
     -- establish a fake type for instance member that matches the one of the instance
     -- cmem  <-  U.findV (MName (Symbol.name symc) (QName.base mname))
     sym   <-  U.findV mname
-    let orig = sym                                          -- save for later
     sym   <-  fakeInstSigma symc symt sym
 
     -- let bndsV = sym.typ.bound
     --    bndsI = (Symbol.typ symt).bound
-    let name   = U.javaName g sym.name                       -- X.foo
-        -- fname  = {-U.fName-} name                            -- X.Ffoo
-        -- higher = (Symbol.vkind symc) > 0                     -- higher kinded tyvar?
-        -- bnds   = filter (`notElem` bndsI) bndsV
-        -- unmentioned = filter (`notElem` bndsV) bndsI
-        -- ftargs = map targ bnds
-        -- itargs = map targ bndsV
-        implies = impliesG g
-        -- funtyp = ForAll bnds ((fst • U.returnTypeN 0) sym.typ.rho)
+    let implies = impliesG g
         ctxs = [ ctx | ctx <- sym.typ.rho.context,
                        not (any (`implies` ctx) symt.typ.rho.context)]
         ourCtxNms = drop symt.typ.rho.context.length ctxNames   -- ctx3, ctx4, ....
@@ -1661,6 +1625,7 @@ wrapperClass g (sym@SymV {name, depth, sid})
     | Local _ <- name = Just (JName "" ("L" ++ show sid))
     | null sym.typ.rho.context = Nothing
     | otherwise = Just (U.javaName g name)
+wrapperClass g sym = error ("wrapperClass: bad arg " ++ sym.nice g)
 
 
 {--
@@ -1679,6 +1644,7 @@ wrapperInstance g (sym@SymD {strsig, flds})
 wrapperInstance g (sym@SymV {}) = case  wrapperClass g sym of
     Nothing -> (workerMethod g sym).{base <- (flLigatur ++)}
     Just it -> U.memberOf it "inst"
+wrapperInstance g sym = error ("wrapperInstance: bad arg " ++ sym.nice g)
 
 {--
     This is used for let bound functions and top level functions with constraints.
@@ -1773,13 +1739,11 @@ adaptArg a s = adaptBind (argBind a) s
 cafCode (sym@SymV {depth = 0, expr = Just x}) binds = do
     g    <- getST
     let bnds = sym.typ.bound
-        argNames = drop (fold (+) 0 (map Symbol.depth g.genEnv)) GenJava7.argNames
         ctxNames = drop (length (envCtxs g)) GenJava7.ctxNames
 
     let (rtyp, _) = U.returnTypeN 0 sym.typ.rho
         symtyp = ForAll bnds rtyp
         mode  = if rlazy then RLazy else RBoxed
-        smode = if rlazy then U else S[]
         rlazy = not g.toplevel `and` not sym.strsig.isStrict `or` sym.rkind `band` 1 == 0
         rsimple = sym.rkind `band` 16 != 0
         ctxs  = if null bnds then [] else filter  (not • Context.checked) sym.typ.rho.context
@@ -1886,14 +1850,12 @@ innerFun (symc@SymV {expr = Just x}) binds = do
 
     let argNames = drop (fold (+) 0 (map Symbol.depth g.genEnv)) GenJava7.argNames
         envCtx   = envCtxs g
-        ctxNames = drop (length envCtx) GenJava7.ctxNames
         implies = impliesG g
         ctxs = [ ctx | ctx <- rho.context,
                        hasVars (Context.tau ctx),
                        not (any (`implies` ctx) envCtx)]
         sym = symc.{typ <- Sigma.{rho <- Rho.{context = []}}}
         argAttr = if (sym.rkind `band` T.rkTail) == 0 then attrFinal else 0
-        bnds = sym.typ.bound                        -- [a,b,c]
         (rty, atys) = U.returnTypeN sym.depth sym.typ.rho
         hasVars (TVar{}) = true
         hasVars (TCon{}) = false
@@ -1910,8 +1872,7 @@ innerFun (symc@SymV {expr = Just x}) binds = do
     workerArgs <- argDef argAttr sym.strsig atys argNames
 
 
-    let constrargs = map (curry (makeConstraintArg g)) (zip ctxs ctxNames)
-        modew = wmode sym.rkind
+    let modew = wmode sym.rkind
 
     let
         workerType = case modew of
@@ -1973,8 +1934,7 @@ topFun (sym@SymV {expr = Just x}) binds = do
     workerArgs <- argDef argAttr sym.strsig atys argNames
 
 
-    let constrargs = map (curry (makeConstraintArg g)) (zip sym.typ.rho.context ctxNames)
-        modew = wmode sym.rkind
+    let modew = wmode sym.rkind
         workerType = case modew of
                                 RLazy  -> lazy rjt
                                 RBoxed -> boxed rjt
@@ -2259,6 +2219,9 @@ nativeCall (sym@SymV {nativ = Just item}) abinds = do
                 (a:as) -> case item of
                     "clone" -> JCast jrty (JInvoke (JExMem a item) as) -- due to java brain damage
                     _ -> JInvoke (JExMem a item) as
+                _ -> JAtom "null"
+            NIMember -> case args of
+                [a] -> (JExMem a (tail item))
                 _ -> JAtom "null"
             NINewArray -> JNewArray  (Ref (JName "" (niArr item)) []) (head args)
             NIStatic -> case sigmas of
@@ -3310,8 +3273,6 @@ genExpr rflg rm (app@App a b (Just sigma)) binds = do
         let flat  = map fst (U.flatx app)
             fun   = head flat
             args  = tail flat
-            asigs = maybe [] (snd • U.returnType • Sigma.rho) fun.typ
-        -- args   <-   adaptHigherPolymorphicS args asigs
         genApp rm binds fun args
     where
         genEx arm aex = genExpr false arm aex binds
