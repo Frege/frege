@@ -60,7 +60,7 @@ public class FregeCompiler  implements Callable<MethodHandle> {
             MethodHandle runcompilerw = MethodHandles.lookup().findStatic(
                 runclass, "w",
                 MethodType.methodType( 
-                    Fun.class,
+                    Lazy.class,
                     String[].class,     // modules
                     String[].class,     // sourcePath
                     int.class,          // flags
@@ -68,10 +68,10 @@ public class FregeCompiler  implements Callable<MethodHandle> {
                     String[].class,     // frege path
                     String.class,       // prefix
                     PrintWriter.class   )); 
-            Fun<Boxed.Int, Boxed.Bool> io = (Fun<Boxed.Int, Boxed.Bool>) runcompilerw.invokeExact(
+            Lazy<FV> io = (Lazy<FV>) runcompilerw.invokeExact(
                     modules, sourcePath, flags, target, fregePath, prefix, compilerMessages
                 );
-            return io._e().a(Boxed.Int.mk(42))._e().j;
+            return ((Box.Bool)((Lambda) io._e()).apply(Box.Int.mk(42))._e()).j;
         } catch (Throwable e) {
             compilerMessages.println("exception: " + e);
             e.printStackTrace();

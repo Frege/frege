@@ -47,14 +47,14 @@ FREGE    = $(JAVA) -Xss30m -Xmx900m -cp build
 FREGEP   = $(JAVAP) -Xss30m -Xmx900m -cp build
 FREGECJ  = $(FREGE) -jar fregec.jar -fp build -d build -nocp -hints
 FREGECJP = $(FREGEP) -jar fregec.jar -fp build -d build -nocp -hints
-FREGECC  = $(FREGE) frege.compiler.Main  -d build -hints -mh
-FREGECCP = $(FREGEP) frege.compiler.Main  -d build -hints -mh
+FREGECC  = $(FREGE) frege.compiler.Main  -d build -hints
+FREGECCP = $(FREGEP) frege.compiler.Main  -d build -hints
 FREGEC0  = $(FREGECJ) -prefix a
 FREGEC0P = $(FREGECJP) -prefix a
-FREGEC1  = $(FREGE) afrege.compiler.Main -d build -hints -prefix b -mh
-FREGEC1P = $(FREGEP) afrege.compiler.Main -d build -hints -prefix b -mh
-FREGEC2  = $(FREGE) -server bfrege.compiler.Main -d build -hints -mh
-FREGEC2P = $(FREGEP) -server bfrege.compiler.Main -d build -hints -mh
+FREGEC1  = $(FREGE) afrege.compiler.Main -d build -hints -prefix b
+FREGEC1P = $(FREGEP) afrege.compiler.Main -d build -hints -prefix b
+FREGEC2  = $(FREGE) -server bfrege.compiler.Main -d build -hints
+FREGEC2P = $(FREGEP) -server bfrege.compiler.Main -d build -hints
 FREGEC3  = $(FREGECJ) -prefix c
 FREGEC3P = $(FREGECJP) -prefix c
 GENDOC   = $(FREGE)  frege.tools.Doc -d doc
@@ -196,7 +196,7 @@ SOURCES  =      $(COMPS)/Scanner.fr   $(COMPS)/Classtools.fr \
 		$(COMPS)/Fixdefs.fr   $(COMPS)/Import.fr    $(COMPS)/Enter.fr \
 		$(COMPS)/TAlias.fr    $(COMPS)/Transdef.fr  $(COMPS)/Classes.fr \
 		$(COMPS)/Transform.fr $(COMPS)/Typecheck.fr $(COMPS)/TCUtil.fr \
-		$(COMPS)/GenMeta.fr   $(COMPS)/GenJava.fr   $(COMPS)/GenJava7.fr
+		$(COMPS)/GenMeta.fr   $(COMPS)/GenJava7.fr  $(COMPS)/GenUtil.fr
 
 
 CLASSES  =       $(COMPF1)/Scanner.class   $(COMPF1)/Classtools.class \
@@ -206,7 +206,8 @@ CLASSES  =       $(COMPF1)/Scanner.class   $(COMPF1)/Classtools.class \
 		$(COMPF1)/Transdef.class   $(COMPF1)/TCUtil.class   \
 		$(COMPF1)/TAlias.class    $(COMPF1)/Classes.class \
 		$(COMPF1)/Transform.class $(COMPF1)/Typecheck.class \
-		$(COMPF1)/GenMeta.class   $(COMPF1)/GenJava7.class $(COMPF1)/GenJava.class
+		$(COMPF1)/GenUtil.class \
+		$(COMPF1)/GenMeta.class   $(COMPF1)/GenJava7.class
 
 #
 # GNU make apparently does not understand our meta rules
@@ -239,7 +240,7 @@ $(COMPF1)/GenMeta.class: $(COMPS)/GenMeta.fr
 	$(FREGEC0) $?
 $(COMPF1)/GenJava7.class: $(COMPS)/GenJava7.fr
 	$(FREGEC0) $?
-$(COMPF1)/GenJava.class: $(COMPS)/GenJava.fr
+$(COMPF1)/GenUtil.class: $(COMPS)/GenUtil.fr
 	$(FREGEC0) $?
 $(LIBF1)/Random.class: frege/lib/Random.fr
 	$(FREGEC0) $?
@@ -312,20 +313,6 @@ RUNTIME  = build/frege/MD.class    $(COMPF)/JavaUtils.class \
 		$(RTDIR)/Lam19.class        $(RTDIR)/Lam20.class      $(RTDIR)/Lam21.class \
 		$(RTDIR)/Lam22.class        $(RTDIR)/Lam23.class      $(RTDIR)/Lam24.class \
 		$(RTDIR)/Lam25.class        $(RTDIR)/Lam26.class \
-		$(RTDIR)/Boxed.class       $(RTDIR)/Constant.class    $(RTDIR)/Ref.class \
-		$(RTDIR)/Fun.class         $(RTDIR)/Fun1.class        $(RTDIR)/Fun2.class \
-		$(RTDIR)/Fun3.class        $(RTDIR)/Fun4.class \
-		$(RTDIR)/Fun5.class        $(RTDIR)/Fun6.class \
-		$(RTDIR)/Fun7.class        $(RTDIR)/Fun8.class \
-		$(RTDIR)/Fun9.class        $(RTDIR)/Fun10.class \
-		$(RTDIR)/Fun11.class       $(RTDIR)/Fun12.class \
-		$(RTDIR)/Fun13.class       $(RTDIR)/Fun14.class \
-		$(RTDIR)/Fun15.class       $(RTDIR)/Fun16.class \
-		$(RTDIR)/Fun17.class       $(RTDIR)/Fun18.class \
-		$(RTDIR)/Fun19.class       $(RTDIR)/Fun20.class \
-		$(RTDIR)/Fun21.class       $(RTDIR)/Fun22.class \
-		$(RTDIR)/Fun23.class       $(RTDIR)/Fun24.class \
-		$(RTDIR)/Fun25.class       $(RTDIR)/Fun26.class \
 		$(RTDIR)/Prod1.class    $(RTDIR)/Prod2.class      $(RTDIR)/Prod3.class \
 		$(RTDIR)/Prod4.class    $(RTDIR)/Prod5.class      $(RTDIR)/Prod6.class \
 		$(RTDIR)/Prod7.class    $(RTDIR)/Prod8.class      $(RTDIR)/Prod9.class \
@@ -335,18 +322,34 @@ RUNTIME  = build/frege/MD.class    $(COMPF)/JavaUtils.class \
 		$(RTDIR)/Prod19.class   $(RTDIR)/Prod20.class     $(RTDIR)/Prod21.class \
 		$(RTDIR)/Prod22.class   $(RTDIR)/Prod23.class     $(RTDIR)/Prod24.class \
 		$(RTDIR)/Prod25.class   $(RTDIR)/Prod26.class \
-		$(RTDIR)/Product1.class    $(RTDIR)/Product2.class      $(RTDIR)/Product3.class \
-		$(RTDIR)/Product4.class    $(RTDIR)/Product5.class      $(RTDIR)/Product6.class \
-		$(RTDIR)/Product7.class    $(RTDIR)/Product8.class      $(RTDIR)/Product9.class \
-		$(RTDIR)/Product10.class   $(RTDIR)/Product11.class     $(RTDIR)/Product12.class \
-		$(RTDIR)/Product13.class   $(RTDIR)/Product14.class     $(RTDIR)/Product15.class \
-		$(RTDIR)/Product16.class   $(RTDIR)/Product17.class     $(RTDIR)/Product18.class \
-		$(RTDIR)/Product19.class   $(RTDIR)/Product20.class     $(RTDIR)/Product21.class \
-		$(RTDIR)/Product22.class   $(RTDIR)/Product23.class     $(RTDIR)/Product24.class \
-		$(RTDIR)/Product25.class   $(RTDIR)/Product26.class \
+		$(RTDIR)/Ref.class \
 		$(RTDIR)/Array.class       $(RTDIR)/SwingSupport.class \
 		$(RTDIR)/FregeCompiler.class \
 		build/frege/RT.class
+#		$(RTDIR)/Boxed.class       $(RTDIR)/Constant.class \
+#		$(RTDIR)/Fun.class         $(RTDIR)/Fun1.class        $(RTDIR)/Fun2.class \
+#		$(RTDIR)/Fun3.class        $(RTDIR)/Fun4.class \
+#		$(RTDIR)/Fun5.class        $(RTDIR)/Fun6.class \
+#		$(RTDIR)/Fun7.class        $(RTDIR)/Fun8.class \
+#		$(RTDIR)/Fun9.class        $(RTDIR)/Fun10.class \
+#		$(RTDIR)/Fun11.class       $(RTDIR)/Fun12.class \
+#		$(RTDIR)/Fun13.class       $(RTDIR)/Fun14.class \
+#		$(RTDIR)/Fun15.class       $(RTDIR)/Fun16.class \
+#		$(RTDIR)/Fun17.class       $(RTDIR)/Fun18.class \
+#		$(RTDIR)/Fun19.class       $(RTDIR)/Fun20.class \
+#		$(RTDIR)/Fun21.class       $(RTDIR)/Fun22.class \
+#		$(RTDIR)/Fun23.class       $(RTDIR)/Fun24.class \
+#		$(RTDIR)/Fun25.class       $(RTDIR)/Fun26.class \
+#		$(RTDIR)/Product1.class    $(RTDIR)/Product2.class      $(RTDIR)/Product3.class \
+#		$(RTDIR)/Product4.class    $(RTDIR)/Product5.class      $(RTDIR)/Product6.class \
+#		$(RTDIR)/Product7.class    $(RTDIR)/Product8.class      $(RTDIR)/Product9.class \
+#		$(RTDIR)/Product10.class   $(RTDIR)/Product11.class     $(RTDIR)/Product12.class \
+#		$(RTDIR)/Product13.class   $(RTDIR)/Product14.class     $(RTDIR)/Product15.class \
+#		$(RTDIR)/Product16.class   $(RTDIR)/Product17.class     $(RTDIR)/Product18.class \
+#		$(RTDIR)/Product19.class   $(RTDIR)/Product20.class     $(RTDIR)/Product21.class \
+#		$(RTDIR)/Product22.class   $(RTDIR)/Product23.class     $(RTDIR)/Product24.class \
+#		$(RTDIR)/Product25.class   $(RTDIR)/Product26.class \
+
 
 
 
@@ -609,7 +612,7 @@ docu:       $(TOOLSF)/Doc.class \
 			$(DOCF)/Fixdefs.html    $(DOCF)/Import.html     $(DOCF)/Enter.html \
 			$(DOCF)/TAlias.html     $(DOCF)/Transdef.html   $(DOCF)/Classes.html \
 			$(DOCF)/Transform.html  $(DOCF)/Typecheck.html  $(DOCF)/TCUtil.html \
-			$(DOCF)/GenMeta.html    $(DOCF)/GenJava7.html    $(DOCF)/GenJava.html \
+			$(DOCF)/GenUtil.html    $(DOCF)/GenMeta.html    $(DOCF)/GenJava7.html   \
 			$(DOC)/lib/PP.html      $(DOC)/lib/ForkJoin.html \
 			$(DOC)/lib/Random.html  $(DOC)/lib/QuickCheck.html \
 			$(DOC)/tools/YYgen.html \
@@ -688,7 +691,7 @@ $(DOCF)/TCUtil.html: $(COMPF)/TCUtil.class
 	$(GENDOC) frege.compiler.TCUtil
 $(DOCF)/GenMeta.html: $(COMPF)/GenMeta.class
 	$(GENDOC) frege.compiler.GenMeta
-$(DOCF)/GenJava.html: $(COMPF)/GenJava.class
-	$(GENDOC) frege.compiler.GenJava
+$(DOCF)/GenUtil.html: $(COMPF)/GenUtil.class
+	$(GENDOC) frege.compiler.GenUtil
 $(DOCF)/GenJava7.html: $(COMPF)/GenJava7.class
 	$(GENDOC) frege.compiler.GenJava7

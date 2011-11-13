@@ -108,7 +108,7 @@ yychar t
     | Token.tokid t == CHAR = (Token.value t).[0]
     | otherwise = '\0'
 yytoken t = Token.tokid t
-vid t = (Token.value t; Token.line t)
+vid t = (Token.value t, Token.line t)
 
 /*
  The following definitions are not strictly necessary, but they help
@@ -414,8 +414,8 @@ vid t = (Token.value t; Token.line t)
 %%
 
 package:
-    packageclause ';' definitions               { \(a,d)\_\b     -> (a;b;d) }
-    | packageclause WHERE '{' definitions '}'   { \(a,d)\_\_\b\_ -> (a;b;d) }
+    packageclause ';' definitions               { \(a,d)\_\b     -> (a,b,d) }
+    | packageclause WHERE '{' definitions '}'   { \(a,d)\_\_\b\_ -> (a,b,d) }
     ;
 
 nativename:
@@ -439,8 +439,8 @@ docs:
     ;
 
 packageclause:
-    docs PACKAGE packagename            { \docu\_\b   -> (b; Just docu) }
-    | PACKAGE packagename               { \_\b        -> (b; Nothing) }
+    docs PACKAGE packagename            { \docu\_\b   -> (b, Just docu) }
+    | PACKAGE packagename               { \_\b        -> (b, Nothing) }
     ;
 
 semicoli:
@@ -1422,8 +1422,8 @@ funhead :: Exp -> YYM Global (String, [Pat])
 funhead (ex@Vbl {name}) = do
         pat <- exprToPat ex
         case pat of
-            PVar _ p ->  YYM.return  (p; [])
-            somepat  ->  YYM.return  ("let"; [somepat])
+            PVar _ p ->  YYM.return  (p, [])
+            somepat  ->  YYM.return  ("let", [somepat])
 /**
  * Otherwise it should be an application
  * > a b c = ....
@@ -1434,17 +1434,17 @@ funhead (ex@Vbl {name}) = do
 funhead (ex@App e1 e2 _)
     | Vbl _ "!"  _ <- e1 = do
             pex <- exprToPat ex
-            YYM.return ("let"; [pex])
+            YYM.return ("let", [pex])
     | otherwise = do
         pat <- exprToPat x
         ps  <- mapSt exprToPat xs
         case pat of
-            PVar _ p    -> YYM.return (p; ps)
-            PCon p n [] -> YYM.return ("let"; [PCon p n ps])
+            PVar _ p    -> YYM.return (p, ps)
+            PCon p n [] -> YYM.return ("let", [PCon p n ps])
             _ -> do
                 es <- U.showexM ex
                 yyerror (getpos x) ("bad function head " ++ es)
-                YYM.return ("bad"; [pat])
+                YYM.return ("bad", [pat])
     where
         flatex = map fst (U.flatx ex)
         x = head flatex
@@ -1461,7 +1461,7 @@ funhead (ex@Inv _ inv)
     | Memfun _ <- inv    = pattern
     | Recget _ <- inv    = pattern
     | Recupd _ _ <- inv  = pattern
-    where pattern = ("let"; [exprToPat ex]; getDoc())
+    where pattern = ("let", [exprToPat ex], getDoc())
     ;
     */
 
