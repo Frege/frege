@@ -61,19 +61,19 @@ GENDOC   = $(FREGE)  frege.tools.Doc -d doc
 
 # Prelude files in the order they must be compiled
 PRELUDE  =  frege/prelude/Base.fr frege/prelude/Native.fr  frege/prelude/Text.fr \
-            frege/contrib/dgronau/Math.fr # frege/contrib/dgronau/Floating.fr
+            frege/contrib/dgronau/Math.fr frege/contrib/dgronau/Floating.fr
 
 
 {frege/prelude}.fr{$(PREL1)}.class::
 	$(FREGEC0) $<
-{frege/compiler}.fr{$(COMPF1)}.class::
-	$(FREGEC0) $<
-{frege/lib}.fr{$(LIBF1)}.class::
-	$(FREGEC0) $<
+# {frege/compiler}.fr{$(COMPF1)}.class::
+#	$(FREGEC0) $<
+# {frege/lib}.fr{$(LIBF1)}.class::
+#	$(FREGEC0) $<
 {frege/tools}.fr{$(TOOLSF1)}.class::
 	$(FREGEC0) $<
-{frege}.fr{$(DIR1)}.class::
-	$(FREGEC0) $<
+# {frege}.fr{$(DIR1)}.class::
+#	$(FREGEC0) $<
 {frege/prelude}.fr{$(PREL0)}.class::
 	$(FREGEC3) $<
 {frege/compiler}.fr{$(COMPF0)}.class::
