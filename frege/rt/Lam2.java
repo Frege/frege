@@ -55,7 +55,7 @@ package frege.rt;
  * of the type variables, see below.</p>
  *
  */
-public abstract class Lam2 implements Lambda {
+public abstract class Lam2 extends Lambda {
     /**
      * <p>Apply this function to an argument.</p>
      *
@@ -99,17 +99,5 @@ public abstract class Lam2 implements Lambda {
      * @return boxed and possibly lazy result
      */
     abstract public Lazy<FV> eval(Lazy<FV> arg2, Lazy<FV> arg1);
-
-    /** <p> required to qualify as {@link FV} */
-    public final int      constructor() { return 0; }
-    /** <p> a {@link Lam1} cannot be reduced further. </p> */
-    public final boolean  _u() { return false; }
-    /** <p> a {@link Lam1} evaluates to itself. </p> */
-    public final Lazy<FV> _v() { return this; }
-    /** <p> a {@link Lam1} evaluates to itself. </p> */
-    public final FV       _e() { return this; }
-    
-    static Lam2 test = new Lam2() {
-        public Box.Int eval(final Lazy<FV> arg2, final Lazy<FV> arg1) { return Box.Int.mk(((Box.Int)arg1._e()).j + ((Box.Int)arg1._e()).j); }
-    };        
+        
 }

@@ -90,7 +90,7 @@ TEXT
  * <p> See {\@link Lam1} for a general discussion of untyped function values. </p>
  *
  */
-public abstract class Lam$n implements Lambda {
+public abstract class Lam$n extends Lambda {
    /**
      * <p>Apply this function to an argument.</p>
      *
@@ -126,26 +126,7 @@ public abstract class Lam$n implements Lambda {
             final public Lazy<FV> _v() { return Lam$n.this.eval($crargs); }
         };
     }
-    /*
-     * <p> Always <tt>0</tt> for function values. </p>
-     * \@return 0
-     */
-    final public int     constructor() { return 0; }          // interface FV
-    /*
-     * <p> Return this function object. </p>
-     * \@return <tt>this</tt>
-     */
-    final public FV _e() { return this; }                    // interface Lazy<FV>
-    /*
-     * <p> Return this function object. </p>
-     * \@return <tt>this</tt>
-     */
-    final public Lazy<FV> _v() { return this; }              // interface Lazy
-    /*
-     * <p> Always <tt>false</tt> for function values. </p>
-     * \@return <tt>false</tt>
-     */
-    final public boolean _u() { return false; }              // interface Lazy
+    
     /**
      * <p> Run the function. </p>
      *

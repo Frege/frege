@@ -45,10 +45,27 @@ package frege.rt;
  * <p> A thing that can be applied to something. </p> 
  */
 
-public interface Lambda extends FV {
+public abstract class Lambda implements FV {
     /**
         <p> Apply this to an argument. </p>
     */
-    public Lazy<FV> apply(Lazy<FV> v);
+    public abstract Lazy<FV> apply(final Lazy<FV> v);
+    /**
+        <p> Apply this to an argument and cast the evaluated result to a Lambda. </p>
+        <p> This is useful to avoid code like </p>
+        <pre> (Lambda) (((Lambda) f.apply(x)._e()).apply(y)._e()) </pre>
+        <p> Rather, we just write </p>
+        <pre> f.app(x).app(y) </pre>
+    */
+    public final Lambda app(final Lazy<FV> v) { return (Lambda) this.apply(v)._e(); }
+    
+    /** <p> {@link Lambda#constructor} returns 0 for all function values </p> */
+    public final int      constructor() { return 0; }
+    /** <p> Return <code>false</code> because a lambda is a value.</p> */
+    public final boolean  _u() { return false; }
+    /** <p> A {@link Lambda} evaluates to itself. </p> */
+    public final Lazy<FV> _v() { return this; }
+    /** <p> A {@link Lambda} evaluates to itself. </p> */
+    public final FV       _e() { return this; }
 }
 

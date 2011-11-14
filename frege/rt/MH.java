@@ -54,7 +54,7 @@ import java.lang.invoke.MethodType;
  * {@link MethodHandle}. </p> 
  */
 
-public final class MH extends Unknown<FV> implements FV, Lambda {
+public final class MH extends Unknown<FV> implements FV {
     /** <p> required to qualify as {@link FV} */
     public final int constructor() { return 0; }
     /** <p> Tells how many arguments we need before we can invoke.</p> */
