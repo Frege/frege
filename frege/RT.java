@@ -193,6 +193,14 @@ public class RT {
         }
     }
     /**
+     * <p> Exception thrown when a guard on a pattern binding fails. </p> 
+     */
+    public static class GuardFailed extends Undefined {
+        public GuardFailed(String qname, int line) {
+            super(qname + " at line " + line + ": guard failed.");
+        }
+    }
+    /**
      * <p> Utility method used by String.show to quote a string. </p> 
      */
     final public static java.lang.String quoteStr(java.lang.String a) {
