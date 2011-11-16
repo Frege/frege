@@ -1,6 +1,6 @@
 package frege.compiler;
 
-// import frege.Prelude;
+
 import frege.MD;
 
 import java.net.MalformedURLException;
@@ -19,6 +19,13 @@ public class JavaUtils {
 		Class<?> cl = null;
 	    cl = loader.loadClass(pack);
 		return cl.getAnnotation(MD.FregePackage.class);
+	}
+	
+	/** get the lambda annotations */
+	public static MD.LambdaClasses getLambdas(ClassLoader loader, String pack) throws  ClassNotFoundException {
+	    Class<?> cl = null;
+	    cl = loader.loadClass(pack);
+	    return cl.getAnnotation(MD.LambdaClasses.class);
 	}
 
     // left for backward compatibility

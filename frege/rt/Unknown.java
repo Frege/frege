@@ -323,8 +323,8 @@ public abstract class Unknown<V> implements Lazy<V>, java.util.concurrent.Callab
           until the result is evaluated.
       </p>
      *
-     * <p>The evaluated value will be a subclass of {@link Value}, such as
-     * a primitive value, a {@link Boxed} java reference value or
+     * <p>The evaluated value will be a subclass of {@link FV}, such as
+     * a boxed primitive value, a {@link Box} java reference value or
      * even a function type. </p>
      *
      * <p>
@@ -346,17 +346,17 @@ public abstract class Unknown<V> implements Lazy<V>, java.util.concurrent.Callab
      * <pre>
      * a = b+1
      * b = a-1
-     * blackhole = case a `par` b of (a,b) -> a+b
+     * blackhole = case a `par` b `par` (a,b) of (x,y) -> x+y
      * </pre>
      *
      * <p> which should compile to something like this:
      *
      * <pre>
-     *   static Lazy<Bint> a = new Unknown<Bint> () {
-     *       Bint _v() { return b._e().j + 1; }
+     *   static Lazy&lt;Box.Int&gt; a = new Unknown&lt;Box.Int&gt; () {
+     *       Lazy&lt;Boxed.Int&gt; _v() { return Box.Int.mk(b._e().j + 1); }
      *   }
-     *   static Lazy<Bint> b = new Unknown<Bint> () {
-     *       Bint _v() { return a._e().j - 1; }
+     *   static Lazy&lt;Box.Int&gt; b = new Unknown&lt;Box.Int&gt; () {
+     *       Lazy&lt;Boxed.Int&gt; _v() { return Box.Int.mk(a._e().j - 1); }
      *   }
      *   ...
      * </pre>

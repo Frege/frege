@@ -101,6 +101,23 @@ public class MD {
         /** <p>Table of expressions.</p> */
         Expr[]      exprs()     default {};
     }
+    
+    /**
+     * <p> Information on lambda classes for top level or data/instance member functions
+           already generated in this package. </p>
+       <p> Because this information is not available before the end of code generation,
+           it will be the the constants class <code><i>Module</i>C</code> that is so annotated. </p>
+       <p> This defines an array of <code>QNames</code> and another of <code>Strings</code>.
+           Both arrays will have the same length and entries with the same index are associated. </p>
+    */
+    @Retention(RetentionPolicy.RUNTIME)
+    public @interface LambdaClasses {
+        /** <p> Array of Frege function names </p> */
+        QName[]       qnames()    default{};
+        /** <p> Array of Java class names </p> */
+        String[]      jnames()    default{};
+    }
+           
 
     /**
      * <p>Information from the infix* definitions.</p>

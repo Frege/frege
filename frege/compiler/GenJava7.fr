@@ -58,6 +58,7 @@ protected version = v "$Revision$" where
 
 
 import frege.List (Tree, values, keys, each, insert, lookup, insertkv)
+import frege.IO   (URLClassLoader)
 
 import frege.compiler.Data          as D
 import frege.compiler.Utilities     as U()
@@ -66,6 +67,8 @@ import frege.lib.PP(`<>`, `<+>`, `</>`, `<+/>`, `<~/>`, text, bracket)
 import frege.compiler.Transform     as T(patternStrictness)
 import frege.compiler.TCUtil        as TC(sameTau)
 import frege.compiler.Typecheck     as TY(mainSigma)
+import frege.compiler.Classtools    as CT(getLambdas)
+import frege.compiler.Import        as I(rebuildQN)
 
 
 infixr 6 `<>`
@@ -358,7 +361,7 @@ mainClass :: Global -> String
 mainClass g = (g.thisPack.className g).base
 
 --- the name of the interface that serves as namespace for this main class
-constClass g = mainClass g ++ "C"
+constClass g = "Consts"
 
 --- prefix for wrapper methods is ﬂ
 flLigatur = "ﬂ"
@@ -475,6 +478,18 @@ lazyMethod sym | sym.{flds?} || sym.{rkind?} = do
 lazyMethod sym = error "lazyMeth: no SymV"
 
 {--
+    construct a name for a lambda class
+-}
+extFname :: Global -> Symbol -> String
+extFname g sym
+    | (MName _ base) <- qname = "M" ++ show sym.sid ++ mangled base
+    | (VName p base) <- qname = if qname.our g
+                                    then "F" ++ mangled base
+                                    else "X" ++ show sym.sid ++ mangled base
+    where qname = Symbol.name sym
+extFname g sym = error ("reqLam: bad symbol " ++ nicer sym g)
+
+{--
     Require that there be an instance of a Lambda suitable to call
     the symbol lazily at runtime and return a 'Binding' for that handle.
 -}
@@ -482,16 +497,13 @@ reqLam :: Symbol -> StG Binding
 reqLam sym = do
         g <- getST
         case lookup g.gen.mhs sym of
-            Just jname -> stio (bind jname)
-            Nothing -> case wrapperInstance g sym of
-                JName clazz base
-                    | clazz == mainClass g = enternew (JName clazz (fiLigatur ++ base))
-                other = enternew other.{qual = mainClass g,
-                                        base <- ((fiLigatur ++ show sym.sid)++)}
+            Just (_, jname) -> stio (bind jname)
+            Nothing -> enternew (JName (mainClass g) (extFname g sym))
     where
-        bind jname = Bind {mode=RBoxed, ftype=sym.typ, jtype=jtFun, jex=JX.static jname}
+        bind jname = Bind {mode=RBoxed, ftype=sym.typ, jtype=jtFun, jex=JX.static iname}
+            where iname = U.memberOf jname "inst"
         enternew jname = do
-            changeST Global.{gen <- GenSt.{mhs <- insertkv sym jname}}
+            changeST Global.{gen <- GenSt.{mhs <- insertkv sym (true, jname)}}
             stio (bind jname)
 
 {--
@@ -500,9 +512,9 @@ reqLam sym = do
 genAnonLams = do
         g <- getST
 
-        let symjn = each g.gen.mhs
-
-        classes <- mapSt anonLazyClass (map fst symjn)
+        let syms = [ sym | (sym, (true, _)) <- each g.gen.mhs ]
+        mapSt anonLazyClass syms
+        {-
         let vars    = [ JMember {attr = attrs [JPrivate, JStatic],
                                  jtype = cls.jtype, name  = jname.base, init = Nothing } |
                             (cls::JDecl, jname::JName) <- zip classes (map snd symjn)]
@@ -511,7 +523,7 @@ genAnonLams = do
             initfi = JMethod {attr = attrs [JPrivate, JStatic], gargs = [],
                         jtype = Nativ "void" [],
                         name = "initﬁ", args = [], body = JBlock assigns}
-        stio (classes ++ vars ++ [initfi])
+        stio (classes ++ vars ++ [initfi]) -}
 
 {--
     Create a class derived from Lambda for the symbol
@@ -519,18 +531,54 @@ genAnonLams = do
 --}
 anonLazyClass :: Symbol -> StG JDecl
 anonLazyClass sym = do
+        g <- getST
         let ari
                 | sym.{depth?} = sym.depth
                 | sym.{flds?}  = length sym.flds
                 | otherwise    = 0                  -- generate wrong code instead of aborting
             lamtype            = Nativ ("Lam" ++ show ari) []
-            cltype             = Nativ ("L" ++ show sym.sid) []
+            cltype             = Nativ (extFname g sym) []
 
-        g    <- getST
         eval <- lazyMethod sym
+        let inst = JMember {attr = attrTop, jtype = cltype,
+                            name = "inst", init = Just (JNew cltype [])}
         stio JClass  { attr = attrTop, jtype = cltype, extend = Just lamtype,
-                       implement = [], defs = [eval] }
+                       implement = [], defs = [inst, eval] }
 
+{--
+    Look for @MD.LambdaClasses@ annotations
+    on the @Consts@ subclass of all available packages.
+    Record the information in the 'GenSt.mhs' tree.
+-}
+initMHS = do
+        g <- getST
+        cl <- doio (U.ourClassLoader g.options)
+        case cl of
+            Left exc     -> U.error 1 ("Can't make class loader: " ++ exc.getMessage)
+            Right loader -> foreach (filter (g.thisPack !=) (keys g.packages)) (addMHS loader)
+    where
+        addMHS :: URLClassLoader -> Pack -> StG ()
+        addMHS loader pack = do
+                g <- getST
+                let clazz = show (pack.className g) ++ "$" ++ (constClass g)
+                doio (CT.getLambdas loader clazz) >>= either noClass (maybe (return ()) insertQJ)
+            where
+                noClass :: JException -> StG ()
+                noClass jex = do
+                    g <- getST
+                    U.error 1 ("Can't load module " ++ pack.unpack g ++ ": "
+                        ++ JException.getMessage jex)
+                insertQJ :: CT.LambdaClasses -> StG ()
+                insertQJ lcs = do
+                    g <- getST
+                    let lcsqns = [ lcs.qnames.[n-1] | n <- 1 .. lcs.qnames.length ]
+                        qnames = map I.rebuildQN lcsqns
+                        jnames = [ JName "" p | p <- lcs.jnames.toList ]
+                        ins = [ (sym, (false, p)) |
+                                (qn, p) <- zip qnames jnames,
+                                sym <- (QName.findit qn g).toList ]
+                        nmhs = fold (\t\(k,v) -> insert t k v) g.gen.mhs ins
+                    changeST Global.{gen <- GenSt.{mhs = nmhs}}
 
 
 pass :: StG (String, Int)
@@ -551,10 +599,8 @@ pass = do
         cType = Ref (JName "" (constClass g)) []
     pp (anno cClass)
 
-    -- we pre-initialize the anonymous lambdas we need
-    U.println ""
-    U.println "static { initﬁ(); }  // initialize functions needed lazily"
-    U.println ""
+    -- load static lambda information from other packages
+    initMHS
 
     mapSt (symCode Nil) (sortBy (comparing Symbol.name) [ s | s@SymT {sid} <- vals ])
         >>= ppSS
@@ -567,6 +613,14 @@ pass = do
 
     -- anonymous lambdas
     genAnonLams >>= mapM_ (pp • anno)
+
+    -- annotation of lambdas before Const class
+    g <- getST
+    let qnjns = [ (Symbol.name sym, U.memberOf (g.thisPack.className g) b) |
+                            (sym, (true, JName _ b)) <- each g.gen.mhs ]
+    pp (annotation "LambdaClasses" [
+        ("qnames", anno (map fst qnjns)),
+        ("jnames", anno (map (show • snd) qnjns))])
 
     -- constants
     makeConstants
