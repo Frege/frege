@@ -530,10 +530,6 @@ letdefs:
 import:
     IMPORT   packagename importliste
         { \i\b\c -> ImpDcl {pos=yyline i, pack=b, imports=c, as=Nothing} }
-    /* | IMPORT packagename importliste conid
-        { \i\p\l\n -> ImpDcl {pos = yyline i,
-                              pack=p, imports=l, as=Just (posItem n)} }
-    */
     | IMPORT packagename VARID conid importliste { \i\p\a\c\l -> do
             when (Token.value a != "as") do
                 yyerror (yyline a) (show "as" ++ " expected instead of " ++ show (Token.value a))
@@ -1675,9 +1671,9 @@ mkMonad _ _ = Prelude.error "empty monadic do block"
 
 // backslash
 bs = '\\';
-quot = '"';
-rex [] sb = cstos (reverse (quot:sb))
-rex ('"':cs) sb = rex cs (quot:bs:sb);
+aQuote = '"';
+rex [] sb = cstos (reverse (aQuote:sb))
+rex ('"':cs) sb = rex cs (aQuote:bs:sb);
 rex ('\\':'#':cs) sb = rex cs ('#':sb);
 /*
 rex ('\\':'n':cs) sb = rex cs (sb << '\\' << 'n');
@@ -1699,7 +1695,7 @@ rex ('\\':c:cs) sb    = rex cs (c:bs:bs:sb)
 rex (c:cs) sb = rex cs (c:sb)
 
 /// translate regex to java string
-reStr rs =  rex (stocs rs)  [ quot ]
+reStr rs =  rex (stocs rs)  [ aQuote ]
 
 litregexp x = do
         let re = reStr (Token.value x)

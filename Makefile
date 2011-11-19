@@ -155,7 +155,7 @@ compiler: compiler2 $(COMPF)/Grammar.class $(COMPF)/Main.class library tools
 	cp frege/tools/yygenpar.fr frege/tools/YYgenparM.fr build/frege/tools
 	@echo Compiler ready
 
-$(COMPF)/Grammar.class: frege/compiler/Grammar.fr $(COMPF)/Scanner.class
+$(COMPF)/Grammar.class: frege/compiler/Grammar.fr $(COMPF)/Scanner.class $(LIBF)/ForkJoin.class
 	$(FREGEC2) -v frege/compiler/Grammar.fr
 frege/compiler/Grammar.fr: frege/compiler/Grammar.y
 	@echo 1 shift/reduce conflict is ok
@@ -248,6 +248,8 @@ $(LIBF1)/PP.class: frege/lib/PP.fr
 	$(FREGEC0) $?
 $(LIBF1)/QuickCheck.class: frege/lib/QuickCheck.fr
 	$(FREGEC0) $?
+$(LIBF1)/ForkJoin.class: frege/lib/ForkJoin.fr
+	$(FREGEC0) $?
 
 PRE1 = $(DIR1)/Prelude.class $(DIR1)/IO.class $(DIR1)/List.class $(DIR1)/Tuples.class
 
@@ -255,7 +257,7 @@ PRE1 = $(DIR1)/Prelude.class $(DIR1)/IO.class $(DIR1)/List.class $(DIR1)/Tuples.
 compiler1: $(RUNTIME)  $(DIR1)/check1 $(COMPF1)/Grammar.class $(COMPF1)/Main.class
 	@echo stage 1 compiler ready
 
-$(COMPF1)/Grammar.class: frege/compiler/Grammar.fr $(COMPF1)/Scanner.class
+$(COMPF1)/Grammar.class: frege/compiler/Grammar.fr $(COMPF1)/Scanner.class $(LIBF1)/ForkJoin.class
 	$(FREGEC0)  -make frege.compiler.Grammar
 $(COMPF1)/Scanner.class: $(PRE1) frege/compiler/Scanner.fr
 	$(FREGEC0)  -make frege.compiler.Scanner
