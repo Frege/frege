@@ -6,6 +6,8 @@ import frege.MD;
 import java.net.MalformedURLException;
 import java.net.URLClassLoader;
 import java.lang.annotation.*;
+import java.nio.file.Files;
+
 
 /*
  * $Revision$
@@ -61,6 +63,17 @@ public class JavaUtils {
 		return 1;
 	}
 
+	/**
+	 *  Reads the named (text) file in the given encoding.
+	 *
+	 *  @return a String representing the contents of the file
+	 */
+	 public String slurp(String filename, String encoding) throws Exception {
+	     return new String(
+	         Files.readAllBytes(
+	             java.nio.file.FileSystems.getDefault().getPath(filename)), 
+	         encoding);
+	 }
 
 
 }
