@@ -32,9 +32,6 @@ import org.eclipse.jface.text.IRegion;
 
 import frege.FregePlugin;
 
-import frege.compiler.Scanner;
-import frege.prelude.Base;
-
 /**
  * NOTE:  This version of the Parse Controller is for use when the Parse
  * Controller and corresponding Node Locator are generated separately from
