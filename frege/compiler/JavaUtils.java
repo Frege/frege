@@ -68,7 +68,7 @@ public class JavaUtils {
 	 *
 	 *  @return a String representing the contents of the file
 	 */
-	 public String slurp(String filename, String encoding) throws Exception {
+	 public CharSequence slurp(String filename, String encoding) throws Exception {
 	     return new String(
 	         Files.readAllBytes(
 	             java.nio.file.FileSystems.getDefault().getPath(filename)), 
