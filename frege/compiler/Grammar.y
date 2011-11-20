@@ -98,12 +98,12 @@ yynice t = case tok of
             | otherwise = tv
 
 yyshow  = Token.show
-yyfromCh c = Token CHAR (ctos c) 0 0
+yyfromCh c = Token CHAR (ctos c) 0 0 0
 yyfromId n
-    | n >= PACKAGE, n <= INFIXR = Token n (String.toLowerCase (show n)) 1 0
-    | n == CONID = Token n "constructor or type name" 0 0
-    | n == VARID = Token n "variable name" 0 0
-    | otherwise = Token n (show n) 0 0
+    | n >= PACKAGE, n <= INFIXR = Token n (String.toLowerCase (show n)) 1 0 0
+    | n == CONID = Token n "constructor or type name" 0 0 0
+    | n == VARID = Token n "variable name" 0 0 0
+    | otherwise = Token n (show n) 0 0 0
 yychar t
     | Token.tokid t == CHAR = (Token.value t).[0]
     | otherwise = '\0'
