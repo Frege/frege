@@ -89,6 +89,18 @@ import frege.compiler.Data       except (Position, is)
 import frege.compiler.Classtools (mkClassLoader, getOperators, Operator, OpArr)
 import frege.compiler.Utilities  as U(cval)
 
+data CharSeq s = native java.lang.CharSequence where
+    pure native charAt                                  :: CharSeq Immutable -> Int -> Char
+    pure native length                                  :: CharSeq Immutable -> Int
+    pure native subSeq  subSequence                     :: CharSeq Immutable -> Int -> Int -> CharSeq Immutable
+    pure native toString                                :: CharSeq Immutable -> String
+    pure native fromString "(java.lang.CharSequence)"   :: String -> CharSeq Immutable
+
+{--
+    [usage] @slurp filename encoding@
+    [return] the content of text file @filename@ appropriatly decoded according to the files @encoding@
+-}
+native slurp frege.compiler.JavaUtils.slurp :: String -> String -> IO (Exception String)
 
 {--
  * A map of keywords to 'TokenID's
@@ -247,7 +259,7 @@ isNot t c = t.tokid != CHAR || t.value.charAt 0 != c
      either the enclosing context ends or a new context is pushed.
     - A positive integer, which is the indentation column of the enclosing layout context.
 
-    The indentation of a token is the column number indicating the start of that token;
+    The /indentation/ of a token is the column number indicating the start of that token;
     the indentation of a line is the indentation of its leftmost lexeme.
     To determine the column number, assume a fixed-width font. For the purposes
     of the layout rule, Unicode characters in a source
@@ -265,7 +277,7 @@ layout !ctx (t1:ts)
 
 ---  2) an explicit \'}\' can only occur in explicit context and closes this context
 layout (0:ms) (t1:ts)
-    | t1 `is` '}', t1.col > 0  = layout ms (Token CHAR "}2" t1.line 0:ts)
+    | t1 `is` '}', t1.col > 0  = layout ms (Token CHAR "}" t1.line 0 t1.offset:ts)
 
 {--
     3) if a *@let@*, *@do@*, *@where@* or *@of@* is not followed by \'{\'
@@ -288,26 +300,55 @@ layout (0:ms) (t1:ts)
 -}
 layout (m:ms) (t1:t2:ts)
     | kw t1.tokid, t2 `isNot` '{', t2.col > m
-    = t1 : Token CHAR "{3" t1.line 0 : layout (t2.col:m:ms) (t2:ts)
+    = t1 : Token CHAR "{" t1.line 0 (t1.offset+t1.value.length) : layout (t2.col:m:ms) (t2:ts)
     | t2.line > t1.line, t2.col == m, t1 `isNot` ';'
-    = t1 : Token CHAR ";4" t1.line 0 : layout (m:ms) (t2:ts)
+    = t1 : Token CHAR ";" t1.line 0 (t1.offset+t1.value.length) : layout (m:ms) (t2:ts)
     | t2.line > t1.line, t2.col < m
-    = t1 : layout ms (Token CHAR "}5" t1.line 0 : t2 : ts)
+    = t1 : layout ms (Token CHAR "}" t1.line 0 (t1.offset+t1.value.length): t2 : ts)
     | m != 0, t2.tokid == IN, t1 `isNot` '}'
-    = t1 : Token CHAR "}6" t1.line 0 : layout ms (t2:ts)
+    = t1 : Token CHAR "}" t1.line 0 (t1.offset+t1.value.length) : layout ms (t2:ts)
     where
         kw LET = true; kw DO  = true; kw WHERE = true; kw OF = true; kw _ = false
 
 layout ms (t1:ts) = t1:layout ms ts
 layout [0] []     = []              -- proper end.
 layout (m:ms) []
-    | m > 0 = Token CHAR "}7" Int.maxBound Int.maxBound : layout ms []
+    | m > 0 = Token CHAR "}" Int.maxBound Int.maxBound Int.maxBound : layout ms []
     | otherwise = layout ms []    -- explicit brace missing
 
 layout ms ts =
     traceLn ("layout " ++ show ms ++ "   " ++ show (take 3 ts)) `seq` []
 
+{--
+    Scan a 'CharSeq' and take care of offsets
+-}
+lex :: CharSeq Immutable -> Int -> Int -> Int -> [Token]
+lex !cs !line !col !start
+    | endOfSeq    = []
+    | ch == '{'   = commentStart (start+1)
+    where
+        endOfSeq = start >= cs.length      -- assume that length is a cheap operation on char sequences
+        ch       = cs.charAt start
+        -- see if we can get a block comment
+        commentStart end
+            | end < cs.length && cs.charAt end == '-' = lexComment proto cs line (col+2) (end+1)
+            | otherwise =  brace : rest
+            where
+                brace = Token {tokid = CHAR, line, col, offset = start, value = "{"}
+                rest  = lex cs line (col+1) end
+                proto = Token DOCUMENTATION "" line (col+2) start
 
+lexComment :: Token -> CharSeq Immutable -> Int -> Int -> Int -> [Token]
+lexComment !proto !cs !line !col !i
+    | i >= cs.length = if proto.offset+2 < cs.length && cs.charAt (proto.offset+2) == '-'
+                        then [proto.{value = (cs.subSeq (proto.offset+3) cs.length).toString}]
+                        else []
+    | cs.charAt i == '-', i+1 < cs.length, cs.charAt (i+1) == '}'
+                     = if proto.offset+2 < i && cs.charAt (proto.offset+2) == '-'
+                        then proto.{value = (cs.subSeq (proto.offset+3) i).toString} : lex cs line (col+2) (i+2)
+                        else lex cs line (col+2) (i+2)
+    | cs.charAt i == '\n' =  lexComment proto cs (line+1) 1        (i+1)
+    | otherwise           =  lexComment proto cs line     (col+1)  (i+1)
 {--
  * Scans the string in the input list and returns a list of 'Token's.
  * For each scanned token, there is one item giving
@@ -389,14 +430,14 @@ scanCommentStart n mgc lns = case mgc ?~ commentStart of
             "{--" -> scancomment 1 n (offset + 1) n mgc lns true  ""
             "{-"  -> scancomment 1 n (offset + 1) n mgc lns false ""
             "---" -> let
-                         !tok = Token DOCUMENTATION (rest ++ "\n\n") n (offset + 1)
+                         !tok = Token DOCUMENTATION (rest ++ "\n\n") n (offset + 1) 0
                      in tok : scan (n+1) (tail lns)
             "--"  -> scan (n+1) (tail lns)
             "{"   -> let
-                        !tok = Token CHAR ("{") n (offset + 1)
+                        !tok = Token CHAR ("{") n (offset + 1) 0
                      in tok : scanSelect n mgc lns
             "-"   -> let
-                        !tok = Token CHAR ("-") n (offset + 1)
+                        !tok = Token CHAR ("-") n (offset + 1) 0
                      in tok : scanSelect n mgc lns
             wrong -> error ("somebody changed commentStart, matched '" ++ wrong ++ "'")
     Nothing -> error (show n ++ " scanCommentStart: " ++ strtail (head lns) (mgc.end 0))
@@ -413,7 +454,7 @@ scanSpecial n mgc lns =
                 s = unJust (mgc.group 0)
                 ind = 1 + mgc.start 0
                 f = CHAR
-                !tok = Token f s n ind
+                !tok = Token f s n ind 0
             in tok : scanSelect n mgc lns
         Nothing -> error (show n ++ " scanSpecial: "
                         ++ strtail (head lns) (mgc.end 0))
@@ -447,7 +488,7 @@ scanQ  n mgc lns =
                 q = unJust (mgc.group 0)  -- the qualifier or Ident
                 qstart = 1 + mgc.start 0  -- and its position
                 f = if isJust (mgc.group 1) then QUALIFIER else CONID
-                !tok = Token f q n qstart
+                !tok = Token f q n qstart 0
             in  tok : scanSelect n mgc lns;
         Nothing -> error (show n ++ " scanQ: " ++ strtail (head lns) (mgc.end 0))
     }
@@ -473,7 +514,7 @@ scanId n mgc lns =
                 f = case Tree.lookupS kwtree s of
                     Just f  -> f -- (f, s, n, ids)    : scanSelect n mgc lns
                     Nothing -> VARID
-                !tok = Token f s n ids
+                !tok = Token f s n ids 0
             in tok : scanSelect n mgc lns
         Nothing -> error (show n ++ " scanId: " ++ strtail (head lns) (mgc.end 0))
 
@@ -496,7 +537,7 @@ scanNumber n mgc lns =
                     Nothing -> INTCONST -- (INTCONST,  lit, n, ind) : scanSelect n mgc lns;
                     Just _  -> LONGCONST -- (LONGCONST, lit, n, ind) : scanSelect n mgc lns;
                     -- Just _  -> LONGCONST // (LONGCONST, lit, n, ind) : scanSelect n mgc lns;
-                !tok = Token f lit n ind
+                !tok = Token f lit n ind 0
             in tok : scanSelect n mgc lns
         ;
         Nothing -> case mgc ?~ fltlit of {
@@ -508,17 +549,17 @@ scanNumber n mgc lns =
                          f = (#_#.matcher fx).replaceAll ""
                          d = (#_#.matcher dx).replaceAll ""
                          !tok = case (mgc.group 2, mgc.group 3, mgc.group 4) of {
-                (Nothing, Nothing, Nothing)     -> Token INTCONST  f n ind;
-                (Nothing, Nothing, Just "l")    -> Token LONGCONST f n ind;
-                (Nothing, Nothing, Just "L")    -> Token LONGCONST f n ind;
-                (Nothing, Nothing, Just "N")    -> Token BIGCONST  d n ind;
-                (Nothing, Nothing, Just "n")    -> Token BIGCONST  d n ind;
-                (_, _, Just "d")                -> Token DBLCONST  f n ind;
-                (_, _, Just "D")                -> Token DBLCONST  f n ind;
-                (_, _, Just "f")                -> Token FLTCONST  f n ind;
-                (_, _, Just "F")                -> Token FLTCONST  f n ind;
-                (Just _, _, Nothing)            -> Token DBLCONST  f n ind;
-                (_, Just _, Nothing)            -> Token DBLCONST  f n ind;
+                (Nothing, Nothing, Nothing)     -> Token INTCONST  f n ind 0;
+                (Nothing, Nothing, Just "l")    -> Token LONGCONST f n ind 0;
+                (Nothing, Nothing, Just "L")    -> Token LONGCONST f n ind 0;
+                (Nothing, Nothing, Just "N")    -> Token BIGCONST  d n ind 0;
+                (Nothing, Nothing, Just "n")    -> Token BIGCONST  d n ind 0;
+                (_, _, Just "d")                -> Token DBLCONST  f n ind 0;
+                (_, _, Just "D")                -> Token DBLCONST  f n ind 0;
+                (_, _, Just "f")                -> Token FLTCONST  f n ind 0;
+                (_, _, Just "F")                -> Token FLTCONST  f n ind 0;
+                (Just _, _, Nothing)            -> Token DBLCONST  f n ind 0;
+                (_, Just _, Nothing)            -> Token DBLCONST  f n ind 0;
                 bad                             -> error ("bad number " ++ fx ++ " " ++ show bad); }
                     in tok : scanSelect n mgc lns;
         }
@@ -534,7 +575,7 @@ strlit = #\G"(\\[0-7][0-7]|\\[0-7]|\\[0123][0-7][0-7]|\\.|[^"])*"#;
  -}
 scanString n mgc lns = case mgc ?~ strlit of
         Just mgc  -> let
-                !tok = Token STRCONST (unJust (mgc.group 0)) n (1 + mgc.start 0)
+                !tok = Token STRCONST (unJust (mgc.group 0)) n (1 + mgc.start 0) 0
             in tok : scanSelect n mgc lns
         Nothing -> scanSpecial n mgc lns   -- error (show n ++ " scanString: " ++ strtail (head lns) (mgc.end 0))
 
@@ -549,7 +590,7 @@ chrlit = #\G'(\\[0-7][0-7]|\\[0-7]|\\[0123][0-7][0-7]|\\.|[^'\\])'#;
 scanChar n mgc lns =
     case mgc ?~ chrlit of
         Just mgc -> let
-                    !tok = Token CHRCONST (unJust (mgc.group 0)) n (1 + mgc.start 0)
+                    !tok = Token CHRCONST (unJust (mgc.group 0)) n (1 + mgc.start 0) 0
                 in tok : scanSelect n mgc lns
         Nothing -> scanSpecial n mgc lns    -- error (show n ++ " scanChar: " ++ strtail (head lns) (mgc.end 0))
 
@@ -565,7 +606,7 @@ scanRegexp n mgc lns =
         Just mgc  -> let
                 ind = 1 + mgc.start 0
                 rex = fromMaybe "" (mgc.group 1)
-                !tok = Token REGEXP rex n ind
+                !tok = Token REGEXP rex n ind 0
             in tok : scanSelect n mgc lns
         Nothing -> scanSpecial n mgc lns   -- error (show n ++ " scanRegexp: " ++ strtail (head lns) (mgc.end 0))
 
@@ -584,7 +625,7 @@ scanOp n mgc lns =
                     -- s = unJust (mgc.group 0)
                     ind = 1+ mgc.start 0
                     o = fromMaybe "" (mgc.group 1)
-                    !tok= Token SOMEOP o n ind
+                    !tok= Token SOMEOP o n ind 0
                 in tok : scanSelect n mgc lns
             Nothing -> scanSpecial n mgc lns   -- error (show n ++ " scanOp: " ++ strtail (head lns) (mgc.end 0))
 
@@ -598,7 +639,7 @@ scancomment lvl sln spos n mgc lns doc acc
         Just mgc  -> if lvl == 1
                 then if doc
                     then let
-                          !tok = Token DOCUMENTATION (acc ++ "\n\n") sln spos
+                          !tok = Token DOCUMENTATION (acc ++ "\n\n") sln spos 0
                         in tok : scanSelect n mgc lns
                     else scanSelect n mgc lns
                 else scancomment (lvl-1) sln spos n mgc lns doc (acc ++ "*/");
@@ -628,7 +669,7 @@ scancomment lvl sln spos n mgc lns doc acc
  -}
 findInfixImports :: [Token] -> [[Token]]
 findInfixImports ts = loop start ts where
-    start = [[Token IMPORT "import" 0 0, Token VARID "frege.prelude.Base" 0 0]] -- import frege.Prelude
+    start = [[Token IMPORT "import" 0 0 0, Token VARID "frege.prelude.Base" 0 0 0]] -- import frege.Prelude
     loop acc [] = acc
     loop acc (t1:ts)
         | wanted (Token.tokid t1) = loop ((t1:this ts) : acc) (tail ts)
@@ -725,7 +766,7 @@ processInfix xs = fold single (Right specialT) xs where
     single _ [] = error ("single: empty command")
     mkInfix op [] tree = error "Cannot happen, this is checked in single"
     mkInfix op (t1:ts) tree
-        | Token INTCONST s _ _ <- t1, i <- s.atoi, i > 0 && i < 17,
+        | Token INTCONST s _ _ _ <- t1, i <- s.atoi, i > 0 && i < 17,
           opid <- TokenID.from (TokenID.ord op + 17 - i) = fold (mkOp opid) tree ts
         | otherwise = Left (t1.line, "Illegal precedence `" ++ t1.value ++ "´, must be integer between 1..16")
     mkOp opid (err@Left _) token = err
@@ -809,11 +850,11 @@ substOp start tree (t:ts)
     | t.tokid == CHAR, forbidden (cval t)
                 = t : substOp start tree ts
     | t.tokid == SOMEOP = case tree.lookupS t.value of
-                Just tid -> Token tid t.value t.line t.col   : substOp start tree ts
-                Nothing  -> Token NOP1 t.value t.line t.col  : substOp start tree ts
+                Just tid -> Token tid  t.value t.line t.col t.offset : substOp start tree ts
+                Nothing  -> Token NOP1 t.value t.line t.col t.offset : substOp start tree ts
     | t.tokid == QUALIFIER = case substOp start tree ts of
                 (tx:ts) | t `vor` tx, tx.tokid > LOP0, tx.tokid < SOMEOP
-                    = Token tx.tokid (t.value ++ tx.value) t.line t.col : ts
+                    = Token tx.tokid (t.value ++ tx.value) t.line t.col t.offset : ts
                 ts  -> t:ts
     | t.tokid == CHAR
                 = check (collect t ts) (t:ts)
@@ -828,30 +869,27 @@ substOp start tree (t:ts)
         check cs ts = case interpret start cs of
             (Nothing, _) -> head ts : substOp start tree (tail ts)
             (Just op, rest) ->
-                Token op (name rest) (Token.line (head ts)) (Token.col (head ts))
+                (head ts::Token).{tokid = op, value = name rest}
+                -- Token op (name rest) (Token.line (head ts)) (Token.col (head ts)) (Token.offset (head ts))
                 : substOp start tree (drop (length cs - length rest) ts)
             -- otherwise = check tree (init xs) ts
           where name rest = cstos (take (length cs - length rest) cs)
 
---* this is the lexical analysis pass
+--- this is the lexical analysis pass
 pass :: (String -> IO (Exception (Maybe OpArr))) -> StG [Token]
 pass getop =
     do
         global <- getST
         let opts   = global.options
-            -- loader = global.classLoader
             prefix = opts.prefix
-        ebr <- doio (openSrc opts.encoding opts.source)
-        case ebr of
+        -- ebr <- doio (openSrc opts.encoding opts.source)
+        fdata <- doio (slurp opts.source (maybe "utf-8" id opts.encoding))
+        case fdata of
             Left exc -> do
-                U.error 0 ("Cannot open source file: " ++ show exc)
-                -- g <- getST
-                -- changeST Global.{errors <- (+1)}
-                stio []     -- IO.return ([], global.{errors <- (+1)})
-            Right br -> do
-                -- doio $ stderr << '.'
-                lines <- doio br.getlines
-                doio br.close
+                U.error 0 ("Cannot read source file: " ++ show exc)
+                stio []
+            Right string -> do
+                let lines   =  #\r?\n#.splitted string
                 let tokens  =  (layout [0] <~ scan 1) lines
                     ifximps
                         {- | global.thisPack == pPreludeBase = []
@@ -876,6 +914,7 @@ pass getop =
             changeST Global.{sub <- SubSt.{optab = tree}}
             stio (substAllOp tree tokens)
 
+        {-
         openSrc Nothing "-"  = do input <- stdin
                                   isr <- InputStreamReader.new input
                                   brFromISR (Right isr)
@@ -898,3 +937,4 @@ pass getop =
                         Right isr -> do
                             br <- BufferedReader.fromISR isr
                             IO.return (Right br)
+        -}

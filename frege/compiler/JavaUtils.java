@@ -22,7 +22,7 @@ public class JavaUtils {
 	    cl = loader.loadClass(pack);
 		return cl.getAnnotation(MD.FregePackage.class);
 	}
-	
+
 	/** get the lambda annotations */
 	public static MD.LambdaClasses getLambdas(ClassLoader loader, String pack) throws  ClassNotFoundException {
 	    Class<?> cl = null;
@@ -68,10 +68,10 @@ public class JavaUtils {
 	 *
 	 *  @return a String representing the contents of the file
 	 */
-	 public CharSequence slurp(String filename, String encoding) throws Exception {
+	 static public String slurp(String filename, String encoding) throws Exception {
 	     return new String(
 	         Files.readAllBytes(
-	             java.nio.file.FileSystems.getDefault().getPath(filename)), 
+	             java.nio.file.FileSystems.getDefault().getPath(filename)),
 	         encoding);
 	 }
 
