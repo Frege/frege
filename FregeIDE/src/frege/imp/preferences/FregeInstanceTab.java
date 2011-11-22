@@ -53,130 +53,72 @@ public class FregeInstanceTab extends InstancePreferencesTab {
 		sourceFontDetailsLink.setEnabled(true);
 		fDetailsLinks.add(sourceFontDetailsLink);
 
-
-		IntegerFieldEditor tabWidth = fPrefUtils.makeNewIntegerField(
+		ColorFieldEditor keyWords = fPrefUtils.makeNewColorField(
 			page, this, fPrefService,
-			"instance", "tabWidth", "tab width",
+			"instance", "keyWords", "key words",
 			"",
 			parent,
 			true, true,
-			true, "0",
 			false);
-		fields.add(tabWidth);
+		fields.add(keyWords);
 
-		Link tabWidthDetailsLink = fPrefUtils.createDetailsLink(parent, tabWidth, tabWidth.getTextControl().getParent(), "Details ...");
-
-		tabWidthDetailsLink.setEnabled(true);
-		fDetailsLinks.add(tabWidthDetailsLink);
+		keyWordsDetailsLink.setEnabled(true);
+		fDetailsLinks.add(keyWordsDetailsLink);
 
 
-		BooleanFieldEditor spacesForTabs = fPrefUtils.makeNewBooleanField(
+		BooleanFieldEditor warningsOn = fPrefUtils.makeNewBooleanField(
 			page, this, fPrefService,
-			"instance", "spacesForTabs", "spaces for tabs",
+			"instance", "warningsOn", "warnings on",
 			"",
 			parent,
 			true, true,
 			true, false,
 			false);
-		fields.add(spacesForTabs);
+		fields.add(warningsOn);
 
-		Link spacesForTabsDetailsLink = fPrefUtils.createDetailsLink(parent, spacesForTabs, spacesForTabs.getChangeControl().getParent(), "Details ...");
+		Link warningsOnDetailsLink = fPrefUtils.createDetailsLink(parent, warningsOn, warningsOn.getChangeControl().getParent(), "Details ...");
 
-		spacesForTabsDetailsLink.setEnabled(true);
-		fDetailsLinks.add(spacesForTabsDetailsLink);
+		warningsOnDetailsLink.setEnabled(true);
+		fDetailsLinks.add(warningsOnDetailsLink);
 
 
-		BooleanFieldEditor UseDefaultIncludePath = fPrefUtils.makeNewBooleanField(
+		BooleanFieldEditor UseDefaultImportPath = fPrefUtils.makeNewBooleanField(
 			page, this, fPrefService,
-			"instance", "UseDefaultIncludePath", "Use default include path",
+			"instance", "UseDefaultImportPath", "Use default import path",
 			"",
 			parent,
 			true, true,
 			true, false,
 			false);
-		fields.add(UseDefaultIncludePath);
+		fields.add(UseDefaultImportPath);
 
-		Link UseDefaultIncludePathDetailsLink = fPrefUtils.createDetailsLink(parent, UseDefaultIncludePath, UseDefaultIncludePath.getChangeControl().getParent(), "Details ...");
+		Link UseDefaultImportPathDetailsLink = fPrefUtils.createDetailsLink(parent, UseDefaultImportPath, UseDefaultImportPath.getChangeControl().getParent(), "Details ...");
 
-		UseDefaultIncludePathDetailsLink.setEnabled(true);
-		fDetailsLinks.add(UseDefaultIncludePathDetailsLink);
+		UseDefaultImportPathDetailsLink.setEnabled(true);
+		fDetailsLinks.add(UseDefaultImportPathDetailsLink);
 
 
-		DirectoryListFieldEditor IncludePathToUse = fPrefUtils.makeNewDirectoryListField(
+		DirectoryListFieldEditor ImportPathToUse = fPrefUtils.makeNewDirectoryListField(
 			page, this, fPrefService,
-			"instance", "IncludePathToUse", "Include path to use",
-			"A semicolon-separated list of folders to search for include files",
+			"instance", "ImportPathToUse", "Import path to use",
+			"A semicolon-separated list of folders to search for import files",
 			parent,
 			true, true,
 			false, "",
 			false);
-		fields.add(IncludePathToUse);
+		fields.add(ImportPathToUse);
 
-		Link IncludePathToUseDetailsLink = fPrefUtils.createDetailsLink(parent, IncludePathToUse, IncludePathToUse.getTextControl().getParent(), "Details ...");
+		Link ImportPathToUseDetailsLink = fPrefUtils.createDetailsLink(parent, ImportPathToUse, ImportPathToUse.getTextControl().getParent(), "Details ...");
 
-		IncludePathToUseDetailsLink.setEnabled(true);
-		fDetailsLinks.add(IncludePathToUseDetailsLink);
-
-
-		fPrefUtils.createToggleFieldListener(UseDefaultIncludePath, IncludePathToUse, false);
-		boolean isEnabledIncludePathToUse = !UseDefaultIncludePath.getBooleanValue();
-				IncludePathToUse.getTextControl().setEditable(isEnabledIncludePathToUse);
-				IncludePathToUse.getTextControl().setEnabled(isEnabledIncludePathToUse);
-				IncludePathToUse.setEnabled(isEnabledIncludePathToUse, IncludePathToUse.getParent());
-
-		StringFieldEditor SourceFileExtensions = fPrefUtils.makeNewStringField(
-			page, this, fPrefService,
-			"instance", "SourceFileExtensions", "Source file extensions",
-			"A comma-separated list of file name extensions identifying the source files to process",
-			parent,
-			true, true,
-			false, "",
-			false);
-		fields.add(SourceFileExtensions);
-
-		Link SourceFileExtensionsDetailsLink = fPrefUtils.createDetailsLink(parent, SourceFileExtensions, SourceFileExtensions.getTextControl().getParent(), "Details ...");
-
-		SourceFileExtensionsDetailsLink.setEnabled(true);
-		fDetailsLinks.add(SourceFileExtensionsDetailsLink);
+		ImportPathToUseDetailsLink.setEnabled(true);
+		fDetailsLinks.add(ImportPathToUseDetailsLink);
 
 
-		BooleanFieldEditor GenerateLog = fPrefUtils.makeNewBooleanField(
-			page, this, fPrefService,
-			"instance", "GenerateLog", "Generate log",
-			"If true, place detailed information from the build process in a log file",
-			parent,
-			true, true,
-			true, false,
-			false);
-		fields.add(GenerateLog);
-
-		Link GenerateLogDetailsLink = fPrefUtils.createDetailsLink(parent, GenerateLog, GenerateLog.getChangeControl().getParent(), "Details ...");
-
-		GenerateLogDetailsLink.setEnabled(true);
-		fDetailsLinks.add(GenerateLogDetailsLink);
-
-
-		IntegerFieldEditor MaxLogEntries = fPrefUtils.makeNewIntegerField(
-			page, this, fPrefService,
-			"instance", "MaxLogEntries", "Maximum # of log entries",
-			"",
-			parent,
-			true, true,
-			true, "0",
-			false);
-		fields.add(MaxLogEntries);
-
-		Link MaxLogEntriesDetailsLink = fPrefUtils.createDetailsLink(parent, MaxLogEntries, MaxLogEntries.getTextControl().getParent(), "Details ...");
-
-		MaxLogEntriesDetailsLink.setEnabled(true);
-		fDetailsLinks.add(MaxLogEntriesDetailsLink);
-
-
-		fPrefUtils.createToggleFieldListener(GenerateLog, MaxLogEntries, true);
-		boolean isEnabledMaxLogEntries = GenerateLog.getBooleanValue();
-				MaxLogEntries.getTextControl().setEditable(isEnabledMaxLogEntries);
-				MaxLogEntries.getTextControl().setEnabled(isEnabledMaxLogEntries);
-				MaxLogEntries.setEnabled(isEnabledMaxLogEntries, MaxLogEntries.getParent());
+		fPrefUtils.createToggleFieldListener(UseDefaultImportPath, ImportPathToUse, false);
+		boolean isEnabledImportPathToUse = !UseDefaultImportPath.getBooleanValue();
+				ImportPathToUse.getTextControl().setEditable(isEnabledImportPathToUse);
+				ImportPathToUse.getTextControl().setEnabled(isEnabledImportPathToUse);
+				ImportPathToUse.setEnabled(isEnabledImportPathToUse, ImportPathToUse.getParent());
 		return fields.toArray(new FieldEditor[fields.size()]);
 	}
 }

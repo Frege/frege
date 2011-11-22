@@ -12,11 +12,8 @@ package frege.imp.preferences;
  */
 public class FregeConstants {
 	public static final String P_SOURCEFONT = "sourceFont";
-	public static final String P_TABWIDTH = "tabWidth";
-	public static final String P_SPACESFORTABS = "spacesForTabs";
-	public static final String P_USEDEFAULTINCLUDEPATH = "UseDefaultIncludePath";
-	public static final String P_INCLUDEPATHTOUSE = "IncludePathToUse";
-	public static final String P_SOURCEFILEEXTENSIONS = "SourceFileExtensions";
-	public static final String P_GENERATELOG = "GenerateLog";
-	public static final String P_MAXLOGENTRIES = "MaxLogEntries";
+	public static final String P_KEYWORDS = "keyWords";
+	public static final String P_WARNINGSON = "warningsOn";
+	public static final String P_USEDEFAULTIMPORTPATH = "UseDefaultImportPath";
+	public static final String P_IMPORTPATHTOUSE = "ImportPathToUse";
 }

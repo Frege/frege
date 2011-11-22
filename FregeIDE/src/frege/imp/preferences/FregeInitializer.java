@@ -19,13 +19,10 @@ public class FregeInitializer extends PreferencesInitializer {
 		IPreferencesService service = FregePlugin.getInstance().getPreferencesService();
 
 		service.setStringPreference(IPreferencesService.DEFAULT_LEVEL, FregeConstants.P_SOURCEFONT, "Courier New");
-		service.setIntPreference(IPreferencesService.DEFAULT_LEVEL, FregeConstants.P_TABWIDTH, 4);
-		service.setBooleanPreference(IPreferencesService.DEFAULT_LEVEL, FregeConstants.P_SPACESFORTABS, false);
-		service.setBooleanPreference(IPreferencesService.DEFAULT_LEVEL, FregeConstants.P_USEDEFAULTINCLUDEPATH, true);
-		service.setStringPreference(IPreferencesService.DEFAULT_LEVEL, FregeConstants.P_INCLUDEPATHTOUSE, ".;..;${pluginResource:org.eclipse.imp.leg/include}");
-		service.setStringPreference(IPreferencesService.DEFAULT_LEVEL, FregeConstants.P_SOURCEFILEEXTENSIONS, "leg");
-		service.setBooleanPreference(IPreferencesService.DEFAULT_LEVEL, FregeConstants.P_GENERATELOG, true);
-		service.setIntPreference(IPreferencesService.DEFAULT_LEVEL, FregeConstants.P_MAXLOGENTRIES, 100);
+		service.setStringPreference(IPreferencesService.DEFAULT_LEVEL, FregeConstants.P_KEYWORDS, "255,0,0");
+		service.setBooleanPreference(IPreferencesService.DEFAULT_LEVEL, FregeConstants.P_WARNINGSON, true);
+		service.setBooleanPreference(IPreferencesService.DEFAULT_LEVEL, FregeConstants.P_USEDEFAULTIMPORTPATH, true);
+		service.setStringPreference(IPreferencesService.DEFAULT_LEVEL, FregeConstants.P_IMPORTPATHTOUSE, ".;..;${project}");
 	}
 
 	/*
