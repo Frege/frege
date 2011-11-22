@@ -345,7 +345,7 @@ vid t = (Token.value t, Token.line t)
 //%explain getfields    field list
 %}
 
-%token VARID CONID QUALIFIER DOCUMENTATION
+%token VARID CONID QVARID QCONID QUALIFIER DOCUMENTATION
 %token PACKAGE IMPORT INFIX INFIXR INFIXL NATIVE DATA WHERE CLASS
 %token INSTANCE ABSTRACT TYPE TRUE FALSE IF THEN ELSE CASE OF DERIVE
 %token LET IN WHILE DO FORALL PRIVATE PROTECTED PUBLIC PURE
@@ -599,10 +599,10 @@ varids:
     ;
 conid:   CONID              { vid }
     ;
-qvarid:  QUALIFIER VARID    { \a\b -> (Token.value a ++ Token.value b, yyline b)}
+qvarid:  QVARID             { \a -> (Token.value a, yyline a)}
     |    VARID              { vid }
     ;
-qconid:  QUALIFIER CONID    { \a\b -> (Token.value a ++ Token.value b, yyline b)}
+qconid:  QCONID             { \a -> (Token.value a, yyline a)}
     |    CONID              { vid }
     ;
 
@@ -1184,11 +1184,11 @@ primary:
     ;
 
 term:
-    varid                           { \x   -> Vbl {pos=posLine x, name=posItem x, typ=Nothing} }
+    qvarid                          { \x   -> Vbl {pos=posLine x, name=posItem x, typ=Nothing} }
     | literal
     | '_'                           { \t   -> Vbl {pos = yyline t, name = "_", typ=Nothing} }  // only valid as pattern
-    | QUALIFIER VARID               { \q\v -> Vbl {pos=yyline v, typ=Nothing,
-                                                    name = Token.value q ++ Token.value v }}
+    // | QUALIFIER VARID               { \q\v -> Vbl {pos=yyline v, typ=Nothing,
+    //                                                name = Token.value q ++ Token.value v }}
     | qconid                        { \qc  -> Con (posLine qc) (posItem qc) Nothing}
     | qconid '{'        '}'         { \qc\_\_    -> ConFS (posLine qc) (posItem qc) [] Nothing}
     | qconid '{' fields '}'         { \qc\_\fs\_ -> ConFS (posLine qc) (posItem qc) fs Nothing}
