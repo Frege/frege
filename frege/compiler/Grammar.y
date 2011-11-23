@@ -972,7 +972,7 @@ literal:
     | CHRCONST                      { \x ->  Lit (yyline x) LChar   (Token.value x) Nothing }
     | STRCONST                      { \x ->  Lit (yyline x) LString (Token.value x) Nothing }
     | INTCONST                      { \x ->  Lit (yyline x) LInt    (Token.value x) Nothing }
-    | BIGCONST                      { \x ->  Lit (yyline x) LBig    (Token.value x) Nothing }
+    | BIGCONST                      { \x ->  Lit (yyline x) LBig    (bignum x)      Nothing }
     | LONGCONST                     { \x ->  Lit (yyline x) LLong   (Token.value x) Nothing }
     | FLTCONST                      { \x ->  Lit (yyline x) LFloat  (Token.value x) Nothing }
     | DBLCONST                      { \x ->  Lit (yyline x) LDouble (Token.value x) Nothing }
@@ -1705,6 +1705,10 @@ litregexp x = do
                 YYM.return (Lit (yyline x) LRegex re Nothing)
             Right _ ->
                 YYM.return (Lit (yyline x) LRegex re Nothing)
+
+--- extract the value of a 'BIGCONST' literal without the trailing N
+bignum :: Token -> String
+bignum x = strhead x.value (x.value.length-1)
 
 classContext clas ctxs cvar = mapSt sup ctxs
     where
