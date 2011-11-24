@@ -12,7 +12,6 @@ package frege.imp.preferences;
  */
 public class FregeConstants {
 	public static final String P_SOURCEFONT = "sourceFont";
-	public static final String P_KEYWORDS = "keyWords";
 	public static final String P_WARNINGSON = "warningsOn";
 	public static final String P_USEDEFAULTIMPORTPATH = "UseDefaultImportPath";
 	public static final String P_IMPORTPATHTOUSE = "ImportPathToUse";

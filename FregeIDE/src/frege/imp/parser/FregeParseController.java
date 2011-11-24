@@ -5,7 +5,11 @@ import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 
+import lpg.runtime.ILexStream;
+import lpg.runtime.IPrsStream;
+import lpg.runtime.Monitor;
 
+/*
 import lpg.runtime.ILexStream;
 import lpg.runtime.IPrsStream;
 import lpg.runtime.IToken;
@@ -13,10 +17,11 @@ import lpg.runtime.LexStream;
 import lpg.runtime.LpgLexStream;
 import lpg.runtime.Monitor;
 import lpg.runtime.PrsStream;
-
+*/
 
 import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.IProgressMonitor;
+
 import org.eclipse.imp.model.ISourceProject;
 import org.eclipse.imp.parser.ILexer;
 import org.eclipse.imp.parser.IMessageHandler;
@@ -31,6 +36,11 @@ import org.eclipse.imp.services.ILanguageSyntaxProperties;
 import org.eclipse.jface.text.IRegion;
 
 import frege.FregePlugin;
+import frege.compiler.Data;
+import frege.compiler.Data.TGlobal;
+import frege.compiler.Data.TTokenID;
+import frege.rt.Lambda;
+import frege.rt.Box;
 
 /**
  * NOTE:  This version of the Parse Controller is for use when the Parse
@@ -61,145 +71,35 @@ public class FregeParseController extends ParseControllerBase implements
 		super(FregePlugin.getInstance().getLanguageID());
 	}
 
-	public class ASTNodeToken extends ASTNode implements IASTNodeToken {
-		public ASTNodeToken(IToken token) {
-			super(token);
-		}
-	}
+	private IParser parser = new IParser() {
+		    /**
+		     * Run the parser to create a model.
+		     * @param monitor stop scanning/parsing when monitor.isCanceled() is true.
+		     * @return
+		     */
+		    public Object parser(Monitor monitor, int error_repair_count) { return null; }
 
-	public interface Visitor {
-		boolean preVisit(ASTNode element);
+		    public IPrsStream getIPrsStream() { return null; }
 
-		void postVisit(ASTNode element);
+		    /**
+		     * @return array of keywords in the order in which they are mapped to integers.
+		     */
+		    public String[] orderedTerminalSymbols() { return Box.<String[]>box(frege.compiler.Scanner.keywordsByID._e()).j; }
 
-		boolean visit(ASTNodeToken n);
+		    /**
+		     * @return array of keywords in the order in which they are mapped to integers.
+		     */
+		    public int numTokenKinds() { return TTokenID.SOMEOP.j; }
 
-		void endVisit(ASTNodeToken n);
-	}
+		    /**
+		     * @return the token kind for the EOF token
+		     */
+		    public int getEOFTokenKind() { return -1; }
 
-	public static abstract class AbstractVisitor implements Visitor {
-		public abstract void unimplementedVisitor(String s);
-
-		public boolean preVisit(ASTNode element) {
-			return true;
-		}
-
-		public void postVisit(ASTNode element) {
-		}
-
-		public boolean visit(ASTNodeToken n) {
-			unimplementedVisitor("visit(ASTNodeToken)");
-			return true;
-		}
-
-		public void endVisit(ASTNodeToken n) {
-			unimplementedVisitor("endVisit(ASTNodeToken)");
-		}
-	}
-
-	public interface IASTNodeToken {
-		public IToken getLeftIToken();
-
-		public IToken getRightIToken();
-
-		void accept(Visitor v);
-	}
-
-	public class ASTNode implements IASTNodeToken {
-		public ASTNode(IToken token) {
-		}
-
-		public ASTNode(IToken leftIToken, IToken rightIToken) {
-		}
-
-		public IToken getLeftIToken() {
-			return null;
-		}
-
-		public IToken getRightIToken() {
-			return null;
-		}
-
-		public void accept(Visitor v) {
-		}
-	}
-
-	public class FregeLexer /* extends LpgLexStream  implements ILexer */ {
-		public FregeLexer(String filename) throws java.io.IOException {
-		}
-
-		public LexStream getLexStream() {
-			return null;
-		}
-
-		public void lexer(IProgressMonitor monitor, String what) {
-		};
-
-		public int[] getKeywordKinds() {
-			return null;
-		}
-
-		public int getKind(int i) {
-			return 0;
-		}
-
-		public String[] orderedExportedSymbols() {
-			return null;
-		}
-	}
-
-	public class FregeParser /* extends PrsStream */ implements IParser {
-		public int numTokenKinds() {
-			return 0;
-		}
-
-		public FregeParser(LexStream lexStream) {
-		}
-
-		public PrsStream getIPrsStream() {
-			return (PrsStream) null;
-		}
-
-		public Object parser(IProgressMonitor monitor, int error_repair_count) {
-			return null;
-		}
-
-		public int getEOFTokenKind() {
-			return 0;
-		}
-
-		public void setMessageHandler(IMessageHandler errMsg) {
-		}
-
-		public void resolve(ASTNode root) {
-		}
+		    public void reset(ILexStream lexStream) {}
 		
-		/**
-	     * @return array of keywords in the order in which they are mapped to integers.
-	     */
-	    public String[] orderedTerminalSymbols() {
-	    	return frege.rt.Box.<String[]>box(frege.compiler.Scanner.keywordsByID._e()).j;
-	    }
-
-		@Override
-		public void reset(ILexStream lexStream) {
-			// TODO Auto-generated method stub
-			
-		}
-
-		@Override
-		public Object parser(Monitor monitor, int error_repair_count) {
-			// TODO Auto-generated method stub
-			return null;
-		}
-	}
-
-	private FregeParser parser;
-	private FregeLexer lexer;
-	private ASTNode currentAst;
-
-	private char keywords[][];
-	private boolean isKeyword[];
+	};
+	private TGlobal global = (TGlobal) frege.prelude.Base.TST.performUnsafe((Lambda) frege.compiler.Main.standardOptions._e())._e();
 
 	/**
 	 * @param filePath		Project-relative path of file
@@ -214,7 +114,7 @@ public class FregeParseController extends ParseControllerBase implements
 				.append(filePath);
 		createLexerAndParser(fullFilePath);
 
-		parser.setMessageHandler(handler);
+		// parser.setMessageHandler(handler);
 	}
 
 	public IParser getParser() {
@@ -234,12 +134,12 @@ public class FregeParseController extends ParseControllerBase implements
 	}
 
 	private void createLexerAndParser(IPath filePath) {
-		try {
-			lexer = new FregeLexer(filePath.toOSString());
-			parser = new FregeParser(lexer.getLexStream());
-		} catch (IOException e) {
-			throw new Error(e);
-		}
+		// try {
+			// lexer = new FregeLexer(filePath.toOSString());
+			// parser = new FregeParser(lexer.getLexStream());
+		// } catch (IOException e) {
+		//	throw new Error(e);
+		// }
 	}
 
 	/**
@@ -248,31 +148,30 @@ public class FregeParseController extends ParseControllerBase implements
 	public Object parse(String contents, boolean scanOnly,
 			IProgressMonitor monitor) {
 		// PMMonitor my_monitor = new PMMonitor(monitor);
-		char[] contentsArray = contents.toCharArray();
-
+		// char[] contentsArray = contents.toCharArray();
+		System.out.println("Frege parse(´" 
+				+ contents.substring(0,  contents.length() < 20 ? contents.length() : 20) 
+				+ "´, " 
+				+ scanOnly  + ")");
 		// lexer.initialize(contentsArray, fFilePath.toPortableString());
 		// parser.getParseStream().resetTokenStream();
 
-		lexer.lexer(monitor, contents); // Lex the stream to produce the token stream
+		// lexer.lexer(monitor, contents); // Lex the stream to produce the token stream
 		if (monitor.isCanceled())
-			return currentAst; // TODO currentAst might (probably will) be inconsistent wrt the lex stream now
+			return null; // TODO currentAst might (probably will) be inconsistent wrt the lex stream now
 
-		currentAst = (ASTNode) parser.parser(monitor, 0);
-		parser.resolve(currentAst);
 
-		// cacheKeywordsOnce();
-
-		return currentAst;
+		return null;
 	}
 
 	@Override
 	public Object parse(String input, IProgressMonitor monitor) {
 		// TODO Auto-generated method stub
-		return null;
+		return parse(input, false, monitor);
 	}
 
 	@Override
-	public Iterator getTokenIterator(IRegion region) {
+	public Iterator<Data.TToken> getTokenIterator(IRegion region) {
 		// TODO Auto-generated method stub
 		return null;
 	}

@@ -3,9 +3,6 @@ package frege.imp.parser;
 import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.Path;
 
-import frege.imp.parser.FregeParseController.ASTNode;
-import frege.imp.parser.FregeParseController.AbstractVisitor;
-
 import org.eclipse.imp.parser.ISourcePositionLocator;
 
 /**
@@ -35,42 +32,12 @@ public class FregeSourcePositionLocator implements ISourcePositionLocator {
 	public FregeSourcePositionLocator() {
 	}
 
-	private final class NodeVisitor extends AbstractVisitor {
-
-		public void unimplementedVisitor(String s) {
-			// System.out.println("NodeVisitor.unimplementedVisitor:  Unimplemented");
-		}
-
-		public boolean preVisit(ASTNode element) {
-			int nodeStartOffset = element.getLeftIToken().getStartOffset();
-			int nodeEndOffset = element.getRightIToken().getEndOffset();
-			//System.out.println("FregeNodeLocator.NodeVisitor.preVisit(ASTNode):  Examining " + element.getClass().getName() +
-			//    " @ [" + nodeStartOffset + "->" + nodeEndOffset + ']');
-
-			// If this node contains the span of interest then record it
-			if (nodeStartOffset <= fStartOffset && nodeEndOffset >= fEndOffset) {
-				//System.out.println("FregeNodeLocator.NodeVisitor.preVisit(ASTNode) SELECTED for offsets [" + fStartOffset + ".." + fEndOffset + "]");
-				fNode[0] = element;
-				return true; // to continue visiting here?
-			}
-			return false; // to stop visiting here?
-		}
-	}
-
-	private NodeVisitor fVisitor = new NodeVisitor();
-
 	public Object findNode(Object ast, int offset) {
 		return findNode(ast, offset, offset);
 	}
 
 	public Object findNode(Object ast, int startOffset, int endOffset) {
-		// System.out.println("Looking for node spanning offsets " + startOffset + " => " + endOffset);
-		fStartOffset = startOffset;
-		fEndOffset = endOffset;
-		// The following could be treated as an IASTNodeToken, but ASTNode
-		// is required for the visit/preVisit method, and there's no reason
-		// to use both of those types
-		((ASTNode) ast).accept(fVisitor);
+		System.out.println("Looking for node spanning offsets " + startOffset + " => " + endOffset);
 		if (fNode[0] == null) {
 			//System.out.println("Selected node:  null");
 		} else {
@@ -81,18 +48,15 @@ public class FregeSourcePositionLocator implements ISourcePositionLocator {
 	}
 
 	public int getStartOffset(Object node) {
-		ASTNode n = (ASTNode) node;
-		return n.getLeftIToken().getStartOffset();
+		return 0;
 	}
 
 	public int getEndOffset(Object node) {
-		ASTNode n = (ASTNode) node;
-		return n.getRightIToken().getEndOffset();
+		return 0;
 	}
 
 	public int getLength(Object node) {
-		ASTNode n = (ASTNode) node;
-		return getEndOffset(n) - getStartOffset(n);
+		return getEndOffset(node) - getStartOffset(node);
 	}
 
 	public IPath getPath(Object node) {

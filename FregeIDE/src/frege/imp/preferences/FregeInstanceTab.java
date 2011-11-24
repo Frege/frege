@@ -53,18 +53,6 @@ public class FregeInstanceTab extends InstancePreferencesTab {
 		sourceFontDetailsLink.setEnabled(true);
 		fDetailsLinks.add(sourceFontDetailsLink);
 
-		ColorFieldEditor keyWords = fPrefUtils.makeNewColorField(
-			page, this, fPrefService,
-			"instance", "keyWords", "key words",
-			"",
-			parent,
-			true, true,
-			false);
-		fields.add(keyWords);
-
-		keyWordsDetailsLink.setEnabled(true);
-		fDetailsLinks.add(keyWordsDetailsLink);
-
 
 		BooleanFieldEditor warningsOn = fPrefUtils.makeNewBooleanField(
 			page, this, fPrefService,
