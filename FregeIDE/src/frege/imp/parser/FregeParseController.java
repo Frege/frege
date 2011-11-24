@@ -89,12 +89,12 @@ public class FregeParseController extends ParseControllerBase implements
 		    /**
 		     * @return array of keywords in the order in which they are mapped to integers.
 		     */
-		    public int numTokenKinds() { return TTokenID.SOMEOP.j; }
+		    public int numTokenKinds() { return TTokenID.LEXERROR.j; }
 
 		    /**
 		     * @return the token kind for the EOF token
 		     */
-		    public int getEOFTokenKind() { return -1; }
+		    public int getEOFTokenKind() { return TTokenID.LEXERROR.j; }
 
 		    public void reset(ILexStream lexStream) {}
 		
@@ -118,6 +118,7 @@ public class FregeParseController extends ParseControllerBase implements
 	}
 
 	public IParser getParser() {
+		new Exception("getParser: called").printStackTrace(System.out);
 		return parser;
 	}
 
