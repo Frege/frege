@@ -22,6 +22,7 @@ import lpg.runtime.PrsStream;
 import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.IProgressMonitor;
 
+import org.eclipse.imp.model.IPathEntry;
 import org.eclipse.imp.model.ISourceProject;
 import org.eclipse.imp.parser.ILexer;
 import org.eclipse.imp.parser.IMessageHandler;
@@ -112,6 +113,9 @@ public class FregeParseController extends ParseControllerBase implements
 		super.initialize(filePath, project, handler);
 		IPath fullFilePath = project.getRawProject().getLocation()
 				.append(filePath);
+		System.out.print("BuildPath: ");
+		for (IPathEntry ip: project.getBuildPath()) System.out.print(ip.getPath().toPortableString() + ", ");
+		System.out.println();
 		createLexerAndParser(fullFilePath);
 
 		// parser.setMessageHandler(handler);
@@ -135,12 +139,7 @@ public class FregeParseController extends ParseControllerBase implements
 	}
 
 	private void createLexerAndParser(IPath filePath) {
-		// try {
-			// lexer = new FregeLexer(filePath.toOSString());
-			// parser = new FregeParser(lexer.getLexStream());
-		// } catch (IOException e) {
-		//	throw new Error(e);
-		// }
+		System.out.println("createLexerAndParser: " + filePath.toPortableString());
 	}
 
 	/**
