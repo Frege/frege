@@ -70,43 +70,37 @@ public class FregeInstanceTab extends InstancePreferencesTab {
 		fDetailsLinks.add(warningsOnDetailsLink);
 
 
-		BooleanFieldEditor UseDefaultImportPath = fPrefUtils.makeNewBooleanField(
+		DirectoryListFieldEditor FregePath = fPrefUtils.makeNewDirectoryListField(
 			page, this, fPrefService,
-			"instance", "UseDefaultImportPath", "Use default import path",
-			"",
-			parent,
-			true, true,
-			true, false,
-			false);
-		fields.add(UseDefaultImportPath);
-
-		Link UseDefaultImportPathDetailsLink = fPrefUtils.createDetailsLink(parent, UseDefaultImportPath, UseDefaultImportPath.getChangeControl().getParent(), "Details ...");
-
-		UseDefaultImportPathDetailsLink.setEnabled(true);
-		fDetailsLinks.add(UseDefaultImportPathDetailsLink);
-
-
-		DirectoryListFieldEditor ImportPathToUse = fPrefUtils.makeNewDirectoryListField(
-			page, this, fPrefService,
-			"instance", "ImportPathToUse", "Import path to use",
+			"instance", "FregePath", "Frege path",
 			"A semicolon-separated list of folders to search for import files",
 			parent,
 			true, true,
 			false, "",
 			false);
-		fields.add(ImportPathToUse);
+		fields.add(FregePath);
 
-		Link ImportPathToUseDetailsLink = fPrefUtils.createDetailsLink(parent, ImportPathToUse, ImportPathToUse.getTextControl().getParent(), "Details ...");
+		Link FregePathDetailsLink = fPrefUtils.createDetailsLink(parent, FregePath, FregePath.getTextControl().getParent(), "Details ...");
 
-		ImportPathToUseDetailsLink.setEnabled(true);
-		fDetailsLinks.add(ImportPathToUseDetailsLink);
+		FregePathDetailsLink.setEnabled(true);
+		fDetailsLinks.add(FregePathDetailsLink);
 
 
-		fPrefUtils.createToggleFieldListener(UseDefaultImportPath, ImportPathToUse, false);
-		boolean isEnabledImportPathToUse = !UseDefaultImportPath.getBooleanValue();
-				ImportPathToUse.getTextControl().setEditable(isEnabledImportPathToUse);
-				ImportPathToUse.getTextControl().setEnabled(isEnabledImportPathToUse);
-				ImportPathToUse.setEnabled(isEnabledImportPathToUse, ImportPathToUse.getParent());
+		DirectoryFieldEditor Destination = fPrefUtils.makeNewDirectoryField(
+			page, this, fPrefService,
+			"instance", "Destination", "Destination",
+			"Where to put compiled java and class files.",
+			parent,
+			true, true,
+			false, "",
+			false);
+		fields.add(Destination);
+
+		Link DestinationDetailsLink = fPrefUtils.createDetailsLink(parent, Destination, Destination.getTextControl().getParent(), "Details ...");
+
+		DestinationDetailsLink.setEnabled(true);
+		fDetailsLinks.add(DestinationDetailsLink);
+
 		return fields.toArray(new FieldEditor[fields.size()]);
 	}
 }

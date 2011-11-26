@@ -20,8 +20,8 @@ public class FregeInitializer extends PreferencesInitializer {
 
 		service.setStringPreference(IPreferencesService.DEFAULT_LEVEL, FregeConstants.P_SOURCEFONT, "Courier New");
 		service.setBooleanPreference(IPreferencesService.DEFAULT_LEVEL, FregeConstants.P_WARNINGSON, true);
-		service.setBooleanPreference(IPreferencesService.DEFAULT_LEVEL, FregeConstants.P_USEDEFAULTIMPORTPATH, true);
-		service.setStringPreference(IPreferencesService.DEFAULT_LEVEL, FregeConstants.P_IMPORTPATHTOUSE, ".;..;${project}");
+		service.setStringPreference(IPreferencesService.DEFAULT_LEVEL, FregeConstants.P_FREGEPATH, "X:/frege3/fregec.jar");
+		service.setStringPreference(IPreferencesService.DEFAULT_LEVEL, FregeConstants.P_DESTINATION, "./build");
 	}
 
 	/*

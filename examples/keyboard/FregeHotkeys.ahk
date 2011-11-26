@@ -1,4 +1,5 @@
-; Run this script with AutoHotkey, obtainable from www.autohotkey.com
+﻿; Run this script with AutoHotkey, obtainable from www.autohotkey.com
+; ƒ•ƒ•ƒ••••ƒƒƒƒƒƒ
 
 #?::ListHotKeys
 
@@ -6,14 +7,8 @@
 CapsLock::
 SendInput {U+0192}
 SetCapsLockState Off
+return
 
-;
-; Ctrl. send •
-; Ctrl' send ´
-; Ctrl< send «
-; Ctrl> send »
-; Ctrl-Alt-Shift <  send ¦¦|¦¦¦|||¦
-;
 ^.::SendInput  {U+2022}
 ^'::SendInput  {U+00B4}
 ^>::SendInput  {U+00BB}
