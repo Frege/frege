@@ -5,6 +5,8 @@ import org.eclipse.core.runtime.Path;
 
 import org.eclipse.imp.parser.ISourcePositionLocator;
 
+import frege.compiler.Data.TToken;
+
 /**
  * NOTE:  This version of the ISourcePositionLocator is for use when the Source
  * Position Locator and corresponding Parse Controller are generated separately from
@@ -48,15 +50,21 @@ public class FregeSourcePositionLocator implements ISourcePositionLocator {
 	}
 
 	public int getStartOffset(Object node) {
+		if (node != null && node instanceof TToken) {
+			TToken.offset((TToken)node);
+		}
 		return 0;
 	}
 
 	public int getEndOffset(Object node) {
+		if (node != null && node instanceof TToken) {
+			return TToken.offset((TToken)node) + TToken.value((TToken) node).length() - 1;
+		}
 		return 0;
 	}
 
 	public int getLength(Object node) {
-		return getEndOffset(node) - getStartOffset(node);
+		return getEndOffset(node) - getStartOffset(node) + 1;
 	}
 
 	public IPath getPath(Object node) {

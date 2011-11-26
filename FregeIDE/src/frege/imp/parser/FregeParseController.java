@@ -190,30 +190,43 @@ public class FregeParseController extends ParseControllerBase implements
 			IProgressMonitor monitor) {
 		// PMMonitor my_monitor = new PMMonitor(monitor);
 		// char[] contentsArray = contents.toCharArray();
-		int i = contents.indexOf('\n');
-		System.out.println("Frege parse(´" 
-				+ (i < 0 ? contents : contents.substring(0,  i)) 
-				+ "´, " 
-				+ scanOnly  + ")");
+		
+//		int i = contents.indexOf('\n');
+//		System.out.println("Frege parse(´" 
+//				+ (i < 0 ? contents : contents.substring(0,  i)) 
+//				+ "´, " 
+//				+ scanOnly  + ")");
+		
+		monitor.beginTask(this.getClass().getName() + " parsing", 2);
 		
 		Lambda lexPass = frege.compiler.Main.lexPassIDE(contents);
 		global = runStG(lexPass, global);
-		if (errors() > 0) return null;
+		if (errors() > 0) {
+			monitor.done();
+			return null;
+		}
 		else if (monitor.isCanceled()) {
 			System.out.println("after lex ... cancelled");
+			monitor.done();
 			return global;
 		}
+		monitor.worked(1);
 		
-		
-		if (errors() > 0) return null;
+		if (errors() > 0) {
+			monitor.done();
+			return null;
+		}
 		else {
 			global = runStG(frege.compiler.Main.parsePass, global);
 			if (monitor.isCanceled()) {
 				System.out.println("after parse ... cancelled");
+				monitor.done();
 				return global;
 			}
 		}
+		monitor.worked(1);
 		
+		monitor.done();
 		return global;
 	}
 
@@ -224,27 +237,33 @@ public class FregeParseController extends ParseControllerBase implements
 	
 	@Override
 	public Object parse(String input, IProgressMonitor monitor) {
-		// TODO Auto-generated method stub
 		return parse(input, false, monitor);
 	}
 
 	@Override
 	public Iterator<Data.TToken> getTokenIterator(IRegion region) {
-		System.out.println("getTokenIterator()");
-		if (errors() > 0) return null;
+		System.out.print("getTokenIterator()");
+		if (errors() > 0) {
+			System.out.println();
+			return null;
+		}
 		List<TToken> ts = new java.util.LinkedList<TToken>();
 		TList fts = TSubSt.toks( TGlobal.sub(global) );
 		while (true) {
 			TList.DCons cons = fts._Cons();
 			if (cons == null) break;
-			ts.add((TToken) cons.mem1._e());
+			TToken tok = (TToken) cons.mem1._e();
+			if (TToken.offset(tok) + TToken.value(tok).length() >= region.getOffset()
+					&& TToken.offset(tok) <= region.getOffset() + region.getLength()) ts.add(tok); 
+			if (TToken.offset(tok) > region.getOffset() + region.getLength()) break;
+			fts = (TList) cons.mem2._e();		
 		}
+		System.out.println(ts.size());
 		return ts.iterator();
 	}
 
 	@Override
 	public ISourcePositionLocator getSourcePositionLocator() {
-		// TODO Auto-generated method stub
 		return fSourcePositionLocator;
 	}
 
