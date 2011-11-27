@@ -367,14 +367,15 @@ lex !cs !line !col !start
         lexQuoted end
             | ch == '\\',
               end+1 < cs.length       = lexQuoted (end+2)
-            | end >= cs.length        = [Token LEXERROR "unterminated quoted construct" line col start]
+            | end >= cs.length        = [Token LEXERROR (seq end) line col start]
+            | ch == '\n'              = Token LEXERROR (seq end) line col start !: lex cs line (col+end-start) end
             | ch != at start          = lexQuoted (end+1)
             | otherwise               = case at start of
                 '"'  -> Token STRCONST (seq (end+1)) line col start !: lex cs line (col+end-start+1) (end+1) -- "
                 '\'' -> Token CHRCONST (seq (end+1)) line col start !: lex cs line (col+end-start+1) (end+1)
-                '#'  -> Token REGEXP   (cs.subSeq (start+1) end).toString line col (start+1) !: lex cs line (col+end-start+1) (end+1) -- #
-                '´'  -> Token REGEXP   (cs.subSeq (start+1) end).toString line col (start+1) !: lex cs line (col+end-start+1) (end+1)
-                _    -> Token SOMEOP   (cs.subSeq (start+1) end).toString line col (start+1) !: lex cs line (col+end-start+1) (end+1)
+                '#'  -> Token REGEXP   (cs.subSeq (start+1) end).toString line col start !: lex cs line (col+end-start+1) (end+1) -- #
+                '´'  -> Token REGEXP   (cs.subSeq (start+1) end).toString line col start !: lex cs line (col+end-start+1) (end+1)
+                _    -> Token SOMEOP   (cs.subSeq (start+1) end).toString line col start !: lex cs line (col+end-start+1) (end+1)
             where
                 !ch = at end
         -- parse a hexadecimal number "
@@ -425,7 +426,7 @@ lex !cs !line !col !start
                     where
                         ch        = at end
         commentStart end
-            | at end == '-' = lexComment 0 (at start == '{') proto cs line (col+2) (end+1)
+            | at end == '-' = lexComment 0 (at start == '{') proto cs line (col+2) (start+2)
             | otherwise     =  brace !: rest
             where
                 brace = Token {tokid = CHAR, line, col, offset = start, value = ctos (at start)}
@@ -443,30 +444,31 @@ lex !cs !line !col !start
 lexComment :: Int -> Bool -> Token -> CharSeq Immutable -> Int -> Int -> Int -> [Token]
 lexComment !nest !block !proto !cs !line !col !i
     | i >= cs.length = if block
-                        then [proto.{tokid=LEXERROR,
-                                     value = "unterminated block comment starting at "
-                                                ++ show proto.line}]
-                        else []
+                        then [proto.{tokid=LEXERROR, value = (cs.subSeq proto.offset i).toString}]
+                        else if at (proto.offset+2) == '-'
+                            then [proto.{value = subseq i ++ "   "}]
+                            else [proto.{tokid = COMMENT, value = subseq i ++ "   "}]
     | block,
-      cs.charAt i == '-',
-      i+1 < cs.length,
-      cs.charAt (i+1) == '}'
-                          = if nest == 0
-                                then if proto.offset+2 < i && cs.charAt (proto.offset+2) == '-'
-                                    then proto.{value = (cs.subSeq (proto.offset+3) i).toString} : lex cs line (col+2) (i+2)
-                                    else lex cs line (col+2) (i+2)
-                                else lexComment (nest-1) block proto cs line (col+2) (i+2)
+      at i     == '-',
+      at (i+1) == '}'
+                     =  if nest == 0
+                        then if at (proto.offset+2) == '-'
+                            then proto.{value = subseq i ++ "     "}                  !: lex cs line (col+2) (i+2)
+                            else proto.{tokid = COMMENT, value = subseq i ++ "     "} !: lex cs line (col+2) (i+2)
+                        else lexComment (nest-1) block proto cs line (col+2) (i+2)
     | block,
-      cs.charAt i == '{',
-      i+1 < cs.length,
-      cs.charAt (i+1) == '-'
-                          =  lexComment (nest+1) block proto cs line (col+2) (i+2)
+      at i     == '{',
+      at (i+1) == '-'
+                     =  lexComment (nest+1) block proto cs line (col+2) (i+2)
     | block,
-      cs.charAt i == '\n' =  lexComment nest block proto cs (line+1) 1        (i+1)
-    | cs.charAt i == '\n' =  if proto.offset+2 < i && cs.charAt (proto.offset+2) == '-'
-                                then proto.{value = (cs.subSeq (proto.offset+3) i).toString} : lex cs line col i
-                                else lex cs line col i
-    | otherwise           =  lexComment nest block proto cs line     (col+1)  (i+1)
+      at i == '\n'   =  lexComment nest block proto cs (line+1) 1        (i+1)
+    | at i == '\n'   =  if at (proto.offset+2) == '-'
+                            then proto.{value = subseq i ++ "   "}                  !: lex cs line col i
+                            else proto.{tokid = COMMENT, value = subseq i ++ "   "} !: lex cs line col i
+    | otherwise      =  lexComment nest block proto cs line     (col+1)  (i+1)
+    where
+        at n = if n >= cs.length then '\0' else cs.charAt n
+        subseq n = (cs.subSeq (proto.offset+3) n).toString
 
 {--
  * Scans the string in the input list and returns a list of 'Token's.
@@ -808,12 +810,10 @@ findInfixImports ts = loop start ts where
                 | otherwise                          = t1:consecutive ts
             consecutive rest                         = rest
             separator t = t `is` '}' || t `is` ';'
-            this ts = if isImport then consecutive (takeUntil separator ts) else takeUntil separator ts
-            -- next ts = drop (length this) ts
-            -- this ts = t1 : takeUntil separator ts
-            -- next ts = case dropUntil separator ts of
-            --    [] -> []
-            --    xs -> tail xs
+            noComment t = Token.tokid t != COMMENT
+
+            this ts = if isImport then consecutive (takeUntil separator tss) else takeUntil separator tss
+                where tss = filter noComment ts
 
 --- special symbols in tree
 specialT = Tree.fromList [("::", DCOLON), ("=>", EARROW), --  ("~>", TARROW),
@@ -1019,7 +1019,7 @@ passCS cs getop =
     do
         g <- getST
         let prefix  =  g.options.prefix
-        let tokens  = layout [0] $ lex cs 1 1 0
+        let tokens = layout [0] nocomms
             ifximps =  (reverse <~ findInfixImports) tokens
             tree0   = processInfix ifximps
         imps <- doio $ processImports prefix getop (Right specialT) ifximps
@@ -1031,15 +1031,25 @@ passCS cs getop =
             ourins t ((k,v):kvs) = ourins (Tree.insert t k v) kvs
         either (failure) (success tokens) tree2
     where
+        lexed = lex cs 1 1 0
+        comments  =  filter Token.isComment lexed
+        nocomms   =  filter Token.noComment lexed
         failure (n, s) = do
             U.error n s
             stio []
         success :: [Token] -> Tree String TokenID -> StG [Token]
         success tokens tree = do
             changeST Global.{sub <- SubSt.{optab = tree}}
-            let !result = substAllOp tree tokens
+            let !result = merge comments  (substAllOp tree tokens)
             changeST Global.{sub <- SubSt.{toks  = result}}
             stio result
+        merge :: [Token] -> [Token] -> [Token]
+        merge a [] = a
+        merge [] b = b
+        merge (ass@a:as) (bss@b:bs)
+            | a.offset < b.offset = a : merge as bss
+            | otherwise           = b : merge ass bs
+
 
         {-
         openSrc Nothing "-"  = do input <- stdin

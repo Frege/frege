@@ -58,13 +58,16 @@ public class FregeSourcePositionLocator implements ISourcePositionLocator {
 
 	public int getEndOffset(Object node) {
 		if (node != null && node instanceof TToken) {
-			return TToken.offset((TToken)node) + TToken.value((TToken) node).length() - 1;
+			return TToken.offset((TToken)node) + TToken.length((TToken) node) - 1;
 		}
 		return 0;
 	}
 
 	public int getLength(Object node) {
-		return getEndOffset(node) - getStartOffset(node) + 1;
+		if (node != null && node instanceof TToken) {
+			return TToken.length((TToken)node);
+		}
+		return 0;
 	}
 
 	public IPath getPath(Object node) {

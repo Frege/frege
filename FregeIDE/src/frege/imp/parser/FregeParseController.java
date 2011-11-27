@@ -1,7 +1,5 @@
 package frege.imp.parser;
 
-import java.io.IOException;
-import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 
@@ -24,7 +22,6 @@ import org.eclipse.core.runtime.IProgressMonitor;
 
 import org.eclipse.imp.model.IPathEntry;
 import org.eclipse.imp.model.ISourceProject;
-import org.eclipse.imp.parser.ILexer;
 import org.eclipse.imp.parser.IMessageHandler;
 import org.eclipse.imp.parser.IParseController;
 import org.eclipse.imp.parser.IParser;
@@ -118,7 +115,7 @@ public class FregeParseController extends ParseControllerBase implements
 	/**
 	 * tell if we have errors
 	 */
-	public int errors() { return global == null ? 1 : TGlobal.errors(global); }
+	public int errors(TGlobal global) { return global == null ? 1 : TGlobal.errors(global); }
 	
 	/**
 	 * run a {@link frege.compiler.data.TStIO} action
@@ -200,29 +197,29 @@ public class FregeParseController extends ParseControllerBase implements
 		monitor.beginTask(this.getClass().getName() + " parsing", 2);
 		
 		Lambda lexPass = frege.compiler.Main.lexPassIDE(contents);
-		global = runStG(lexPass, global);
-		if (errors() > 0) {
+		final TGlobal g1 = runStG(lexPass, global);
+		if (errors(g1) > 0) {
 			monitor.done();
-			return null;
+			return global;
 		}
-		else if (monitor.isCanceled()) {
+		global = g1;
+		if (monitor.isCanceled()) {
 			System.out.println("after lex ... cancelled");
 			monitor.done();
 			return global;
 		}
 		monitor.worked(1);
 		
-		if (errors() > 0) {
+		final TGlobal g2 = runStG(frege.compiler.Main.parsePass, global);
+		if (errors(g2) > 0) {
 			monitor.done();
-			return null;
+			return global;
 		}
-		else {
-			global = runStG(frege.compiler.Main.parsePass, global);
-			if (monitor.isCanceled()) {
-				System.out.println("after parse ... cancelled");
-				monitor.done();
-				return global;
-			}
+		global = g2;
+		if (monitor.isCanceled()) {
+			System.out.println("after parse ... cancelled");
+			monitor.done();
+			return global;
 		}
 		monitor.worked(1);
 		
@@ -242,11 +239,13 @@ public class FregeParseController extends ParseControllerBase implements
 
 	@Override
 	public Iterator<Data.TToken> getTokenIterator(IRegion region) {
-		System.out.print("getTokenIterator()");
+		System.out.print("getTokenIterator(): ");
+		/*
 		if (errors() > 0) {
 			System.out.println();
 			return null;
 		}
+		*/
 		List<TToken> ts = new java.util.LinkedList<TToken>();
 		TList fts = TSubSt.toks( TGlobal.sub(global) );
 		while (true) {
@@ -284,43 +283,36 @@ public class FregeParseController extends ParseControllerBase implements
 				
 				@Override
 				public String getSingleLineCommentPrefix() {
-					// TODO Auto-generated method stub
 					return "--";
 				}
 				
 				@Override
 				public String getIdentifierConstituentChars() {
-					// TODO Auto-generated method stub
 					return null;
 				}
 				
 				@Override
 				public int[] getIdentifierComponents(String ident) {
-					// TODO Auto-generated method stub
 					return null;
 				}
 				
 				@Override
 				public String[][] getFences() {
-					// TODO Auto-generated method stub
 					return new String[][] { {"(", ")"}, {"{", "}"}, {"[", "]"}};
 				}
 				
 				@Override
 				public String getBlockCommentStart() {
-					// TODO Auto-generated method stub
 					return "{-";
 				}
 				
 				@Override
 				public String getBlockCommentEnd() {
-					// TODO Auto-generated method stub
 					return "-}";
 				}
 				
 				@Override
 				public String getBlockCommentContinuation() {
-					// TODO Auto-generated method stub
 					return null;
 				}
 			};

@@ -15,8 +15,9 @@ import frege.compiler.Data.IShow_Token;
 
 
 public class FregeTokenColorer extends TokenColorerBase implements ITokenColorer {
-	protected final TextAttribute docuAttribute, identifierAttribute,
-			keywordAttribute, numberAttribute;
+	protected final TextAttribute docuAttribute, conidAttribute, identifierAttribute,
+			commentAttribute, specialAttribute, opAttribute,
+			keywordAttribute, literalAttribute, errorAttribute;
 
 	//  protected final TextAttribute commentAttribute, stringAttribute;
 
@@ -31,15 +32,23 @@ public class FregeTokenColorer extends TokenColorerBase implements ITokenColorer
 		// properly or at all.
 		Display display = Display.getDefault();
 		docuAttribute = new TextAttribute(
-				display.getSystemColor(SWT.COLOR_DARK_GREEN), null, SWT.ITALIC);
+				display.getSystemColor(SWT.COLOR_DARK_YELLOW), null, SWT.ITALIC);
+		commentAttribute = new TextAttribute(
+				display.getSystemColor(SWT.COLOR_DARK_YELLOW), null, SWT.NORMAL);
+		conidAttribute = new TextAttribute(
+				display.getSystemColor(SWT.COLOR_DARK_RED), null, SWT.NORMAL);
 		identifierAttribute = new TextAttribute(
 				display.getSystemColor(SWT.COLOR_BLACK), null, SWT.NORMAL);
 		keywordAttribute = new TextAttribute(
 				display.getSystemColor(SWT.COLOR_DARK_MAGENTA), null, SWT.BOLD);
-		numberAttribute = new TextAttribute(
-				display.getSystemColor(SWT.COLOR_DARK_YELLOW), null, SWT.BOLD);
-		//      commentAttribute = new TextAttribute(display.getSystemColor(SWT.COLOR_DARK_RED), null, SWT.ITALIC);
-		//      stringAttribute = new TextAttribute(display.getSystemColor(SWT.COLOR_DARK_BLUE), null, SWT.BOLD);
+		literalAttribute = new TextAttribute(
+				display.getSystemColor(SWT.COLOR_DARK_CYAN), null, SWT.NORMAL);
+		opAttribute = new TextAttribute(
+				display.getSystemColor(SWT.COLOR_DARK_GREEN), null, SWT.NORMAL);
+		errorAttribute = new TextAttribute(
+				display.getSystemColor(SWT.COLOR_RED), null, SWT.BOLD);
+		specialAttribute = keywordAttribute;
+		
 	}
 
 	public TextAttribute getColoring(IParseController controller, Object o) {
@@ -47,13 +56,41 @@ public class FregeTokenColorer extends TokenColorerBase implements ITokenColorer
 			return null;
 		final TToken token = (TToken) o;
 		final int tid = TToken.tokid(token).j;
-		System.out.println("coloring " + IShow_Token.show(token));
 		
 		if (tid >= TTokenID.PACKAGE.j && tid <= TTokenID.INFIXR.j) 	return keywordAttribute;
-		if (tid == TTokenID.CONID.j)								return docuAttribute; 
-		if (tid == TTokenID.LEXERROR.j)
-			return null;
+		if (tid == TTokenID.DOCUMENTATION.j)						return docuAttribute;
+		if (tid == TTokenID.COMMENT.j)								return commentAttribute;
+		if (tid == TTokenID.CONID.j)								return conidAttribute;
+		if (tid == TTokenID.VARID.j)								return identifierAttribute;
+		if (tid >= TTokenID.INTCONST.j && tid < TTokenID.REGEXP.j) 	return literalAttribute;
+		if (tid == TTokenID.REGEXP.j) {
+			// System.out.println("coloring ..." + IShow_Token.show(token) + " " + TToken.length(token));
+			return literalAttribute;
+		}
+		if (tid == TTokenID.LEXERROR.j) 							return errorAttribute;
 
+		if (tid >= TTokenID.DCOLON.j && tid <= TTokenID.EARROW.j)	return specialAttribute;
+		if (tid >= TTokenID.LOP0.j && tid <= TTokenID.SOMEOP.j) {
+			// System.out.println("coloring ..." + IShow_Token.show(token) + " " + TToken.length(token));
+			if (TToken.value(token).length() 
+					!= TToken.length(token))						return opAttribute;
+			else													return identifierAttribute;
+		}
+		if (tid == TTokenID.CHAR.j) switch (TToken.value(token)) {
+		case "_": return keywordAttribute;
+		case "=": return keywordAttribute;
+		case "|": return keywordAttribute;
+		case ";": return identifierAttribute;
+		case "(": return identifierAttribute;
+		case ")": return identifierAttribute;
+		case "[": return identifierAttribute;
+		case "]": return identifierAttribute;
+		case "{": return identifierAttribute;
+		case "}": return identifierAttribute;
+		default:
+			System.out.println("How to colour " + IShow_Token.show(token) + " ?");
+		}
+		
 		
 		return super.getColoring(controller, token);
 	}

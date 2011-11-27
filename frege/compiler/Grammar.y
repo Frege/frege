@@ -1717,6 +1717,7 @@ classContext clas ctxs cvar = mapSt sup ctxs
             U.error pos ("Illegal constraint, only " ++ cname ++ " " ++ cvar ++ " is allowed")
             stio cname
 
+isComment Token{tokid} = tokid == COMMENT
 /**
  * the parser pass
  */
