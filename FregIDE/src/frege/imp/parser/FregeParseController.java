@@ -7,18 +7,9 @@ import lpg.runtime.ILexStream;
 import lpg.runtime.IPrsStream;
 import lpg.runtime.Monitor;
 
-/*
-import lpg.runtime.ILexStream;
-import lpg.runtime.IPrsStream;
-import lpg.runtime.IToken;
-import lpg.runtime.LexStream;
-import lpg.runtime.LpgLexStream;
-import lpg.runtime.Monitor;
-import lpg.runtime.PrsStream;
-*/
-
 import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.IProgressMonitor;
+import org.eclipse.core.resources.IProject;
 
 import org.eclipse.imp.model.IPathEntry;
 import org.eclipse.imp.model.ISourceProject;
@@ -26,10 +17,8 @@ import org.eclipse.imp.parser.IMessageHandler;
 import org.eclipse.imp.parser.IParseController;
 import org.eclipse.imp.parser.IParser;
 import org.eclipse.imp.parser.ISourcePositionLocator;
-import org.eclipse.imp.parser.MessageHandlerAdapter;
 import org.eclipse.imp.parser.ParseControllerBase;
 import org.eclipse.imp.parser.SimpleAnnotationTypeInfo;
-import org.eclipse.imp.parser.SimpleLPGParseController;
 import org.eclipse.imp.preferences.IPreferencesService;
 import org.eclipse.imp.services.IAnnotationTypeInfo;
 import org.eclipse.imp.services.ILanguageSyntaxProperties;
@@ -109,8 +98,10 @@ public class FregeParseController extends ParseControllerBase implements
 		
 	};
 	private TGlobal global = (TGlobal) frege.prelude.Base.TST.performUnsafe((Lambda) frege.compiler.Main.standardOptions._e())._e();
-	private ISourcePositionLocator fSourcePositionLocator = new FregeSourcePositionLocator();
-    private final SimpleAnnotationTypeInfo fSimpleAnnotationTypeInfo= new SimpleAnnotationTypeInfo();
+	private final ISourcePositionLocator   fSourcePositionLocator   
+					= new FregeSourcePositionLocator();
+    private final SimpleAnnotationTypeInfo fSimpleAnnotationTypeInfo
+    				= new SimpleAnnotationTypeInfo();
 	
 	/**
 	 * tell if we have errors
@@ -185,16 +176,8 @@ public class FregeParseController extends ParseControllerBase implements
 	 */
 	public Object parse(String contents, boolean scanOnly,
 			IProgressMonitor monitor) {
-		// PMMonitor my_monitor = new PMMonitor(monitor);
-		// char[] contentsArray = contents.toCharArray();
 		
-//		int i = contents.indexOf('\n');
-//		System.out.println("Frege parse(´" 
-//				+ (i < 0 ? contents : contents.substring(0,  i)) 
-//				+ "´, " 
-//				+ scanOnly  + ")");
-		
-		monitor.beginTask(this.getClass().getName() + " parsing", 2);
+		monitor.beginTask(this.getClass().getName() + " parsing", 4);
 		
 		Lambda lexPass = frege.compiler.Main.lexPassIDE(contents);
 		final TGlobal g1 = runStG(lexPass, global);
@@ -223,6 +206,32 @@ public class FregeParseController extends ParseControllerBase implements
 		}
 		monitor.worked(1);
 		
+		final TGlobal g3 = runStG(frege.compiler.Fixdefs.pass, global);
+		if (errors(g3) > 0) {
+			monitor.done();
+			return global;
+		}
+		global = g3;
+		if (monitor.isCanceled()) {
+			System.out.println("after fixdefs ... cancelled");
+			monitor.done();
+			return global;
+		}
+		monitor.worked(1);
+		
+		final TGlobal g4 = runStG(frege.compiler.Import.pass, global);
+		if (errors(g4) > 0) {
+			monitor.done();
+			return global;
+		}
+		global = g4;
+		if (monitor.isCanceled()) {
+			System.out.println("after fixdefs ... cancelled");
+			monitor.done();
+			return global;
+		}
+		monitor.worked(1);
+		
 		monitor.done();
 		return global;
 	}
@@ -240,12 +249,7 @@ public class FregeParseController extends ParseControllerBase implements
 	@Override
 	public Iterator<Data.TToken> getTokenIterator(IRegion region) {
 		System.out.print("getTokenIterator(): ");
-		/*
-		if (errors() > 0) {
-			System.out.println();
-			return null;
-		}
-		*/
+		
 		List<TToken> ts = new java.util.LinkedList<TToken>();
 		TList fts = TSubSt.toks( TGlobal.sub(global) );
 		while (true) {

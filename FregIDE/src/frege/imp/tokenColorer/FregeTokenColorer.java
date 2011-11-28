@@ -23,13 +23,7 @@ public class FregeTokenColorer extends TokenColorerBase implements ITokenColorer
 
 	public FregeTokenColorer() {
 		super();
-		// TODO Define text attributes for the various token types that will have their text colored
-		//
-		// NOTE: Colors (i.e., instances of org.eclipse.swt.graphics.Color) are system resources
-		// and are limited in number.  THEREFORE, it is good practice to reuse existing system Colors
-		// or to allocate a fixed set of new Colors and reuse those.  If new Colors are instantiated
-		// beyond the bounds of your system capacity then your Eclipse invocation may cease to function
-		// properly or at all.
+
 		Display display = Display.getDefault();
 		docuAttribute = new TextAttribute(
 				display.getSystemColor(SWT.COLOR_DARK_YELLOW), null, SWT.ITALIC);
@@ -87,6 +81,8 @@ public class FregeTokenColorer extends TokenColorerBase implements ITokenColorer
 		case "]": return identifierAttribute;
 		case "{": return identifierAttribute;
 		case "}": return identifierAttribute;
+		case ",": return identifierAttribute;
+		case ".": return identifierAttribute;
 		default:
 			System.out.println("How to colour " + IShow_Token.show(token) + " ?");
 		}
