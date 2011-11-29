@@ -34,6 +34,9 @@ public class JavaUtils {
 	public static MD.Operator[] getOperators(ClassLoader loader, String pack) throws ClassNotFoundException {
 		Class<?> cl = null;
 	    cl = loader.loadClass(pack);
+	    System.err.println("curr. class loader " + MD.FregePackage.class.getClassLoader());
+	    System.err.println("using class loader " + loader);
+	    System.err.println("with parent loader " + loader.getParent());
 		MD.FregePackage os = cl.getAnnotation(MD.FregePackage.class);
 		if (os == null) return null;
 		return os.ops();
