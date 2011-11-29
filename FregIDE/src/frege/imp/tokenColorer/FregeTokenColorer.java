@@ -68,7 +68,7 @@ public class FregeTokenColorer extends TokenColorerBase implements ITokenColorer
 			// System.out.println("coloring ..." + IShow_Token.show(token) + " " + TToken.length(token));
 			if (TToken.value(token).length() 
 					!= TToken.length(token))						return opAttribute;
-			else													return identifierAttribute;
+			else													return opAttribute;  // identifierAttribute;
 		}
 		if (tid == TTokenID.CHAR.j) switch (TToken.value(token)) {
 		case "_": return keywordAttribute;

@@ -112,7 +112,7 @@ dist: fregec.jar
 fregec.jar: tools $(DIR)/check1
 	jar  -cf    fregec.jar -C build frege
 	jar  -uvfe  fregec.jar frege.compiler.Main
-	cp fregec.jar FregeIDE
+	cp fregec.jar FregIDE
 
 $(DIR)/check1: $(DIR)/PreludeProperties.class
 	$(JAVA) -cp build frege.PreludeProperties && echo Prelude Properties checked >$(DIR)/check1

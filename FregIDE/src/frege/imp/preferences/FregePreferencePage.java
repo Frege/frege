@@ -18,13 +18,13 @@ public class FregePreferencePage extends TabbedPreferencesPage {
 		TabbedPreferencesPage page, TabFolder tabFolder) {
 		PreferencesTab[] tabs = new PreferencesTab[2];
 
-		FregeInstanceTab instanceTab = new FregeInstanceTab(prefService);
-		instanceTab.createTabContents(page, tabFolder);
-		tabs[0] = instanceTab;
-
 		FregeProjectTab projectTab = new FregeProjectTab(prefService);
 		projectTab.createTabContents(page, tabFolder);
-		tabs[1] = projectTab;
+		tabs[0] = projectTab;
+
+		FregeInstanceTab instanceTab = new FregeInstanceTab(prefService);
+		instanceTab.createTabContents(page, tabFolder);
+		tabs[1] = instanceTab;
 
 		return tabs;
 	}
