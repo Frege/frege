@@ -8,9 +8,9 @@ import org.eclipse.jface.text.TextAttribute;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.widgets.Display;
 
-import efrege.compiler.Data.TToken;
-import efrege.compiler.Data.TTokenID;
-import efrege.compiler.Data.IShow_Token;
+import bfrege.compiler.Data.TToken;
+import bfrege.compiler.Data.TTokenID;
+import bfrege.compiler.Data.IShow_Token;
 
 
 
@@ -74,6 +74,7 @@ public class FregeTokenColorer extends TokenColorerBase implements ITokenColorer
 		case "_": return keywordAttribute;
 		case "=": return keywordAttribute;
 		case "|": return keywordAttribute;
+		case "\\": return keywordAttribute;
 		case ";": return identifierAttribute;
 		case "(": return identifierAttribute;
 		case ")": return identifierAttribute;
@@ -83,6 +84,8 @@ public class FregeTokenColorer extends TokenColorerBase implements ITokenColorer
 		case "}": return identifierAttribute;
 		case ",": return identifierAttribute;
 		case ".": return identifierAttribute;
+		case "!": return opAttribute;
+		case "-": return opAttribute;
 		default:
 			System.out.println("How to colour " + IShow_Token.show(token) + " ?");
 		}

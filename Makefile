@@ -121,6 +121,17 @@ fregec.jar: tools $(DIR)/check1
 	jar  -cf    fregec.jar -C build frege
 	jar  -uvfe  fregec.jar frege.compiler.Main
 
+rt-files: build/bfrege/compiler/Main.class
+	find frege -type f -name "*.java" -print >rt-files
+
+b-files: build/bfrege/compiler/Main.class
+	cd build && find bfrege -type f -name "*.java" -print >../b-files
+
+ide.jar: rt-files b-files
+	jar -cMf ide.jar @rt-files
+	cd build && jar -uMf ../ide.jar @../b-files
+	cd fregIDE/src && jar -xvf ../../ide.jar
+
 $(DIR)/check1: $(DIR)/PreludeProperties.class
 	$(JAVA) -cp build frege.PreludeProperties && echo Prelude Properties checked >$(DIR)/check1
 
