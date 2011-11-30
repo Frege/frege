@@ -22,7 +22,7 @@ COMPF0  = $(DIR0)/compiler
 LIBF0   = $(DIR0)/lib
 LIBJ0   = $(DIR0)/j
 TOOLSF0 = $(DIR0)/tools
-DIR3    = fregIDE/bin/efrege
+DIR3    = fregIDE/lib/efrege
 PREL3   = $(DIR3)/prelude
 COMPF3  = $(DIR3)/compiler
 LIBF3   = $(DIR3)/lib
@@ -51,8 +51,8 @@ COMPS   = frege/compiler
 
 FREGE    = $(JAVA) -Xss30m -Xmx900m -cp build
 FREGEP   = $(JAVAP) -Xss30m -Xmx900m -cp build
-FREGECJ  = $(FREGE)  -jar fregec.jar  -d build -nocp -hints
-FREGECJP = $(FREGEP) -jar fregec.jar  -d build -nocp -hints
+FREGECJ  = $(FREGE)  -jar fregec.jar  -d build -fp build -nocp -hints
+FREGECJP = $(FREGEP) -jar fregec.jar  -d build -fp build -nocp -hints
 FREGECC  = $(FREGE) frege.compiler.Main  -d build -hints
 FREGECCP = $(FREGEP) frege.compiler.Main  -d build -hints
 FREGEC0  = $(FREGECJ) -prefix a
@@ -63,8 +63,8 @@ FREGEC2  = $(FREGE) -server bfrege.compiler.Main -d build -hints
 FREGEC2P = $(FREGEP) -server bfrege.compiler.Main -d build -hints
 FREGEC3  = $(FREGECJ) -prefix c
 FREGEC3P = $(FREGECJP) -prefix c
-FREGEC4  = $(JAVA) -Xss30m -Xmx900m -jar fregec.jar  -d fregIDE/bin -nocp -hints -prefix e
-FREGEC4P = $(JAVAP) -Xss30m -Xmx900m -jar fregec.jar  -d fregIDE/bin -nocp -hints -prefix e
+FREGEC4  = $(JAVA)  -Xss30m -Xmx900m -jar fregec.jar  -d fregIDE/lib -hints -prefix e
+FREGEC4P = $(JAVAP) -Xss30m -Xmx900m -jar fregec.jar  -d fregIDE/lib -hints -prefix e
 GENDOC   = $(FREGE)  frege.tools.Doc -d doc
 
 # Prelude files in the order they must be compiled
@@ -120,7 +120,6 @@ dist: fregec.jar
 fregec.jar: tools $(DIR)/check1
 	jar  -cf    fregec.jar -C build frege
 	jar  -uvfe  fregec.jar frege.compiler.Main
-	cp fregec.jar FregIDE
 
 $(DIR)/check1: $(DIR)/PreludeProperties.class
 	$(JAVA) -cp build frege.PreludeProperties && echo Prelude Properties checked >$(DIR)/check1
@@ -282,7 +281,7 @@ $(DIR1)/PreludeProperties.class: $(LIBF1)/Random.class $(LIBF1)/QuickCheck.class
 $(DIR1)/check1: $(PRE1) $(LIBF1)/Random.class $(LIBF1)/QuickCheck.class $(DIR1)/PreludeProperties.class
 	$(JAVA) -cp build afrege.PreludeProperties && echo Prelude Properties checked >$(DIR1)/check1
 
-compiler3: $(RUNTIME) $(COMPF3)/Grammar.class $(COMPF3)/Main.class
+compiler3: $(RUNTIME3) $(COMPF3)/Grammar.class $(COMPF3)/Main.class
 	@echo stage 3 compiler ready
 
 $(COMPF3)/Grammar.class: frege/compiler/Grammar.fr $(COMPF3)/Scanner.class $(LIBF3)/ForkJoin.class
@@ -291,15 +290,29 @@ $(COMPF3)/Scanner.class: $(PRE3) frege/compiler/Scanner.fr
 	$(FREGEC4)  -make frege.compiler.Scanner
 $(COMPF3)/Main.class : $(PRE3) $(LIBF3)/PP.class $(CLASSES)
 	$(FREGEC4)  -make frege.compiler.Main
+$(DIR3)/IO.class : $(DIR3)/Prelude.class frege/IO.fr
+	$(FREGEC4) frege/IO.fr
+$(DIR3)/List.class : $(DIR3)/Prelude.class frege/List.fr
+	$(FREGEC4) frege/List.fr
+$(DIR3)/Tuples.class : $(DIR3)/Prelude.class frege/Tuples.fr
+	$(FREGEC4) frege/Tuples.fr
+$(DIR3)/lib/ForkJoin.class : $(DIR3)/Prelude.class frege/lib/ForkJoin.fr
+	$(FREGEC4) frege/lib/ForkJoin.fr
+$(DIR3)/lib/PP.class : $(DIR3)/Prelude.class frege/lib/PP.fr
+	$(FREGEC4) frege/lib/PP.fr
 $(DIR3)/Prelude.class: $(PRELUDE) frege/Prelude.fr
 	rm -rf $(COMPF3)
 	rm -rf $(DIR3)
-	$(FREGEC4P) -v $(PRELUDE)
+	$(FREGEC4P) $(PRELUDE)
+#	$(FREGEC4P) frege/prelude/Native.fr
+#	$(FREGEC4P) frege/prelude/Text.fr
+#	$(FREGEC4P) frege/contrib/dgronau/Math.fr
+#	$(FREGEC4P) frege/contrib/dgronau/Floating.fr
 	$(FREGEC4)  -make frege.Prelude
 $(DIR3)/PreludeProperties.class: $(LIBF3)/Random.class $(LIBF3)/QuickCheck.class
 	$(FREGEC4)  frege/PreludeProperties.fr
 $(DIR3)/check1: $(PRE3) $(LIBF3)/Random.class $(LIBF3)/QuickCheck.class $(DIR3)/PreludeProperties.class
-	$(JAVA) -cp fregIDE/bin efrege.PreludeProperties && echo Prelude Properties checked >$(DIR3)/check1
+	$(JAVA) -cp fregIDE/lib efrege.PreludeProperties && echo Prelude Properties checked >$(DIR3)/check1
 
 
 PRE0 = $(DIR0)/IO.class $(DIR0)/List.class $(DIR0)/Tuples.class
@@ -327,7 +340,7 @@ $(DIR0)/check1: $(PRE0)  $(DIR0)/PreludeProperties.class
 #
 
 RTDIR    = build/frege/rt
-RTDIR3   = fregIDE/bin/frege/rt
+RTDIR3   = fregIDE/lib/frege/rt
 
 RUNTIME  = build/frege/MD.class    $(COMPF)/JavaUtils.class \
 		$(RTDIR)/Lazy.class        $(RTDIR)/Value.class       $(RTDIR)/FV.class \
@@ -357,7 +370,7 @@ RUNTIME  = build/frege/MD.class    $(COMPF)/JavaUtils.class \
 		$(RTDIR)/FregeCompiler.class \
 		build/frege/RT.class
 
-RUNTIME3  = fregIDE/bin/frege/MD.class    fregIDE/bin/frege/compiler/JavaUtils.class \
+RUNTIME3  = fregIDE/lib/frege/MD.class    fregIDE/lib/frege/compiler/JavaUtils.class \
 		$(RTDIR3)/Lazy.class        $(RTDIR3)/Value.class       $(RTDIR3)/FV.class \
 		$(RTDIR3)/Unknown.class \
 		$(RTDIR3)/Val.class         $(RTDIR3)/Box.class \
@@ -383,7 +396,7 @@ RUNTIME3  = fregIDE/bin/frege/MD.class    fregIDE/bin/frege/compiler/JavaUtils.c
 		$(RTDIR3)/Ref.class \
 		$(RTDIR3)/Array.class       $(RTDIR3)/SwingSupport.class \
 		$(RTDIR3)/FregeCompiler.class \
-		fregIDE/bin/frege/RT.class
+		fregIDE/lib/frege/RT.class
 
 
 runtime: $(RUNTIME)  doc/index.html
@@ -393,144 +406,144 @@ runtime3: $(RUNTIME3)
 	@echo Runtime 3 is complete.
 
 
-fregIDE/bin/frege/MD.class: frege/MD.java
-	$(JAVAC) -d fregIDE/bin frege/MD.java
-fregIDE/bin/frege/compiler/JavaUtils.class: fregIDE/bin/frege/MD.class frege/compiler/JavaUtils.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin frege/compiler/JavaUtils.java
-fregIDE/bin/frege/RT.class: frege/RT.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+fregIDE/lib/frege/MD.class: frege/MD.java
+	$(JAVAC) -d fregIDE/lib frege/MD.java
+fregIDE/lib/frege/compiler/JavaUtils.class: fregIDE/lib/frege/MD.class frege/compiler/JavaUtils.java
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib frege/compiler/JavaUtils.java
+fregIDE/lib/frege/RT.class: frege/RT.java
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Lambda.class: frege/rt/Lambda.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Val.class: frege/rt/Val.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Box.class: frege/rt/Box.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/MH.class: frege/rt/MH.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/FV.class: frege/rt/FV.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Lam1.class: frege/rt/Lam1.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Lam2.class: frege/rt/Lam2.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Lam3.class: frege/rt/Lam3.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Lam4.class: frege/rt/Lam4.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Lam5.class: frege/rt/Lam5.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Lam6.class: frege/rt/Lam6.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Lam7.class: frege/rt/Lam7.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Lam8.class: frege/rt/Lam8.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Lam9.class: frege/rt/Lam9.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Lam10.class: frege/rt/Lam10.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Lam11.class: frege/rt/Lam11.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Lam12.class: frege/rt/Lam12.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Lam13.class: frege/rt/Lam13.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Lam14.class: frege/rt/Lam14.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Lam15.class: frege/rt/Lam15.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Lam16.class: frege/rt/Lam16.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Lam17.class: frege/rt/Lam17.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Lam18.class: frege/rt/Lam18.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Lam19.class: frege/rt/Lam19.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Lam20.class: frege/rt/Lam20.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Lam21.class: frege/rt/Lam21.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Lam22.class: frege/rt/Lam22.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Lam23.class: frege/rt/Lam23.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Lam24.class: frege/rt/Lam24.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Lam25.class: frege/rt/Lam25.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Lam26.class: frege/rt/Lam26.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Boxed.class: frege/rt/Boxed.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Value.class: frege/rt/Value.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Constant.class: frege/rt/Constant.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Lazy.class: frege/rt/Lazy.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Ref.class: frege/rt/Ref.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Array.class: frege/rt/Array.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Unknown.class: frege/rt/Unknown.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Prod1.class: frege/rt/Prod1.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Prod2.class: frege/rt/Prod2.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Prod3.class: frege/rt/Prod3.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Prod4.class: frege/rt/Prod4.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Prod5.class: frege/rt/Prod5.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Prod6.class: frege/rt/Prod6.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Prod7.class: frege/rt/Prod7.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Prod8.class: frege/rt/Prod8.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Prod9.class: frege/rt/Prod9.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Prod10.class: frege/rt/Prod10.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Prod11.class: frege/rt/Prod11.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Prod12.class: frege/rt/Prod12.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Prod13.class: frege/rt/Prod13.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Prod14.class: frege/rt/Prod14.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Prod15.class: frege/rt/Prod15.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Prod16.class: frege/rt/Prod16.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Prod17.class: frege/rt/Prod17.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Prod18.class: frege/rt/Prod18.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Prod19.class: frege/rt/Prod19.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Prod20.class: frege/rt/Prod20.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Prod21.class: frege/rt/Prod21.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Prod22.class: frege/rt/Prod22.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Prod23.class: frege/rt/Prod23.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Prod24.class: frege/rt/Prod24.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Prod25.class: frege/rt/Prod25.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/Prod26.class: frege/rt/Prod26.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/SwingSupport.class: frege/rt/SwingSupport.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 $(RTDIR3)/FregeCompiler.class: frege/rt/FregeCompiler.java
-	$(JAVAC) -d fregIDE/bin -cp fregIDE/bin $?
+	$(JAVAC) -d fregIDE/lib -cp fregIDE/lib $?
 
 
 build/frege/MD.class: frege/MD.java
