@@ -8,9 +8,9 @@ import org.eclipse.jface.text.TextAttribute;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.widgets.Display;
 
-import bfrege.compiler.Data.TToken;
-import bfrege.compiler.Data.TTokenID;
-import bfrege.compiler.Data.IShow_Token;
+import frege.compiler.Data.TToken;
+import frege.compiler.Data.TTokenID;
+import frege.compiler.Data.IShow_Token;
 
 
 

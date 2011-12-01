@@ -5,7 +5,7 @@ import org.eclipse.core.runtime.Path;
 
 import org.eclipse.imp.parser.ISourcePositionLocator;
 
-import bfrege.compiler.Data.TToken;
+import frege.compiler.Data.TToken;
 
 /**
  * NOTE:  This version of the ISourcePositionLocator is for use when the Source

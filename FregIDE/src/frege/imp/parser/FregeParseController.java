@@ -30,15 +30,15 @@ import frege.rt.Lambda;
 import frege.rt.Box;
 import frege.rt.FV;
 import frege.rt.Lazy;
-import bfrege.prelude.Base.TTuple2;
-import bfrege.prelude.Base.TList;
-import bfrege.compiler.Data.TGlobal;
-import bfrege.compiler.Data.TOptions;
-import bfrege.compiler.Data.TStIO;
-import bfrege.compiler.Data.TSubSt;
-import bfrege.compiler.Data.TToken;
-import bfrege.compiler.Data.TTokenID;
-import bfrege.compiler.Data;
+import frege.prelude.Base.TTuple2;
+import frege.prelude.Base.TList;
+import frege.compiler.Data.TGlobal;
+import frege.compiler.Data.TOptions;
+import frege.compiler.Data.TStIO;
+import frege.compiler.Data.TSubSt;
+import frege.compiler.Data.TToken;
+import frege.compiler.Data.TTokenID;
+import frege.compiler.Data;
 
 /**
  * NOTE:  This version of the Parse Controller is for use when the Parse
@@ -82,7 +82,7 @@ public class FregeParseController extends ParseControllerBase implements
 		    /**
 		     * @return array of keywords in the order in which they are mapped to integers.
 		     */
-		    public String[] orderedTerminalSymbols() { return Box.<String[]>box(bfrege.compiler.Scanner.keywordsByID._e()).j; }
+		    public String[] orderedTerminalSymbols() { return Box.<String[]>box(frege.compiler.Scanner.keywordsByID._e()).j; }
 
 		    /**
 		     * @return array of keywords in the order in which they are mapped to integers.
@@ -97,7 +97,7 @@ public class FregeParseController extends ParseControllerBase implements
 		    public void reset(ILexStream lexStream) {}
 		
 	};
-	private TGlobal global = (TGlobal) bfrege.prelude.Base.TST.performUnsafe((Lambda) bfrege.compiler.Main.standardOptions._e())._e();
+	private TGlobal global = (TGlobal) frege.prelude.Base.TST.performUnsafe((Lambda) frege.compiler.Main.standardOptions._e())._e();
 	private final ISourcePositionLocator   fSourcePositionLocator   
 					= new FregeSourcePositionLocator();
     private final SimpleAnnotationTypeInfo fSimpleAnnotationTypeInfo
@@ -179,7 +179,7 @@ public class FregeParseController extends ParseControllerBase implements
 		
 		monitor.beginTask(this.getClass().getName() + " parsing", 4);
 		
-		Lambda lexPass = bfrege.compiler.Main.lexPassIDE(contents);
+		Lambda lexPass = frege.compiler.Main.lexPassIDE(contents);
 		final TGlobal g1 = runStG(lexPass, global);
 		if (errors(g1) > 0) {
 			monitor.done();
@@ -193,7 +193,7 @@ public class FregeParseController extends ParseControllerBase implements
 		}
 		monitor.worked(1);
 		
-		final TGlobal g2 = runStG(bfrege.compiler.Main.parsePass, global);
+		final TGlobal g2 = runStG(frege.compiler.Main.parsePass, global);
 		if (errors(g2) > 0) {
 			monitor.done();
 			return global;
@@ -206,7 +206,7 @@ public class FregeParseController extends ParseControllerBase implements
 		}
 		monitor.worked(1);
 		
-		final TGlobal g3 = runStG(bfrege.compiler.Fixdefs.pass, global);
+		final TGlobal g3 = runStG(frege.compiler.Fixdefs.pass, global);
 		if (errors(g3) > 0) {
 			monitor.done();
 			return global;
@@ -219,7 +219,7 @@ public class FregeParseController extends ParseControllerBase implements
 		}
 		monitor.worked(1);
 		
-		final TGlobal g4 = runStG(bfrege.compiler.Import.pass, global);
+		final TGlobal g4 = runStG(frege.compiler.Import.pass, global);
 		if (errors(g4) > 0) {
 			monitor.done();
 			return global;
