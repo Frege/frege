@@ -5,7 +5,7 @@ import org.osgi.framework.BundleContext;
 
 public class FregePlugin extends PluginBase {
 
-	public static final String kPluginID = "FregeIDE";
+	public static final String kPluginID = "FregIDE";
 	public static final String kLanguageID = "frege";
 
 	/**

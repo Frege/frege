@@ -69,35 +69,35 @@ public class FregeParseController extends ParseControllerBase implements
 		super(FregePlugin.getInstance().getLanguageID());
 	}
 
-	private IParser parser = new IParser() {
-		    /**
-		     * Run the parser to create a model.
-		     * @param monitor stop scanning/parsing when monitor.isCanceled() is true.
-		     * @return
-		     */
-		    public Object parser(Monitor monitor, int error_repair_count) { return null; }
-
-		    public IPrsStream getIPrsStream() { return null; }
-
-		    /**
-		     * @return array of keywords in the order in which they are mapped to integers.
-		     */
-		    public String[] orderedTerminalSymbols() { return Box.<String[]>box(frege.compiler.Scanner.keywordsByID._e()).j; }
-
-		    /**
-		     * @return array of keywords in the order in which they are mapped to integers.
-		     */
-		    public int numTokenKinds() { return TTokenID.LEXERROR.j; }
-
-		    /**
-		     * @return the token kind for the EOF token
-		     */
-		    public int getEOFTokenKind() { return TTokenID.LEXERROR.j; }
-
-		    public void reset(ILexStream lexStream) {}
-		
-	};
-	private TGlobal global = (TGlobal) frege.prelude.Base.TST.performUnsafe((Lambda) frege.compiler.Main.standardOptions._e())._e();
+//	private IParser parser = new IParser() {
+//		    /**
+//		     * Run the parser to create a model.
+//		     * @param monitor stop scanning/parsing when monitor.isCanceled() is true.
+//		     * @return
+//		     */
+//		    public Object parser(Monitor monitor, int error_repair_count) { return null; }
+//
+//		    public IPrsStream getIPrsStream() { return null; }
+//
+//		    /**
+//		     * @return array of keywords in the order in which they are mapped to integers.
+//		     */
+//		    public String[] orderedTerminalSymbols() { return Box.<String[]>box(frege.compiler.Scanner.keywordsByID._e()).j; }
+//
+//		    /**
+//		     * @return array of keywords in the order in which they are mapped to integers.
+//		     */
+//		    public int numTokenKinds() { return TTokenID.LEXERROR.j; }
+//
+//		    /**
+//		     * @return the token kind for the EOF token
+//		     */
+//		    public int getEOFTokenKind() { return TTokenID.LEXERROR.j; }
+//
+//		    public void reset(ILexStream lexStream) {}
+//		
+//	};
+	private TGlobal global;
 	private final ISourcePositionLocator   fSourcePositionLocator   
 					= new FregeSourcePositionLocator();
     private final SimpleAnnotationTypeInfo fSimpleAnnotationTypeInfo
@@ -134,6 +134,10 @@ public class FregeParseController extends ParseControllerBase implements
 			for (IPathEntry ip: project.getBuildPath()) 
 				System.out.print(ip.getPath().toPortableString() + ", ");
 		System.out.println();
+		frege.compiler.Main.v("123");
+		global =  (TGlobal) 
+				frege.prelude.Base.TST.performUnsafe(
+						(Lambda) frege.compiler.Main.standardOptions._e())._e();
 		createLexerAndParser(fullFilePath, project);
 
 		// parser.setMessageHandler(handler);
@@ -141,14 +145,14 @@ public class FregeParseController extends ParseControllerBase implements
 
 	public IParser getParser() {
 		new Exception("getParser: called").printStackTrace(System.out);
-		return parser;
+		return null; // parser;
 	}
 
-	/*
+	
 	public ISourcePositionLocator getNodeLocator() {
 		return new FregeSourcePositionLocator(); // FregeASTNodeLocator();
 	}
-	*/
+	
 
 	private void createLexerAndParser(IPath filePath, ISourceProject project) {
 		System.out.println("createLexerAndParser: " + filePath.toPortableString());
