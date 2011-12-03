@@ -2,22 +2,22 @@
 
     Copyright © 2011, Ingo Wechsung
     All rights reserved.
-    
+
     Redistribution and use in source and binary forms, with or
     without modification, are permitted provided that the following
     conditions are met:
-    
+
         Redistributions of source code must retain the above copyright
         notice, this list of conditions and the following disclaimer.
-    
+
         Redistributions in binary form must reproduce the above
         copyright notice, this list of conditions and the following
         disclaimer in the documentation and/or other materials provided
         with the distribution. Neither the name of the copyright holder
         nor the names of its contributors may be used to endorse or
         promote products derived from this software without specific
-        prior written permission. 
-        
+        prior written permission.
+
     THIS SOFTWARE IS PROVIDED BY THE
     COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR
     IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
@@ -33,7 +33,7 @@
     THE POSSIBILITY OF SUCH DAMAGE.
 
     «•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•» */
-    
+
 package frege;
 
 import frege.rt.*;
@@ -54,7 +54,7 @@ public class RT {
      */
     public final static int constructor(Object x) {
         if (x instanceof FV) { return ((FV)x).constructor(); }
-        else if (x instanceof Value) 
+        else if (x instanceof Value)
             return ((Value) x)._c();
         else if (x instanceof Lazy)
             return constructor(((Lazy) x)._e());
@@ -170,12 +170,16 @@ public class RT {
                                                 final java.lang.String r) {
         return clone(m).replaceAll(r);
     }
-    
+
     /**
      * <p> Exception thrown when the undefined value is evaluated. </p>
      */
     public static class Undefined extends java.lang.IllegalArgumentException {
-        public Undefined(String err) {
+        /**
+		 *
+		 */
+		private static final long serialVersionUID = 1L;
+		public Undefined(String err) {
             super(err);
         }
         public Undefined(String err, Throwable cause) {
@@ -185,23 +189,33 @@ public class RT {
         public final boolean die()  { if (true) throw this; return false; }
     }
     /**
-     * <p> Exception thrown when all matches of a case or lambda fail. </p> 
+     * <p> Exception thrown when all matches of a case or lambda fail. </p>
      */
     public static class NoMatch extends Undefined {
-        public NoMatch(String qname, int line, Object x) {
+        /**
+		 *
+		 */
+		private static final long serialVersionUID = 1L;
+
+		public NoMatch(String qname, int line, Object x) {
             super(qname + " at line " + line + " no match for value " + x);
         }
     }
     /**
-     * <p> Exception thrown when a guard on a pattern binding fails. </p> 
+     * <p> Exception thrown when a guard on a pattern binding fails. </p>
      */
     public static class GuardFailed extends Undefined {
-        public GuardFailed(String qname, int line) {
+        /**
+		 *
+		 */
+		private static final long serialVersionUID = 1L;
+
+		public GuardFailed(String qname, int line) {
             super(qname + " at line " + line + ": guard failed.");
         }
     }
     /**
-     * <p> Utility method used by String.show to quote a string. </p> 
+     * <p> Utility method used by String.show to quote a string. </p>
      */
     final public static java.lang.String quoteStr(java.lang.String a) {
 		java.lang.StringBuilder sr = new java.lang.StringBuilder();
@@ -225,7 +239,7 @@ public class RT {
 	}
 
     /**
-     * <p> Utility method used by Char.show to quote a character. </p> 
+     * <p> Utility method used by Char.show to quote a character. </p>
      */
 	final public static java.lang.String quoteChr(char c) {
         java.lang.StringBuilder sr = new java.lang.StringBuilder();
@@ -242,9 +256,9 @@ public class RT {
         sr.append("'");
         return sr.toString();
     }
-    
+
     public final static<T> T our(final T o) { return o; }
-    
+
     public final static<T extends Serializable> T copySerializable(final T o) {
         try {
             final ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -262,7 +276,7 @@ public class RT {
             return null;
         }
     }
-    
+
     /* ----------- code for fork/join support  ------------- */
     /**
      *  <p> Start a program to run in a fork/join task </p>
@@ -270,20 +284,20 @@ public class RT {
      *
      *  <p> Called from the java <tt>main</tt> method of a frege program.
      *  This converts the argument String array to a list and passes this to
-     *  the compiled frege main function. The result is an IO action of type 
+     *  the compiled frege main function. The result is an IO action of type
      *  <tt>IO ()</tt> to which then <tt>IO.performUnsafe</tt> is applied.
      *  The resulting {@link frege.rt.Unknown} then actually executes the frege code
      *  when evaluated.</p>
      *
      *  <p>This method checks first if the system property <tt>frege.parallel</tt>
-     *  is set to a value that does not represent <tt>true</tt>. 
+     *  is set to a value that does not represent <tt>true</tt>.
      *  If so, it just evaluates the argument.
      *  Otherwise it submits its argument to a {@link java.util.concurrent.ForkJoinPool}
      *  and waits for completion. This ensures that frege code sees itself executed
      *  in a fork join pool and is able to fork further tasks.
      *  </p>
      *  <p>In frege code that is not executed in a fork join pool all library
-     *  functions for ad hoc parallelism shall perform semantically equivalent 
+     *  functions for ad hoc parallelism shall perform semantically equivalent
      *  sequential functions
      *  with as little overhead as possible.
      *  </p>
@@ -298,7 +312,7 @@ public class RT {
         // This is the case when the VM was started with -Dfrege.parallel=x
         // and x is not equal, ignoring case, to the string "true".
         final String  prop     = System.getProperty("frege.parallel");
-        final boolean parallel = prop == null ? true : Boolean.valueOf( prop );  
+        final boolean parallel = prop == null ? true : Boolean.valueOf( prop );
         if ( !parallel ) {
             // execution outside fork/join pool
             try {
@@ -316,10 +330,10 @@ public class RT {
                 .get();
         } catch (Exception ex) {
             throw new Error(ex);
-        }        
+        }
         return;
     }
-    
+
     /**
      * <p> fork execution of an Unknown </p>
      * <p> If we are in a fork/join pool and the argument contains an unevaluated value
