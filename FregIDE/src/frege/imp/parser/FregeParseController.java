@@ -249,13 +249,61 @@ public class FregeParseController extends ParseControllerBase implements
 	public Object parse(String input, IProgressMonitor monitor) {
 		return parse(input, false, monitor);
 	}
-
+	
+	static class TokensIterator implements Iterator<TToken> {
+		/** current list node */
+		private TList list;
+		private IRegion region;
+		/** check if token is within region */
+		public static boolean within(TToken tok, IRegion region) {
+			return (TToken.offset(tok) + TToken.value(tok).length() >= region.getOffset()
+					&& TToken.offset(tok) <= region.getOffset() + region.getLength());
+		}
+		/** construct an Iterator */
+		public TokensIterator(TList it, IRegion reg) { 
+			list = it;
+			region = reg;
+			while (true) {
+				TList.DCons cons = list._Cons();
+				if (cons == null) break;
+				TToken t = (TToken) cons.mem1._e();
+				if (within(t, reg)) break;
+				list = (TList) cons.mem2._e();
+			}
+		}
+		
+		@Override
+		public boolean hasNext() {
+			// we have a next if we are not the empty list and the token is in the region
+			return list._Cons() != null
+					&& within((TToken)list._Cons().mem1._e(), region);
+		}
+		@Override
+		public TToken next() {
+			// give back next token
+			TList.DCons cons = list._Cons();
+			if (cons != null) {
+				list = (TList)  cons.mem2._e();
+				return (TToken) cons.mem1._e();
+			}
+			return null;
+		}
+		@Override
+		public void remove() {
+			throw new UnsupportedOperationException("TokensIterator");
+		}
+		
+		
+	}
 	@Override
 	public Iterator<Data.TToken> getTokenIterator(IRegion region) {
-		System.out.print("getTokenIterator(): ");
+		System.out.println("getTokenIterator(): ");
+		return new TokensIterator(TSubSt.toks(TGlobal.sub(global)), region);
 		
+		/*
 		List<TToken> ts = new java.util.LinkedList<TToken>();
-		TList fts = TSubSt.toks( TGlobal.sub(global) );
+		 
+		TList fts = TSubSt.toks(TGlobal.sub(global));
 		while (true) {
 			TList.DCons cons = fts._Cons();
 			if (cons == null) break;
@@ -267,6 +315,7 @@ public class FregeParseController extends ParseControllerBase implements
 		}
 		System.out.println(ts.size());
 		return ts.iterator();
+		*/
 	}
 
 	@Override

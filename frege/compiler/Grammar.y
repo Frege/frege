@@ -563,19 +563,23 @@ importitem:
     | conid '(' memspecs ')'        { \v\_\ms\_ -> protoItem.{ pos = posLine v, name = posItem v, members = Just ms} }
     | conid '(' ')'                 { \v\_\_    -> protoItem.{ pos = posLine v, name = posItem v, members = Just []} }
     | qconid                        { \v        -> protoItem.{ pos = posLine v, name = posItem v} }
-    | operator                      { \t        -> protoItem.{ pos = yyline t,  name = Token.value t} }
+    | operator                      { \t        -> protoItem.{ pos = yyline t,  name = U.enclosed (Token.value t)} }
     | unary                         { \v        -> protoItem.{ pos = posLine v, name = posItem v} }
     ;
 
 importspec:
-    importitem                      { \s      -> ImportItem.{alias = (last • #\.#.splitted • ImportItem.name) s} s}
-    | importitem alias              { \s\a    -> ImportItem.{alias = Token.value a} s }
+    importitem                      { \s      -> ImportItem.{alias = (U.enclosed • last • #\.#.splitted • ImportItem.name) s} s}
+    | importitem alias              { \s\a    -> ImportItem.{alias = U.enclosed (Token.value a)} s }
     | PUBLIC importspec             { \_\s    -> ImportItem.export s }
     ;
 
 memspec:
-    alias               { \v     -> protoItem.{pos = yyline v, name = Token.value v, alias = (last • (#\.#.splitted) • Token.value) v} }
-    | alias  alias      { \v\a   -> protoItem.{pos = yyline v, name = Token.value v, alias = Token.value a} }
+    alias               { \v     -> protoItem.{ pos = yyline v,
+                                                name  = U.enclosed (Token.value v),
+                                                alias = (U.enclosed • last • (#\.#.splitted) • Token.value) v} }
+    | alias  alias      { \v\a   -> protoItem.{ pos = yyline v,
+                                                name = U.enclosed (Token.value v),
+                                                alias = U.enclosed (Token.value a)} }
     | PUBLIC memspec    { \_\s   -> ImportItem.export s }
     ;
 
@@ -1284,7 +1288,7 @@ addDoc second (Just first) = Just (first ++ "\n" ++ second)
 varcon o
     | Token.value o == ":" = Con
     | Token.value o == "Prelude.:" = Con
-    | m ~ #(\w+$)# <- Token.value o, Just s <- m.group 1, (s.charAt 0).isUpperCase = Con
+    | m ~ #(\w+'*`?$)# <- Token.value o, Just s <- m.group 1, (s.charAt 0).isUpperCase = Con
     | otherwise = Vbl
 
 /// check that operator is unqualified
@@ -1328,13 +1332,13 @@ exprToPat (Vbl  p "_" _) = do
         YYM.return (PVar p ("_" ++ show u))
 exprToPat (Vbl p (m~#^Prelude\.strictTuple(\d+)$#) _)
         | Just s <- m.group 1 = YYM.return (PCon p (tuple s.atoi) [])
-exprToPat (Vbl n x _) = YYM.return (PVar n x)
-exprToPat (Lit p k v _) = YYM.return (PLit p k v);
+exprToPat (Vbl n x _)   = YYM.return (PVar n (U.enclosed x))
+exprToPat (Lit p k v _) = YYM.return (PLit p k v)
 exprToPat (App (Vbl _ "!" _) b _) = do p <- exprToPat b; YYM.return (PStrict p)
 
 exprToPat (App (App (Vbl _ "@" _) b _) c _)
-        | Vbl n x _ <- b = do cp <- exprToPat c; YYM.return (PAt n x cp)
-        | App (Vbl _ "!" _) (Vbl n x _) _ <- b = do cp <- exprToPat c; YYM.return (PStrict (PAt n x cp))
+        | Vbl n x _ <- b = do cp <- exprToPat c; YYM.return (PAt n (U.enclosed x) cp)
+        | App (Vbl _ "!" _) (Vbl n x _) _ <- b = do cp <- exprToPat c; YYM.return (PStrict (PAt n (U.enclosed x) cp))
         | otherwise = do
             bs <- U.showexM b
             U.error (getpos b) ("pattern " ++ bs ++ " not allowed left from @")
