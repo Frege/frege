@@ -69,7 +69,7 @@ type Exp = ExprT String
 type Pat = PatternT String
 type Item = Token
 type Qual = Either (Maybe (Pos Pat), Exp) [Def]
-type Guard = (Line, [Qual], Exp)
+type Guard = (Position, [Qual], Exp)
 
 infixl 16 `nApp`
 
@@ -78,7 +78,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
     -> StG (YYsi ParseResult Token, [(Int, YYsi ParseResult Token)])
 
 yyerror = U.error
-yyline  = Token.line
+yyline  = Token.position
 yyval   = Token.value
 
 yynice t = case tok of
@@ -89,7 +89,7 @@ yynice t = case tok of
         ARROW         -> "'->'"
         DCOLON        -> "'::'"
         GETS          -> "'<-'"
-        _             -> if yyline t > 0 then "token " ++ show tv else tv
+        _             -> if Token.line t > 0 then "token " ++ show tv else tv
     where
         tok = yytoken t
         tv = Token.value t
@@ -108,7 +108,7 @@ yychar t
     | Token.tokid t == CHAR = (Token.value t).[0]
     | otherwise = '\0'
 yytoken t = Token.tokid t
-vid t = (Token.value t, Token.line t)
+vid t = (Token.value t, Pos t t)
 
 /*
  The following definitions are not strictly necessary, but they help
@@ -449,7 +449,7 @@ semicoli:
     ;
 
 definitions:
-    definition                          // { single }
+    definition
     | definition semicoli               { const }
     | definition semicoli definitions   { \a\_\b -> a ++ b }
     ;
@@ -462,10 +462,10 @@ definition:
     ;
 
 visibledefinition:
-    PRIVATE     publicdefinition      { \_\ds -> map (updVis Private) ds }
-    | PROTECTED   publicdefinition      { \_\ds -> map (updVis Protected) ds }
-    | PUBLIC    publicdefinition      { \_\ds -> map (updVis Public) ds }
-    | ABSTRACT  datadef               { \_\(d::Def) -> [d.{ctrs <- map updCtr}] }
+    PRIVATE     publicdefinition        { \_\ds -> map (updVis Private) ds }
+    | PROTECTED publicdefinition        { \_\ds -> map (updVis Protected) ds }
+    | PUBLIC    publicdefinition        { \_\ds -> map (updVis Public) ds }
+    | ABSTRACT  datadef                 { \_\(d::Def) -> [d.{ctrs <- map updCtr}] }
     ;
 
 
@@ -623,13 +623,13 @@ unop: '!' | '?' ;
 fixity:
       INFIX  INTCONST   { \f\i -> do
                                     t <- U.infixop (yyline i) NOP1 (atoi (Token.value i) - 1)
-                                    YYM.return (FixDcl {pos=yyline f, opid=t, ops=[]}) }
+                                    YYM.return (FixDcl {pos=Pos f i, opid=t, ops=[]}) }
     | INFIXL INTCONST   { \f\i -> do
                                     t <- U.infixop (yyline i) LOP1 (atoi (Token.value i) - 1)
-                                    YYM.return (FixDcl {pos=Token.line f, opid=t, ops=[]}) }
+                                    YYM.return (FixDcl {pos=Pos f i, opid=t, ops=[]}) }
     | INFIXR INTCONST   { \f\i -> do
                                     t <- U.infixop (yyline i) ROP1 (atoi (Token.value i) - 1)
-                                    YYM.return (FixDcl {pos=Token.line f, opid=t, ops=[]}) }
+                                    YYM.return (FixDcl {pos=Pos f i, opid=t, ops=[]}) }
     ;
 
 
@@ -1297,7 +1297,7 @@ binop op = do
     YYM.return (vid tok)
 
 /// make a binary expression
-mkapp a op b = varcon op (Token.line op) (Token.value op) Nothing `nApp` a `nApp` b
+mkapp a op b = varcon op (yyline op) (Token.value op) Nothing `nApp` a `nApp` b
 
 
 

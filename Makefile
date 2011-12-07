@@ -268,10 +268,10 @@ $(LIBF1)/ForkJoin.class: frege/lib/ForkJoin.fr
 
 PRE1 = $(DIR1)/Prelude.class $(DIR1)/IO.class $(DIR1)/List.class $(DIR1)/Tuples.class
 
-compiler1: $(RUNTIME)  $(DIR1)/check1 $(COMPF1)/Grammar.class $(COMPF1)/Main.class
+compiler1: $(RUNTIME)  $(DIR1)/check1  $(LIBF1)/PP.class $(COMPF1)/Grammar.class $(COMPF1)/Main.class
 	@echo stage 1 compiler ready
 
-$(COMPF1)/Grammar.class: frege/compiler/Grammar.fr $(COMPF1)/Scanner.class $(LIBF1)/ForkJoin.class
+$(COMPF1)/Grammar.class: frege/compiler/Grammar.fr $(COMPF1)/Scanner.class
 	$(FREGEC0)  -make frege.compiler.Grammar
 $(COMPF1)/Scanner.class: $(PRE1) $(COMPF1)/Utilities.class frege/compiler/Scanner.fr
 	$(FREGEC0)  -make frege.compiler.Scanner
