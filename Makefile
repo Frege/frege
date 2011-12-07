@@ -229,6 +229,10 @@ $(DIR1)/List.class: frege/List.fr
 	$(FREGEC0) $?
 $(DIR1)/Tuples.class: frege/Tuples.fr
 	$(FREGEC0) $?
+$(COMPF1)/Utilities.class: 	$(COMPS)/Utilities.fr $(COMPF1)/Data.class
+	$(FREGEC0) $(COMPS)/Utilities.fr
+$(COMPF1)/Data.class: 	$(COMPS)/Data.fr
+	$(FREGEC0) $?
 $(COMPF1)/Fixdefs.class: $(COMPS)/Fixdefs.fr
 	$(FREGEC0) $?
 $(COMPF1)/Import.class: $(COMPS)/Import.fr
@@ -269,7 +273,7 @@ compiler1: $(RUNTIME)  $(DIR1)/check1 $(COMPF1)/Grammar.class $(COMPF1)/Main.cla
 
 $(COMPF1)/Grammar.class: frege/compiler/Grammar.fr $(COMPF1)/Scanner.class $(LIBF1)/ForkJoin.class
 	$(FREGEC0)  -make frege.compiler.Grammar
-$(COMPF1)/Scanner.class: $(PRE1) frege/compiler/Scanner.fr
+$(COMPF1)/Scanner.class: $(PRE1) $(COMPF1)/Utilities.class frege/compiler/Scanner.fr
 	$(FREGEC0)  -make frege.compiler.Scanner
 $(COMPF1)/Main.class : $(PRE1) $(LIBF1)/PP.class $(CLASSES)
 	$(FREGEC0)  -make frege.compiler.Main

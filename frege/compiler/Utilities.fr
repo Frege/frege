@@ -67,8 +67,8 @@ cval t = t.value.charAt 0
 posItem :: Pos s -> s
 posItem (s,_) = s
 
---- get the line number of a positioned value
-posLine :: Pos s -> Line
+--- get the 'Position' of a positioned value
+posLine :: Pos s -> Position
 posLine (_,l) = l
 
 --- check that item is unqualified, flag syntax error otherwise
@@ -247,50 +247,79 @@ unflatx xs = unflat (reverse xs) where
     unflat ((h,t):es) = App (unflat es) h t
     unflat [] = Prelude.error "unflat: cannot happen"
 
-instance Position Symbol where
+instance Positioned Symbol where
     is x = ""
     getpos = Symbol.pos
-    untyped = id
+    -- untyped = id
 
-instance Position (ExprT a) where
+instance Positioned (ExprT a) where
     is x = "expression"
     --- get the line number of an expression
-    getpos (App a b _)    = let p = getpos a in if p <= 0 then getpos b else p
+    getpos (App a b _)    = (getpos a).merge (getpos b)
     getpos (Mem {ex})     = getpos ex
-    getpos (Lam _ p x _)  = let pos = p.getpos in if pos <= 0 then x.getpos else pos
-    getpos (Case _ e _ _) = getpos e
-    getpos (Let _ _ e _)  = getpos e
-    getpos (Ifte c a b _) = fold max (negate 1) (map getpos [c,a,b])
-    getpos (Ann e _)      = getpos e
+    getpos (Lam _ p x _)  = p.getpos.merge x.getpos
+    getpos (Case _ e alts _) = (getpos e).merge (Position.merges (map Positioned.getpos alts))
+    getpos (Let e _ x _)  = (getpos x).merge (Position.merges (map Positioned.getpos (values e)))
+    getpos (Ifte c a b _) = Position.merges (map getpos [c, a, b])
+    getpos (Ann e s)      = (getpos e).merge (maybe Position.null Sigma.getpos s)
     getpos e | e.{pos?}   = e.pos
              | otherwise  = Prelude.error ("can't determine expr pos " ++ show (constructor e))
-    {--
-     * untyped 'Expr'
-     -}
-    untyped (App a b _) = App (untyped a) (untyped b) Nothing
-    untyped (x@Let {env,ex}) = x.{env <- Tree.map utEx, ex <- untyped, typ=Nothing}
-        where utEx (v@SymV {expr=Just x}) = v.{expr = Just (untyped x)}
-              utEx v = v
-    untyped (x@Case {ex,alts}) = x.{ex <- untyped, alts <- map ualt, typ=Nothing}
-        where ualt (a@CAlt {ex}) = a.{ex <- untyped}
-    untyped (x@Lam {ex}) = x.{ex <- untyped, typ = Nothing}
-    untyped (x@Ifte c t e _) = Ifte (untyped c) (untyped t) (untyped e) Nothing
-    untyped (x@Mem {member}) = x.{ex <- untyped, typ=Nothing}
-    untyped (Ann x t) = Ann x.untyped t
-    untyped x
-        | Just _ <- x.typ = x.{typ=Nothing}
-        | otherwise       = x
+
+instance Positioned (CAltT a) where
+    is _ = "case alternative"
+    getpos c = c.pos
+
+{--
+    untyped 'Expr'
+
+untyped (App a b _) = App (untyped a) (untyped b) Nothing
+untyped (x@Let {env,ex}) = x.{env <- Tree.map utEx, ex <- untyped, typ=Nothing}
+    where utEx (v@SymV {expr=Just x}) = v.{expr = Just (untyped x)}
+          utEx v = v
+untyped (x@Case {ex,alts}) = x.{ex <- untyped, alts <- map ualt, typ=Nothing}
+    where ualt (a@CAlt {ex}) = a.{ex <- untyped}
+untyped (x@Lam {ex}) = x.{ex <- untyped, typ = Nothing}
+untyped (x@Ifte c t e _) = Ifte (untyped c) (untyped t) (untyped e) Nothing
+untyped (x@Mem {member}) = x.{ex <- untyped, typ=Nothing}
+untyped (Ann x t) = Ann (untyped x) t
+untyped x
+    | Just _ <- x.typ = x.{typ=Nothing}
+    | otherwise       = x
+ -}
+
+instance Positioned (TauT a) where
+    is p = "tau type"
+    getpos (TFun a b)    = a.getpos.merge b.getpos
+    getpos (TApp a b)    = a.getpos.merge b.getpos
+    getpos t | t.{pos?}  = t.pos
+             | otherwise = Position.null
+
+instance Positioned (RhoT a) where
+    is p = "rho type"
+    getpos rho = case rho of
+        RhoFun{sigma,rho}  = (c.merge sigma.getpos).merge rho.getpos
+        RhoTau{tau}        = c.merge tau.getpos
+      where
+        c = Position.merges (map Context.getpos rho.context)
+
+instance Positioned (ContextT a) where
+    is p = "constraint"
+    getpos c = c.pos
+
+instance Positioned (SigmaT a) where
+    is s = "sigma type"
+    getpos s = s.rho.getpos
 
 
-instance Position (PatternT a) where
+instance Positioned (PatternT a) where
     is p = "pattern"
     --- get the line number of a pattern
-    getpos (PAnn p _)   = getpos p
+    getpos (PAnn p t)   = (getpos p).merge t.getpos
     getpos (PStrict p)  = getpos p
     getpos p | p.{pos?} = p.pos
-             | otherwise = negate 1
-    --- untyped 'Pattern', this is yet another identity function
-    untyped p = p
+             | otherwise = Position.null
+    -- untyped 'Pattern', this is yet another identity function
+    -- untyped p = p
 
 --- get the variables in a pattern
 patNames :: PatternT a -> OrdSet String
@@ -305,15 +334,13 @@ patNames p = names Nil p where
     names t (PMat {var})      = t `including` var
 
 
---- get the line number of a rho type
-rhoPos (RhoFun _ (ForAll _ rho1) rho2) = let p = rhoPos rho1 in if p <= 0 then rhoPos rho2 else p
-rhoPos (RhoTau _ tau) = tauPos tau
 
---- get the line number of a tau type
-tauPos (TFun a b)   = min (tauPos a) (tauPos b)
-tauPos (TApp a b)   = min (tauPos a) (tauPos b)
-tauPos t | t.{pos?} = t.pos
-tauPos _ = Int.maxBound
+--- get the 'Position' of a rho type
+rhoPos = Rho.getpos
+
+--- get the 'Position' of a tau type
+tauPos = Tau.getpos
+
 
 -- turn a function (Global -> a) into StG a
 inState f = do g <- getST; stio (f g)
@@ -362,7 +389,7 @@ showex lambdachar x global = showprec 17 x where
             varcon (Vbl {name=v}) = Just v;
             varcon (Con {name=v}) = Just v;
             varcon _ = Nothing;
-            sop v = showprec 17 (Vbl {pos=0, name=v, typ=Nothing});
+            sop v = showprec 17 (Vbl {pos=Position.null, name=v, typ=Nothing});
             ops v = if sop v ~ #\w# then " `" ++ sop v ++ "` " else sop v;
             isop x
                 | Just this <- Tree.lookupS optree x = Just this
@@ -943,7 +970,7 @@ checkTApp :: Bool -> [Tau] -> StG Tau
 checkTApp partial (con:as) = do
         g <- getST
         let t = Tau.mkapp con as
-            units   = repeat (TCon {pos=0, name=TName pPreludeBase "()"})  -- for err correction
+            units   = repeat (TCon {pos=Position.null, name=TName pPreludeBase "()"})  -- for err correction
         case con of
             TCon {pos,name} -> case name.findit g of
                 -- Just (SymT {typ=ForAll bs _}) | null as, null bs = stio con
@@ -1194,8 +1221,8 @@ accessforbidden we sym
     | MName (TName p _) _ <- Symbol.name sym = sym.vis == Private && p != we
     | otherwise = Prelude.error ("Strange symbol")
 
-resolve :: (String -> QName) -> Int -> String -> StG [QName]
-resolve3 :: (String -> QName) -> Int -> (String, String, String) -> StG [Symbol]
+resolve :: (String -> QName) -> Position -> String -> StG [QName]
+resolve3 :: (String -> QName) -> Position -> (String, String, String) -> StG [Symbol]
 resolve fname pos sname = do
     g   <- getST
     syms <- resolve3 fname pos (qname sname)
