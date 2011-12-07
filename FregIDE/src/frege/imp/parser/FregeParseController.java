@@ -25,7 +25,6 @@ import org.eclipse.imp.services.ILanguageSyntaxProperties;
 import org.eclipse.jface.text.IRegion;
 
 import frege.FregePlugin;
-import frege.imp.preferences.FregeConstants;
 import frege.rt.Lambda;
 import frege.rt.Box;
 import frege.rt.FV;
@@ -102,7 +101,7 @@ public class FregeParseController extends ParseControllerBase implements
 					= new FregeSourcePositionLocator();
     private final SimpleAnnotationTypeInfo fSimpleAnnotationTypeInfo
     				= new SimpleAnnotationTypeInfo();
-	
+	private IMessageHandler msgHandler = null;
 	/**
 	 * tell if we have errors
 	 */
@@ -140,7 +139,7 @@ public class FregeParseController extends ParseControllerBase implements
 						(Lambda) frege.compiler.Main.standardOptions._e())._e();
 		createLexerAndParser(fullFilePath, project);
 
-		// parser.setMessageHandler(handler);
+		msgHandler = handler;
 	}
 
 	public IParser getParser() {
@@ -160,11 +159,11 @@ public class FregeParseController extends ParseControllerBase implements
 		global = TGlobal.upd$options(global, TOptions.upd$source(
 				TGlobal.options(global), 
 				filePath.toPortableString()));
-		IPreferencesService service = FregePlugin.getInstance().getPreferencesService();
-		service.setLanguageName("frege");
-		if (project != null) service.setProject(project.getRawProject());
-		String fp = service.getStringPreference(FregeConstants.P_FREGEPATH);
-		String bp = service.getStringPreference(FregeConstants.P_DESTINATION);
+		// IPreferencesService service = FregePlugin.getInstance().getPreferencesService();
+		// service.setLanguageName("frege");
+		// if (project != null) service.setProject(project.getRawProject());
+		String fp = ".";   // service.getStringPreference(FregeConstants.P_FREGEPATH);
+		String bp = ".";   // service.getStringPreference(FregeConstants.P_DESTINATION);
 		System.out.println("FregePath: " + fp);
 		global = TGlobal.upd$options(global, TOptions.upd$path(
 				TGlobal.options(global), 
@@ -181,7 +180,8 @@ public class FregeParseController extends ParseControllerBase implements
 	public Object parse(String contents, boolean scanOnly,
 			IProgressMonitor monitor) {
 		
-		monitor.beginTask(this.getClass().getName() + " parsing", 4);
+		msgHandler.clearMessages();
+		monitor.beginTask(this.getClass().getName() + " parsing", 7);
 		
 		Lambda lexPass = frege.compiler.Main.lexPassIDE(contents);
 		final TGlobal g1 = runStG(lexPass, global);
@@ -230,12 +230,52 @@ public class FregeParseController extends ParseControllerBase implements
 		}
 		global = g4;
 		if (monitor.isCanceled()) {
-			System.out.println("after fixdefs ... cancelled");
+			System.out.println("after import ... cancelled");
 			monitor.done();
 			return global;
 		}
 		monitor.worked(1);
 		
+		final TGlobal g5 = runStG(frege.compiler.Classes.passI(Box.Bool.t), global);
+		if (errors(g5) > 0) {
+			monitor.done();
+			return global;
+		}
+		global = g5;
+		if (monitor.isCanceled()) {
+			System.out.println("after verify imported instances ... cancelled");
+			monitor.done();
+			return global;
+		}
+		monitor.worked(1);
+		
+		final TGlobal g6 = runStG(frege.compiler.Enter.pass, global);
+		if (errors(g6) > 0) {
+			monitor.done();
+			return global;
+		}
+		global = g6;
+		if (monitor.isCanceled()) {
+			System.out.println("after enter ... cancelled");
+			monitor.done();
+			return global;
+		}
+		monitor.worked(1);
+		
+		final TGlobal g7 = runStG(frege.compiler.TAlias.pass, global);
+		if (errors(g7) > 0) {
+			monitor.done();
+			return global;
+		}
+		global = g7;
+		if (monitor.isCanceled()) {
+			System.out.println("after aliases ... cancelled");
+			monitor.done();
+			return global;
+		}
+		monitor.worked(1);
+		
+		msgHandler.handleSimpleMessage("Warning: end of file reached", 0, 6, 0, 0, 0, 0);
 		monitor.done();
 		return global;
 	}

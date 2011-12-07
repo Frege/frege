@@ -54,8 +54,10 @@ public class FregeTokenColorer extends TokenColorerBase implements ITokenColorer
 		if (tid >= TTokenID.PACKAGE.j && tid <= TTokenID.INFIXR.j) 	return keywordAttribute;
 		if (tid == TTokenID.DOCUMENTATION.j)						return docuAttribute;
 		if (tid == TTokenID.COMMENT.j)								return commentAttribute;
-		if (tid == TTokenID.CONID.j)								return conidAttribute;
-		if (tid == TTokenID.VARID.j)								return identifierAttribute;
+		if (tid == TTokenID.CONID.j 
+				|| tid == TTokenID.QUALIFIER.j
+				|| tid == TTokenID.QCONID.j)	return conidAttribute;
+		if (tid == TTokenID.VARID.j || tid == TTokenID.QVARID.j)	return identifierAttribute;
 		if (tid >= TTokenID.INTCONST.j && tid < TTokenID.REGEXP.j) 	return literalAttribute;
 		if (tid == TTokenID.REGEXP.j) {
 			// System.out.println("coloring ..." + IShow_Token.show(token) + " " + TToken.length(token));
@@ -64,12 +66,7 @@ public class FregeTokenColorer extends TokenColorerBase implements ITokenColorer
 		if (tid == TTokenID.LEXERROR.j) 							return errorAttribute;
 
 		if (tid >= TTokenID.DCOLON.j && tid <= TTokenID.EARROW.j)	return specialAttribute;
-		if (tid >= TTokenID.LOP0.j && tid <= TTokenID.SOMEOP.j) {
-			// System.out.println("coloring ..." + IShow_Token.show(token) + " " + TToken.length(token));
-			if (TToken.value(token).length() 
-					!= TToken.length(token))						return opAttribute;
-			else													return opAttribute;  // identifierAttribute;
-		}
+		if (tid >= TTokenID.LOP0.j && tid <= TTokenID.SOMEOP.j) 	return opAttribute;
 		if (tid == TTokenID.CHAR.j) switch (TToken.value(token)) {
 		case "_": return keywordAttribute;
 		case "=": return keywordAttribute;
@@ -85,16 +82,16 @@ public class FregeTokenColorer extends TokenColorerBase implements ITokenColorer
 		case ",": return identifierAttribute;
 		case ".": return identifierAttribute;
 		case "!": return opAttribute;
+		case "?": return opAttribute;
 		case "-": return opAttribute;
-		default:
-			System.out.println("How to colour " + IShow_Token.show(token) + " ?");
+		default: break;
 		}
-		
-		
+		System.err.println("Don't know how to colour " + IShow_Token.show(token) + " ?");
 		return super.getColoring(controller, token);
 	}
 
 	public IRegion calculateDamageExtent(IRegion seed) {
+		System.err.println("calculateDamagExtent: " + seed);
 		return seed;
 	}
 }
