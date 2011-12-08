@@ -2,14 +2,25 @@ package frege.imp.parser;
 
 import java.util.Iterator;
 import java.util.List;
+import java.util.regex.Pattern;
 
 import lpg.runtime.ILexStream;
 import lpg.runtime.IPrsStream;
 import lpg.runtime.Monitor;
 
+import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.IProgressMonitor;
+import org.eclipse.core.runtime.Platform;
+import org.eclipse.core.runtime.preferences.IEclipsePreferences;
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.resources.IProjectNatureDescriptor;
+import org.eclipse.core.resources.ResourcesPlugin;
+import org.eclipse.core.resources.IWorkspace;
+import org.eclipse.jdt.core.IClasspathEntry;
+import org.eclipse.jdt.core.IJavaProject;
+import org.eclipse.jdt.core.JavaCore;
+import org.eclipse.jdt.core.JavaModelException;
 
 import org.eclipse.imp.model.IPathEntry;
 import org.eclipse.imp.model.ISourceProject;
@@ -23,6 +34,7 @@ import org.eclipse.imp.preferences.IPreferencesService;
 import org.eclipse.imp.services.IAnnotationTypeInfo;
 import org.eclipse.imp.services.ILanguageSyntaxProperties;
 import org.eclipse.jface.text.IRegion;
+import org.osgi.service.prefs.BackingStoreException;
 
 import frege.FregePlugin;
 import frege.rt.Lambda;
@@ -105,12 +117,12 @@ public class FregeParseController extends ParseControllerBase implements
 	/**
 	 * tell if we have errors
 	 */
-	public int errors(TGlobal global) { return global == null ? 1 : TGlobal.errors(global); }
+	public static int errors(TGlobal global) { return global == null ? 1 : TGlobal.errors(global); }
 	
 	/**
 	 * run a {@link frege.compiler.data.TStIO} action
 	 */
-	public TGlobal runStG(Lazy<FV> action, TGlobal g) {
+	public static TGlobal runStG(Lazy<FV> action, TGlobal g) {
 		Lambda stg = (Lambda) action._e();				// StIO (g -> IO (a, g) 
 		TTuple2 r = (TTuple2)TStIO.performUnsafe(stg, g)._e();
 		return (TGlobal) r.mem2._e();
@@ -128,12 +140,15 @@ public class FregeParseController extends ParseControllerBase implements
 		IPath fullFilePath = project != null ?
 				project.getRawProject().getLocation().append(filePath)
 				: filePath;
-		System.out.print("BuildPath: ");
-		if (project != null)
-			for (IPathEntry ip: project.getBuildPath()) 
-				System.out.print(ip.getPath().toPortableString() + ", ");
-		System.out.println();
-		frege.compiler.Main.v("123");
+//		System.out.print("BuildPath: ");
+//		if (project != null) {
+//			for (IPathEntry ip: project.getBuildPath()) 
+//				System.out.print(ip.getPath().toPortableString() + ", ");
+//			IProject jp = project.getRawProject();
+//		}
+//		System.out.println();
+		
+		// frege.compiler.Main.v("123");
 		global =  (TGlobal) 
 				frege.prelude.Base.TST.performUnsafe(
 						(Lambda) frege.compiler.Main.standardOptions._e())._e();
@@ -153,9 +168,10 @@ public class FregeParseController extends ParseControllerBase implements
 	}
 	
 
+	@SuppressWarnings("unchecked")
 	private void createLexerAndParser(IPath filePath, ISourceProject project) {
-		System.out.println("createLexerAndParser: " + filePath.toPortableString());
-		System.out.println("classpath: " + System.getProperty("java.class.path"));
+		System.err.println("createLexerAndParser: " + filePath.toPortableString());
+		System.err.println("classpath: " + System.getProperty("java.class.path"));
 		global = TGlobal.upd$options(global, TOptions.upd$source(
 				TGlobal.options(global), 
 				filePath.toPortableString()));
@@ -164,11 +180,57 @@ public class FregeParseController extends ParseControllerBase implements
 		// if (project != null) service.setProject(project.getRawProject());
 		String fp = ".";   // service.getStringPreference(FregeConstants.P_FREGEPATH);
 		String bp = ".";   // service.getStringPreference(FregeConstants.P_DESTINATION);
-		System.out.println("FregePath: " + fp);
+		
+		if (project != null) {
+			IProject rp = project.getRawProject();
+			// System.out.println("The raw project has type: " + jp.getClass());
+			IWorkspace workspace = ResourcesPlugin.getWorkspace();
+			IPath wroot = workspace.getRoot().getLocation();
+			// IProjectNatureDescriptor[] nds = workspace.getNatureDescriptors();
+			boolean isJava = false;
+			
+			try {
+					isJava = rp.hasNature("org.eclipse.jdt.core.javanature");
+					
+			} catch (CoreException e) {
+					// e.printStackTrace();
+					// System.out.println("The " + nd.getNatureId() + " is not supported, or so it seems.");
+			}
+			System.err.println("Our project "
+					+ (isJava ? " has the " : " does not have ")
+					+ " java nature.");
+			if (isJava) {
+				IJavaProject jp = JavaCore.create(rp);
+				try {
+					bp = wroot.append(jp.getOutputLocation()).toPortableString();
+					IClasspathEntry[] cpes = jp.getResolvedClasspath(true);
+					fp = "";
+					for (IClasspathEntry cpe: cpes) {
+						if (cpe.getEntryKind() == IClasspathEntry.CPE_SOURCE) continue;
+						if (fp.length() > 0) fp += System.getProperty("path.separator");
+						fp += cpe.getPath().toPortableString();
+					}
+				} catch (JavaModelException e) {
+				} catch (NullPointerException np) {
+				}
+			}
+		}
+		
+		org.eclipse.core.runtime.preferences.IPreferencesService prefs = Platform.getPreferencesService();
+		IEclipsePreferences eprefs = prefs.getRootNode();
+		try {
+			prefs.exportPreferences(eprefs, System.out, null);
+		} catch (CoreException e) {
+			System.err.println("exception: " + e);
+		}
+		
+		System.err.println("FregePath: " + fp);
 		global = TGlobal.upd$options(global, TOptions.upd$path(
-				TGlobal.options(global), 
-				TList.DCons.mk(Box.mk(fp), TList.DList.mk())));
-		System.out.println("Destination: " + bp);
+				TGlobal.options(global),
+				frege.prelude.Base.TRegex.splitted(
+						((frege.rt.Box<Pattern>)frege.compiler.Utilities.pathRE._e()).j, 
+						fp))); 
+		System.err.println("Destination: " + bp);
 		global = TGlobal.upd$options(global, TOptions.upd$dir(
 				TGlobal.options(global), 
 				bp));
