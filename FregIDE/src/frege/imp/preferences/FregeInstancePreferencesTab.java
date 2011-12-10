@@ -96,7 +96,7 @@ public class FregeInstancePreferencesTab extends InstancePreferencesTab {
 
 		ColorFieldEditor commColor = fPrefUtils.makeNewColorField(
 			page, this, fPrefService,
-			"instance", "commColor", "Comment color       ",
+			"instance", "commColor", "Comment color     ",
 			"",
 			parent,
 			true, true,
@@ -121,6 +121,15 @@ public class FregeInstancePreferencesTab extends InstancePreferencesTab {
 			false);
 		fields.add(varidColor);
 
+		ColorFieldEditor globalColor = fPrefUtils.makeNewColorField(
+				page, this, fPrefService,
+				"instance", "globalColor", "Imported Variables color",
+				"",
+				parent,
+				true, true,
+				false);
+		fields.add(globalColor);
+		
 		ColorFieldEditor keywordColor = fPrefUtils.makeNewColorField(
 			page, this, fPrefService,
 			"instance", "keywordColor", "Keyword color       ",

@@ -243,7 +243,7 @@ public class FregeParseController extends ParseControllerBase implements
 			IProgressMonitor monitor) {
 		
 		msgHandler.clearMessages();
-		monitor.beginTask(this.getClass().getName() + " parsing", 7);
+		monitor.beginTask(this.getClass().getName() + " parsing", 10);
 		
 		Lambda lexPass = frege.compiler.Main.lexPassIDE(contents);
 		final TGlobal g1 = runStG(lexPass, global);
@@ -332,6 +332,46 @@ public class FregeParseController extends ParseControllerBase implements
 		global = g7;
 		if (monitor.isCanceled()) {
 			System.out.println("after aliases ... cancelled");
+			monitor.done();
+			return global;
+		}
+		monitor.worked(1);
+		
+
+		final TGlobal g8 = runStG(frege.compiler.Enter.pass2, global);
+		if (errors(g8) > 0) {
+			monitor.done();
+			return global;
+		}
+		global = g8;
+		if (monitor.isCanceled()) {
+			System.out.println("after field definitions ... cancelled");
+			monitor.done();
+			return global;
+		}
+		monitor.worked(1);
+		
+		final TGlobal g9 = runStG(frege.compiler.Enter.pass3, global);
+		if (errors(g9) > 0) {
+			monitor.done();
+			return global;
+		}
+		global = g9;
+		if (monitor.isCanceled()) {
+			System.out.println("after derived instances ... cancelled");
+			monitor.done();
+			return global;
+		}
+		monitor.worked(1);
+		
+		final TGlobal g10 = runStG(frege.compiler.Transdef.pass, global);
+		if (errors(g10) > 0) {
+			monitor.done();
+			return global;
+		}
+		global = g10;
+		if (monitor.isCanceled()) {
+			System.out.println("after translate definitions ... cancelled");
 			monitor.done();
 			return global;
 		}

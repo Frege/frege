@@ -18,6 +18,7 @@ public class FregePreferencesConstants {
 	public static final String P_COMMCOLOR = "commColor";
 	public static final String P_CONIDCOLOR = "conidColor";
 	public static final String P_VARIDCOLOR = "varidColor";
+	public static final String P_GLOBALCOLOR = "globalColor";
 	public static final String P_KEYWORDCOLOR = "keywordColor";
 	public static final String P_SPECIALCOLOR = "specialColor";
 	public static final String P_OPCOLOR = "opColor";

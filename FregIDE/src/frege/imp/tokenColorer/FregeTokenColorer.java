@@ -22,8 +22,8 @@ import frege.imp.preferences.FregePreferencesConstants;
 
 public class FregeTokenColorer extends TokenColorerBase implements ITokenColorer {
 	protected final TextAttribute
-			normalAttribute,
-			docuAttribute, conidAttribute, identifierAttribute,
+			normalAttribute, impAttribute,
+			docuAttribute, conidAttribute, identAttribute,
 			commentAttribute, specialAttribute, opAttribute,
 			keywordAttribute, literalAttribute, errorAttribute;
 
@@ -32,31 +32,49 @@ public class FregeTokenColorer extends TokenColorerBase implements ITokenColorer
 	public FregeTokenColorer() {
 		super();
 		
-		int i = SWT.COLOR_DARK_CYAN;
-
 		Display display = Display.getDefault();
 		IPreferencesService service = FregePlugin.getInstance().getPreferencesService();
-		Color docuColor = new Color (display, StringConverter.asRGB(service.getStringPreference(FregePreferencesConstants.P_DOCUCOLOR), 
-											                        display.getSystemColor(SWT.COLOR_DARK_YELLOW).getRGB())); 
-		Color commColor = new Color (display, StringConverter.asRGB(service.getStringPreference(FregePreferencesConstants.P_COMMCOLOR), 
-                													display.getSystemColor(SWT.COLOR_DARK_YELLOW).getRGB())); 
+		Color docuColor = new Color (display, 
+				StringConverter.asRGB(service.getStringPreference(FregePreferencesConstants.P_DOCUCOLOR), 
+						display.getSystemColor(SWT.COLOR_DARK_YELLOW).getRGB())); 
+		Color commColor = new Color (display, 
+				StringConverter.asRGB(service.getStringPreference(FregePreferencesConstants.P_COMMCOLOR),
+						display.getSystemColor(SWT.COLOR_DARK_YELLOW).getRGB())); 
+		Color conidColor = new Color (display, 
+				StringConverter.asRGB(service.getStringPreference(FregePreferencesConstants.P_CONIDCOLOR), 
+						display.getSystemColor(SWT.COLOR_DARK_RED).getRGB()));
+		Color varidColor = new Color (display, 
+				StringConverter.asRGB(service.getStringPreference(FregePreferencesConstants.P_VARIDCOLOR), 
+						display.getSystemColor(SWT.COLOR_BLACK).getRGB()));
+		Color impColor = new Color (display, 
+				StringConverter.asRGB(service.getStringPreference(FregePreferencesConstants.P_GLOBALCOLOR), 
+						display.getSystemColor(SWT.COLOR_BLUE).getRGB()));
+		Color keywdColor = new Color (display, 
+				StringConverter.asRGB(service.getStringPreference(FregePreferencesConstants.P_KEYWORDCOLOR), 
+						display.getSystemColor(SWT.COLOR_DARK_MAGENTA).getRGB()));
+		Color litColor = new Color (display, 
+				StringConverter.asRGB(service.getStringPreference(FregePreferencesConstants.P_LITERALCOLOR), 
+						display.getSystemColor(SWT.COLOR_DARK_CYAN).getRGB()));
+		Color opColor = new Color (display, 
+				StringConverter.asRGB(service.getStringPreference(FregePreferencesConstants.P_OPCOLOR), 
+						display.getSystemColor(SWT.COLOR_DARK_GREEN).getRGB()));
+		Color errColor = new Color (display, 
+				StringConverter.asRGB(service.getStringPreference(FregePreferencesConstants.P_ERRORCOLOR), 
+						display.getSystemColor(SWT.COLOR_RED).getRGB()));
+		Color spcColor = new Color (display, 
+				StringConverter.asRGB(service.getStringPreference(FregePreferencesConstants.P_SPECIALCOLOR), 
+						display.getSystemColor(SWT.COLOR_DARK_MAGENTA).getRGB()));
 		docuAttribute    = new TextAttribute(docuColor, null, SWT.ITALIC);
 		commentAttribute = new TextAttribute(commColor, null, SWT.NORMAL);
-		conidAttribute = new TextAttribute(
-				display.getSystemColor(SWT.COLOR_DARK_RED), null, SWT.NORMAL);
-		normalAttribute = new TextAttribute(
-				display.getSystemColor(SWT.COLOR_BLACK), null, SWT.NORMAL);
-		identifierAttribute = new TextAttribute(
-				display.getSystemColor(SWT.COLOR_BLACK), null, SWT.NORMAL);
-		keywordAttribute = new TextAttribute(
-				display.getSystemColor(SWT.COLOR_DARK_MAGENTA), null, SWT.BOLD);
-		literalAttribute = new TextAttribute(
-				display.getSystemColor(SWT.COLOR_DARK_CYAN), null, SWT.NORMAL);
-		opAttribute = new TextAttribute(
-				display.getSystemColor(SWT.COLOR_DARK_GREEN), null, SWT.NORMAL);
-		errorAttribute = new TextAttribute(
-				display.getSystemColor(SWT.COLOR_RED), null, SWT.BOLD);
-		specialAttribute = keywordAttribute;
+		conidAttribute   = new TextAttribute(conidColor, null, SWT.NORMAL);
+		normalAttribute  = new TextAttribute(display.getSystemColor(SWT.COLOR_BLACK), null, SWT.NORMAL);
+		identAttribute   = new TextAttribute(varidColor, null, SWT.NORMAL);
+		impAttribute     = new TextAttribute(impColor, null, SWT.NORMAL);
+		keywordAttribute = new TextAttribute(keywdColor, null, SWT.BOLD);
+		literalAttribute = new TextAttribute(litColor, null, SWT.NORMAL);
+		opAttribute      = new TextAttribute(opColor, null, SWT.NORMAL);
+		errorAttribute   = new TextAttribute(errColor, null, SWT.NORMAL);
+		specialAttribute = new TextAttribute(spcColor, null, SWT.BOLD);
 		
 	}
 
@@ -72,7 +90,7 @@ public class FregeTokenColorer extends TokenColorerBase implements ITokenColorer
 		if (tid == TTokenID.CONID.j 
 				|| tid == TTokenID.QUALIFIER.j
 				|| tid == TTokenID.QCONID.j)	return conidAttribute;
-		if (tid == TTokenID.VARID.j || tid == TTokenID.QVARID.j)	return identifierAttribute;
+		if (tid == TTokenID.VARID.j || tid == TTokenID.QVARID.j)	return identAttribute;
 		if (tid >= TTokenID.INTCONST.j && tid <= TTokenID.REGEXP.j) return literalAttribute;
 		if (tid == TTokenID.LEXERROR.j) 							return errorAttribute;
 

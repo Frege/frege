@@ -26,6 +26,7 @@ public class FregePreferencesInitializer extends PreferencesInitializer {
 		String darkRed    = StringConverter.asString(display.getSystemColor(SWT.COLOR_DARK_RED).getRGB());
 		String black      = StringConverter.asString(display.getSystemColor(SWT.COLOR_BLACK).getRGB());
 		String red        = StringConverter.asString(display.getSystemColor(SWT.COLOR_RED).getRGB());
+		String blue       = StringConverter.asString(display.getSystemColor(SWT.COLOR_BLUE).getRGB());
 		String darkMagenta= StringConverter.asString(display.getSystemColor(SWT.COLOR_DARK_MAGENTA).getRGB());
 		String darkGreen  = StringConverter.asString(display.getSystemColor(SWT.COLOR_DARK_GREEN).getRGB());
 		String darkCyan   = StringConverter.asString(display.getSystemColor(SWT.COLOR_DARK_CYAN).getRGB());
@@ -37,12 +38,14 @@ public class FregePreferencesInitializer extends PreferencesInitializer {
 		service.setStringPreference(IPreferencesService.DEFAULT_LEVEL, FregePreferencesConstants.P_COMMCOLOR, darkYellow);
 		service.setStringPreference(IPreferencesService.DEFAULT_LEVEL, FregePreferencesConstants.P_CONIDCOLOR, darkRed);
 		service.setStringPreference(IPreferencesService.DEFAULT_LEVEL, FregePreferencesConstants.P_VARIDCOLOR, black);
+		service.setStringPreference(IPreferencesService.DEFAULT_LEVEL, FregePreferencesConstants.P_GLOBALCOLOR, blue);
 		service.setStringPreference(IPreferencesService.DEFAULT_LEVEL, FregePreferencesConstants.P_KEYWORDCOLOR, darkMagenta);
 		service.setStringPreference(IPreferencesService.DEFAULT_LEVEL, FregePreferencesConstants.P_SPECIALCOLOR, darkMagenta);
 		service.setStringPreference(IPreferencesService.DEFAULT_LEVEL, FregePreferencesConstants.P_OPCOLOR, darkGreen);
 		service.setStringPreference(IPreferencesService.DEFAULT_LEVEL, FregePreferencesConstants.P_LITERALCOLOR, darkCyan);
 		service.setStringPreference(IPreferencesService.DEFAULT_LEVEL, FregePreferencesConstants.P_ERRORCOLOR, red);
 		
+		/*
 		System.err.println("darkYellow is " + darkYellow);
 		System.err.println("darkRed is " + darkRed);
 		System.err.println("black is " + black);
@@ -50,6 +53,7 @@ public class FregePreferencesInitializer extends PreferencesInitializer {
 		System.err.println("darkMagenta is " + darkMagenta);
 		System.err.println("darkGreen is " + darkGreen);
 		System.err.println("darkCyan is " + darkCyan);
+		*/
 	}
 
 	/*
