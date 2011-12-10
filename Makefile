@@ -229,10 +229,12 @@ $(DIR1)/List.class: frege/List.fr
 	$(FREGEC0) $?
 $(DIR1)/Tuples.class: frege/Tuples.fr
 	$(FREGEC0) $?
-$(COMPF1)/Utilities.class: 	$(COMPS)/Utilities.fr $(COMPF1)/Data.class
+$(COMPF1)/Utilities.class: 	$(COMPF1)/Data.class $(COMPF1)/Nice.class $(COMPS)/Utilities.fr
 	$(FREGEC0) $(COMPS)/Utilities.fr
 $(COMPF1)/Data.class: 	$(COMPS)/Data.fr
 	$(FREGEC0) $?
+$(COMPF1)/Nice.class: 	$(COMPS)/Nice.fr $(LIBF1)/PP.class $(COMPF1)/Data.class
+	$(FREGEC0) $(COMPS)/Nice.fr
 $(COMPF1)/Fixdefs.class: $(COMPS)/Fixdefs.fr
 	$(FREGEC0) $?
 $(COMPF1)/Import.class: $(COMPS)/Import.fr

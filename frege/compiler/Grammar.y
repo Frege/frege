@@ -54,6 +54,7 @@ package frege.compiler.Grammar where
 -- import frege.IO(stdout, stderr, <<, BufferedReader)
 import frege.List(Tree, keyvalues, keys)
 import frege.compiler.Data      as D
+import frege.compiler.Nice      except (group, annotation)
 import frege.compiler.Utilities as U(
     posItem, posLine, unqualified, tuple)
 
@@ -77,7 +78,7 @@ infixl 16 `nApp`
 private yyprod1 :: [(Int, YYsi ParseResult Token)]
     -> StG (YYsi ParseResult Token, [(Int, YYsi ParseResult Token)])
 
-yyerror = U.error
+yyerror pos s = U.error pos (msgdoc s)
 yyline  = Token.position
 yyval   = Token.value
 
@@ -235,7 +236,7 @@ vid t = (Token.value t, Pos t t)
 //%explain package      a package
 //%explain packageclause a package clause
 //%explain packagename  a package name
-//%explain semicoli     a sequence of one or more ';'
+//%explain semicoli     the next definition
 //%explain operator     an operator
 //%explain operators    some operators
 //%explain import       a package import
@@ -649,18 +650,6 @@ infix:
 
 annotation:
     /*funhead*/ annoitems DCOLON sigma  { \as\_\s -> map (annotation s) as }
-        /* {\as\d\t ->
-        case as of {
-            ("let", _, _) -> do
-                    yyerror "invalid definition, pattern may not be followed by type.";
-                for [];
-            (x, pats, !docu) -> do
-                    (if ! (null pats)
-                        then yyerror ("invalid annotation, shoud be ("
-                                        ++ x ++ ") :: " ++ show t)
-                        else ())
-                    for  [Anno (num d) Public {item=x ,typ=t,docu}]
-        }}*/
         ;
 
 annoitem:
@@ -956,7 +945,7 @@ fundef:
             [fd@FunDcl {expr=x}] -> YYM.return [fd.{expr = nx}] where
                                 nx = Let Nil defs x Nothing
             _ -> do
-                yyerror 0 "illegal function definition, where { ... } after annotation?"
+                yyerror (head fdefs).pos ("illegal function definition, where { ... } after annotation?")
                 YYM.return fdefs
     }
     ;
@@ -1237,8 +1226,8 @@ fields:
     field                           { single }
     | field ',' fields              { \a\c\ls ->
                                         if elemBy (using fst) a ls then do {
-                                                U.warn (yyline c) ("field `" ++ fst a
-                                                    ++ "` should appear only once.");
+                                                U.warn (yyline c) (msgdoc ("field `" ++ fst a
+                                                    ++ "` should appear only once."));
                                                 YYM.return ls
                                             } else
                                                 YYM.return (a:ls)
@@ -1341,7 +1330,7 @@ exprToPat (App (App (Vbl _ "@" _) b _) c _)
         | App (Vbl _ "!" _) (Vbl n x _) _ <- b = do cp <- exprToPat c; YYM.return (PStrict (PAt n (U.enclosed x) cp))
         | otherwise = do
             bs <- U.showexM b
-            U.error (getpos b) ("pattern " ++ bs ++ " not allowed left from @")
+            yyerror (getpos b) (("pattern " ++ bs ++ " not allowed left from @"))
             exprToPat c
 
 
@@ -1350,13 +1339,13 @@ exprToPat (App (App (Vbl _ "~" _) b _) c _)
         | App (Vbl _ "!" _) (Vbl p x _) _ <- b = do cp <- regPat c; YYM.return (PStrict (PMat p x cp))
         | otherwise = do
             bs <- U.showexM b
-            U.error (getpos b) ("pattern " ++ bs ++ " not allowed left from ~")
+            yyerror (getpos b) (("pattern " ++ bs ++ " not allowed left from ~"))
             exprToPat c
         where
             regPat (Lit {kind=LRegex, value=regex}) = YYM.return regex
             regPat e = do
                     es <- U.showexM e
-                    U.error (getpos e) ("regex expected right from ~, found " ++ es)
+                    yyerror (getpos e) (("regex expected right from ~, found " ++ es))
                     YYM.return "regex"
 
 
@@ -1369,7 +1358,7 @@ exprToPat (e@App a b _) = do
             PCon p n ps -> YYM.return (PCon p n (ps++[pb]))
             _ -> do
                 es <- U.showexM e
-                U.error (getpos e) ("illegal pattern, only constructor applications are allowed " ++ es)
+                yyerror (getpos e) (("illegal pattern, only constructor applications are allowed " ++ es))
                 YYM.return (PVar {pos=getpos e, var="_"})
 
 
@@ -1378,33 +1367,11 @@ exprToPat (Ann e (Just t)) = do
         p <- exprToPat e
         YYM.return (PAnn p t)
 
-/*
-exprToPat (Inv e (Memfun s)) = PVar newfs x
-    where
-        (fs, x)   = exprToPatVar e
-        newfs     = (s, PVar [] s):fs
-    ;
-    */
-/*
-exprToPat (Inv e (Recget s)) = PVar newfs x
-    where
-        (fs, x)   = exprToPatVar e
-        newfs     = (s, PVar [] s):fs
-    ;
-    */
-/*
-exprToPat (Inv e (Recupd vs u)) = PVar newfs x
-    where
-        (fs, x)   = exprToPatVar e
-        pu        = exprToPat u
-        newfs     = (vs, pu):fs
-    ;
-    */
 
 exprToPat e =
     do
         es <- U.showexM e
-        U.error pos ("can't make pattern from " ++ es)
+        yyerror pos (("can't make pattern from " ++ es))
         YYM.return (PVar pos "_")
     where
         pos = getpos e
@@ -1468,7 +1435,7 @@ funhead (ex@Inv _ inv)
 funhead ex = do
         let pos = getpos ex
         es <- U.showexM ex
-        U.error pos ("illegal left hand side of a function definition: " ++ es)
+        yyerror pos ("illegal left hand side of a function definition: " ++ es)
         YYM.return ("_", [])
 
 /**
@@ -1633,10 +1600,10 @@ listComprehension pos e (q:qs) l2 = case q of
 mkMonad line [e]
     | Left (Nothing, x) <- e = YYM.return x
     | Left (Just _, x)  <- e = do
-            U.error line "last statement in a monadic do block must not be  pat <- ex"
+            yyerror line ("last statement in a monadic do block must not be  pat <- ex")
             YYM.return x
     | Right _ <- e = do
-            U.error line "last statement in a monadic do block must not be  let decls"
+            yyerror line ("last statement in a monadic do block must not be  let decls")
             YYM.return (Vbl line "PreludeBase.undefined" Nothing)
 
 mkMonad line (e:es)
@@ -1705,7 +1672,7 @@ litregexp x = do
         let re = reStr (Token.value x)
         case regcomp (Token.value x) of
             Left exc -> do
-                U.error (yyline x) ("regular expression syntax: " ++ exc.getMessage)
+                U.error (yyline x) (stack (text "regular expression syntax: " : map text (#\r?\n#.splitted exc.getMessage)))
                 YYM.return (Lit (yyline x) LRegex re Nothing)
             Right _ ->
                 YYM.return (Lit (yyline x) LRegex re Nothing)
@@ -1718,10 +1685,10 @@ classContext clas ctxs cvar = mapSt sup ctxs
     where
         sup (Ctx {pos, cname, tau = TVar {var}}) | var == cvar = stio cname
         sup (Ctx {pos, cname}) = do
-            U.error pos ("Illegal constraint, only " ++ cname ++ " " ++ cvar ++ " is allowed")
+            yyerror pos (("Illegal constraint, only " ++ cname ++ " " ++ cvar ++ " is allowed"))
             stio cname
 
-isComment Token{tokid} = tokid == COMMENT
+yyEOF = Token {tokid=CHAR, value=" ", line=maxBound, col=maxBound, offset=maxBound}.position
 /**
  * the parser pass
  */
