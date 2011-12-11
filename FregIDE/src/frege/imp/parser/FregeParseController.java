@@ -4,9 +4,9 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.regex.Pattern;
 
-import lpg.runtime.ILexStream;
-import lpg.runtime.IPrsStream;
-import lpg.runtime.Monitor;
+// import lpg.runtime.ILexStream;
+// import lpg.runtime.IPrsStream;
+// import lpg.runtime.Monitor;
 
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IPath;
@@ -44,7 +44,10 @@ import frege.rt.Lazy;
 import frege.prelude.Base.TTuple2;
 import frege.prelude.Base.TList;
 import frege.compiler.Data.TGlobal;
+import frege.compiler.Data.TMessage;
 import frege.compiler.Data.TOptions;
+import frege.compiler.Data.TPosition;
+import frege.compiler.Data.TSeverity;
 import frege.compiler.Data.TStIO;
 import frege.compiler.Data.TSubSt;
 import frege.compiler.Data.TToken;
@@ -140,15 +143,7 @@ public class FregeParseController extends ParseControllerBase implements
 		IPath fullFilePath = project != null ?
 				project.getRawProject().getLocation().append(filePath)
 				: filePath;
-//		System.out.print("BuildPath: ");
-//		if (project != null) {
-//			for (IPathEntry ip: project.getBuildPath()) 
-//				System.out.print(ip.getPath().toPortableString() + ", ");
-//			IProject jp = project.getRawProject();
-//		}
-//		System.out.println();
-		
-		// frege.compiler.Main.v("123");
+
 		global =  (TGlobal) 
 				frege.prelude.Base.TST.performUnsafe(
 						(Lambda) frege.compiler.Main.standardOptions._e())._e();
@@ -175,11 +170,9 @@ public class FregeParseController extends ParseControllerBase implements
 		global = TGlobal.upd$options(global, TOptions.upd$source(
 				TGlobal.options(global), 
 				filePath.toPortableString()));
-		// IPreferencesService service = FregePlugin.getInstance().getPreferencesService();
-		// service.setLanguageName("frege");
-		// if (project != null) service.setProject(project.getRawProject());
-		String fp = ".";   // service.getStringPreference(FregeConstants.P_FREGEPATH);
-		String bp = ".";   // service.getStringPreference(FregeConstants.P_DESTINATION);
+
+		String fp = ".";   
+		String bp = ".";   
 		
 		if (project != null) {
 			IProject rp = project.getRawProject();
@@ -216,14 +209,7 @@ public class FregeParseController extends ParseControllerBase implements
 			}
 		}
 		
-		org.eclipse.core.runtime.preferences.IPreferencesService prefs = Platform.getPreferencesService();
-		IEclipsePreferences eprefs = prefs.getRootNode();
-		try {
-			prefs.exportPreferences(eprefs, System.out, null);
-		} catch (CoreException e) {
-			System.err.println("exception: " + e);
-		}
-		
+				
 		System.err.println("FregePath: " + fp);
 		global = TGlobal.upd$options(global, TOptions.upd$path(
 				TGlobal.options(global),
@@ -237,148 +223,72 @@ public class FregeParseController extends ParseControllerBase implements
 	}
 
 	/**
-	 * setFilePath() should be called before calling this method.
+	 * The msgHandler must be in place
 	 */
-	public Object parse(String contents, boolean scanOnly,
+	public TGlobal parse(String contents, boolean scanOnly,
 			IProgressMonitor monitor) {
 		
 		msgHandler.clearMessages();
-		monitor.beginTask(this.getClass().getName() + " parsing", 10);
 		
-		Lambda lexPass = frege.compiler.Main.lexPassIDE(contents);
-		final TGlobal g1 = runStG(lexPass, global);
-		if (errors(g1) > 0) {
-			monitor.done();
-			return global;
-		}
-		global = g1;
-		if (monitor.isCanceled()) {
-			System.out.println("after lex ... cancelled");
-			monitor.done();
-			return global;
-		}
-		monitor.worked(1);
+		final IProgressMonitor myMonitor = monitor;
 		
-		final TGlobal g2 = runStG(frege.compiler.Main.parsePass, global);
-		if (errors(g2) > 0) {
-			monitor.done();
-			return global;
-		}
-		global = g2;
-		if (monitor.isCanceled()) {
-			System.out.println("after parse ... cancelled");
-			monitor.done();
-			return global;
-		}
-		monitor.worked(1);
+		Lambda cancel = new frege.rt.Lam1() {
+			public Lazy<FV> eval(Lazy<FV> realworld) {
+				return (myMonitor.isCanceled()) ? Box.Bool.t : Box.Bool.f;	
+			}
+		};
 		
-		final TGlobal g3 = runStG(frege.compiler.Fixdefs.pass, global);
-		if (errors(g3) > 0) {
-			monitor.done();
-			return global;
-		}
-		global = g3;
-		if (monitor.isCanceled()) {
-			System.out.println("after fixdefs ... cancelled");
-			monitor.done();
-			return global;
-		}
-		monitor.worked(1);
+		global = TGlobal.upd$sub(global,  TSubSt.upd$cancelled(
+				TGlobal.sub(global), 
+				cancel));
 		
-		final TGlobal g4 = runStG(frege.compiler.Import.pass, global);
-		if (errors(g4) > 0) {
-			monitor.done();
-			return global;
-		}
-		global = g4;
-		if (monitor.isCanceled()) {
-			System.out.println("after import ... cancelled");
-			monitor.done();
-			return global;
-		}
-		monitor.worked(1);
+		@SuppressWarnings("unchecked")
+		Lazy<FV> actions[] = new Lazy[] {
+				frege.compiler.Main.lexPassIDE(contents),
+				frege.compiler.Main.parsePass,
+				frege.compiler.Fixdefs.pass,
+				frege.compiler.Import.pass,
+				frege.compiler.Classes.passI(Box.Bool.t),
+				frege.compiler.Enter.pass,
+				frege.compiler.TAlias.pass,
+				frege.compiler.Enter.pass2,
+				frege.compiler.Enter.pass3,
+				frege.compiler.Transdef.pass,
+				frege.compiler.Classes.passC,
+				frege.compiler.Classes.passI(Box.Bool.f),
+				frege.compiler.Transform.pass7,
+				frege.compiler.Typecheck.pass,
+		};
+		String names[] = new String[] {
+			"lexical analysis",
+			"syntax analysis",
+			"collecting definitions",
+			"symbol table initialization and import",
+			"verify imported instances",
+			"enter definitions",
+			"check type aliases",
+			"make field definitions",
+			"enter (derived) instances",
+			"translate names in exprs and types",
+			"verify class definitions",
+			"verify own instances",
+			"simplify lets",
+			"type check",
+		};
 		
-		final TGlobal g5 = runStG(frege.compiler.Classes.passI(Box.Bool.t), global);
-		if (errors(g5) > 0) {
-			monitor.done();
-			return global;
-		}
-		global = g5;
-		if (monitor.isCanceled()) {
-			System.out.println("after verify imported instances ... cancelled");
-			monitor.done();
-			return global;
-		}
-		monitor.worked(1);
+		monitor.beginTask(this.getClass().getName() + " parsing", actions.length);
 		
-		final TGlobal g6 = runStG(frege.compiler.Enter.pass, global);
-		if (errors(g6) > 0) {
-			monitor.done();
-			return global;
+		for (int i = 0; i < actions.length; i++) {
+			TGlobal g = runStG(actions[i], global);
+			if (errors(g) > 0) return g;
+			global = g;
+			if (monitor.isCanceled()) {
+				System.err.println("cancelled in " + names[i]);
+				return global;
+			}
+			monitor.worked(1);
 		}
-		global = g6;
-		if (monitor.isCanceled()) {
-			System.out.println("after enter ... cancelled");
-			monitor.done();
-			return global;
-		}
-		monitor.worked(1);
 		
-		final TGlobal g7 = runStG(frege.compiler.TAlias.pass, global);
-		if (errors(g7) > 0) {
-			monitor.done();
-			return global;
-		}
-		global = g7;
-		if (monitor.isCanceled()) {
-			System.out.println("after aliases ... cancelled");
-			monitor.done();
-			return global;
-		}
-		monitor.worked(1);
-		
-
-		final TGlobal g8 = runStG(frege.compiler.Enter.pass2, global);
-		if (errors(g8) > 0) {
-			monitor.done();
-			return global;
-		}
-		global = g8;
-		if (monitor.isCanceled()) {
-			System.out.println("after field definitions ... cancelled");
-			monitor.done();
-			return global;
-		}
-		monitor.worked(1);
-		
-		final TGlobal g9 = runStG(frege.compiler.Enter.pass3, global);
-		if (errors(g9) > 0) {
-			monitor.done();
-			return global;
-		}
-		global = g9;
-		if (monitor.isCanceled()) {
-			System.out.println("after derived instances ... cancelled");
-			monitor.done();
-			return global;
-		}
-		monitor.worked(1);
-		
-		final TGlobal g10 = runStG(frege.compiler.Transdef.pass, global);
-		if (errors(g10) > 0) {
-			monitor.done();
-			return global;
-		}
-		global = g10;
-		if (monitor.isCanceled()) {
-			System.out.println("after translate definitions ... cancelled");
-			monitor.done();
-			return global;
-		}
-		monitor.worked(1);
-		
-		msgHandler.handleSimpleMessage("Warning: end of file reached", 0, 6, 0, 0, 0, 0);
-		monitor.done();
 		return global;
 	}
 
@@ -389,7 +299,21 @@ public class FregeParseController extends ParseControllerBase implements
 	
 	@Override
 	public Object parse(String input, IProgressMonitor monitor) {
-		return parse(input, false, monitor);
+		TGlobal g = parse(input, false, monitor);
+		TList msgs = TSubSt.messages(TGlobal.sub(g));
+		while (true) {
+			TList.DCons node = msgs._Cons();
+			if (node == null) break;
+			msgs = (TList) node.mem2._e();
+			TMessage msg = (TMessage) node.mem1._e();
+			if (TMessage.level(msg).j != TSeverity.ERROR.j) continue;
+			msgHandler.handleSimpleMessage(TMessage.text(msg), 
+					TPosition.start(TMessage.pos(msg)), 
+					TPosition.end(TMessage.pos(msg))-1, 
+					0, 0, 0, 0);
+		}
+		monitor.done();
+		return g;
 	}
 	
 	static class TokensIterator implements Iterator<TToken> {
