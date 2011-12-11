@@ -13,6 +13,7 @@ import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.Platform;
 import org.eclipse.core.runtime.preferences.IEclipsePreferences;
+import org.eclipse.core.resources.IMarker;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IProjectNatureDescriptor;
 import org.eclipse.core.resources.ResourcesPlugin;
@@ -22,6 +23,8 @@ import org.eclipse.jdt.core.IJavaProject;
 import org.eclipse.jdt.core.JavaCore;
 import org.eclipse.jdt.core.JavaModelException;
 
+import org.eclipse.imp.builder.MarkerCreatorWithBatching;
+import org.eclipse.imp.builder.ProblemLimit.LimitExceededException;
 import org.eclipse.imp.model.IPathEntry;
 import org.eclipse.imp.model.ISourceProject;
 import org.eclipse.imp.parser.IMessageHandler;
@@ -172,7 +175,8 @@ public class FregeParseController extends ParseControllerBase implements
 				filePath.toPortableString()));
 
 		String fp = ".";   
-		String bp = ".";   
+		String bp = "."; 
+		String sp = ".";
 		
 		if (project != null) {
 			IProject rp = project.getRawProject();
@@ -198,16 +202,24 @@ public class FregeParseController extends ParseControllerBase implements
 					bp = wroot.append(jp.getOutputLocation()).toPortableString();
 					IClasspathEntry[] cpes = jp.getResolvedClasspath(true);
 					fp = "";
+					sp = "";
 					for (IClasspathEntry cpe: cpes) {
-						if (cpe.getEntryKind() == IClasspathEntry.CPE_SOURCE) continue;
-						if (fp.length() > 0) fp += System.getProperty("path.separator");
-						fp += cpe.getPath().toPortableString();
+						if (cpe.getEntryKind() == IClasspathEntry.CPE_SOURCE) {
+							if (sp.length() > 0) fp += System.getProperty("path.separator");
+							sp += cpe.getPath().toPortableString();
+						}
+						else {
+							if (fp.length() > 0) fp += System.getProperty("path.separator");
+							fp += cpe.getPath().toPortableString();
+						}
 					}
 				} catch (JavaModelException e) {
 				} catch (NullPointerException np) {
 				}
 			}
 		}
+		if (fp == "") fp=".";
+		if (sp == "") sp=".";
 		
 				
 		System.err.println("FregePath: " + fp);
@@ -215,11 +227,18 @@ public class FregeParseController extends ParseControllerBase implements
 				TGlobal.options(global),
 				frege.prelude.Base.TRegex.splitted(
 						((frege.rt.Box<Pattern>)frege.compiler.Utilities.pathRE._e()).j, 
-						fp))); 
+						fp)));
+		System.err.println("SourcePath: " + sp);
+		global = TGlobal.upd$options(global, TOptions.upd$sourcePath(
+				TGlobal.options(global),
+				frege.prelude.Base.TRegex.splitted(
+						((frege.rt.Box<Pattern>)frege.compiler.Utilities.pathRE._e()).j, 
+						sp)));
 		System.err.println("Destination: " + bp);
 		global = TGlobal.upd$options(global, TOptions.upd$dir(
 				TGlobal.options(global), 
 				bp));
+		global = runStG(frege.compiler.Main.newLoader, global);
 	}
 
 	/**
@@ -278,8 +297,15 @@ public class FregeParseController extends ParseControllerBase implements
 		
 		monitor.beginTask(this.getClass().getName() + " parsing", actions.length);
 		
+		long t0 = System.nanoTime();
+		
 		for (int i = 0; i < actions.length; i++) {
+			long t1 = System.nanoTime();
 			TGlobal g = runStG(actions[i], global);
+			long te = System.nanoTime();
+			System.err.println(names[i] + " took " 
+				+ (te-t1)/1000000 + "ms, cumulative "
+				+ (te-t0)/1000000 + "ms");
 			if (errors(g) > 0) return g;
 			global = g;
 			if (monitor.isCanceled()) {
@@ -299,13 +325,35 @@ public class FregeParseController extends ParseControllerBase implements
 	
 	@Override
 	public Object parse(String input, IProgressMonitor monitor) {
-		TGlobal g = parse(input, false, monitor);
+		MarkerCreatorWithBatching mcwb = msgHandler instanceof MarkerCreatorWithBatching ?
+				(MarkerCreatorWithBatching) msgHandler : null;
+		// when we build, we'll get a MarkerCreatorWithBatching
+		// Hence, if we do not have one, we just scan&parse, otherwise we do a full compile
+		TGlobal g = parse(input, mcwb == null, monitor);
 		TList msgs = TSubSt.messages(TGlobal.sub(g));
+		 
 		while (true) {
 			TList.DCons node = msgs._Cons();
 			if (node == null) break;
 			msgs = (TList) node.mem2._e();
 			TMessage msg = (TMessage) node.mem1._e();
+			if (mcwb != null) {
+				// do also warnings and hints
+				int sev = IMarker.SEVERITY_ERROR;
+				if (TMessage.level(msg).j == TSeverity.HINT.j) sev = IMarker.SEVERITY_INFO;
+				else if (TMessage.level(msg).j == TSeverity.WARNING.j)
+					sev = IMarker.SEVERITY_WARNING;
+				try {
+					mcwb.addMarker(sev, TMessage.text(msg), 
+							TToken.line( TPosition.first(TMessage.pos(msg)) ), 
+							TPosition.start(TMessage.pos(msg)), 
+							TPosition.end(TMessage.pos(msg))-1);
+				} catch (LimitExceededException e) {
+					break;
+				}
+				continue;
+			}
+			// normal message handling
 			if (TMessage.level(msg).j != TSeverity.ERROR.j) continue;
 			msgHandler.handleSimpleMessage(TMessage.text(msg), 
 					TPosition.start(TMessage.pos(msg)), 
