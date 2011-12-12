@@ -96,24 +96,25 @@ public class FregeTokenColorer extends TokenColorerBase implements ITokenColorer
 
 		if (tid >= TTokenID.DCOLON.j && tid <= TTokenID.EARROW.j)	return specialAttribute;
 		if (tid >= TTokenID.LOP0.j && tid <= TTokenID.SOMEOP.j) 	return opAttribute;
-		if (tid == TTokenID.CHAR.j) switch (TToken.value(token)) {
-		case "_": return  specialAttribute;
-		case "=": return  specialAttribute;
-		case "|": return  specialAttribute;
-		case "\\": return specialAttribute;
-		case ";": return normalAttribute;
-		case "(": return normalAttribute;
-		case ")": return normalAttribute;
-		case "[": return normalAttribute;
-		case "]": return normalAttribute;
-		case "{": return normalAttribute;
-		case "}": return normalAttribute;
-		case ",": return normalAttribute;
-		case ".": return normalAttribute;
-		case "!": return opAttribute;
-		case "?": return opAttribute;
-		case "-": return opAttribute;
-		default: break;
+		if (tid == TTokenID.CHAR.j && TToken.value(token).length() > 0) 
+			switch (TToken.value(token).charAt(0)) {
+				case '_': return  specialAttribute;
+				case '=': return  specialAttribute;
+				case '|': return  specialAttribute;
+				case '\\': return specialAttribute;
+				case ';': return normalAttribute;
+				case '(': return normalAttribute;
+				case ')': return normalAttribute;
+				case '[': return normalAttribute;
+				case ']': return normalAttribute;
+				case '{': return normalAttribute;
+				case '}': return normalAttribute;
+				case ',': return normalAttribute;
+				case '.': return normalAttribute;
+				case '!': return opAttribute;
+				case '?': return opAttribute;
+				case '-': return opAttribute;
+				default: break;
 		}
 		System.err.println("Don't know how to colour " + IShow_Token.show(token) + " ?");
 		return super.getColoring(controller, token);
