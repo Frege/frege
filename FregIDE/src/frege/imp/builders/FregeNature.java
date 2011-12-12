@@ -8,7 +8,7 @@ import frege.FregePlugin;
 public class FregeNature extends ProjectNatureBase {
 	public FregeNature() { super(); }
 	public static final String k_natureID = FregePlugin.kPluginID
-			+ ".imp.nature";
+			+ ".frege.nature";
 
 	public String getNatureID() {
 		return k_natureID;

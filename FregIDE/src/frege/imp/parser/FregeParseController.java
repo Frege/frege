@@ -205,7 +205,7 @@ public class FregeParseController extends ParseControllerBase implements
 					sp = "";
 					for (IClasspathEntry cpe: cpes) {
 						if (cpe.getEntryKind() == IClasspathEntry.CPE_SOURCE) {
-							if (sp.length() > 0) fp += System.getProperty("path.separator");
+							if (sp.length() > 0) sp += System.getProperty("path.separator");
 							sp += cpe.getPath().toPortableString();
 						}
 						else {
@@ -218,8 +218,8 @@ public class FregeParseController extends ParseControllerBase implements
 				}
 			}
 		}
-		if (fp == "") fp=".";
-		if (sp == "") sp=".";
+		if (fp.equals("")) fp=".";
+		if (sp.equals("")) sp=".";
 		
 				
 		System.err.println("FregePath: " + fp);
@@ -347,7 +347,7 @@ public class FregeParseController extends ParseControllerBase implements
 					mcwb.addMarker(sev, TMessage.text(msg), 
 							TToken.line( TPosition.first(TMessage.pos(msg)) ), 
 							TPosition.start(TMessage.pos(msg)), 
-							TPosition.end(TMessage.pos(msg))-1);
+							TPosition.end(TMessage.pos(msg)));
 				} catch (LimitExceededException e) {
 					break;
 				}

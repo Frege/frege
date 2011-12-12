@@ -39,19 +39,17 @@ public class FregeBuilder extends BuilderBase {
 	 * the corresponding extension definition in plugin.xml.
 	 */
 	public static final String BUILDER_ID = FregePlugin.kPluginID +
-			".imp.builder";
+			".frege.builder";
 
 	/**
 	 * A marker ID that identifies problems detected by the builder
 	 */
-	public static final String PROBLEM_MARKER_ID = FregePlugin.kLanguageID
-			+ ".imp.builder.problem";
-	public static final String WARNING_MARKER_ID = FregePlugin.kLanguageID
-			+ ".imp.builder.warning";
-	public static final String INFO_MARKER_ID = FregePlugin.kLanguageID
-			+ ".imp.builder.hint";
+	public static final String PROBLEM_MARKER_ID = FregePlugin.kPluginID
+			+ ".frege.problem";
+	public static final String WARNING_MARKER_ID = PROBLEM_MARKER_ID;
+	public static final String INFO_MARKER_ID = PROBLEM_MARKER_ID;
 
-	public static final String LANGUAGE_NAME = "frege";
+	public static final String LANGUAGE_NAME = FregePlugin.kLanguageID;
 
 	public static final Language LANGUAGE = LanguageRegistry
 			.findLanguage(LANGUAGE_NAME);
@@ -191,9 +189,6 @@ public class FregeBuilder extends BuilderBase {
 		try {
 			IParseController parseController = new FregeParseController();
 
-			// TODO:  Pick a version of the marker creator (or just go with this one)
-			// MarkerCreator markerCreator = new MarkerCreator(file,
-			// 		parseController, PROBLEM_MARKER_ID);
 			MarkerCreatorWithBatching markerCreator = new MarkerCreatorWithBatching(file, parseController, this);
 
 			parseController.getAnnotationTypeInfo().addProblemMarkerType(
