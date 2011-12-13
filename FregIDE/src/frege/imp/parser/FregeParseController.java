@@ -44,8 +44,10 @@ import frege.rt.Lambda;
 import frege.rt.Box;
 import frege.rt.FV;
 import frege.rt.Lazy;
+import frege.prelude.Base.TList.DCons;
 import frege.prelude.Base.TTuple2;
 import frege.prelude.Base.TList;
+import frege.prelude.Base.TTuple3;
 import frege.compiler.Data.TGlobal;
 import frege.compiler.Data.TMessage;
 import frege.compiler.Data.TOptions;
@@ -261,6 +263,12 @@ public class FregeParseController extends ParseControllerBase implements
 				TGlobal.sub(global), 
 				cancel));
 		
+		if (!scanOnly) {
+			System.err.println("parse: do with make");
+			global = runStG(frege.compiler.Main.withMakeOption, global);
+			
+		}
+		
 		@SuppressWarnings("unchecked")
 		Lazy<FV> actions[] = new Lazy[] {
 				frege.compiler.Main.lexPassIDE(contents),
@@ -298,21 +306,28 @@ public class FregeParseController extends ParseControllerBase implements
 		monitor.beginTask(this.getClass().getName() + " parsing", actions.length);
 		
 		long t0 = System.nanoTime();
-		
-		for (int i = 0; i < actions.length; i++) {
+		TList passes = (TList) frege.compiler.Main.passes._e();
+		while (true) {
 			long t1 = System.nanoTime();
-			TGlobal g = runStG(actions[i], global);
+			DCons pass = passes._Cons();
+			if (pass== null) break;   // done
+			passes = (TList) pass.mem2._e();
+			TTuple3 adx = (TTuple3) pass.mem1._e();
+			Lazy<FV> action = adx.mem1;
+			String   desc   = Box.<String>box(adx.mem2._e()).j;
+			TGlobal g = runStG(action, global);
 			long te = System.nanoTime();
-			System.err.println(names[i] + " took " 
+			System.err.println(desc + " took " 
 				+ (te-t1)/1000000 + "ms, cumulative "
 				+ (te-t0)/1000000 + "ms");
 			if (errors(g) > 0) return g;
 			global = g;
 			if (monitor.isCanceled()) {
-				System.err.println("cancelled in " + names[i]);
+				System.err.println("cancelled in " + desc);
 				return global;
 			}
 			monitor.worked(1);
+			if (scanOnly && desc.startsWith("type check")) break;
 		}
 		
 		return global;
@@ -344,7 +359,9 @@ public class FregeParseController extends ParseControllerBase implements
 				else if (TMessage.level(msg).j == TSeverity.WARNING.j)
 					sev = IMarker.SEVERITY_WARNING;
 				try {
-					mcwb.addMarker(sev, TMessage.text(msg), 
+					mcwb.addMarker(sev, 
+							TMessage.text(msg)
+								.replaceAll("\n", "   "), 
 							TToken.line( TPosition.first(TMessage.pos(msg)) ), 
 							TPosition.start(TMessage.pos(msg)), 
 							TPosition.end(TMessage.pos(msg)));
