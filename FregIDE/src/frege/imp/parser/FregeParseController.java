@@ -44,10 +44,12 @@ import frege.rt.Lambda;
 import frege.rt.Box;
 import frege.rt.FV;
 import frege.rt.Lazy;
+import frege.prelude.Base.ILength__lbrack_rbrack;
 import frege.prelude.Base.TList.DCons;
 import frege.prelude.Base.TTuple2;
 import frege.prelude.Base.TList;
 import frege.prelude.Base.TTuple3;
+import frege.compiler.Data.TFlag;
 import frege.compiler.Data.TGlobal;
 import frege.compiler.Data.TMessage;
 import frege.compiler.Data.TOptions;
@@ -58,6 +60,7 @@ import frege.compiler.Data.TSubSt;
 import frege.compiler.Data.TToken;
 import frege.compiler.Data.TTokenID;
 import frege.compiler.Data;
+import frege.compiler.Main;
 
 /**
  * NOTE:  This version of the Parse Controller is for use when the Parse
@@ -264,58 +267,25 @@ public class FregeParseController extends ParseControllerBase implements
 				cancel));
 		
 		if (!scanOnly) {
-			System.err.println("parse: do with make");
-			global = runStG(frege.compiler.Main.withMakeOption, global);
-			
+			System.err.println("parse for build");
+			global = runStG(frege.compiler.Main.withOption(TFlag.WITHCP), global);
 		}
 		
-		@SuppressWarnings("unchecked")
-		Lazy<FV> actions[] = new Lazy[] {
-				frege.compiler.Main.lexPassIDE(contents),
-				frege.compiler.Main.parsePass,
-				frege.compiler.Fixdefs.pass,
-				frege.compiler.Import.pass,
-				frege.compiler.Classes.passI(Box.Bool.t),
-				frege.compiler.Enter.pass,
-				frege.compiler.TAlias.pass,
-				frege.compiler.Enter.pass2,
-				frege.compiler.Enter.pass3,
-				frege.compiler.Transdef.pass,
-				frege.compiler.Classes.passC,
-				frege.compiler.Classes.passI(Box.Bool.f),
-				frege.compiler.Transform.pass7,
-				frege.compiler.Typecheck.pass,
-		};
-		String names[] = new String[] {
-			"lexical analysis",
-			"syntax analysis",
-			"collecting definitions",
-			"symbol table initialization and import",
-			"verify imported instances",
-			"enter definitions",
-			"check type aliases",
-			"make field definitions",
-			"enter (derived) instances",
-			"translate names in exprs and types",
-			"verify class definitions",
-			"verify own instances",
-			"simplify lets",
-			"type check",
-		};
-		
-		monitor.beginTask(this.getClass().getName() + " parsing", actions.length);
 		
 		long t0 = System.nanoTime();
 		TList passes = (TList) frege.compiler.Main.passes._e();
-		while (true) {
+		monitor.beginTask(this.getClass().getName() + " parsing", ILength__lbrack_rbrack.length(passes));
+		int index = 0;
+		while (!monitor.isCanceled()) {
 			long t1 = System.nanoTime();
-			DCons pass = passes._Cons();
+			index++;
+			final DCons pass = passes._Cons();
 			if (pass== null) break;   // done
 			passes = (TList) pass.mem2._e();
-			TTuple3 adx = (TTuple3) pass.mem1._e();
-			Lazy<FV> action = adx.mem1;
-			String   desc   = Box.<String>box(adx.mem2._e()).j;
-			TGlobal g = runStG(action, global);
+			final TTuple3 adx = (TTuple3) pass.mem1._e();
+			final Lazy<FV> action = index == 1 ? Main.lexPassIDE(contents) : adx.mem1;
+			final String   desc   = Box.<String>box(adx.mem2._e()).j;
+			final TGlobal g = runStG(action, global);
 			long te = System.nanoTime();
 			System.err.println(desc + " took " 
 				+ (te-t1)/1000000 + "ms, cumulative "
