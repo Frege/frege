@@ -1,6 +1,9 @@
 package frege.imp.builders;
 
+import java.io.PrintWriter;
+
 import org.eclipse.core.resources.IFile;
+import org.eclipse.core.resources.IMarker;
 import org.eclipse.core.resources.IResource;
 import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.IProgressMonitor;
@@ -9,6 +12,7 @@ import org.eclipse.imp.builder.BuilderUtils;
 import org.eclipse.imp.builder.MarkerCreator;
 import org.eclipse.imp.builder.MarkerCreatorWithBatching;
 import org.eclipse.imp.builder.BuilderBase;
+import org.eclipse.imp.builder.ProblemLimit.LimitExceededException;
 import org.eclipse.imp.language.Language;
 import org.eclipse.imp.language.LanguageRegistry;
 import org.eclipse.imp.model.ISourceProject;
@@ -18,7 +22,17 @@ import org.eclipse.imp.parser.IParseController;
 import org.eclipse.imp.runtime.PluginBase;
 
 import frege.FregePlugin;
+import frege.compiler.Data.TGlobal;
+import frege.compiler.Data.TMessage;
+import frege.compiler.Data.TOptions;
+import frege.compiler.Data.TPosition;
+import frege.compiler.Data.TToken;
+import frege.compiler.Main;
 import frege.imp.parser.FregeParseController;
+import frege.prelude.Base;
+import frege.prelude.Base.TList;
+import frege.prelude.Text;
+import frege.rt.Box;
 
 /**
  * A builder may be activated on a file containing frege code every time it
@@ -144,7 +158,7 @@ public class FregeBuilder extends BuilderBase {
 			// markers for errors that will show up in the problems view
 			runParserForCompiler(file, monitor);
 
-			doRefresh(file.getParent()); // N.B.: Assumes all generated files go into parent folder
+			// doRefresh(file.getParent()); // N.B.: Assumes all generated files go into parent folder
 		} catch (Exception e) {
 			// catch Exception, because any exception could break the
 			// builder infra-structure.
@@ -185,9 +199,9 @@ public class FregeBuilder extends BuilderBase {
 	 * @param monitor progress monitor
 	 */
 	protected void runParserForCompiler(final IFile file,
-			IProgressMonitor monitor) {
+			final IProgressMonitor monitor) {
 		try {
-			IParseController parseController = new FregeParseController();
+			FregeParseController parseController = new FregeParseController();
 
 			MarkerCreatorWithBatching markerCreator = new MarkerCreatorWithBatching(file, parseController, this);
 
@@ -199,12 +213,65 @@ public class FregeBuilder extends BuilderBase {
 					sourceProject, markerCreator);
 
 			String contents = BuilderUtils.getFileContents(file);
-			parseController.parse(contents, monitor);
+			final TGlobal result = parseController.parse(contents, monitor);
+			if (FregeParseController.errors(result) == 0) {
+				// run the eclipse java compiler
+				final String target = Box.<String>box(
+						FregeParseController.funStG(Main.targetPath(".java"),
+								result)).j;
+				getPlugin().writeInfoMsg("built: " + target);
+				// get the frege path and build path
+				final String bp = TOptions.dir( TGlobal.options(result) );
+				final TList ourPath = frege.compiler.Utilities.ourPath(TGlobal.options(result));
+				final String fp = Box.<String>box(
+						Text.joined(
+								Box.mk(System.getProperty("path.separator")), 
+								ourPath)._e()).j;
+				// construct the commandline
+				final String cmdline = "-cp " + fp 
+						+ " -d " + bp 
+						+ " -1.7 -encoding UTF-8 "
+						+ target;
+				getPlugin().writeInfoMsg("batch-compile " + cmdline);
+				class CompProgress extends org.eclipse.jdt.core.compiler.CompilationProgress  {
+
+					@Override
+					public void begin(int arg0) { }
+
+					@Override
+					public void done() { }
+
+					@Override
+					public boolean isCanceled() {
+						return monitor.isCanceled();
+					}
+
+					@Override
+					public void setTaskName(String arg0) {}
+
+					@Override
+					public void worked(int arg0, int arg1) { }
+					
+				}
+				final boolean success = org.eclipse.jdt.core.compiler.batch.BatchCompiler.compile(
+				   cmdline,
+				   new PrintWriter(System.out),
+				   new PrintWriter(System.err),
+				   new CompProgress());
+				if (!success) {
+					markerCreator.addMarker(IMarker.SEVERITY_ERROR, 
+							"java compiler errors", 
+							1, 
+							0, 
+							1);
+				}
+			}
+			monitor.done();
 
 			if (markerCreator instanceof MarkerCreatorWithBatching) {
 				((MarkerCreatorWithBatching) markerCreator).flush(monitor);
 			}
-		} catch (ModelException e) {
+		} catch (ModelException | LimitExceededException e) {
 			getPlugin()
 					.logException(
 							"Example builder returns without parsing due to a ModelException",

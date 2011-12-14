@@ -87,38 +87,123 @@ import frege.compiler.Main;
 public class FregeParseController extends ParseControllerBase implements
 		IParseController {
 
+	public static class TokensIterator implements Iterator<TToken> {
+		/** current list node */
+		private TList list;
+		private IRegion region;
+		/** check if token is within region */
+		public static boolean within(TToken tok, IRegion region) {
+			return (TToken.offset(tok) + TToken.value(tok).length() >= region.getOffset()
+					&& TToken.offset(tok) <= region.getOffset() + region.getLength());
+		}
+		/** construct an Iterator */
+		public TokensIterator(TList it, IRegion reg) { 
+			list = it;
+			region = reg;
+			while (true) {
+				TList.DCons cons = list._Cons();
+				if (cons == null) break;
+				TToken t = (TToken) cons.mem1._e();
+				if (within(t, reg)) break;
+				list = (TList) cons.mem2._e();
+			}
+		}
+		
+		@Override
+		public boolean hasNext() {
+			// we have a next if we are not the empty list and the token is in the region
+			return list._Cons() != null
+					&& within((TToken)list._Cons().mem1._e(), region);
+		}
+		@Override
+		public TToken next() {
+			// give back next token
+			TList.DCons cons = list._Cons();
+			if (cons != null) {
+				list = (TList)  cons.mem2._e();
+				return (TToken) cons.mem1._e();
+			}
+			return null;
+		}
+		@Override
+		public void remove() {
+			throw new UnsupportedOperationException("TokensIterator");
+		}		
+	}
+	
+	public static class FregeData {
+		private String sp = ".";
+		private String fp = ".";
+		private String bp = ".";
+		public FregeData(ISourceProject project) {
+			if (project != null) {
+				IProject rp = project.getRawProject();
+				// System.out.println("The raw project has type: " + jp.getClass());
+				IWorkspace workspace = ResourcesPlugin.getWorkspace();
+				IPath wroot = workspace.getRoot().getLocation();
+				// IProjectNatureDescriptor[] nds = workspace.getNatureDescriptors();
+				boolean isJava = false;
+				
+				try {
+						isJava = rp.hasNature("org.eclipse.jdt.core.javanature");
+						
+				} catch (CoreException e) {
+						// e.printStackTrace();
+						// System.out.println("The " + nd.getNatureId() + " is not supported, or so it seems.");
+				}
+				System.err.println("Our project "
+						+ (isJava ? " has the " : " does not have ")
+						+ " java nature.");
+				if (isJava) {
+					IJavaProject jp = JavaCore.create(rp);
+					try {
+						bp = wroot.append(jp.getOutputLocation()).toPortableString();
+						IClasspathEntry[] cpes = jp.getResolvedClasspath(true);
+						fp = "";
+						sp = "";
+						for (IClasspathEntry cpe: cpes) {
+							if (cpe.getEntryKind() == IClasspathEntry.CPE_SOURCE) {
+								if (sp.length() > 0) sp += System.getProperty("path.separator");
+								sp += cpe.getPath().toPortableString();
+							}
+							else {
+								if (fp.length() > 0) fp += System.getProperty("path.separator");
+								fp += cpe.getPath().toPortableString();
+							}
+						}
+					} catch (JavaModelException e) {
+					} catch (NullPointerException np) {
+					}
+				}
+			}
+			if (fp.equals("")) fp=".";
+			if (sp.equals("")) sp=".";
+		}
+		/**
+		 * @return the sp
+		 */
+		public String getSp() {
+			return sp;
+		}
+		/**
+		 * @return the fp
+		 */
+		public String getFp() {
+			return fp;
+		}
+		/**
+		 * @return the bp
+		 */
+		public String getBp() {
+			return bp;
+		}
+		
+	}
+	
 	public FregeParseController() {
 		super(FregePlugin.getInstance().getLanguageID());
 	}
 
-//	private IParser parser = new IParser() {
-//		    /**
-//		     * Run the parser to create a model.
-//		     * @param monitor stop scanning/parsing when monitor.isCanceled() is true.
-//		     * @return
-//		     */
-//		    public Object parser(Monitor monitor, int error_repair_count) { return null; }
-//
-//		    public IPrsStream getIPrsStream() { return null; }
-//
-//		    /**
-//		     * @return array of keywords in the order in which they are mapped to integers.
-//		     */
-//		    public String[] orderedTerminalSymbols() { return Box.<String[]>box(frege.compiler.Scanner.keywordsByID._e()).j; }
-//
-//		    /**
-//		     * @return array of keywords in the order in which they are mapped to integers.
-//		     */
-//		    public int numTokenKinds() { return TTokenID.LEXERROR.j; }
-//
-//		    /**
-//		     * @return the token kind for the EOF token
-//		     */
-//		    public int getEOFTokenKind() { return TTokenID.LEXERROR.j; }
-//
-//		    public void reset(ILexStream lexStream) {}
-//		
-//	};
 	private TGlobal global;
 	private final ISourcePositionLocator   fSourcePositionLocator   
 					= new FregeSourcePositionLocator();
@@ -131,12 +216,24 @@ public class FregeParseController extends ParseControllerBase implements
 	public static int errors(TGlobal global) { return global == null ? 1 : TGlobal.errors(global); }
 	
 	/**
-	 * run a {@link frege.compiler.data.TStIO} action
+	 * run a {@link frege.compiler.data.TStIO} action and return the new TGlobal state
+	 * @return the new state
 	 */
 	public static TGlobal runStG(Lazy<FV> action, TGlobal g) {
 		Lambda stg = (Lambda) action._e();				// StIO (g -> IO (a, g) 
 		TTuple2 r = (TTuple2)TStIO.performUnsafe(stg, g)._e();
 		return (TGlobal) r.mem2._e();
+	}
+	
+	/**
+	 * Run a {@link frege.compiler.data.TStIO} action and return the result.
+	 * The state must not be changed by the action. 
+	 * @return the result
+	 */
+	public static FV funStG(Lazy<FV> action, TGlobal g) {
+		Lambda stg = (Lambda) action._e();				// StIO (g -> IO (a, g) 
+		TTuple2 r = (TTuple2)TStIO.performUnsafe(stg, g)._e();
+		return r.mem1._e();
 	}
 
 	/**
@@ -179,52 +276,10 @@ public class FregeParseController extends ParseControllerBase implements
 				TGlobal.options(global), 
 				filePath.toPortableString()));
 
-		String fp = ".";   
-		String bp = "."; 
-		String sp = ".";
-		
-		if (project != null) {
-			IProject rp = project.getRawProject();
-			// System.out.println("The raw project has type: " + jp.getClass());
-			IWorkspace workspace = ResourcesPlugin.getWorkspace();
-			IPath wroot = workspace.getRoot().getLocation();
-			// IProjectNatureDescriptor[] nds = workspace.getNatureDescriptors();
-			boolean isJava = false;
-			
-			try {
-					isJava = rp.hasNature("org.eclipse.jdt.core.javanature");
-					
-			} catch (CoreException e) {
-					// e.printStackTrace();
-					// System.out.println("The " + nd.getNatureId() + " is not supported, or so it seems.");
-			}
-			System.err.println("Our project "
-					+ (isJava ? " has the " : " does not have ")
-					+ " java nature.");
-			if (isJava) {
-				IJavaProject jp = JavaCore.create(rp);
-				try {
-					bp = wroot.append(jp.getOutputLocation()).toPortableString();
-					IClasspathEntry[] cpes = jp.getResolvedClasspath(true);
-					fp = "";
-					sp = "";
-					for (IClasspathEntry cpe: cpes) {
-						if (cpe.getEntryKind() == IClasspathEntry.CPE_SOURCE) {
-							if (sp.length() > 0) sp += System.getProperty("path.separator");
-							sp += cpe.getPath().toPortableString();
-						}
-						else {
-							if (fp.length() > 0) fp += System.getProperty("path.separator");
-							fp += cpe.getPath().toPortableString();
-						}
-					}
-				} catch (JavaModelException e) {
-				} catch (NullPointerException np) {
-				}
-			}
-		}
-		if (fp.equals("")) fp=".";
-		if (sp.equals("")) sp=".";
+		final FregeData data = new FregeData(project);
+		final String fp = data.getFp();   
+		final String bp = data.getBp(); 
+		final String sp = data.getSp();
 		
 				
 		System.err.println("FregePath: " + fp);
@@ -274,7 +329,8 @@ public class FregeParseController extends ParseControllerBase implements
 		
 		long t0 = System.nanoTime();
 		TList passes = (TList) frege.compiler.Main.passes._e();
-		monitor.beginTask(this.getClass().getName() + " parsing", ILength__lbrack_rbrack.length(passes));
+		monitor.beginTask(this.getClass().getName() + " parsing", 
+				1 + ILength__lbrack_rbrack.length(passes));
 		int index = 0;
 		while (!monitor.isCanceled()) {
 			long t1 = System.nanoTime();
@@ -309,7 +365,7 @@ public class FregeParseController extends ParseControllerBase implements
 	}
 	
 	@Override
-	public Object parse(String input, IProgressMonitor monitor) {
+	public TGlobal parse(String input, IProgressMonitor monitor) {
 		MarkerCreatorWithBatching mcwb = msgHandler instanceof MarkerCreatorWithBatching ?
 				(MarkerCreatorWithBatching) msgHandler : null;
 		// when we build, we'll get a MarkerCreatorWithBatching
@@ -347,76 +403,15 @@ public class FregeParseController extends ParseControllerBase implements
 					TPosition.end(TMessage.pos(msg))-1, 
 					0, 0, 0, 0);
 		}
-		monitor.done();
+		if (mcwb == null) monitor.done();
 		return g;
 	}
 	
-	static class TokensIterator implements Iterator<TToken> {
-		/** current list node */
-		private TList list;
-		private IRegion region;
-		/** check if token is within region */
-		public static boolean within(TToken tok, IRegion region) {
-			return (TToken.offset(tok) + TToken.value(tok).length() >= region.getOffset()
-					&& TToken.offset(tok) <= region.getOffset() + region.getLength());
-		}
-		/** construct an Iterator */
-		public TokensIterator(TList it, IRegion reg) { 
-			list = it;
-			region = reg;
-			while (true) {
-				TList.DCons cons = list._Cons();
-				if (cons == null) break;
-				TToken t = (TToken) cons.mem1._e();
-				if (within(t, reg)) break;
-				list = (TList) cons.mem2._e();
-			}
-		}
-		
-		@Override
-		public boolean hasNext() {
-			// we have a next if we are not the empty list and the token is in the region
-			return list._Cons() != null
-					&& within((TToken)list._Cons().mem1._e(), region);
-		}
-		@Override
-		public TToken next() {
-			// give back next token
-			TList.DCons cons = list._Cons();
-			if (cons != null) {
-				list = (TList)  cons.mem2._e();
-				return (TToken) cons.mem1._e();
-			}
-			return null;
-		}
-		@Override
-		public void remove() {
-			throw new UnsupportedOperationException("TokensIterator");
-		}
-		
-		
-	}
 	@Override
 	public Iterator<Data.TToken> getTokenIterator(IRegion region) {
 		System.out.println("getTokenIterator(): ");
 		return new TokensIterator(TSubSt.toks(TGlobal.sub(global)), region);
 		
-		/*
-		List<TToken> ts = new java.util.LinkedList<TToken>();
-		 
-		TList fts = TSubSt.toks(TGlobal.sub(global));
-		while (true) {
-			TList.DCons cons = fts._Cons();
-			if (cons == null) break;
-			TToken tok = (TToken) cons.mem1._e();
-			if (TToken.offset(tok) + TToken.value(tok).length() >= region.getOffset()
-					&& TToken.offset(tok) <= region.getOffset() + region.getLength()) ts.add(tok); 
-			if (TToken.offset(tok) > region.getOffset() + region.getLength()) break;
-			fts = (TList) cons.mem2._e();		
-		}
-		System.out.println(ts.size());
-		return ts.iterator();
-		*/
 	}
 
 	@Override
