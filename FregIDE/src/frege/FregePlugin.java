@@ -1,5 +1,10 @@
 package frege;
 
+import java.net.URL;
+import java.security.CodeSource;
+import java.security.ProtectionDomain;
+
+import org.eclipse.core.runtime.FileLocator;
 import org.eclipse.imp.runtime.PluginBase;
 import org.osgi.framework.BundleContext;
 
@@ -26,6 +31,14 @@ public class FregePlugin extends PluginBase {
 
 	public void start(BundleContext context) throws Exception {
 		super.start(context);
+		URL url = this.getBundle().getEntry(".");
+		System.err.println(kPluginID + ": " + url);
+		URL fileUrl = FileLocator.toFileURL(url);
+		System.err.println(kPluginID + ": " + fileUrl);
+		final ProtectionDomain pd = this.getClass().getProtectionDomain();
+		final CodeSource cs = pd.getCodeSource();
+		URL xurl = cs.getLocation();
+		System.err.println(kPluginID + ": " + xurl);
 	}
 
 	@Override
