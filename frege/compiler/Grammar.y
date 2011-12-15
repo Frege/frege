@@ -85,7 +85,8 @@ yyval   = Token.value
 yynice t = case tok of
         DOCUMENTATION -> "documentation comment"
         CHAR          -> show (tv).[0]
-        STRCONST      -> "literal " ++ start tv
+        STRCONST      -> "literal " ++ start tv ++ "\""
+        LEXERROR      -> "error token " ++ start tv
         EARROW        -> "'=>'"
         ARROW         -> "'->'"
         DCOLON        -> "'::'"
@@ -95,7 +96,7 @@ yynice t = case tok of
         tok = yytoken t
         tv = Token.value t
         start tv
-            | length tv > 8 = substr tv 0 5 ++ "..." ++ substr tv 0 1
+            | length tv > 8 = substr tv 0 7 ++ "..."
             | otherwise = tv
 
 yyshow  = Token.show
