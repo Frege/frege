@@ -27,7 +27,8 @@ public class FregeNature extends ProjectNatureBase {
 	}
 
 	public String getDownstreamBuilderID() {
-		// TODO If needed, specify the builder that will consume artifacts created by this nature's builder, or null if none
-		return "org.eclipse.jdt.core.javabuilder";
+		// There is no builder that will consume artifacts created by this nature's builder,
+		// hence null
+		return null;
 	}
 }

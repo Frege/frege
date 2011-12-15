@@ -85,6 +85,21 @@ public class FregeInstancePreferencesTab extends InstancePreferencesTab {
 		spacesForTabsDetailsLink.setEnabled(true);
 		fDetailsLinks.add(spacesForTabsDetailsLink);
 
+		FileFieldEditor fregeLib = fPrefUtils.makeNewFileField(
+				page, this, fPrefService,
+				"instance", "fregeLib", "Frege library",
+				"The location of the Frege Standard Library, the default is to use the one that comes with fregIDE.",
+				parent,
+				true, true,
+				false, "",
+				false);
+			fields.add(fregeLib);
+
+			Link fregeLibDetailsLink = fPrefUtils.createDetailsLink(parent, fregeLib, fregeLib.getTextControl().getParent(), "Details ...");
+
+			fregeLibDetailsLink.setEnabled(false);
+			fDetailsLinks.add(fregeLibDetailsLink);
+		
 		ColorFieldEditor docuColor = fPrefUtils.makeNewColorField(
 			page, this, fPrefService,
 			"instance", "docuColor", "Documentation color ",

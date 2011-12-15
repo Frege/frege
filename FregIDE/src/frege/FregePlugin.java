@@ -12,6 +12,7 @@ public class FregePlugin extends PluginBase {
 
 	public static final String kPluginID = "frege.ide";
 	public static final String kLanguageID = "frege";
+	private static      String fregeLib = null; 
 
 	/**
 	 * The unique instance of this plugin class
@@ -31,14 +32,20 @@ public class FregePlugin extends PluginBase {
 
 	public void start(BundleContext context) throws Exception {
 		super.start(context);
-//		URL url = this.getBundle().getEntry(".");
-//		System.err.println(kPluginID + ": " + url);
-//		URL fileUrl = FileLocator.toFileURL(url);
-//		System.err.println(kPluginID + ": " + fileUrl);
-		final ProtectionDomain pd = this.getClass().getProtectionDomain();
-		final CodeSource cs = pd.getCodeSource();
-		URL xurl = cs.getLocation();
-		System.err.println(kPluginID + ": " + xurl);
+	}
+	
+	/**
+	 * get the path name of the Frege Standard Library
+	 */
+	public String getFregeLib() {
+		if (fregeLib == null) {
+			final ProtectionDomain pd = this.getClass().getProtectionDomain();
+			final CodeSource cs = pd.getCodeSource();
+			URL xurl = cs.getLocation();
+			fregeLib = xurl.getPath();
+			System.err.println(kPluginID + ": " + xurl);
+		}
+		return fregeLib; 
 	}
 
 	@Override

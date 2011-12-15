@@ -24,4 +24,5 @@ public class FregePreferencesConstants {
 	public static final String P_OPCOLOR = "opColor";
 	public static final String P_LITERALCOLOR = "literalColor";
 	public static final String P_ERRORCOLOR = "errorColor";
+	public static final String P_FREGELIB = "fregeLib";
 }
