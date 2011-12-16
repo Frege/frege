@@ -5,6 +5,7 @@ import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.IProgressMonitor;
+import org.eclipse.core.runtime.Path;
 import org.eclipse.imp.preferences.IPreferencesService;
 import org.eclipse.jdt.core.IClasspathEntry;
 import org.eclipse.jdt.core.IJavaProject;
@@ -56,16 +57,15 @@ public class EnableFregeNature implements IWorkbenchWindowActionDelegate {
 				}
 				IPreferencesService service = FregePlugin.getInstance().getPreferencesService();
 				String flib = service.getStringPreference(FregePreferencesConstants.P_FREGELIB);
-				IPath path = fProject.getFile(flib).getFullPath().makeAbsolute();
+				IPath path = new Path(flib);				
 				cpe[i] = JavaCore.newLibraryEntry(path, null, null);
 				jp.setRawClasspath(cpe, null);
 			} catch (JavaModelException e) {
-				// TODO Auto-generated catch block
+				// leck mich
 				// e.printStackTrace();
 			}
 		}
-		else {
-			
+		else {			
 			// show error message
 		}
 	}
@@ -75,10 +75,20 @@ public class EnableFregeNature implements IWorkbenchWindowActionDelegate {
 			IStructuredSelection ss = (IStructuredSelection) selection;
 			Object first = ss.getFirstElement();
 
-			if (first instanceof IProject) {
-				fProject = (IProject) first;
-			} else if (first instanceof IJavaProject) {
+			if (first instanceof IJavaProject) {
 				fProject = ((IJavaProject) first).getProject();
+			} else if (first instanceof IProject) {
+				fProject = (IProject) first;
+			}
+			// FIXME: cannot set frege nature on non java project at his time
+			// because build and run will need the frege library
+			// and I have no idea yet how to make a run configuration
+			// for it.
+			// TODO: we can get the frege lib from the preferences on build
+			try {
+				action.setEnabled(fProject.hasNature("org.eclipse.jdt.core.javanature"));
+			} catch (CoreException e) {
+				action.setEnabled(true);
 			}
 		}
 	}

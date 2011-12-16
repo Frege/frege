@@ -259,12 +259,16 @@ public class FregeBuilder extends BuilderBase {
 				   new PrintWriter(System.err),
 				   new CompProgress());
 				if (!success) {
+					getPlugin().writeErrorMsg("java compiler failed on " + target);
 					markerCreator.addMarker(IMarker.SEVERITY_ERROR, 
-							"java compiler errors", 
+							"java compiler failed"
+								+ " - please report under http://code.google.com/p/frege/issues/list and attach a copy of "
+								+ target	, 
 							1, 
 							0, 
 							1);
 				}
+				else getPlugin().writeInfoMsg("java compiled: " + target);
 			}
 			monitor.done();
 
