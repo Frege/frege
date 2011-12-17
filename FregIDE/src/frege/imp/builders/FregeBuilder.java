@@ -1,6 +1,9 @@
 package frege.imp.builders;
 
 import java.io.PrintWriter;
+import java.io.StringWriter;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IMarker;
@@ -20,6 +23,7 @@ import org.eclipse.imp.model.ModelFactory;
 import org.eclipse.imp.model.ModelFactory.ModelException;
 import org.eclipse.imp.parser.IParseController;
 import org.eclipse.imp.runtime.PluginBase;
+
 
 import frege.FregePlugin;
 import frege.compiler.Data.TGlobal;
@@ -200,6 +204,27 @@ public class FregeBuilder extends BuilderBase {
 	 */
 	protected void runParserForCompiler(final IFile file,
 			final IProgressMonitor monitor) {
+		// a class we can give the compiler as progress monitor
+		class CompProgress extends org.eclipse.jdt.core.compiler.CompilationProgress  {
+
+			@Override
+			public void begin(int arg0) { }
+
+			@Override
+			public void done() { }
+
+			@Override
+			public boolean isCanceled() {
+				return monitor.isCanceled();
+			}
+
+			@Override
+			public void setTaskName(String arg0) {}
+
+			@Override
+			public void worked(int arg0, int arg1) { }
+			
+		}
 		try {
 			FregeParseController parseController = new FregeParseController();
 
@@ -230,43 +255,36 @@ public class FregeBuilder extends BuilderBase {
 				// construct the commandline
 				final String cmdline = "-cp " + fp 
 						+ " -d " + bp 
-						+ " -1.7 -encoding UTF-8 "
+						+ " -Xemacs -1.7 -encoding UTF-8 "
 						+ target;
 				getPlugin().writeInfoMsg("batch-compile " + cmdline);
-				class CompProgress extends org.eclipse.jdt.core.compiler.CompilationProgress  {
-
-					@Override
-					public void begin(int arg0) { }
-
-					@Override
-					public void done() { }
-
-					@Override
-					public boolean isCanceled() {
-						return monitor.isCanceled();
-					}
-
-					@Override
-					public void setTaskName(String arg0) {}
-
-					@Override
-					public void worked(int arg0, int arg1) { }
-					
-				}
+				final StringWriter errs = new StringWriter();
 				final boolean success = org.eclipse.jdt.core.compiler.batch.BatchCompiler.compile(
 				   cmdline,
 				   new PrintWriter(System.out),
-				   new PrintWriter(System.err),
+				   new PrintWriter(errs),
 				   new CompProgress());
 				if (!success) {
+					String msg = errs.toString();
+					String[] msgs = msg.split(System.getProperty("line.terminator", "\n"));
+					Pattern p = Pattern.compile(":\\d+:\\s+error:(.*)");
+					for (String s : msgs) {
+						if (s == null) continue;
+						Matcher m = p.matcher(s);
+						if (m.find()) {
+							String se = m.group(1);
+							markerCreator.addMarker(
+									IMarker.SEVERITY_ERROR, 
+									se, 1, 0, 6);
+						}
+					}
 					getPlugin().writeErrorMsg("java compiler failed on " + target);
-					markerCreator.addMarker(IMarker.SEVERITY_ERROR, 
-							"java compiler failed"
-								+ " - please report under http://code.google.com/p/frege/issues/list and attach a copy of "
-								+ target	, 
-							1, 
-							0, 
-							1);
+					markerCreator.addMarker(IMarker.SEVERITY_INFO, 
+							"Bad native declarations may cause java compiler errors. "
+								+ "When you're sure this is out of the question "
+								+ "please report under http://code.google.com/p/frege/issues/list and attach a copy of "
+								+ target, 
+							1, 0, 1);
 				}
 				else getPlugin().writeInfoMsg("java compiled: " + target);
 			}

@@ -80,6 +80,7 @@ public class EnableFregeNature implements IWorkbenchWindowActionDelegate {
 			} else if (first instanceof IProject) {
 				fProject = (IProject) first;
 			}
+			else if (first == null) return;
 			// FIXME: cannot set frege nature on non java project at his time
 			// because build and run will need the frege library
 			// and I have no idea yet how to make a run configuration

@@ -37,7 +37,7 @@
  * This is the scanner for the frege compiler.
  *
  * Essentialy, there are the following important functions:
- * - the 'scan' function turns a list of strings into a list of 'Token's.
+ * - the 'lex' function turns a list of strings into a list of 'Token's.
  * - the 'layout' function takes the output from 'scan' and inserts
  *   braces and semicolons according to layout rules.
  * - the 'substAllOp' functions scans the output of the scan function and
@@ -143,9 +143,9 @@ kwtree = Tree.insertlist Nil [
     ("infixr" ,  INFIXR)];
 
 -- the list of keywords, sorted by token id
-keywordsByID = StringArr.fromList (map fst (sortBy (comparing snd) (each kwtree)))
+-- keywordsByID = StringArr.fromList (map fst (sortBy (comparing snd) (each kwtree)))
 
---* standard operators, this are the multi character special symbols
+{- standard operators, this are the multi character special symbols
 standardops = [
         ("::", DCOLON), ("->", ARROW), ("<-", GETS),
         ("_", CHAR), ("\\", CHAR), (".", CHAR), (";", CHAR), (",", CHAR),
@@ -159,7 +159,7 @@ standardops = [
     ];
 
 standardtops = Tree.fromList standardops
-
+-}
 {--
  * checks if a user defined operator obeys certain rules:
  * - it must not be one of "=" "|" "," ";" "." "\\" "_" "!" "?" "-"
@@ -206,31 +206,29 @@ forbidden '['  = true
 forbidden ']'  = true
 forbidden '{'  = true
 forbidden '}'  = true
--- forbidden c    = c.isWhitespace || c.isLowerCase || c.isUpperCase || c >= '0' && c <= '9'
--- forbidden c | c >= '0', c <= '9' = true
 forbidden _    = false
 
 
 
 {--
  * makes a 'Regex' that matches any string in /ops/
- -}
+ -
 opat ops = orops.compile where
     qops  =  (map String.quote <~ sortBy (descending String.length)) ops
     orops = "\\G(" ++ joined "|" qops ++ ")"
+-}
 
+-- opp = opat (map fst standardops)
 
-opp = opat (map fst standardops)
-
-{--
+{-
  * tells if the argument is a real operator,
  * i.e. one that consists of non word characters only
  -}
-realop #^\W+$# = true
-realop _       = false
+-- realop #^\W+$# = true
+-- realop _       = false
 
---- look up a standardop
-getop s = standardtops.lookupS s;
+-- look up a standardop
+-- getop s = standardtops.lookupS s;
 
 
 -- tokenizeXXX ls = layout (scan 1 ls) [0];
@@ -471,320 +469,6 @@ lexComment !nest !block !proto !cs !line !col !i
         at n = if n >= cs.length then '\0' else cs.charAt n
         subseq n = (cs.subSeq (proto.offset+3) n).toString
 
-{--
- * Scans the string in the input list and returns a list of 'Token's.
- * For each scanned token, there is one item giving
- * - the token identifier that was recognized
- * - the string that was matched
- * - the line number where the string occured
- * - the 1-based start position (column) of the token.
- *
- * The real work is done in various scan.... functions of type
- * > Line -> Matcher -> [String] -> [Token]
- * where the following invariants are maintained:
- *
- * 1) the 'Matcher' has just performed a successful match
- *
- * 2) the 'String' list is not empty
- *
- * 3) the 'head' of the 'String's is the one the 'Matcher' operates on
- -}
-scan !n [] = [];
-scan !n (lns@ln:ls) = case (##.matcher ln).find of
-        Just mgc ->  scanSelect n mgc lns
-        Nothing  ->  error ("Can't match ## in '" ++ ln ++ "'")  -- then we have REAL problems ...
-
-
-{--
-    This function selects the next scan function based on the next character.
-
-    Earlier design tried one pattern after the other, but with the now immutable
-    'Matcher', this involves cloning of the matcher for each try. Which is,
-    as some profiling exposed, the single most expensive operation. The new approach
-    will need at most two tries.
-
-    If the first character is
-    [{ or -] we use 'scanCommentStart' (1 find operation)
-    [a lowercase letter] we use 'scanId' (1 find operation)
-    [an uppercase letter] we use 'scanQ' (1 find operation)
-    [a space character] we just skip and tailrecurse (1 find operation)
-    [a digit 0..9] we use 'scanNumber' (2 find operations)
-    ["] we use 'scanString' (1 find operation)
-    [#] we use 'scanRegexp' (1 find operation)
-    [\'] we use 'scanChar' (1 find operation)
-    [anything else] we use 'scanSpecial' (1 find operation)
--}
-scanSelect :: Line -> Matcher -> [String] -> [Token]
-scanSelect !n mgc (currls@ln:lns)
-    -- | trace ("line=" ++ show n ++ ", offset=" ++ show offset ++ ", matcher=" ++ mgc.toString ++ "\n") = undefined
-    | endOfLine = scan (n+1) lns                   -- end of line was reached
-    | c == '{'       = scanCommentStart n mgc currls
-    | c == '-'       = scanCommentStart n mgc currls
-    | c.isLowerCase  = scanId n mgc currls
-    | c.isUpperCase  = scanQ  n mgc currls
-    | c.isWhitespace = scanSelect n (unJust (mgc ?~ #\G\p{javaWhitespace}+#)) currls -- skip
-    | c >= '0' && c <= '9' = scanNumber n mgc currls
-    | c == '"'       = scanString  n mgc currls
-    | c == '#'       = scanRegexp  n mgc currls
-    | c == '\''      = scanChar    n mgc currls
-    | c == '`'       = scanOp      n mgc currls
-    | otherwise      = scanSpecial n mgc currls
-    where
-        offset    = mgc.end 0
-        endOfLine = offset >= ln.length
-        !c        = if endOfLine then '\n' else String.charAt ln offset
-scanSelect !n mgc [] = error ("scanSelect " ++ show n ++ "  " ++ mgc.toString ++ " []")
-
-
---- matches \'{\' or \'-\' start of a comment
-commentStart = #\G(\{|-)-{0,2}#
-{--
-    When the 'Matcher' points to a \'{\' or a \'-\' this can be the start of a block or line
-    comment, where both may also be doc-comments.
-    Otherwise it is just the character \'\/\'
--}
-scanCommentStart n mgc lns = case mgc ?~ commentStart of
-    Just mgc -> let
-            offset = mgc.start 0
-            value  = unJust (mgc.group 0)
-            rest   = strtail (head lns) (mgc.end 0)
-        in case value of
-            "{--" -> scancomment 1 n (offset + 1) n mgc lns true  ""
-            "{-"  -> scancomment 1 n (offset + 1) n mgc lns false ""
-            "---" -> let
-                         !tok = Token DOCUMENTATION (rest ++ "\n\n") n (offset + 1) 0
-                     in tok : scan (n+1) (tail lns)
-            "--"  -> scan (n+1) (tail lns)
-            "{"   -> let
-                        !tok = Token CHAR ("{") n (offset + 1) 0
-                     in tok : scanSelect n mgc lns
-            "-"   -> let
-                        !tok = Token CHAR ("-") n (offset + 1) 0
-                     in tok : scanSelect n mgc lns
-            wrong -> error ("somebody changed commentStart, matched '" ++ wrong ++ "'")
-    Nothing -> error (show n ++ " scanCommentStart: " ++ strtail (head lns) (mgc.end 0))
-
---- special operators or just character
-special = #\G->|<-|::|.#
-
-{--
- * match single character operators
- -}
-scanSpecial n mgc lns =
-    case mgc ?~ #\G.# of
-        Just mgc  -> let
-                s = unJust (mgc.group 0)
-                ind = 1 + mgc.start 0
-                f = CHAR
-                !tok = Token f s n ind 0
-            in tok : scanSelect n mgc lns
-        Nothing -> error (show n ++ " scanSpecial: "
-                        ++ strtail (head lns) (mgc.end 0))
-
-
-{--
- * matches Ident[.Ident].
- -}
-qualifier = #\G(?:\p{Lu}(?:\d|_|\p{L})*\.){1,2}#;
-
-{--
- * matches Ident
- -}
-iDent = #\G\p{Lu}(?:\d|_|\p{L})*#;
-
-{--
- * Matches qualifier or constructor name.
- * The pattern is @Ident(.(Ident.)?)?@
- * If it matches and group 1 is present, then it's a qualifier
- * else it's a constructor
- -}
-qualID = #\G\p{Lu}(?:\d|_|\p{L})*(\.(?:\p{Lu}(?:\d|_|\p{L})*\.)?)?#
-
-{--
- * Match qualifier or constructor name using 'qualID'. The 'Matcher' must
- * point to an uppercase letter.
- -}
-scanQ  n mgc lns =
-    case mgc ?~ qualID of {
-        Just mgc -> let
-                q = unJust (mgc.group 0)  -- the qualifier or Ident
-                qstart = 1 + mgc.start 0  -- and its position
-                f = if isJust (mgc.group 1) then QUALIFIER else CONID
-                !tok = Token f q n qstart 0
-            in  tok : scanSelect n mgc lns;
-        Nothing -> error (show n ++ " scanQ: " ++ strtail (head lns) (mgc.end 0))
-    }
-
-{--
- * matches identifier
- -}
-ident = #\G\p{Ll}(?:\d|_|\p{L})*'*#;
-
-
-{--
- * Match identifier or keyword using 'ident'.
- *
- * Precondition: the matcher points to a lowercase letter so that the pattern
- * always matches.
- -}
-scanId n mgc lns =
-    case mgc ?~ ident of
-        Just mgc  ->
-            let
-                s   = unJust (mgc.group 0)
-                ids = 1 + mgc.start 0
-                f = case Tree.lookupS kwtree s of
-                    Just f  -> f -- (f, s, n, ids)    : scanSelect n mgc lns
-                    Nothing -> VARID
-                !tok = Token f s n ids 0
-            in tok : scanSelect n mgc lns
-        Nothing -> error (show n ++ " scanId: " ++ strtail (head lns) (mgc.end 0))
-
---- a hexadecimal number
-hexlit = #\G0([xX][0-9a-fA-F]+)([lL])?#;
---- a decimal number
-fltlit = #\G(\d+(?:_\d\d\d)*)(\.\d+)?([eE][+-]?\d+)?([fFdDlLnN])?#;
-
-{--
- * Find a numeric literal.
- *
- * The matcher must point to a digit.
- -}
-scanNumber n mgc lns =
-    case mgc ?~ hexlit of {
-        Just mgc -> let
-                lit = unJust (mgc.group 0)
-                ind = 1 + mgc.start 0
-                f = case mgc.group 2 of
-                    Nothing -> INTCONST -- (INTCONST,  lit, n, ind) : scanSelect n mgc lns;
-                    Just _  -> LONGCONST -- (LONGCONST, lit, n, ind) : scanSelect n mgc lns;
-                    -- Just _  -> LONGCONST // (LONGCONST, lit, n, ind) : scanSelect n mgc lns;
-                !tok = Token f lit n ind 0
-            in tok : scanSelect n mgc lns
-        ;
-        Nothing -> case mgc ?~ fltlit of {
-            Nothing -> error (show n ++ " scanNumber: " ++ strtail (head lns) (mgc.end 0));
-            Just mgc -> let
-                         fx = unJust (mgc.group 0)
-                         ind = 1 + mgc.start 0
-                         dx = unJust (mgc.group 1)
-                         f = (#_#.matcher fx).replaceAll ""
-                         d = (#_#.matcher dx).replaceAll ""
-                         !tok = case (mgc.group 2, mgc.group 3, mgc.group 4) of {
-                (Nothing, Nothing, Nothing)     -> Token INTCONST  f n ind 0;
-                (Nothing, Nothing, Just "l")    -> Token LONGCONST f n ind 0;
-                (Nothing, Nothing, Just "L")    -> Token LONGCONST f n ind 0;
-                (Nothing, Nothing, Just "N")    -> Token BIGCONST  d n ind 0;
-                (Nothing, Nothing, Just "n")    -> Token BIGCONST  d n ind 0;
-                (_, _, Just "d")                -> Token DBLCONST  f n ind 0;
-                (_, _, Just "D")                -> Token DBLCONST  f n ind 0;
-                (_, _, Just "f")                -> Token FLTCONST  f n ind 0;
-                (_, _, Just "F")                -> Token FLTCONST  f n ind 0;
-                (Just _, _, Nothing)            -> Token DBLCONST  f n ind 0;
-                (_, Just _, Nothing)            -> Token DBLCONST  f n ind 0;
-                bad                             -> error ("bad number " ++ fx ++ " " ++ show bad); }
-                    in tok : scanSelect n mgc lns;
-        }
-    };
-
---* matches a string literal
-strlit = #\G"(\\[0-7][0-7]|\\[0-7]|\\[0123][0-7][0-7]|\\.|[^"])*"#;
-
-{--
- * find a string literal
-
- * The matcher must point to a \'"\'
- -}
-scanString n mgc lns = case mgc ?~ strlit of
-        Just mgc  -> let
-                !tok = Token STRCONST (unJust (mgc.group 0)) n (1 + mgc.start 0) 0
-            in tok : scanSelect n mgc lns
-        Nothing -> scanSpecial n mgc lns   -- error (show n ++ " scanString: " ++ strtail (head lns) (mgc.end 0))
-
---- matches a char literal
-chrlit = #\G'(\\[0-7][0-7]|\\[0-7]|\\[0123][0-7][0-7]|\\.|[^'\\])'#;
-
-{--
- * Find a character literal.
-
- * The matcher must point to a \'\\\'\'
- -}
-scanChar n mgc lns =
-    case mgc ?~ chrlit of
-        Just mgc -> let
-                    !tok = Token CHRCONST (unJust (mgc.group 0)) n (1 + mgc.start 0) 0
-                in tok : scanSelect n mgc lns
-        Nothing -> scanSpecial n mgc lns    -- error (show n ++ " scanChar: " ++ strtail (head lns) (mgc.end 0))
-
---- matches a regular expression
-regexp = #\G\#((\\\#|[^\#])*)\##
-{--
- * Find a regexp literal.
-
- * The matcher must point to a \'#\'
- -}
-scanRegexp n mgc lns =
-    case mgc ?~ regexp of
-        Just mgc  -> let
-                ind = 1 + mgc.start 0
-                rex = fromMaybe "" (mgc.group 1)
-                !tok = Token REGEXP rex n ind 0
-            in tok : scanSelect n mgc lns
-        Nothing -> scanSpecial n mgc lns   -- error (show n ++ " scanRegexp: " ++ strtail (head lns) (mgc.end 0))
-
-
---- an operator in backticks, either all word or all non word chars
-idop  = #\G`(\w+|[^"'`\#{}\[\]()\w]+)`#
-
-{--
- * Find an operator in backticks
- *
- * The matcher must point to a backtick.
- -}
-scanOp n mgc lns =
-        case mgc ?~ idop of
-            Just mgc -> let
-                    -- s = unJust (mgc.group 0)
-                    ind = 1+ mgc.start 0
-                    o = fromMaybe "" (mgc.group 1)
-                    !tok= Token SOMEOP o n ind 0
-                in tok : scanSelect n mgc lns
-            Nothing -> scanSpecial n mgc lns   -- error (show n ++ " scanOp: " ++ strtail (head lns) (mgc.end 0))
-
-{--
- * scan a block comment and recognize enclosed comment blocks, thereby collecting
- * the comment text in case it is a doc comment.
- -}
-scancomment lvl sln spos n mgc lns doc acc
-    {-| trace ("scancomment n=" ++ show n ++ ", doc=" ++ show doc ++ ", matcher=" ++ Matcher.toString mgc ++ "\n") = undefined
-    | otherwise -} =  case mgc ?~ #\G-\}# of {
-        Just mgc  -> if lvl == 1
-                then if doc
-                    then let
-                          !tok = Token DOCUMENTATION (acc ++ "\n\n") sln spos 0
-                        in tok : scanSelect n mgc lns
-                    else scanSelect n mgc lns
-                else scancomment (lvl-1) sln spos n mgc lns doc (acc ++ "*/");
-        Nothing -> case mgc ?~ #\G\{-# of {
-            Just mgc -> scancomment (lvl+1) sln spos n mgc lns doc (acc ++ unJust (mgc.group 0));
-            Nothing -> case mgc ?~ #\G$# of {
-                Just _  -> case tail lns of {
-                    []   -> error ("end of input while in comment started in line " ++ show sln);
-                    tls -> let
-                                nmgc = unJust (##.matcher (head tls)).find
-                            in scancomment lvl sln spos (n+1) nmgc tls doc (acc ++ "\n");
-                };
-                Nothing -> case mgc ?~ #\G.[^-}]*# of {
-                    Just mgc  -> scancomment lvl sln spos n mgc lns doc (acc ++ unJust (mgc.group 0));
-                    Nothing -> error ("Can't match any char in comment line " ++ show n);
-                };
-            };
-        };
-    } {- where {
-        unstar (m~#^(\s+\*+\s+)(.*)$#) | Just s <- m.group 2 = s;
-        unstar s = s;
-    } -};
-
 
 {--
  * Find @infix@ and @import@ declarations in token stream.
@@ -824,17 +508,17 @@ specialT = Tree.fromList [("::", DCOLON), ("=>", EARROW), --  ("~>", TARROW),
  * build a map from 'String's to 'TokenID's, which serves as dictionary of operators
  -}
 -- processInfixImport :: [Token] ->(String ->  Either (Line, String) (Tree String TokenID)
-processImports prefix getop (err@Left _) xs = IO.return err
-processImports prefix getop (tree@Right _) [] = IO.return tree
+processImports prefix getop (err@Left _) xs = StG.return err
+processImports prefix getop (tree@Right _) [] = StG.return tree
 processImports prefix getop (tree@Right _) (cmd:cmds)
         | (t1:ts) <- cmd, Token.tokid t1 == IMPORT = do
             imp <- mkImport (Pos t1 t1) ts tree
             processImports prefix getop imp cmds
         | otherwise = processImports prefix getop tree cmds
         where
-    mkImport _ _  (err@Left _)    = IO.return err
+    mkImport _ _  (err@Left _)    = StG.return err
     mkImport n ts (tree@Right _)
-        | null name = IO.return $ Left (n, msgdoc "Package name missing after `import´")
+        | null name = StG.return $ Left (n, msgdoc "Package name missing after `import´")
         | otherwise = do
             (loaded::Exception (Maybe OpArr)) <- getop name
             case loaded of
@@ -843,12 +527,12 @@ processImports prefix getop (tree@Right _) (cmd:cmds)
                 -- there already, or we are compiling something else and then we will
                 -- see the error in the import pass, because every package except frege.Prelude
                 -- will try to import frege.Prelude
-                Left _ | name == prefix ++ "frege.prelude.Base" -> IO.return tree
-                Left jex           -> IO.return $ Left (n, msgdoc ("Could not import package "
+                Left _ | name == prefix ++ "frege.prelude.Base" -> StG.return tree
+                Left jex           -> StG.return $ Left (n, msgdoc ("Could not import package "
                                                         ++ name
                                                         ++ " (" ++ show jex ++ ")"))
-                Right (Just oparr) -> IO.return $ fold ins tree [ oparr.[i] | i <- 0..oparr.length - 1]
-                _                  -> IO.return $ tree      -- no operators
+                Right (Just oparr) -> StG.return $ fold ins tree [ oparr.[i] | i <- 0..oparr.length - 1]
+                _                  -> StG.return $ tree      -- no operators
         where
             name = prefix ++ (fold (++) "" <~ map Token.value <~ takeWhile packToken) ts
             -- loaded = getOperators loader name
@@ -998,7 +682,7 @@ substOp start tree (t:ts)
           where name rest = cstos (take (length cs - length rest) cs)
 
 --- this is the lexical analysis pass
-pass :: (String -> IO (Exception (Maybe OpArr))) -> StG [Token]
+pass :: (String -> StG (Exception (Maybe OpArr))) -> StG [Token]
 pass getop =
     do
         global <- getST
@@ -1014,7 +698,7 @@ pass getop =
 {--
     This is the entry point for lexical analysis of a program contained in an immutable @java.lang.CharSequence@
 -}
-passCS :: CharSeq Immutable -> (String -> IO (Exception (Maybe OpArr))) -> StG [Token]
+passCS :: CharSeq Immutable -> (String -> StG (Exception (Maybe OpArr))) -> StG [Token]
 passCS cs getop =
     do
         g <- getST
@@ -1022,7 +706,7 @@ passCS cs getop =
         let tokens = layout [0] nocomms
             ifximps =  (reverse <~ findInfixImports) tokens
             tree0   = processInfix ifximps
-        imps <- doio $ processImports prefix getop (Right specialT) ifximps
+        imps <- processImports prefix getop (Right specialT) ifximps
         let tree2 = either Left (ourinfix tree0) imps
             -- enter infix defined symbols last
             ourinfix (Right t0)    t = ourins t (each t0)
