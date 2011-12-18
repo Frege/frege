@@ -130,18 +130,18 @@ public class FregeBuilder extends BuilderBase {
 	 * them via calls to <code>fDependency.addDependency()</code>.
 	 */
 	@Override public void collectDependencies(IFile file) {
-		String fromPath = file.getFullPath().toString();
-
-		getPlugin().writeInfoMsg(
-				"Collecting dependencies from frege file: " + fromPath);
+		
 		try {
 			final ISourceProject sourceProject 
 				= ModelFactory.open(file.getProject());
+			final String fromPath = file.getProjectRelativePath().toString();
 			final FregeParseController.FregeData fd 
 				= new FregeParseController.FregeData(sourceProject);
 			final String[] srcs = fd.getSp().split(System.getProperty("path.separator"));
 			final String contents = BuilderUtils.getFileContents(file);
 			TList packs = (TList) frege.compiler.Scanner.dependencies(Box.mk(contents))._e();
+			getPlugin().writeInfoMsg(
+					"Collecting dependencies from frege file: " + fromPath);
 			while (true) {
 				final DCons cons = packs._Cons();
 				if (cons == null) break;
@@ -150,10 +150,10 @@ public class FregeBuilder extends BuilderBase {
 				final String fr = pack.replaceAll("\\.", "/") + ".fr";
 				for (String sf: srcs) {
 					final IPath p = new Path(sf + "/" + fr);
-					String toPath = p.toPortableString();
+					final String toPath = p.toPortableString();
 					// final java.io.File f = p.toFile();
 					getPlugin().writeInfoMsg(
-							"DependenciesCollector looks for: " + toPath);
+							"DependenciesCollector looks for: " + p.toPortableString());
 					if (sourceProject.getRawProject().exists(p)) {
 						getPlugin().writeInfoMsg(
 								"DependenciesCollector found: " + toPath);
