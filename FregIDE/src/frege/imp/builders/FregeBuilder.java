@@ -10,6 +10,7 @@ import org.eclipse.core.resources.IMarker;
 import org.eclipse.core.resources.IResource;
 import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.IProgressMonitor;
+import org.eclipse.core.runtime.Path;
 
 import org.eclipse.imp.builder.BuilderUtils;
 import org.eclipse.imp.builder.MarkerCreator;
@@ -35,6 +36,7 @@ import frege.compiler.Main;
 import frege.imp.parser.FregeParseController;
 import frege.prelude.Base;
 import frege.prelude.Base.TList;
+import frege.prelude.Base.TList.DCons;
 import frege.prelude.Text;
 import frege.rt.Box;
 
@@ -43,8 +45,6 @@ import frege.rt.Box;
  * has changed (when "Build automatically" is on), or when the programmer
  * chooses to "Build" a project.
  * 
- * TODO This default implementation was generated from a template, it needs to
- * be completed manually.
  */
 public class FregeBuilder extends BuilderBase {
 	
@@ -133,11 +133,41 @@ public class FregeBuilder extends BuilderBase {
 		String fromPath = file.getFullPath().toString();
 
 		getPlugin().writeInfoMsg(
-				"Collecting dependencies from frege file: " + file.getName());
-
-		// TODO: implement dependency collector
-		// E.g. for each dependency:
-		// fDependencyInfo.addDependency(fromPath, uponPath);
+				"Collecting dependencies from frege file: " + fromPath);
+		try {
+			final ISourceProject sourceProject 
+				= ModelFactory.open(file.getProject());
+			final FregeParseController.FregeData fd 
+				= new FregeParseController.FregeData(sourceProject);
+			final String[] srcs = fd.getSp().split(System.getProperty("path.separator"));
+			final String contents = BuilderUtils.getFileContents(file);
+			TList packs = (TList) frege.compiler.Scanner.dependencies(Box.mk(contents))._e();
+			while (true) {
+				final DCons cons = packs._Cons();
+				if (cons == null) break;
+				packs = (TList) cons.mem2._e();
+				final String pack = Box.<String>box(cons.mem1._e()).j;
+				final String fr = pack.replaceAll("\\.", "/") + ".fr";
+				for (String sf: srcs) {
+					final IPath p = new Path(sf + "/" + fr);
+					String toPath = p.toPortableString();
+					// final java.io.File f = p.toFile();
+					getPlugin().writeInfoMsg(
+							"DependenciesCollector looks for: " + toPath);
+					if (sourceProject.getRawProject().exists(p)) {
+						getPlugin().writeInfoMsg(
+								"DependenciesCollector found: " + toPath);
+						fDependencyInfo.addDependency(fromPath, toPath);
+						break;
+					}
+				}
+			}
+		}
+		catch (ModelException mex) {
+			getPlugin().writeErrorMsg(
+					"Can't get source project: " + mex.getMessage());
+			return;
+		}
 	}
 
 	/**
@@ -153,16 +183,7 @@ public class FregeBuilder extends BuilderBase {
 	@Override public void compile(final IFile file, IProgressMonitor monitor) {
 		try {
 			getPlugin().writeInfoMsg("Building frege file: " + file.getName());
-
-			// START_HERE
-			//FregeCompiler compiler= new FregeCompiler(PROBLEM_MARKER_ID);
-			//compiler.compile(file, monitor);
-			// Here we provide a substitute for the compile method that simply
-			// runs the parser in place of the compiler but creates problem
-			// markers for errors that will show up in the problems view
-			runParserForCompiler(file, monitor);
-
-			// doRefresh(file.getParent()); // N.B.: Assumes all generated files go into parent folder
+			runParserForCompiler(file, monitor); 
 		} catch (Exception e) {
 			// catch Exception, because any exception could break the
 			// builder infra-structure.
@@ -171,33 +192,15 @@ public class FregeBuilder extends BuilderBase {
 	}
 
 	/**
-	 * This is an example "compiler" implementation that simply uses the parse controller
-	 * to parse the given file, adding error markers to the file for any parse errors
-	 * that are reported.
+	 * This is a "compiler" implementation that simply uses the parse controller
+	 * to parse the given file, adding markers to the file for any errors,
+	 * warnings or hints that are reported.
 	 * 
 	 * Error markers are created by a special type of message handler (i.e., implementation
 	 * of IMessageHandler) known as a MarkerCreator.  The MarkerCreator is passed to the
 	 * parse controller.  The parser reports its error messages to the MarkerCreator, and
 	 * the MarkerCreator puts corresponding error markers on the file.
-	 * 
-	 * This example shows the use of two different types of marker creator:  the MarkerCreator
-	 * base type and an the MarkerCreatorWithBatching subtype.  In MarkerCreator the error
-	 * markers are added to the file one at a time, as error messages are received.  In
-	 * MarkerCreatorWithBatching, the information from each error message is cached; 
-	 * the corresponding error markers are not created until the flush(..) method is called,
-	 * at which point all markers are created together.  MarkerCreatorWithBatching is more
-	 * complicated internally and requires proper use of the flush(..) method, but it may
-	 * be more efficient at runtime for files that have many errors.  That is because a
-	 * Workspace operation is required to add the error markers to the file.  There is one
-	 * of these for each of the error markers added in MarkerCreator, but only one for all
-	 * of the markers in MarkerCreatorWithBatching.
-	 * 
-	 * In this example we have declared a marker creator of each type but commented out the
-	 * batching version.  The example should also execute correctly if you comment out the
-	 * base version and uncomment the batching version, so it should be easy to experiment
-	 * with them.
-	 * 
-	 * TODO remove or rename this method once an actual compiler is being called. 
+	 *   
 	 * 
 	 * @param file    input source file
 	 * @param monitor progress monitor

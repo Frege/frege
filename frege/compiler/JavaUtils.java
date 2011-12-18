@@ -3,9 +3,6 @@ package frege.compiler;
 
 import frege.MD;
 
-import java.net.MalformedURLException;
-import java.net.URLClassLoader;
-import java.lang.annotation.*;
 import java.nio.file.Files;
 
 

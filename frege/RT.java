@@ -52,12 +52,13 @@ public class RT {
     /**
      * Get the constructor
      */
-    public final static int constructor(Object x) {
+    @SuppressWarnings("unchecked")
+	public final static int constructor(Object x) {
         if (x instanceof FV) { return ((FV)x).constructor(); }
         else if (x instanceof Value)
             return ((Value) x)._c();
         else if (x instanceof Lazy)
-            return constructor(((Lazy) x)._e());
+            return constructor(((Lazy<FV>) x)._e());
         else throw new Error("constructor: " + x.getClass().getName());
     }
 

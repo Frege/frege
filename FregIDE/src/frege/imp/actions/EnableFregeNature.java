@@ -43,9 +43,9 @@ public class EnableFregeNature implements IWorkbenchWindowActionDelegate {
 			// e.printStackTrace();
 			// System.out.println("The " + nd.getNatureId() + " is not supported, or so it seems.");
 		}
-		System.err.println("Our project "
-			+ (isJava ? " has the " : " does not have ")
-			+ " java nature.");
+//		System.err.println("Our project "
+//			+ (isJava ? " has the " : " does not have ")
+//			+ " java nature.");
 		if (isJava) {
 			IJavaProject jp = JavaCore.create(fProject);
 			try {

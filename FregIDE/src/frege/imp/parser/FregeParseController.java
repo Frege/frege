@@ -151,9 +151,9 @@ public class FregeParseController extends ParseControllerBase implements
 						// e.printStackTrace();
 						// System.out.println("The " + nd.getNatureId() + " is not supported, or so it seems.");
 				}
-				System.err.println("Our project "
-						+ (isJava ? " has the " : " does not have ")
-						+ " java nature.");
+//				System.err.println("Our project "
+//						+ (isJava ? " has the " : " does not have ")
+//						+ " java nature.");
 				if (isJava) {
 					IJavaProject jp = JavaCore.create(rp);
 					try {
@@ -164,7 +164,7 @@ public class FregeParseController extends ParseControllerBase implements
 						for (IClasspathEntry cpe: cpes) {
 							if (cpe.getEntryKind() == IClasspathEntry.CPE_SOURCE) {
 								if (sp.length() > 0) sp += System.getProperty("path.separator");
-								sp += cpe.getPath().toPortableString();
+								sp += cpe.getPath().makeRelativeTo(jp.getPath()).toString();
 							}
 							else {
 								if (fp.length() > 0) fp += System.getProperty("path.separator");
