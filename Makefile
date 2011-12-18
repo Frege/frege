@@ -122,7 +122,7 @@ fr-files: build/bfrege/compiler/Main.class
 sources.jar: rt-files fr-files
 	jar -cMf sources.jar @rt-files
 	cd build && jar -uMf ../sources.jar @../fr-files
-	cd fregIDE/src && jar -xvf ../../sources.jar
+	cd FregIDE/src && jar -xvf ../../sources.jar
 
 $(DIR)/check1: $(DIR)/PreludeProperties.class
 	$(JAVA) -cp build frege.PreludeProperties && echo Prelude Properties checked >$(DIR)/check1
@@ -229,7 +229,9 @@ $(DIR1)/List.class: frege/List.fr
 	$(FREGEC0) $?
 $(DIR1)/Tuples.class: frege/Tuples.fr
 	$(FREGEC0) $?
-$(COMPF1)/Utilities.class: 	$(COMPF1)/Data.class $(COMPF1)/Nice.class $(COMPS)/Utilities.fr
+$(COMPF1)/Classtools.class: frege/compiler/Classtools.fr
+	$(FREGEC0) $?
+$(COMPF1)/Utilities.class: 	$(COMPF1)/Classtools.class $(COMPF1)/Data.class $(COMPF1)/Nice.class $(COMPS)/Utilities.fr
 	$(FREGEC0) $(COMPS)/Utilities.fr
 $(COMPF1)/Data.class: 	$(COMPS)/Data.fr
 	$(FREGEC0) $?
