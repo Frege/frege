@@ -441,8 +441,18 @@ docs:
     ;
 
 packageclause:
-    docs PACKAGE packagename            { \docu\_\b   -> (b, Just docu) }
-    | PACKAGE packagename               { \_\b        -> (b, Nothing) }
+    docs PACKAGE packagename                { \docu\_\b   -> (b, Just docu) }
+    | PACKAGE packagename                   { \_\b        -> (b, Nothing) }
+    | docs PROTECTED PACKAGE packagename    { \docu\_\_\b   -> do {
+                                                    g <- getST;
+                                                    changeST Global.{options = g.options.{
+                                                        flags = U.setFlag g.options.flags INPRELUDE}};
+                                                    YYM.return (b, Just docu) }}
+    | PROTECTED PACKAGE packagename         { \_\_\b   -> do {
+                                                    g <- getST;
+                                                    changeST Global.{options = g.options.{
+                                                        flags = U.setFlag g.options.flags INPRELUDE}};
+                                                    YYM.return (b, Nothing) }}
     ;
 
 semicoli:
