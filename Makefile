@@ -97,7 +97,7 @@ sanitycheck:
 	$(JAVA) -version
 
 stage1: prel0 compiler0 $(TOOLSF0)/LexConvt.class $(TOOLSF0)/YYgen.class
-	cp frege/tools/yygenpar.fr frege/tools/YYgenparM.fr build/cfrege/tools
+	cp frege/tools/yygenpar-fr frege/tools/YYgenparM-fr build/cfrege/tools
 	jar  -cf    fregec.jar -C build cfrege frege
 	jar  -uvfe  fregec.jar cfrege.compiler.Main
 	@echo you can do now backwards incompatible changes
@@ -163,7 +163,7 @@ tools: $(TOOLSF)/Doc.class $(TOOLSF)/YYgen.class $(TOOLSF)/LexConvt.class
 # final compiler
 #
 compiler: compiler2 $(COMPF)/Grammar.class $(COMPF)/Main.class library tools
-	cp frege/tools/yygenpar.fr frege/tools/YYgenparM.fr build/frege/tools
+	cp frege/tools/yygenpar-fr frege/tools/YYgenparM-fr build/frege/tools
 	@echo Compiler ready
 
 $(COMPF)/Grammar.class: frege/compiler/Grammar.fr $(COMPF)/Scanner.class $(LIBF)/ForkJoin.class
