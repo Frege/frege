@@ -296,11 +296,14 @@ public class FregeBuilder extends BuilderBase {
 			if (markerCreator instanceof MarkerCreatorWithBatching) {
 				((MarkerCreatorWithBatching) markerCreator).flush(monitor);
 			}
-		} catch (ModelException | LimitExceededException e) {
-			getPlugin()
-					.logException(
+		} catch (ModelException e) {
+			getPlugin().logException(
 							"Example builder returns without parsing due to a ModelException",
 							e);
+		} catch (LimitExceededException e) {
+			getPlugin().logException(
+					"Caught exception while building: ",
+					e);
 		}
 	}
 }
