@@ -10,7 +10,8 @@
 JAVAC = javac -encoding UTF-8
 YACC = pbyacc
 JAVA = java7 "-Dfrege.javac=javac -J-Xmx512m"
-JAVAP = $(JAVA) -Dfrege.inPrelude=true
+JAVAP = $(JAVA)
+# JAVAP = $(JAVA) -Dfrege.inPrelude=true
 
 
 

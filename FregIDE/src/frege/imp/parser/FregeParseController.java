@@ -331,6 +331,8 @@ public class FregeParseController extends ParseControllerBase implements
 		TList passes = (TList) frege.compiler.Main.passes._e();
 		monitor.beginTask(this.getClass().getName() + " parsing", 
 				1 + ILength__lbrack_rbrack.length(passes));
+		if (scanOnly)
+			try { Thread.sleep(300); } catch (InterruptedException e) {}
 		int index = 0;
 		while (!monitor.isCanceled()) {
 			long t1 = System.nanoTime();
