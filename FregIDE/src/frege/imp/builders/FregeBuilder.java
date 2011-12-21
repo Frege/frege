@@ -2,12 +2,14 @@ package frege.imp.builders;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.util.Iterator;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IMarker;
 import org.eclipse.core.resources.IResource;
+import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.Path;
@@ -46,7 +48,7 @@ import frege.rt.Box;
  * chooses to "Build" a project.
  * 
  */
-public class FregeBuilder extends BuilderBase {
+public class FregeBuilder extends FregeBuilderBase {
 	
 	public FregeBuilder() {
 		super();
@@ -134,7 +136,7 @@ public class FregeBuilder extends BuilderBase {
 		try {
 			final ISourceProject sourceProject 
 				= ModelFactory.open(file.getProject());
-			final String fromPath = file.getProjectRelativePath().toString();
+			final String fromPath = file.getFullPath().toString();
 			final FregeParseController.FregeData fd 
 				= new FregeParseController.FregeData(sourceProject);
 			final String[] srcs = fd.getSp().split(System.getProperty("path.separator"));
@@ -150,11 +152,11 @@ public class FregeBuilder extends BuilderBase {
 				final String fr = pack.replaceAll("\\.", "/") + ".fr";
 				for (String sf: srcs) {
 					final IPath p = new Path(sf + "/" + fr);
-					final String toPath = p.toPortableString();
-					// final java.io.File f = p.toFile();
+					final IResource toRes = file.getProject().findMember(p);  // .toPortableString
 					getPlugin().writeInfoMsg(
 							"DependenciesCollector looks for: " + p.toPortableString());
-					if (sourceProject.getRawProject().exists(p)) {
+					if (toRes != null) {
+						final String toPath = toRes.getFullPath().toString();
 						getPlugin().writeInfoMsg(
 								"DependenciesCollector found: " + toPath);
 						fDependencyInfo.addDependency(fromPath, toPath);
@@ -184,12 +186,14 @@ public class FregeBuilder extends BuilderBase {
 		try {
 			getPlugin().writeInfoMsg("Building frege file: " + file.getName());
 			runParserForCompiler(file, monitor); 
+			doRefresh(file.getProject());
 		} catch (Exception e) {
 			// catch Exception, because any exception could break the
-			// builder infra-structure.
+			// builder infrastructure.
 			getPlugin().logException(e.getMessage(), e);
 		}
 	}
+	
 
 	/**
 	 * This is a "compiler" implementation that simply uses the parse controller
@@ -280,6 +284,7 @@ public class FregeBuilder extends BuilderBase {
 									IMarker.SEVERITY_ERROR, 
 									se, 1, 0, 6);
 						}
+						// System.err.println(s);
 					}
 					getPlugin().writeErrorMsg("java compiler failed on " + target);
 					markerCreator.addMarker(IMarker.SEVERITY_INFO, 
