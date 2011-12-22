@@ -321,10 +321,10 @@ public class FregeParseController extends ParseControllerBase implements
 				TGlobal.sub(global), 
 				cancel));
 		
-		if (!scanOnly) {
-			System.err.println("parse for build");
-			global = runStG(frege.compiler.Main.withOption(TFlag.WITHCP), global);
-		}
+//		if (!scanOnly) {
+//			System.err.println("parse for build");
+//			global = runStG(frege.compiler.Main.withOption(TFlag.WITHCP), global);
+//		}
 		
 		
 		long t0 = System.nanoTime();
