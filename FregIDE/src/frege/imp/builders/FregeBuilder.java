@@ -3,13 +3,17 @@ package frege.imp.builders;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.util.Iterator;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IMarker;
+import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
+import org.eclipse.core.resources.IncrementalProjectBuilder;
 import org.eclipse.core.resources.ResourcesPlugin;
+import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.Path;
@@ -26,6 +30,9 @@ import org.eclipse.imp.model.ModelFactory;
 import org.eclipse.imp.model.ModelFactory.ModelException;
 import org.eclipse.imp.parser.IParseController;
 import org.eclipse.imp.runtime.PluginBase;
+import org.eclipse.jdt.core.IJavaProject;
+import org.eclipse.jdt.core.JavaCore;
+import org.eclipse.jdt.core.JavaModelException;
 
 
 import frege.FregePlugin;
@@ -50,9 +57,7 @@ import frege.rt.Box;
  */
 public class FregeBuilder extends FregeBuilderBase {
 	
-	public FregeBuilder() {
-		super();
-	}
+	public FregeBuilder() {}
 
 	/**
 	 * Extension ID of the Frege builder, which matches the ID in
@@ -69,10 +74,6 @@ public class FregeBuilder extends FregeBuilderBase {
 	public static final String WARNING_MARKER_ID = PROBLEM_MARKER_ID;
 	public static final String INFO_MARKER_ID = PROBLEM_MARKER_ID;
 
-	public static final String LANGUAGE_NAME = FregePlugin.kLanguageID;
-
-	public static final Language LANGUAGE = LanguageRegistry
-			.findLanguage(LANGUAGE_NAME);
 
 	@Override public PluginBase getPlugin() {
 		return FregePlugin.getInstance();
@@ -92,39 +93,6 @@ public class FregeBuilder extends FregeBuilderBase {
 
 	@Override public String getInfoMarkerID() {
 		return INFO_MARKER_ID;
-	}
-
-	/**
-	 * Decide whether a file needs to be build using this builder. Note that
-	 * <code>isNonRootSourceFile()</code> and <code>isSourceFile()</code>
-	 * should never return true for the same file.
-	 * 
-	 * @return true iff an arbitrary file is a frege source file.
-	 */
-	@Override public boolean isSourceFile(IFile file) {
-		IPath path = file.getRawLocation();
-		if (path == null)
-			return false;
-
-		String pathString = path.toString();
-		if (pathString.indexOf("/bin/") != -1)
-			return false;
-
-		return LANGUAGE.hasExtension(path.getFileExtension());
-	}
-
-	/**
-	 * Decide whether or not to scan a file for dependencies. Note:
-	 * <code>isNonRootSourceFile()</code> and <code>isSourceFile()</code>
-	 * should never return true for the same file.
-	 * 
-	 * @return true iff the given file is a source file that this builder should
-	 *         scan for dependencies, but not compile as a top-level compilation
-	 *         unit.
-	 * 
-	 */
-	@Override public boolean isNonRootSourceFile(IFile resource) {
-		return false;
 	}
 
 	/**
@@ -152,14 +120,18 @@ public class FregeBuilder extends FregeBuilderBase {
 				final String fr = pack.replaceAll("\\.", "/") + ".fr";
 				for (String sf: srcs) {
 					final IPath p = new Path(sf + "/" + fr);
-					final IResource toRes = file.getProject().findMember(p);  // .toPortableString
+					// getProject().getWorkspace().getRoot().getFile(new Path(depPath));
+					final IResource toRes = file.getProject().findMember(p);  
 					getPlugin().writeInfoMsg(
 							"DependenciesCollector looks for: " + p.toPortableString());
-					if (toRes != null) {
-						final String toPath = toRes.getFullPath().toString();
-						getPlugin().writeInfoMsg(
-								"DependenciesCollector found: " + toPath);
-						fDependencyInfo.addDependency(fromPath, toPath);
+					if (toRes != null && toRes instanceof IFile) {
+						final IFile to = (IFile) toRes;
+						// avoid endless recursion for frege.prelude.Base -> frege.prelude.Base
+						if (!file.equals(to))	{ 
+							this.addDependency(file, to);
+							getPlugin().writeInfoMsg(
+									"DependenciesCollector found: " + to.getFullPath());
+						}
 						break;
 					}
 				}
@@ -172,31 +144,29 @@ public class FregeBuilder extends FregeBuilderBase {
 		}
 	}
 
-	/**
-	 * @return true iff this resource identifies the output folder
-	 */
-	@Override  public boolean isOutputFolder(IResource resource) {
-		return resource.getFullPath().lastSegment().equals("bin");
-	}
+
 
 	/**
 	 * Compile one frege file.
 	 */
-	@Override public void compile(final IFile file, IProgressMonitor monitor) {
+	@Override public boolean compiled(final IFile file, IProgressMonitor monitor) {
+		boolean succ = false;
 		try {
 			getPlugin().writeInfoMsg("Building frege file: " + file.getName());
-			runParserForCompiler(file, monitor); 
+			succ = runParserForCompiler(file, monitor); 
 			doRefresh(file.getProject());
 		} catch (Exception e) {
 			// catch Exception, because any exception could break the
 			// builder infrastructure.
 			getPlugin().logException(e.getMessage(), e);
 		}
+		return succ;
 	}
+	@Override public void compile(IFile f, IProgressMonitor m) { compiled(f, m); }
 	
 
 	/**
-	 * This is a "compiler" implementation that simply uses the parse controller
+	 * This is a compiler implementation that simply uses the parse controller
 	 * to parse the given file, adding markers to the file for any errors,
 	 * warnings or hints that are reported.
 	 * 
@@ -209,10 +179,10 @@ public class FregeBuilder extends FregeBuilderBase {
 	 * @param file    input source file
 	 * @param monitor progress monitor
 	 */
-	protected void runParserForCompiler(final IFile file,
+	protected boolean runParserForCompiler(final IFile file,
 			final IProgressMonitor monitor) {
 		// a class we can give the compiler as progress monitor
-		class CompProgress extends org.eclipse.jdt.core.compiler.CompilationProgress  {
+		class CompProgress extends org.eclipse.jdt.core.compiler.CompilationProgress implements IProgressMonitor  {
 
 			@Override
 			public void begin(int arg0) { }
@@ -230,8 +200,34 @@ public class FregeBuilder extends FregeBuilderBase {
 
 			@Override
 			public void worked(int arg0, int arg1) { }
+
+			@Override
+			public void beginTask(String name, int totalWork) {
+				
+			}
+
+			@Override
+			public void internalWorked(double work) {
+				monitor.internalWorked(work);
+			}
+
+			@Override
+			public void setCanceled(boolean value) {
+				monitor.setCanceled(value);
+			}
+
+			@Override
+			public void subTask(String name) {
+				monitor.subTask(name);
+			}
+
+			@Override
+			public void worked(int work) {
+			}
 			
 		}
+		
+		boolean success = false;
 		try {
 			FregeParseController parseController = new FregeParseController();
 
@@ -245,7 +241,7 @@ public class FregeBuilder extends FregeBuilderBase {
 					sourceProject, markerCreator);
 
 			String contents = BuilderUtils.getFileContents(file);
-			final TGlobal result = parseController.parse(contents, monitor);
+			final TGlobal result = parseController.parse(contents, new CompProgress());
 			if (FregeParseController.errors(result) == 0) {
 				// run the eclipse java compiler
 				final String target = Box.<String>box(
@@ -266,7 +262,7 @@ public class FregeBuilder extends FregeBuilderBase {
 						+ target;
 				getPlugin().writeInfoMsg("batch-compile " + cmdline);
 				final StringWriter errs = new StringWriter();
-				final boolean success = org.eclipse.jdt.core.compiler.batch.BatchCompiler.compile(
+				success = org.eclipse.jdt.core.compiler.batch.BatchCompiler.compile(
 				   cmdline,
 				   new PrintWriter(System.out),
 				   new PrintWriter(errs),
@@ -294,9 +290,10 @@ public class FregeBuilder extends FregeBuilderBase {
 								+ target, 
 							1, 0, 1);
 				}
-				else getPlugin().writeInfoMsg("java compiled: " + target);
+				// else {
+				// 		getPlugin().writeInfoMsg("java compiled: " + target);
+				// }
 			}
-			monitor.done();
 
 			if (markerCreator instanceof MarkerCreatorWithBatching) {
 				((MarkerCreatorWithBatching) markerCreator).flush(monitor);
@@ -310,5 +307,15 @@ public class FregeBuilder extends FregeBuilderBase {
 					"Caught exception while building: ",
 					e);
 		}
+		return success;
 	}
+
+	/**
+	 * Alwasy false, there is not such thing in Frege
+	 */
+	@Override
+	protected boolean isNonRootSourceFile(IFile file) {
+		return false;
+	}
+
 }
