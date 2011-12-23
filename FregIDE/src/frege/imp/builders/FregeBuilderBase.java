@@ -14,50 +14,32 @@
 
 package frege.imp.builders;
 
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
 import org.eclipse.core.resources.IFile;
-import org.eclipse.core.resources.IMarker;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
 import org.eclipse.core.resources.IResourceDelta;
 import org.eclipse.core.resources.IResourceDeltaVisitor;
 import org.eclipse.core.resources.IResourceVisitor;
-import org.eclipse.core.resources.IWorkspace;
-import org.eclipse.core.resources.IWorkspaceRunnable;
-import org.eclipse.core.resources.IncrementalProjectBuilder;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.IStatus;
-import org.eclipse.core.runtime.Path;
 import org.eclipse.core.runtime.Status;
-import org.eclipse.core.runtime.jobs.ISchedulingRule;
 import org.eclipse.imp.builder.BuilderBase;
-import org.eclipse.imp.builder.DependencyInfo;
 import org.eclipse.imp.language.Language;
 import org.eclipse.imp.language.LanguageRegistry;
 import org.eclipse.imp.preferences.IPreferencesService;
-import org.eclipse.imp.preferences.PreferenceConstants;
-import org.eclipse.imp.preferences.PreferencesService;
-import org.eclipse.imp.runtime.PluginBase;
-import org.eclipse.imp.runtime.RuntimePlugin;
-import org.eclipse.imp.utils.UnimplementedError;
 import org.eclipse.jdt.core.IJavaProject;
 import org.eclipse.jdt.core.JavaCore;
 import org.eclipse.jdt.core.JavaModelException;
-import org.eclipse.jface.dialogs.MessageDialog;
-import org.eclipse.swt.widgets.Shell;
-import org.eclipse.ui.PlatformUI;
-
 import frege.FregePlugin;
 
 
@@ -142,13 +124,15 @@ public abstract class FregeBuilderBase extends BuilderBase {
 
 
     private final class SourceDeltaVisitor implements IResourceDeltaVisitor {
-        public boolean visit(IResourceDelta delta) throws CoreException {
+        @Override
+		public boolean visit(IResourceDelta delta) throws CoreException {
             return processResource(delta.getResource());
         }
     }
 
     private class SourceCollectorVisitor implements IResourceVisitor {
-        public boolean visit(IResource res) throws CoreException {
+        @Override
+		public boolean visit(IResource res) throws CoreException {
             return processResource(res);
         }
     }
@@ -176,7 +160,8 @@ public abstract class FregeBuilderBase extends BuilderBase {
             fResult= result;
         }
 
-        public boolean visit(IResource resource) throws CoreException {
+        @Override
+		public boolean visit(IResource resource) throws CoreException {
             if (resource instanceof IFile) {
                 IFile file= (IFile) resource;
 
@@ -194,7 +179,8 @@ public abstract class FregeBuilderBase extends BuilderBase {
     }
 
     
-    protected IProject[] build(int kind, Map args, IProgressMonitor monitor) {
+    @Override
+	protected IProject[] build(int kind, Map args, IProgressMonitor monitor) {
         if (getPreferencesService().getProject() == null) {
             getPreferencesService().setProject(getProject());
         }
@@ -319,7 +305,8 @@ public abstract class FregeBuilderBase extends BuilderBase {
      * 
      * Once a compilation fails, other files that depend on the failed one will not be compiled.
      */
-    protected void compileNecessarySources(IProgressMonitor monitor) {
+    @Override
+	protected void compileNecessarySources(IProgressMonitor monitor) {
     	Set<IFile> toCompile = new HashSet<IFile>();
     	for (IFile f : fChangedSources)
     		addTransitive(f, toCompile);
