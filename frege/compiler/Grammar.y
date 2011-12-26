@@ -216,7 +216,7 @@ vid t = (Token.value t, Pos t t)
 //%type exprSC          [Exp]
 //%type exprSS          [Exp]
 //%type pattern         Pat
-//%type funhead         (String, [Pat])
+//%type funhead         (Position, String, [Pat])
 //%type confld          [ConField String]
 //%type conflds         [ConField String]
 //%type contypes        [ConField String]
@@ -660,7 +660,7 @@ infix:
     ;
 
 annotation:
-    /*funhead*/ annoitems DCOLON sigma  { \as\_\s -> map (annotation s) as }
+    annoitems DCOLON sigma  { \as\_\s -> map (annotation s) as }
         ;
 
 annoitem:
@@ -949,7 +949,7 @@ wherelet:
 
 
 fundef:
-    funhead '=' expr        { \fh\eq\expr -> fundef fh (yyline eq) expr }
+    funhead '=' expr        { \fh\eq\expr -> fundef fh expr }
     | funhead guards        { \fh\gds -> fungds fh gds }
     | fundef wherelet       { \fdefs\defs ->
         case fdefs of
@@ -992,7 +992,7 @@ aeq: ARROW | '=';                   // we can make grammar conflict free if case
 
 lcqual:
     gqual
-    |expr '=' expr                  { \e\t\x -> do { fh <- funhead e; YYM.return (Right (fundef fh (yyline t) x)) }}
+    |expr '=' expr                  { \e\t\x -> do { fh <- funhead e; YYM.return (Right (fundef fh x)) }}
     | LET '{' letdefs '}'           { \_\_\ds\_ -> Right ds }
     ;
 
@@ -1396,12 +1396,12 @@ exprToPat e =
  *  @v = expr@ or
  *  @Nothing = expr@
  */
-funhead :: Exp -> YYM Global (String, [Pat])
+funhead :: Exp -> YYM Global (Position, String, [Pat])
 funhead (ex@Vbl {name}) = do
         pat <- exprToPat ex
         case pat of
-            PVar _ p ->  YYM.return  (p, [])
-            somepat  ->  YYM.return  ("let", [somepat])
+            PVar p v ->  YYM.return  (p, v, [])
+            somepat  ->  YYM.return  (getpos somepat, "let", [somepat])
 /**
  * Otherwise it should be an application
  * > a b c = ....
@@ -1412,49 +1412,33 @@ funhead (ex@Vbl {name}) = do
 funhead (ex@App e1 e2 _)
     | Vbl _ "!"  _ <- e1 = do
             pex <- exprToPat ex
-            YYM.return ("let", [pex])
+            YYM.return (getpos pex, "let", [pex])
     | otherwise = do
         pat <- exprToPat x
         ps  <- mapSt exprToPat xs
         case pat of
-            PVar _ p    -> YYM.return (p, ps)
-            PCon p n [] -> YYM.return ("let", [PCon p n ps])
+            PVar p var  -> YYM.return (p, var, ps)
+            PCon p n [] -> YYM.return (p, "let", [PCon p n ps])
             _ -> do
                 es <- U.showexM ex
                 yyerror (getpos x) ("bad function head " ++ es)
-                YYM.return ("bad", [pat])
+                YYM.return (getpos x, "bad", [pat])
     where
         flatex = map fst (U.flatx ex)
         x = head flatex
         xs = tail flatex
 
 
-
-
-/**
- * Also patterns are @x.foo x.{bar}@ and @x.{baz=p}@.
- */
- /*
-funhead (ex@Inv _ inv)
-    | Memfun _ <- inv    = pattern
-    | Recget _ <- inv    = pattern
-    | Recupd _ _ <- inv  = pattern
-    where pattern = ("let", [exprToPat ex], getDoc())
-    ;
-    */
-
 funhead ex = do
         let pos = getpos ex
         es <- U.showexM ex
         yyerror pos ("illegal left hand side of a function definition: " ++ es)
-        YYM.return ("_", [])
+        YYM.return (pos, "_", [])
 
 /**
  * construct a function definition as list
  */
-//fundef ("let", [PStrict (PVar [] (a,_))], docu) pos expr = [Fun pos Public {name=a, pats=[], expr, strict=true, docu}];
-//fundef ("let", [pat], docu) pos expr = letpat pos pat expr docu;
-fundef (name, pats) pos expr = [FunDcl {pos=pos, vis=Public, name, pats, expr, doc=Nothing}];
+fundef (pos, name, pats) expr = [FunDcl {pos=pos, vis=Public, name, pats, expr, doc=Nothing}];
 
 /**
  * construct a function with guards
@@ -1462,7 +1446,7 @@ fundef (name, pats) pos expr = [FunDcl {pos=pos, vis=Public, name, pats, expr, d
 fungds funhead gds = let
                 expr = gdsexpr gds;
                 (gdln,_,_)   = head gds;
-            in fundef funhead gdln expr;
+            in fundef funhead expr;
 
 
 
