@@ -268,6 +268,11 @@ public class FregeBuilder extends FregeBuilderBase {
 				   new PrintWriter(errs),
 				   new CompProgress());
 				if (!success) {
+					TPosition pos = (TPosition) TPosition.packageStart(result)._e();
+					TToken module = TPosition.first(pos);
+					int line = TToken.line(module);
+					int chStart = TToken.offset(module);
+					int chEnd = chStart + TToken.length(module);
 					String msg = errs.toString();
 					String[] msgs = msg.split(System.getProperty("line.terminator", "\n"));
 					Pattern p = Pattern.compile(":\\d+:\\s+error:(.*)");
@@ -278,21 +283,17 @@ public class FregeBuilder extends FregeBuilderBase {
 							String se = m.group(1);
 							markerCreator.addMarker(
 									IMarker.SEVERITY_ERROR, 
-									se, 1, 0, 6);
+									se, line, chStart, chEnd);
 						}
-						// System.err.println(s);
 					}
 					getPlugin().writeErrorMsg("java compiler failed on " + target);
 					markerCreator.addMarker(IMarker.SEVERITY_INFO, 
-							"Bad native declarations may cause java compiler errors. "
-								+ "When you're sure this is out of the question "
+							"Java compiler errors are almost always caused by bad native declarations. "
+								+ "When you're sure this is out of the question you've found a compiler bug, "
 								+ "please report under http://code.google.com/p/frege/issues/list and attach a copy of "
 								+ target, 
-							1, 0, 1);
+							line, chStart, chEnd);
 				}
-				// else {
-				// 		getPlugin().writeInfoMsg("java compiled: " + target);
-				// }
 			}
 
 			if (markerCreator instanceof MarkerCreatorWithBatching) {
