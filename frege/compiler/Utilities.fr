@@ -515,7 +515,7 @@ instance Nice Nice q => PatternT q where
             showp 13 p = showp 2 p
             showp 2  (PMat _ m r) = m ++ "~" ++ r
             showp 2  p = showp 1 p
-            showp 1  (p@PCon {qname,pats}) 
+            showp 1  (p@PCon {qname,pats})
                 | null pats || qname.nice g ~ #\(,+\)$# = showp 0 p
             showp 1  (PCon {qname, pats}) = qname.nice g ++ " " ++ joined " " (map (showp 0) pats)
             showp 1  p = showp 0 p
@@ -607,12 +607,17 @@ tuple n = let
         i = n-1
         commas = repeat ","
         string = "(" ++ fold (++) "" (take i commas) ++ ")"
-    in "PreludeBase." ++ string
+    in string
 
-mkTuple con pos [x] = x
-mkTuple con pos xs = fold app (con pos (tuple (length xs)) Nothing) xs where app a b = App a b Nothing
-mkpTuple pos [p] = p
-mkpTuple pos xs = PCon pos (tuple (length xs)) xs
+tupleName i = With1 baseToken baseToken.{tokid=CONID, value=tuple i}
+
+mkTuple con (pos::Position) [x] = x
+mkTuple con pos xs = fold app (con (pos.change CONID (tuple n)) (tupleName n) Nothing) xs
+    where !n = length xs
+          app a b = App a b Nothing
+mkpTuple (pos::Position) [p] = p
+mkpTuple pos xs = PCon (pos.change CONID (tuple n)) (tupleName n) xs
+    where !n = length xs
 
 {- ######################### symbol handling ######################## -}
 {--
@@ -620,12 +625,17 @@ mkpTuple pos xs = PCon pos (tuple (length xs)) xs
  -}
 insName :: DefinitionS -> String;
 insName idcl | idcl.{clas?}, idcl.{typ?} = clas ++ "_" ++ tcon idcl.typ where
-    clas = case qname idcl.clas of (_,_,x) -> x
+    clas = idcl.clas.id.value
     tcon (ForAll _ rho) = rhoTcon rho
     rhoTcon (RhoFun _ _ _)  = "->"
     rhoTcon (RhoTau _ tau)  = tauTcon tau
-    tauTcon (TCon {name=m~#^PreludeBase\.(\S+)$#}) = unJust (m.group 1)
-    tauTcon (TCon {name}) = (#\.#.matcher name).replaceAll "_"
+    -- tauTcon (TCon {name=m~#^PreludeBase\.(\S+)$#}) = unJust (m.group 1)
+    tauTcon (TCon {name}) = case name of
+        Simple t = t.value
+        With1{}
+            | name.ty.value == "PreludeBase" = name.id.value
+            | otherwise  = name.ty.value ++ "_" ++ name.id.value
+        With2{}  = Prelude.error ("insName: should not happen " ++ show name)
     tauTcon (TApp a _)     = tauTcon a
     tauTcon (TVar {var})  = var     -- undefined
     tauTcon (Meta _)      = "meta"  -- undefined
@@ -868,11 +878,11 @@ qname ".." = ("", "", "..")
 qname wrong = ("", "", wrong)     -- Prelude.error ("illegal name: " ++ wrong)
 
 {-- interpret NS.T or T as type name -}
-nstname :: String -> Global -> Maybe QName
-nstname s g = case qname s of
-    ("", "", t) -> Just (TName g.thisPack t)
-    ("", ns, t) -> case g.namespaces.lookup (NSX ns) of
-        Just p  -> Just (TName p t)
+nstname :: SName -> Global -> Maybe QName
+nstname s g = case s of
+    Simple t   -> Just (TName g.thisPack t.value)
+    With1 ns t -> case g.namespaces.lookup (NSX ns.value) of
+        Just p  -> Just (TName p t.value)
         Nothing -> Nothing
     _           -> Nothing
 
@@ -1175,7 +1185,7 @@ transRho partial (RhoTau ctx tau) = do
 {--
  * check a tau and translate it to 'QName' form
  -}
-transTau :: Bool -> TauT String -> StG (TauT QName)
+transTau :: Bool -> TauT SName -> StG (TauT QName)
 transTau partial (TVar {pos,var}) = do
         -- mbcs <- mapSt (resolveTName pos) classes
         -- let classes = [ c | Just c <- mbcs ]
@@ -1252,17 +1262,17 @@ accessforbidden we sym
     | MName (TName p _) _ <- Symbol.name sym = sym.vis == Private && p != we
     | otherwise = Prelude.error ("Strange symbol")
 
-resolve :: (String -> QName) -> Position -> String -> StG [QName]
-resolve3 :: (String -> QName) -> Position -> (String, String, String) -> StG [Symbol]
+resolve  :: (String -> QName) -> Position -> SName -> StG [QName]
+resolve3 :: (String -> QName) -> Position -> SName -> StG [Symbol]
 resolve fname pos sname = do
     g   <- getST
-    syms <- resolve3 fname pos (qname sname)
-    logmsg TRACE5 pos (text ("resolve: " ++ sname ++ " --> " ++ show (map (flip nice g) syms)))
+    syms <- resolve3 fname pos sname
+    logmsg TRACE5 pos (text ("resolve: " ++ show sname ++ " --> " ++ show (map (flip nice g) syms)))
     case partition (accessforbidden g.thisPack) syms of
         (psyms, asyms)
             | null psyms, null asyms = stio []      -- not found erros was flagged by resolve3
             | null asyms = do   -- only private symbols found
-                error pos (msgdoc ("`" ++ sname ++ "' resolves to private " ++ (flip nice g • head) psyms
+                error pos (msgdoc ("`" ++ show sname ++ "´ resolves to private " ++ (flip nice g • head) psyms
                             ++ ", access is not allowed."))
                 stio []         -- ignore private ones
             | otherwise = do
@@ -1270,14 +1280,15 @@ resolve fname pos sname = do
                 foreach ss (traceSym sname)
                 stio (map Symbol.name ss) -- some public ones found
             where
-                traceSym :: String -> Symbol -> StG ()
+                traceSym :: SName -> Symbol -> StG ()
                 traceSym sname symbol = do
-                    logmsg TRACE5 pos (text (sname ++ " resolved to " ++ nice symbol g ++ " ("
+                    logmsg TRACE5 pos (text (show sname ++ " resolved to " ++ nice symbol g ++ " ("
                         ++ QName.show symbol.name ++ ", " ++ show symbol.vis ++ ")"))
 
 -- resolve3 keeps the original name, i.e. 'Int.<=>' will not be resolved to 'Ord.<=>'
-resolve3 fname pos ("", "", s) = do
+resolve3 fname pos (Simple Token{value=qs}) = do
     g <- getST
+    let s = enclosed qs
     let local = Local s
         mname = fname s
         vname = VName g.thisPack s
@@ -1304,8 +1315,9 @@ resolve3 fname pos ("", "", s) = do
             more acc env = foldr (:) acc [ v.name.base | v <- values env,
                                     not (v::Symbol).{clas?} ]
 -- T.v  T.C  N.v  N.C N.T
-resolve3 _ pos ("", n, v) = do
+resolve3 _ pos (With1 Token{value=n} Token{value=qv}) = do
     g <- getST
+    let v = enclosed qv
     let tname   = TName g.thisPack n
         mname   = MName tname v         -- T.v or T.C
         member  = mname.findit g
@@ -1351,8 +1363,9 @@ resolve3 _ pos ("", n, v) = do
     es :: Symtab -> [String]
     es e = map (QName.base • Symbol.name) (values e)
 
-resolve3 _ pos (n,t,m) = do
+resolve3 _ pos (With2 Token{value=n} Token{value=t} Token{value=qm}) = do
     g <- getST
+    let m = enclosed qm
     case g.namespaces.lookup (NSX n) of
         Just pack -> case g.packages.lookup pack of
             Just env -> let tname = TName pack t in case tname.findit g of
@@ -1392,11 +1405,11 @@ resolveVName fname pos name = do
         let vnames = filter (not • isTName) qnames
         case vnames of
             x:xs -> stio x
-            []  | null qnames = stio (fname name)
+            []  | null qnames = stio (fname name.id.value)
                 | otherwise   = do
                     g <- getST
-                    error pos (msgdoc ("`" ++ nice (fname name) g ++ "` is not a variable, function or constructor."))
-                    stio (fname name)
+                    error pos (msgdoc ("`" ++ nice (fname name.id.value) g ++ "` is not a variable, function or constructor."))
+                    stio (fname name.id.value)
 
 resolveTName pos name = do
         qnames <- resolve (VName pPreludeBase) pos name
@@ -1405,12 +1418,12 @@ resolveTName pos name = do
             [x] -> stio (Just x)
             []  -> do
                 when ((not • null) qnames) do
-                    error pos (msgdoc ("`" ++ name ++ "` is not a type, class or instance."))
+                    error pos (msgdoc ("`" ++ show name ++ "` is not a type, class or instance."))
                 stio Nothing
             more -> do
                 g <- getST
                 fatal pos (msgdoc ("ambiguous type name ++ `"
-                    ++ name ++ "`, could be "
+                    ++ show name ++ "`, could be "
                     ++ display (map (flip QName.nice g) tnames)))
                 -- stio Nothing
 
@@ -1881,9 +1894,11 @@ sigmaInst g sigma1 sigma2 = [ s | Just s <-  map (Tree.lookupS tree) (Sigma.boun
  * If @tau@ is not a tuple, it is handed down to tauCtx.
  * A valid context is a tyname applied to a type variable or an application of type variables.
  -}
+tauToCtx :: Position -> TauS -> StG [ContextS]
 tauToCtx pos tau
     | TApp _ _ <- tau = case tau.flat of
-        (TCon {name = #^(PreludeBase\.)?\(,+\)$#} : subtaus) = do
+        (TCon {name = With1{ty, id}} : subtaus)
+          | ty.value==baseToken.value, id.value ~ ´^\(,+\)$´ = do
             ctxss <- mapSt tauCtx subtaus
             let ctxs = [ ctx | ctxs <- ctxss, ctx <- ctxs ]
             stio ctxs

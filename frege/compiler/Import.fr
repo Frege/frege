@@ -168,10 +168,10 @@ importHere d = U.fatal d.pos (text ("must be an import definition, not " ++ show
 importEnv :: Position -> Symtab -> NSName -> ImportList -> StG ()
 importEnv pos env ns (imp@Imports {except=true, items}) = do
         g <- getST
-        let xs = [ (ns.unNS ++ "." ++ ImportItem.name e) | e <- items ]
+        let xs = [ withNS ns.unNS  (ImportItem.name e) | e <- items ]
         exss <- mapSt (U.resolve (VName g.thisPack) pos) xs
         let exs = fold (++) [] exss
-            nitems = [ protoItem.{ pos, name  = (Symbol.name sym).base,
+            nitems = [ protoItem.{ name = Simple pos.first.{tokid=VARID, value=(Symbol.name sym).base},
                                       members = nomem csym,
                                       alias   = (Symbol.name sym).base} |
                         sym <- sortBy (comparing constructor) (values env),         -- place SymL before SymC
@@ -190,14 +190,15 @@ importEnv pos env ns (imp@Imports {except=true, items}) = do
 importEnv pos env ns (imp@Imports {publik=true, items})
     = importEnv pos env ns imp.{publik = false, items <- map ImportItem.export}
 --- All items in the list are processed one by one
-importEnv pos env ns (Imports {items}) = foreach items (linkItem (ns.unNS ++ "."))
+importEnv pos env ns (Imports {items}) = foreach items (linkItem ns.unNS)
 
 --- a symbolic link is dereferenced and the link goes to the target
 linkHere ns (item@Item {alias=itema}) (link@SymL {name, alias}) = do
+    let pos = Pos item.name.id item.name.id
     g <- getST
     case alias.findit g of
         Just sym -> linkHere ns item sym
-        Nothing -> U.fatal (item.pos) (text (link.name.nice g ++ " points to non-existing " ++ link.alias.nice g))
+        Nothing -> U.fatal (pos) (text (link.name.nice g ++ " points to non-existing " ++ link.alias.nice g))
 
 -- an alias of Nothing is replaced by the base name of the item linked to
 -- linkHere ns (item@Item {alias=Nothing}) sym = linkHere ns item.{alias = Just sym.name.base} sym
@@ -205,7 +206,8 @@ linkHere ns (item@Item {alias=itema}) (link@SymL {name, alias}) = do
 -- linkHere ns (item@Item {alias=Just ""}) sym = U.fatal item.pos ("bad alias for " ++ item.name ++ ", must be at least 1 char")
 
 -- otherwise the alias is checked for correctness
-linkHere ns (item@Item {pos,publik,name,members,alias=newn}) sym = do
+linkHere ns (item@Item {publik,name,members,alias=newn}) sym = do
+    let pos   = Pos name.id name.id
     let conid = (newn.elemAt 0).isUpperCase
         conidOk
             | TName _ _ <- sym.name = true
@@ -232,17 +234,17 @@ linkHere ns (item@Item {pos,publik,name,members,alias=newn}) sym = do
     case sym of
         SymT {env}
             | Nothing <- members = do        -- link constructors also
-                let cons = [ item.{name <- (++ ("." ++ mem.name.base)),
+                let cons = [ item.{name <- (pos.first.{tokid=CONID, value=mem.name.base} `qBy`),
                                     members = Nothing,
                                     alias = mem.name.base, publik = false}
                                 | mem@SymD {pos} <- values env, mem.vis != Private ]
                 foreach cons (linkItem ns)
             | Just ms <- members = do
-                let nms = map  ImportItem.{name <- ((item.name ++ ".") ++)} ms
+                let nms = map  ImportItem.{name <- (`qBy` item.name) • SName.id} ms
                 foreach nms (linkItem ns)
         SymC {env}
             | Nothing <- members =  do        -- link class methods
-                let meth = [  item.{name <- (++ ("." ++ sym.name.base)),
+                let meth = [  item.{name <- (pos.first.{tokid=VARID, value=sym.name.base} `qBy`),
                                     members = Nothing, alias = sym.name.base}
                                 | sym@SymV {pos, vis} <- values env,
                                   vis == Public || vis == Abstract,
@@ -251,16 +253,17 @@ linkHere ns (item@Item {pos,publik,name,members,alias=newn}) sym = do
                     defined s = isJust (QName.find (VName g.thisPack s) g)
                 foreach meth (linkItem ns)
             | Just ms <- members = do
-                let nms = map  ImportItem.{name <- ((item.name ++ ".") ++)} ms
+                let nms = map  ImportItem.{name <- (`qBy` item.name) • SName.id} ms
                 foreach nms (linkItem ns)
         _ -> if isNothing members then stio ()
              else do
-                U.error pos (msgdoc ("Member list not allowed for " ++ name))
+                U.error pos (msgdoc ("Member list not allowed for " ++ show name))
                 stio ()
 
-linkItem ns (item@Item {pos,publik,name,members,alias}) = do
+linkItem ns (item@Item {publik,name,members,alias}) = do
     g <- getST
-    res <- U.resolve (VName g.thisPack) pos (ns ++ name)
+    let pos = Pos name.id name.id
+    res <- U.resolve (VName g.thisPack) pos (withNS ns name)
     case res of
         [] -> stio ()       -- got error message from resolve or excluded
         [x] -> case x.findit g of
@@ -460,7 +463,7 @@ importClassData pos pack = do
                     flds = zipWith mkcf names types,
                     strsig = decodeS sym.stri }
                   where sym = arr.[n]
-                        mkcf nm ty = Field nm Nothing ty
+                        mkcf nm ty = Field Position.null nm Nothing ty
                         vis = if sym.priv then Private else if sym.publik then Public else Protected
                         types = [ nSigma t | i <- 0..sym.ftys.length-1, t=sym.ftys.[i]]
                         names | sym.fnms.length == 0 = repeat Nothing
@@ -584,7 +587,7 @@ preludeBasics = do
                 sid=0, pos=Position.null, vis=Public, doc=Just "empty list",
                 strsig = U})
     U.enter (SymD {name = listCons, typ = consTy, cid=1,
-                   flds = map (Field Nothing Nothing) [ForAll [] (RhoTau [] va), listTy],
+                   flds = map (Field Position.null Nothing Nothing) [ForAll [] (RhoTau [] va), listTy],
                    sid=0, pos=Position.null, vis=Public, doc=Just "list construction",
                    strsig = U})
     U.enter (SymL {name = VName pPreludeBase "[]", alias = listNil,
@@ -611,7 +614,7 @@ preludeBasics = do
             tvs  = take n tvars                     -- TVar 1 "a", TVar 1 "b", ...
             vs   = take n vars                      -- "a", "b", ...
             sigmas = map (ForAll [] • RhoTau []) tvs   -- ForAll (RhoTau (TVar 1 "a")), ...
-            flds   = map (Field Nothing Nothing) sigmas       -- (Nothing, a), (Nothing, b)
+            flds   = map (Field Position.null Nothing Nothing) sigmas       -- (Nothing, a), (Nothing, b)
             tupleT   = TName pPreludeBase name          -- Prelude.(,)
             tupleC   = MName tupleT   name          -- Prelude.(,).(,)
             tupleRho = RhoTau [] (Tau.mkapp (TCon Position.null tupleT) tvs)   -- (a,b,...)

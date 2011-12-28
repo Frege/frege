@@ -115,9 +115,10 @@ chgddef (d@DatDcl {pos}) = do
     where
         work g (dsym@SymT {env}) =
                 let cons   = [ sym | sym@SymD {sid} <- values env ]
-                    fields = (uniq • sort) [ f | con <- cons, Field {name = Just f} <- Symbol.flds con ]
-                in [ d | f <- fields, d <- gen g dsym.pos dsym.name cons f]
+                    fields = (uniqBy (using fst) • sort) [ (f,p) | con <- cons, Field {pos = p, name = Just f} <- Symbol.flds con ]
+                in [ d | (f,p) <- fields, d <- gen g p dsym.name cons f]
         work _ _ = error "work: need a SymT"
+        gen :: Global -> Position -> QName -> [Symbol] -> String -> [DefinitionS]
         gen g pos tname cons f = let
                 model = FunDcl {vis=Public, pos, name="", pats=[pvar "this"], expr = var "x", doc=Nothing}
                 symf =  model.{name = f, expr = getExpr,
@@ -146,12 +147,13 @@ chgddef (d@DatDcl {pos}) = do
                 arity sym = length (Symbol.flds sym)
                 -- displayed name of a constructor
                 cname sym = case Symbol.name sym of
-                    MName tn base -> tn.nice g ++ "." ++ base
+                    MName tn base -> With1 pos.first.{tokid=CONID, value=tn.base}
+                                           pos.first.{tokid=CONID,value=base}
                     _ -> error "constructor must be a member"
                 -- [PVar c1, PVar c2, PVar c3, ...]
                 -- subpats "_" = repeat (PVar {name="_",pos})
-                subpats c = [ PVar {var=c ++ show a, pos} | a <- 1..1000 ]
-                subvars = [ Vbl  {name="a" ++ show a, pos, typ = Nothing} | a <- 1..1000 ]
+                subpats c = [ pvar (c   ++ show a)   | a <- 1..1000 ]
+                subvars   = [ var  ("a" ++ show a)   | a <- 1..1000 ]
                 -- construct pattern  Con s1 s2 s3 ... sn
                 conpat con s = PCon {qname=cname con,pos,pats}
                     where pats = take (arity con) (subpats s)
@@ -160,15 +162,16 @@ chgddef (d@DatDcl {pos}) = do
                         sv (p@PVar {var}) | var == v = PStrict p
                         sv p = p
                 reppat v p = p
-                --* construct simple (pattern) variables
+                -- construct simple (pattern) variables
                 pvar s = PVar {var=s,pos}
-                var  s = Vbl  {name=s,pos,typ = Nothing}
-                --* replace a variable named a with expr b in a list
+                var  s = Vbl  {name=Simple pos.first.{value=s},pos,typ = Nothing}
+                -- replace a variable named a with expr b in a list
                 rep a b vs = map (repvar a b) vs                -- replace Vbl ONLY!
-                repvar a b v = if Expr.name v == a then b else v
-                --* constructor expression
+                repvar :: String -> ExprS -> ExprS -> ExprS
+                repvar a b v = if (Expr.name v).id.value == a then b else v
+                -- constructor expression
                 conval con = Con {name=cname con,pos,typ=Nothing}
-                --* make an app
+                -- make an app
                 mkApp x xs = fold nApp x xs
                 this   = var "this"
                 that   = var "that"
@@ -179,14 +182,14 @@ chgddef (d@DatDcl {pos}) = do
                                                         | con <- cons, v <- occurs con f]
                 updExpr = Case CNoWarn this updAlts Nothing
                 conUpd :: Symbol -> ExprS -> ExprS
-                conUpd con v = mkApp (conval con) (rep v.name that (take (arity con) subvars))
+                conUpd con v = mkApp (conval con) (rep v.name.id.value that (take (arity con) subvars))
                 updAlts = [ CAlt {pos,env=Nil,pat=conpat con "a", ex = conUpd con v}
                                                         | con <- cons, v <- occurs con f]
                 chgExpr = Case CNoWarn this chgAlts Nothing
                 conChg :: Symbol -> ExprS -> ExprS
-                conChg con v = mkApp (conval con) (rep v.name (nApp that v) (take (arity con) subvars))
-                chgAlts = [ CAlt {pos,env=Nil,pat=reppat (Expr.name v) (conpat con "a"), ex = conChg con v}
-                                                        | con <- cons, v <- occurs con f]
+                conChg con v = mkApp (conval con) (rep v.name.id.value (nApp that v) (take (arity con) subvars))
+                chgAlts = [ CAlt {pos,env=Nil,pat=reppat (Expr.name v).id.value (conpat con "a"), ex = conChg con v}
+                                                        | con <- cons, (v::ExprS) <- occurs con f]
                 hasExpr = Case CNoWarn this (hasAlts ++ [last]) Nothing
                 hasAlts = [ CAlt {pos,env=Nil,pat=conpat con "_", ex = vTrue}
                                                         | con <- cons, v <- occurs con f]
@@ -410,7 +413,7 @@ enter1 fname (d@JavDcl {pos}) = do
         U.enter (SymT {sid=0, pos=d.pos, vis=d.vis, doc=d.doc, name=dname,
                        product = false, enum = false, newt = false, pur = d.isPure,
                        typ=ForAll (map Tau.var d.vars) (RhoTau [] dtau),
-                       nativ = Just d.clas, env=Nil})
+                       nativ = Just d.jclas, env=Nil})
         enter (MName dname) d.defs
 
 enter1 fname (d@TypDcl {pos}) = do
@@ -471,35 +474,56 @@ deriveDcls pos clas forty ctrs = do
         isEnum = all (0==) (map arity ctrs)
         -- displayed name of a constructor
         cname sym = case Symbol.name sym of
-            MName tn base -> tn.nice g ++ "." ++ base
+            MName tn base -> With1 pos.first.{tokid=CONID, value=tn.base}
+                                   pos.first.{tokid=CONID, value=base}
             _ -> error "constructor must be a member"
         -- [PVar c1, PVar c2, PVar c3, ...]
         subpats "_" = repeat (pvar "_")
         subpats c = [ pvar (c ++ show a) | a <- 1..1000 ]
         subvars c = [ var  (c ++ show a) | a <- 1..1000 ]
         -- construct pattern  Con s1 s2 s3 ... sn
-        conpat con s = PCon {qname=cname con, pos=pos.change QCONID (cname con), pats}
+        conpat :: Symbol -> String -> PatternS
+        conpat con s = PCon {qname=cname con, pos=pos.change QCONID con.name.base, pats}
             where pats = take (arity con) (subpats s)
-        --* construct simple (pattern) variables
+        -- construct simple (pattern) variables
+        pvar :: String -> PatternS
         pvar s = PVar {var =s,pos=pos.change VARID s}
-        var  s = Vbl  {name=s,pos=pos.change VARID s, typ = Nothing}
+        var :: String -> ExprS
+        var  s = Vbl  {name=Simple pos.first.{tokid=VARID, value=s},pos=pos.change VARID s, typ = Nothing}
+        gvar p s = Vbl {name=With1 pos.first.{tokid=CONID, value=p} pos.first.{tokid=VARID, value=s},
+                        pos=pos.change VARID s, typ = Nothing}
+        gvar2 p t s = Vbl {name=With2 pos.first.{tokid=CONID, value=p}
+                                      pos.first.{tokid=CONID, value=t}
+                                      pos.first.{tokid=VARID, value=s},
+                        pos=pos.change VARID s, typ = Nothing}
         !varg1  = var  "arg1"
         !varg2  = var  "arg2"
         !parg1  = pvar "arg1"
         !parg2  = pvar "arg2"
-        --* construct tuples
-        ptcon pats  = PCon {qname="PreludeBase.(,).(,)", pos=pos.change CONID "(,)", pats}
-        !vtcon      = Con  {name= "PreludeBase.(,).(,)", pos=pos.change CONID "(,)", typ = Nothing}
+        -- misc global SNames
+        tuple2Name  = With1 baseToken pos.first.{tokid=CONID, value="(,)"}
+        unitName    = With1 baseToken pos.first.{tokid=CONID, value="()"}
+        eqName      = With2 baseToken pos.first.{tokid=CONID, value="Ordering"} pos.first.{tokid=CONID, value="Eq"}
+        eqeqName    = With2 baseToken pos.first.{tokid=CONID, value="Eq"} pos.first.{tokid=VARID, value="=="}
+        undefName   = With1 baseToken pos.first.{tokid=VARID, value="undefined"}
+        errorName   = With1 baseToken pos.first.{tokid=VARID, value="error"}
+        appName     = With2 baseToken pos.first.{tokid=CONID, value="String"} pos.first.{tokid=VARID, value="++"}
+        showName    = With1 pos.first.{tokid=CONID, value="PreludeText"} pos.first.{tokid=VARID, value="show"}
+        ptcon pats  = PCon {qname=tuple2Name, pos=pos.change CONID "(,)", pats}
+        !vtcon      = Con  {name= tuple2Name, pos=pos.change CONID "(,)", typ = Nothing}
         ptup a b = ptcon [a,b]
         vtup a b = nApp  (nApp  vtcon a) b
-        --* misc constructors and vars
-        !pEq = PCon {qname="PreludeBase.Ordering.Eq", pos=pos.change CONID "Eq", pats=[]}
-        !pUn = PCon {qname="PreludeBase.().()", pos=pos.change CONID "()", pats=[]}
-        !vEq = Con  {name="PreludeBase.Ordering.Eq", pos=pos.change CONID "Eq", typ = Nothing}
+        -- misc constructors and vars
+        !pEq = PCon {qname=eqName, pos=pos.change CONID "Eq", pats=[]}
+        !pUn = PCon {qname=unitName, pos=pos.change CONID "()", pats=[]}
+        !vEq = Con  {name=eqName, pos=pos.change CONID "Eq", typ = Nothing}
         !vFalse = Lit {kind=LBool, value="false", pos, typ = Nothing}
         !vTrue  = Lit {kind=LBool, value="true",  pos, typ = Nothing}
-        !vUndef = Vbl {name="PreludeBase.undefined", pos=pos.change CONID "undefined", typ = Nothing}
-        !vError = Vbl {name="PreludeBase.error",     pos=pos.change CONID "error", typ = Nothing}
+        !vUndef = Vbl {name=undefName, pos=pos.change VARID "undefined", typ = Nothing}
+        !vError = Vbl {name=errorName, pos=pos.change VARID "error", typ = Nothing}
+        !vApp   = Vbl {name=appName,   pos=pos.change VARID "++", typ = Nothing}
+        !vShow  = Vbl {name=showName,  pos=pos.change VARID "show", typ = Nothing}
+        !opEq   = Vbl {name=eqeqName,  pos=pos.change VARID "==", typ = Nothing}
         string s = Lit {kind=LString, value=show s,  pos=pos.change STRCONST (show s), typ = Nothing}
         -- int :: Int -> ExprT String
         -- int n    = Lit  {kind=LInt, value=n.show, pos=pos.change INTCONST (show n), typ = Nothing}
@@ -510,9 +534,9 @@ deriveDcls pos clas forty ctrs = do
                         doc=Just "Function generated for derived istance."}
         calt p x  = CAlt {pos, env=Nil, pat=p, ex=x}
         -- construct  a ++ b
-        mkapp a b = nApp (nApp (var "PreludeBase.String.++") a) b
+        mkapp a b = nApp (nApp vApp a) b
         -- construct "show v"
-        showit v = var "PreludeText.show" `nApp` v
+        showit v = vShow `nApp` v
         -- construct  a `op` b
         mkbin op a b = nApp (nApp (var op) a) b
         -- derive Eq
@@ -522,10 +546,10 @@ deriveDcls pos clas forty ctrs = do
             alts  = map mkequalalt ctrs ++ deflt
             deflt = if length ctrs == 1 then [] else [dalt]
             dalt  = calt (pvar "_") vFalse
-            cond  = nApp  (nApp (var "PreludeBase.Eq.==") ca1) ca2
-            ca1   = nApp (var "PreludeBase.constructor") varg1
-            ca2   = nApp (var "PreludeBase.constructor") varg2
-            --* (C,C) -> true, (C1 a1 a2, C1 b1 b2) -> a1 == b1 && a2==b2
+            cond  = nApp  (nApp opEq ca1) ca2
+            ca1   = nApp (gvar "PreludeBase" "constructor") varg1
+            ca2   = nApp (gvar "PreludeBase" "constructor") varg2
+            -- (C,C) -> true, (C1 a1 a2, C1 b1 b2) -> a1 == b1 && a2==b2
             mkequalalt con = calt (ptup peq1 peq2) eqex
                 where
                     a = arity con
@@ -534,10 +558,10 @@ deriveDcls pos clas forty ctrs = do
                     sub1 = take a (subvars "a")
                     sub2 = take a (subvars "b")
                     eqex = andit (map eqit (zip sub1 sub2))
-                    eqit (a,b) = nApp (nApp (var "PreludeBase.Eq.==") a) b
+                    eqit (a,b) = nApp (nApp opEq a) b
                     andit [] = vTrue
                     andit [x] = x
-                    andit (x:xs) = nApp (nApp (var "PreludeBase.&&") x) (andit xs)
+                    andit (x:xs) = nApp (nApp (gvar "PreludeBase" "&&") x) (andit xs)
         -- derive Ord
         deriveClass "Ord"
             | [prod] <- ctrs = [publicfun "<=>"
@@ -551,7 +575,7 @@ deriveDcls pos clas forty ctrs = do
                     | a == n+1  = comp
                     | otherwise = Case CNormal comp [calt1, calt2] Nothing
                     where
-                        cmp = var "PreludeBase.Ord.<=>"
+                        cmp = gvar2 "PreludeBase" "Ord" "<=>"
                         va  = var ("a" ++ show (n+1))
                         vb  = var ("b" ++ show (n+1))
                         comp = nApp (nApp cmp va) vb
@@ -565,9 +589,9 @@ deriveDcls pos clas forty ctrs = do
                         peq2 = conpat con "b"    -- C b1 b2 .. bn
                         oex  = ordex a 0
                 outercase = Case CNormal  defex [alt1, alt2] Nothing
-                defex     = nApp (nApp (var "PreludeBase.Ord.<=>") oa1) oa2
-                oa1       = nApp (var "PreludeBase.constructor") varg1
-                oa2       = nApp (var "PreludeBase.constructor") varg2
+                defex     = nApp (nApp (gvar2 "PreludeBase" "Ord" "<=>") oa1) oa2
+                oa1       = nApp (gvar "PreludeBase" "constructor") varg1
+                oa2       = nApp (gvar "PreludeBase" "constructor") varg2
                 alt1      = calt pEq cas
                 alt2      = calt (pvar "x") (var "x")
                 cas       = if isEnum then vEq else Case CNormal (vtup varg1 varg2) eqexs Nothing
@@ -595,7 +619,7 @@ deriveDcls pos clas forty ctrs = do
                         sub  = take (arity con) (subvars "a")
                         sx   = joinit scon sub
                         blanked s  = s `mkapp` string " "
-                        showit v   = var "PreludeText.showsub" `nApp` v
+                        showit v   = gvar "PreludeText" "showsub" `nApp` v
                         showsv s v = blanked s `mkapp` showit v
                         joinit s [] = s
                         joinit s (v:vs) = joinit (showsv s v) vs
@@ -621,12 +645,12 @@ deriveDcls pos clas forty ctrs = do
                 from    = publicfun "from"  [pvar "r"]      fex
                 succ    = publicfun "succ"  [pvar "r"]      sex
                 pred    = publicfun "pred"  [pvar "r"]      pex
-                eqex    = (var "PreludeBase.Ordering.==" `nApp`
+                eqex    = (opEq `nApp`
                             ((var "<=>" `nApp` var "a") `nApp` var "b")) `nApp`
-                                Con {pos, name="PreludeBase.Ordering.Eq", typ=Nothing}
+                                pEq
                 ctup    = sortBy (comparing Symbol.cid) ctrs
                 ctdn    = reverse ctup
-                oex     = nApp (var "PreludeBase.constructor") (var "r")
+                oex     = nApp (gvar "PreludeBase" "constructor") (var "r")
                 fex     = Case CNormal (var "r") (map fromalt ctup ++ [last]) Nothing
                 sex     = Case CNormal (var "r") (mkalts "succ " ctup) Nothing
                 pex     = Case CNormal (var "r") (mkalts "pred " ctdn) Nothing
@@ -635,7 +659,7 @@ deriveDcls pos clas forty ctrs = do
                           `mkapp` string ".from ")
                           `mkapp` showit (var "r")                  -- "X" ++ ".from " ++ show r
                 fromalt ctr = calt (pint (Symbol.cid ctr)) (Con {name=cname ctr, pos, typ=Nothing})
-                mkalts s [x] = [calt (conpat x "_") (nApp vError (string (s ++ cname x)))]
+                mkalts s [x] = [calt (conpat x "_") (nApp vError (string (s ++ show (cname x))))]
                 mkalts s (x:y:zs) = calt (conpat x "_") (Con  {name=cname y, pos, typ = Nothing}) : mkalts s (y:zs)
                 mkalts s [] = []
 

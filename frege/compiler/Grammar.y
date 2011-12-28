@@ -66,8 +66,8 @@ version = v "$Revision$" where
 
 type ParseResult = (String, [Def], Maybe String)
 type Def = DefinitionT
-type Exp = ExprT String
-type Pat = PatternT String
+type Exp = ExprT SName
+type Pat = PatternT SName
 type Item = Token
 type Qual = Either (Maybe (Pos Pat), Exp) [Def]
 type Guard = (Position, [Qual], Exp)
@@ -121,12 +121,12 @@ vid t = (Token.value t, Pos t t)
  Note that types like "Maybe x" on the RHS must be given like so: (Maybe x)
  */
 //%type package         ParseResult
+//%type varop           Token
 //%type commata         Int
 //%type semicoli        Int
 //%type packagename     String
 //%type nativename      String
 //%type nativepur       Bool
-//%type dconid          String
 //%type docs            String
 //%type opstring        String
 //%type boundvar        String
@@ -139,14 +139,11 @@ vid t = (Token.value t, Pos t t)
 //%type aeq             Token
 //%type varid           (Pos String)
 //%type varids          [Pos String]
-//%type conid           (Pos String)
-//%type qvarid          (Pos String)
-//%type qconid          (Pos String)
+//%type qvarid          SName
+//%type qconid          SName
 //%type qunop           (Pos String)
 //%type binop           (Pos String)
-//%type unary           (Pos String)
-//%type tyname          (Pos String)
-//%type importitem      (Pos String)
+//%type tyname          SName
 //%type annoitem        (Pos String)
 //%type nativestart     (Pos String)
 //%type importspec      ImportItem
@@ -202,8 +199,8 @@ vid t = (Token.value t, Pos t t)
 //%type fldtypes        [(Pos String, SigmaS)]
 //%type field           (String, Exp)
 //%type fields          [(String, Exp)]
-//%type getfield        (String, Bool,Exp)
-//%type getfields       [(String,Bool,Exp)]
+//%type getfield        (Token, Bool,Exp)
+//%type getfields       [(Token,Bool,Exp)]
 //%type unex            Exp
 //%type term            Exp
 //%type appex           Exp
@@ -217,9 +214,9 @@ vid t = (Token.value t, Pos t t)
 //%type exprSS          [Exp]
 //%type pattern         Pat
 //%type funhead         (Position, String, [Pat])
-//%type confld          [ConField String]
-//%type conflds         [ConField String]
-//%type contypes        [ConField String]
+//%type confld          [ConField SName]
+//%type conflds         [ConField SName]
+//%type contypes        [ConField SName]
 //%type dalt            DConS
 //%type simpledalt      DConS
 //%type strictdalt      DConS
@@ -238,6 +235,7 @@ vid t = (Token.value t, Pos t t)
 //%explain packageclause a package clause
 //%explain packagename  a package name
 //%explain semicoli     the next definition
+//%explain varop        a variable or an operator
 //%explain operator     an operator
 //%explain operators    some operators
 //%explain import       a package import
@@ -245,7 +243,6 @@ vid t = (Token.value t, Pos t t)
 //%explain fixity       the start of a fixity declaration
 //%explain typedef      a type declaration
 //%explain annotation   an annotation
-//%explain conid        a constructor or type name
 //%explain qconid       a qualified constructor or type name
 //%explain docs         a sequence of doc comments
 //%explain importliste  an import list
@@ -255,14 +252,12 @@ vid t = (Token.value t, Pos t t)
 //%explain memspecs     a list of member imports
 //%explain qunop        a qualified unary operator
 //%explain unop         an unary operator
-//%explain unary        an unary operator
 //%explain varid        a variable name
 //%explain varids       a list of field names
 //%explain qvarid       a qualified variable name
 //%explain importitem   an import item
 //%explain alias        a simple name for a member or import item
 //%explain binop        a binary operator
-//%explain dconid       a type or class name
 //%explain commata      a sequence of one or more ','
 //%explain topdefinition a top level declaration
 //%explain publicdefinition a declaration
@@ -421,17 +416,17 @@ package:
     ;
 
 nativename:
-      qconid                    { posItem }
-    | qvarid                    { posItem }
-    | qconid '.' nativename     { \a\_\c -> posItem a ++ "." ++ c }
-    | qvarid '.' nativename     { \a\_\c -> posItem a ++ "." ++ c }
+      VARID                     { \t -> Token.value t }
+    | CONID                     { \t -> Token.value t }
+    | VARID  '.' nativename     { \a\_\c -> Token.value a ++ "." ++ c }
+    | QUALIFIER  nativename     { \a\c   -> Token.value a ++ "." ++ c }
     | STRCONST                  { \x -> let s = Token.value x; i = length s - 1 in substr s 1 i }
     ;
 
 packagename:
-    qconid                              { posItem }
-    | qvarid '.' packagename            { \a\_\c -> repljavakws (posItem a) ++ "." ++ c }
-    | qconid '.' packagename            { \a\_\c -> posItem a ++ "." ++ c }
+    CONID                       { \t -> Token.value t }
+    | VARID '.' packagename     { \a\_\c -> repljavakws (Token.value a) ++ "." ++ c }
+    | QUALIFIER packagename     { \a\c   -> Token.value a ++ "." ++ c }
     ;
 
 docs:
@@ -542,13 +537,13 @@ letdefs:
 import:
     IMPORT   packagename importliste
         { \i\b\c -> ImpDcl {pos=yyline i, pack=b, imports=c, as=Nothing} }
-    | IMPORT packagename VARID conid importliste { \i\p\a\c\l -> do
+    | IMPORT packagename VARID CONID importliste { \i\p\a\c\l -> do
             when (Token.value a != "as") do
                 yyerror (yyline a) (show "as" ++ " expected instead of " ++ show (Token.value a))
-            YYM.return ImpDcl {pos = yyline i, pack = p, imports = l, as = Just (posItem c)}
+            YYM.return ImpDcl {pos = yyline i, pack = p, imports = l, as = Just (Token.value c)}
         }
-    | IMPORT packagename conid importliste { \i\p\c\l ->
-            ImpDcl {pos = yyline i, pack = p, imports = l, as = Just (posItem c)}
+    | IMPORT packagename CONID importliste { \i\p\c\l ->
+            ImpDcl {pos = yyline i, pack = p, imports = l, as = Just (Token.value c)}
         }
     ;
 
@@ -556,12 +551,12 @@ importliste:
     { linkAll }
     | varid '(' importspecs ')' { \v\_\is\_ -> do
             when ( posItem v `notElem` [ "except", "excluding", "without", "außer", "ohne", "hiding" ]) do
-                yyerror (posLine v) (show "except" ++ " expected instead of " ++ show (posItem v))
+                yyerror (posLine v) (show "hiding" ++ " expected instead of " ++ show (posItem v))
             YYM.return linkAll.{items=is}
         }
-    | '(' ')'               { \_\_   -> linkNone }
+    | '(' ')'               { \_\_    -> linkNone }
     | '(' importspecs ')'   { \_\is\_ -> linkNone.{items = is}  }
-    | PUBLIC importliste    { \_\il  -> ImportList.{publik = true} il }
+    | PUBLIC importliste    { \_\il   -> ImportList.{publik = true} il }
     ;
 
 importspecs:
@@ -571,26 +566,24 @@ importspecs:
     ;
 
 importitem:
-    qvarid                          { \v        -> protoItem.{ pos = posLine v, name = posItem v} }
-    | conid '(' memspecs ')'        { \v\_\ms\_ -> protoItem.{ pos = posLine v, name = posItem v, members = Just ms} }
-    | conid '(' ')'                 { \v\_\_    -> protoItem.{ pos = posLine v, name = posItem v, members = Just []} }
-    | qconid                        { \v        -> protoItem.{ pos = posLine v, name = posItem v} }
-    | operator                      { \t        -> protoItem.{ pos = yyline t,  name = U.enclosed (Token.value t)} }
-    | unary                         { \v        -> protoItem.{ pos = posLine v, name = posItem v} }
+    qvarid                          { \v        -> protoItem.{ name = v } }
+    | CONID '(' memspecs ')'        { \v\_\ms\_ -> protoItem.{ name = Simple v, members = Just ms} }
+    | CONID '(' ')'                 { \v\_\_    -> protoItem.{ name = Simple v, members = Just []} }
+    | qconid                        { \v        -> protoItem.{ name = v } }
+    | operator                      { \t        -> protoItem.{ name = Simple t } }
+    | unop                          { \v        -> protoItem.{ name = Simple v} }
     ;
 
 importspec:
-    importitem                      { \s      -> ImportItem.{alias = (U.enclosed • last • #\.#.splitted • ImportItem.name) s} s}
+    importitem                      { \s      -> ImportItem.{alias = (U.enclosed • Token.value • SName.id • ImportItem.name) s} s}
     | importitem alias              { \s\a    -> ImportItem.{alias = U.enclosed (Token.value a)} s }
     | PUBLIC importspec             { \_\s    -> ImportItem.export s }
     ;
 
 memspec:
-    alias               { \v     -> protoItem.{ pos = yyline v,
-                                                name  = U.enclosed (Token.value v),
-                                                alias = (U.enclosed • last • (#\.#.splitted) • Token.value) v} }
-    | alias  alias      { \v\a   -> protoItem.{ pos = yyline v,
-                                                name = U.enclosed (Token.value v),
+    alias               { \v     -> protoItem.{ name  = Simple v,
+                                                alias = U.enclosed (Token.value v)} }
+    | alias  alias      { \v\a   -> protoItem.{ name  = Simple v,
                                                 alias = U.enclosed (Token.value a)} }
     | PUBLIC memspec    { \_\s   -> ImportItem.export s }
     ;
@@ -613,15 +606,18 @@ varids:
     varid                   { single }
     | varid ',' varids      { liste }
     ;
-conid:   CONID              { vid }
+
+qvarid:  QUALIFIER QUALIFIER varop  { \n\t\v     -> With2 n t v}
+    |    QUALIFIER varop            { \t\v       -> With1 t v}
+    |    VARID                      { \v         -> Simple v }
     ;
-qvarid:  QVARID             { \a -> (Token.value a, yyline a)}
-    |    VARID              { vid }
-    ;
-qconid:  QCONID             { \a -> (Token.value a, yyline a)}
-    |    CONID              { vid }
+qconid:  QUALIFIER QUALIFIER CONID  { \n\t\v     -> With2 n t v}
+    |    QUALIFIER CONID            { \t\v       -> With1 t v}
+    |    CONID                      { \v         -> Simple v }
     ;
 
+varop:
+    VARID | operator | unop
 
 operator:
       LOP1 | LOP2 | LOP3 | LOP4 | LOP5 | LOP6 | LOP7 | LOP8 | LOP9 | LOP10 | LOP11 | LOP12 | LOP13 | LOP14 | LOP15 | LOP16
@@ -666,7 +662,7 @@ annotation:
 annoitem:
     varid
     | '(' operator ')'          { \_\a\_ -> do binop a }
-    | '(' unary ')'             { \_\a\_ -> a }
+    | '(' unop ')'              { \_\a\_ -> vid a }
     | '(' '-' ')'               { \_\a\_ -> vid a }
     ;
 
@@ -675,7 +671,6 @@ annoitems:
     | annoitem ',' annoitems    { liste    }
     ;
 
-unary: unop     { vid }
 
 nativedef:
     PURE impurenativedef        { \_\(d::Def) -> d.{isPure = true} }
@@ -685,7 +680,7 @@ nativedef:
 nativestart:
       NATIVE annoitem      { flip const }
     | NATIVE operator      { \_\b  -> do binop b }
-    | NATIVE unary         { flip const }
+    | NATIVE unop          { \_\b  -> vid b }
     | NATIVE '-'           { \_\b  -> vid b }
     ;
 
@@ -701,9 +696,9 @@ impurenativedef:
                             o <- binop o;
                             YYM.return (NatDcl {pos=posLine item, vis=Public, name=posItem item,
                                                 meth=posItem o, typ=t, isPure=false, doc=Nothing})}}
-    | nativestart unary      DCOLON sigma
+    | nativestart unop      DCOLON sigma
                     { \item\o\col\t -> NatDcl {pos=posLine item, vis=Public, name=posItem item,
-                                                meth=posItem o, typ=t, isPure=false, doc=Nothing}}
+                                                meth=Token.value o, typ=t, isPure=false, doc=Nothing}}
     ;
 
 
@@ -760,56 +755,47 @@ tapp:
 
 simpletype:
     tyvar
-    | tyname            { \tn -> TCon (posLine tn) (posItem tn)}
+    | tyname            { \(tn::SName) -> TCon (yyline tn.id) tn}
     | '(' tau ')'      { \_\t\_ -> t }
     | '(' tau ',' tauSC ')'
-                        {\_\t\c\ts\_ ->
+                        {\_\t\(c::Token)\ts\_ ->
                             let
                                 tus = t:ts;
                                 i = length tus;
-                                tname = tuple i
+                                tname = With1 baseToken c.{tokid=CONID, value=tuple i}
                             in  (TCon (yyline c) tname).mkapp tus
                         }
-    | '[' tau ']'      {\a\t\_ -> TApp (TCon (yyline a) "PreludeBase.[]") t }
+    | '[' tau ']'      {\a\t\_ -> TApp (TCon (yyline a)
+                                             (With1 baseToken a.{tokid=CONID, value="[]"}))
+                                        t }
     ;
 
-/*
-rop13: ':'
-        | ROP13         { \t -> if Token.value t == ":" then YYM.return t else do
-                                yyerror (yyline t) ("':' expected instead of " ++ yynice t)
-                                YYM.return t }
-        ;
-        */
+
 
 tyvar:
-    varid                   { \n -> TVar (posLine n) (posItem n)  }
-    /*
-    | tyname rop13 tyvar    { \t\_\(tv::TauS) -> do
-                                    U.warn (posLine t) "deprecated constraint syntax"
-                                    YYM.return tv.{classes <- (posItem t:)}    }
-                                    */
+    VARID                   { \n -> TVar (yyline n) (Token.value n)  }
 ;
 
 
 tyname:
     qconid
-    | '[' ']'               { \a\_ -> ("PreludeBase.[]", yyline a) }
-    | '(' ')'               { \a\_ -> ("PreludeBase.()", yyline a) }
-    | '(' commata ')'       { \z\n\_ -> (tuple (n+1), yyline z) }
-    | '(' ARROW ')'         { \_\a\_ -> ("PreludeBase.->", yyline a) }
+    | '[' ']'               { \(a::Token)\_ -> With1 baseToken a.{tokid=CONID, value="[]"} }
+    | '(' ')'               { \(a::Token)\_ -> With1 baseToken a.{tokid=CONID, value="()"} }
+    | '(' commata ')'       { \(z::Token)\n\_ -> With1 baseToken z.{tokid=CONID, value=tuple (n+1)} }
+    | '(' ARROW ')'         { \_\(a::Token)\_ -> With1 baseToken a.{tokid=CONID, value="->"} }
     ;
 
 
 classdef:
-    CLASS conid tyvar wheredef       {
-        \_\i\(tv::TauS)\defs -> ClaDcl {pos = posLine i, vis = Public, name = posItem i,
+    CLASS CONID tyvar wheredef       {
+        \_\i\(tv::TauS)\defs -> ClaDcl {pos = yyline i, vis = Public, name = Token.value i,
                         clvar=tv, supers=[], defs = defs, doc = Nothing}
     }
-    | CLASS conid tapp EARROW varid wheredef {
+    | CLASS CONID tapp EARROW varid wheredef {
         \_\i\tau\_\v\defs -> do
-            ctxs <- U.tauToCtx (posLine i) tau
-            sups <- classContext (posItem i) ctxs (posItem v)
-            YYM.return (ClaDcl {pos = posLine i, vis = Public, name = posItem i,
+            ctxs <- U.tauToCtx (yyline i) tau
+            sups <- classContext (Token.value i) ctxs (posItem v)
+            YYM.return (ClaDcl {pos = yyline i, vis = Public, name = Token.value i,
                              clvar = TVar (posLine v) (posItem v),
                              supers = sups, defs = defs, doc = Nothing})
     }
@@ -818,18 +804,14 @@ classdef:
 
 instdef:
     INSTANCE tyname sigma wheredef {
-        \ins\t\r\defs -> InsDcl {pos = yyline ins, vis = Public, clas=posItem t, typ=r, defs=defs, doc=Nothing}
+        \ins\t\r\defs -> InsDcl {pos = yyline ins, vis = Public, clas=t, typ=r, defs=defs, doc=Nothing}
     }
     ;
 
 
 derivedef:
-    DERIVE tyname sigma     { \d\t\r -> DrvDcl {pos = yyline d, vis = Public, clas=posItem t, typ=r, doc=Nothing}}
+    DERIVE tyname sigma     { \d\t\r -> DrvDcl {pos = yyline d, vis = Public, clas=t, typ=r, doc=Nothing}}
     ;
-
-dconid : conid              { posItem }
-    ;
-
 
 datadef:
     datainit wheredef       { \def\defs -> (def::Def).{defs = defs} }
@@ -842,31 +824,22 @@ nativepur:
     ;
 
 datainit:
-    DATA dconid '=' nativepur nativename {
-        \dat\d\docu\pur\jt -> JavDcl {pos=yyline dat, vis=Public, name=d,
-                                    clas=jt, vars=[], defs=[], isPure = pur, doc=Nothing}
+    DATA CONID '=' nativepur nativename {
+        \dat\d\docu\pur\jt -> JavDcl {pos=yyline d, vis=Public, name=Token.value d,
+                                    jclas=jt, vars=[], defs=[], isPure = pur, doc=Nothing}
     }
-    | DATA dconid dvars '=' nativepur nativename {
-        \dat\d\ds\docu\pur\jt -> JavDcl {pos=yyline dat, vis=Public, name=d,
-                                    clas=jt, vars=ds, defs=[], isPure = pur, doc=Nothing}
+    | DATA CONID dvars '=' nativepur nativename {
+        \dat\d\ds\docu\pur\jt -> JavDcl {pos=yyline d, vis=Public, name=Token.value d,
+                                    jclas=jt, vars=ds, defs=[], isPure = pur, doc=Nothing}
     }
-    | DATA dconid dvars '=' dalts {
-        \dat\d\ds\docu\alts -> DatDcl {pos=yyline dat, vis=Public,
-                                       name=d, vars=ds, ctrs=alts, defs=[], doc=Nothing}
+    | DATA CONID dvars '=' dalts {
+        \dat\d\ds\docu\alts -> DatDcl {pos=yyline d, vis=Public, name=Token.value d,
+                                       vars=ds, ctrs=alts, defs=[], doc=Nothing}
     }
-    | DATA dconid '=' dalts {
-        \dat\d\docu\alts -> DatDcl {pos=yyline dat, vis=Public,
-                                    name=d, vars=[], ctrs=alts, defs=[], doc=Nothing}
+    | DATA CONID '=' dalts {
+        \dat\d\docu\alts -> DatDcl {pos=yyline d, vis=Public, name=Token.value d,
+                                    vars=[], ctrs=alts, defs=[], doc=Nothing}
     }
-    /*
-    | DATA dconid '=' NATIVE '{' conflds '}'    {
-        \dat\d\_\n\_\fs\_ ->
-            let con = DCon {pos=yyline n, vis=Public,
-                                                name=d, flds=fs, doc=Nothing }
-            in DatDcl {pos=yyline dat, vis=Public,
-                                    name=d, vars=[], ctrs=[con], defs=[], doc=Nothing}
-    }
-    */
     ;
 
 dvars:
@@ -898,16 +871,16 @@ strictdalt:
     ;
 
 simpledalt:
-    conid                       { \c        -> DCon {pos=posLine c, vis=Public, strict=false,
-                                                name=posItem c, flds=[], doc=Nothing } }
-    | conid '{' conflds '}'     { \c\_\fs\_ -> DCon {pos=posLine c, vis=Public, strict=false,
-                                                name=posItem c, flds=fs, doc=Nothing } }
-    | conid contypes            { \c\fs     -> DCon {pos=posLine c, vis=Public, strict=false,
-                                                name=posItem c, flds=fs, doc=Nothing } }
+    CONID                       { \c        -> DCon {pos=yyline c, vis=Public, strict=false,
+                                                name=Token.value c, flds=[], doc=Nothing } }
+    | CONID '{' conflds '}'     { \c\_\fs\_ -> DCon {pos=yyline c, vis=Public, strict=false,
+                                                name=Token.value c, flds=fs, doc=Nothing } }
+    | CONID contypes            { \c\fs     -> DCon {pos=yyline c, vis=Public, strict=false,
+                                                name=Token.value c, flds=fs, doc=Nothing } }
     ;
 
 contypes:
-    simpletypes                 { map (Field Nothing Nothing • ForAll [] • RhoTau []) }
+    simpletypes                 { map (Field Position.null Nothing Nothing • ForAll [] • RhoTau []) }
     ;
 
 simpletypes:
@@ -924,16 +897,16 @@ conflds:
     ;
 
 confld:
-    varids DCOLON tau           { \vs\_\t -> [Field (Just (fst v)) Nothing (ForAll [] (RhoTau [] t)) | v <- vs ]}
+    varids DCOLON tau           { \vs\_\t -> [Field (snd v) (Just (fst v)) Nothing (ForAll [] (RhoTau [] t)) | v <- vs ]}
     | docs varids DCOLON tau    { \(d::String)\vs\_\t ->
                                         map ConField.{doc=Just d}
-                                            [Field (Just (fst v)) Nothing (ForAll [] (RhoTau [] t)) | v <- vs ]
+                                            [Field (snd v) (Just (fst v)) Nothing (ForAll [] (RhoTau [] t)) | v <- vs ]
                                 }
     ;
 
 typedef:
-    TYPE dconid '=' tau         { \t\i   \_\r -> TypDcl {pos=yyline t, vis=Public, name=i, vars=[], rho=RhoTau [] r, doc=Nothing}}
-    | TYPE dconid dvars '=' tau { \t\i\vs\_\r -> TypDcl {pos=yyline t, vis=Public, name=i, vars=vs, rho=RhoTau [] r, doc=Nothing}}
+    TYPE CONID '=' tau         { \t\i   \_\r -> TypDcl {pos=yyline i, vis=Public, name=Token.value i, vars=[], rho=RhoTau [] r, doc=Nothing}}
+    | TYPE CONID dvars '=' tau { \t\i\vs\_\r -> TypDcl {pos=yyline i, vis=Public, name=Token.value i, vars=vs, rho=RhoTau [] r, doc=Nothing}}
     ;
 
 wheredef :
@@ -1111,7 +1084,7 @@ binex:
     | binex ROP4  binex                 { mkapp }
     | binex LOP4  binex                 { mkapp }
     | binex '-'   binex                 { mkapp }
-    | '-' binex                         { \m\x -> nApp (Vbl (yyline m) "PreludeBase.negate" Nothing) x}
+    | '-' binex                         { \m\x -> nApp (Vbl (yyline m) (With1 baseToken m.{tokid=VARID, value="negate"}) Nothing) x}
     | binex NOP4  binex                 { mkapp }
     | binex ROP3  binex                 { mkapp }
     | binex LOP3  binex                 { mkapp }
@@ -1136,50 +1109,61 @@ appex:
 
 unex:
     primary
-    | unary unex                        { \u\p -> nApp (Vbl {pos=posLine u, name=posItem u, typ=Nothing}) p}
+    | unop unex                        { \u\p -> nApp (Vbl {pos=yyline u, name=Simple u, typ=Nothing}) p}
     ;
 
 
 primary:
     term
     | DO  '{' dodefs  '}'             { \d\_\defs\_   -> do mkMonad (yyline d) defs }
-    | primary   '.' varid             { \p\_\v -> Mem p (posItem v) Nothing}
+    | primary   '.' VARID             { \p\_\(v::Token) -> Mem p (v.value) Nothing}
     | primary   '.' operator          { \p\_\v -> do {v <- binop v;
                                                     YYM.return (Mem p (posItem v) Nothing)}}
-    | primary   '.' unary             { \p\_\v -> Mem p (posItem v) Nothing}
-    | QUALIFIER     '{' varid '?' '}' { \q\_\v\_\_ ->
-                                            Vbl (yyline q) (yyval q ++ "has$" ++ posItem v) Nothing}
-    | QUALIFIER     '{' varid '=' '}' { \q\_\v\_\_ ->
-                                            Vbl (yyline q) (yyval q ++ "upd$" ++ posItem v) Nothing}
-    | QUALIFIER     '{' varid GETS '}' { \q\_\v\_\_ ->
-                                            Vbl (yyline q) (yyval q ++ "chg$" ++ posItem v) Nothing}
-    | QUALIFIER     '{' varid '=' expr '}' { \q\_\v\_\x\_ ->
-                                         Vbl (yyline q) ("PreludeBase.flip") Nothing `nApp`
-                                         Vbl (yyline q) (yyval q ++ "upd$" ++ posItem v) Nothing `nApp`
-                                         x}
-    | QUALIFIER     '{' varid '}'          { \q\_\v\_ ->        // Q.{n} --> Q.{n=n}
-                                         Vbl (yyline q) ("PreludeBase.flip") Nothing `nApp`
-                                         Vbl (yyline q) (yyval q ++ "upd$" ++ posItem v) Nothing `nApp`
-                                         Vbl (posLine v) (posItem v) Nothing}
-    | QUALIFIER     '{' varid GETS expr '}' { \q\_\v\_\x\_ ->
-                                         Vbl (yyline q) ("PreludeBase.flip") Nothing `nApp`
-                                         Vbl (yyline q) (yyval q ++ "chg$" ++ posItem v) Nothing `nApp`
-                                         x}
-    | primary   '.' '{' varid '?' '}' { \p\_\_\v\_\_ -> case p of {
-                                            Con p n t -> Vbl p (n ++ ".has$" ++ posItem v) t;
-                                            x       -> Mem x ("has$" ++ posItem v) Nothing}}
-    | primary   '.' '{' varid '=' '}' { \p\_\_\v\_\_ -> case p of {
-                                            Con p n t -> Vbl p (n ++ ".upd$" ++ posItem v) t;
-                                            x       -> Mem x ("upd$" ++ posItem v) Nothing}}
-    | primary   '.' '{' varid GETS '}' { \p\_\_\v\_\_ -> case p of {
-                                            Con p n t -> Vbl p (n ++ ".chg$" ++ posItem v) t;
-                                            x       -> Mem x ("chg$" ++ posItem v) Nothing}}
-    | primary '.' '{' getfields '}' { \x\_\_\fs\_ ->
-                                let
-                                    u x [] = x
-                                    u x ((r, true , e):xs) = u (Mem x ("chg$" ++ r) Nothing  `nApp` e)  xs
-                                    u x ((r, false, e):xs) = u (Mem x ("upd$" ++ r) Nothing  `nApp` e)  xs
-                                in u x fs}
+    | primary   '.' unop              { \p\_\v -> Mem p (Token.value v) Nothing}
+    | QUALIFIER     '{' VARID '?' '}' { \q\_\(v::Token)\_\_ ->
+                                            Vbl (yyline v) (With1 q v.{value <- ("has$" ++)}) Nothing}
+    | QUALIFIER     '{' VARID '=' '}' { \q\_\(v::Token)\_\_ ->
+                                            Vbl (yyline v) (With1 q v.{value <- ("upd$" ++)}) Nothing}
+    | QUALIFIER     '{' VARID GETS '}' { \q\_\(v::Token)\_\_ ->
+                                            Vbl (yyline v) (With1 q v.{value <- ("chg$" ++)}) Nothing}
+    | QUALIFIER     '{' getfields '}' { \q\(p::Token)\fs\_ -> let {
+                        n   = Simple q;
+                        flp = Vbl (yyline p) (wellKnown p "flip") Nothing;
+                        bul = Vbl (yyline p) (wellKnown p "•")    Nothing;
+                        c []     = undefined;
+                        c (f:fs) = fold cex (chup f) fs where {
+                            cex x f = bul `nApp` x `nApp` chup f;
+                            chup :: (Token, Bool, Exp) -> Exp;
+                            chup (r, true, e)  = flp `nApp` Vbl (yyline r) (r.{value <- ("chg$"++)} `qBy` n) Nothing `nApp` e;
+                            chup (r, false, e) = flp `nApp` Vbl (yyline r) (r.{value <- ("upd$"++)} `qBy` n) Nothing `nApp` e;
+                                      }} in c fs }
+    | primary   '.' '{' VARID '?' '}' { \p\_\_\(v::Token)\_\_ -> case p of {
+                        // Con p n t -> Vbl p (v.{value <- ("has$"++)} `qBy`  n) t;
+                        x         -> Mem x ("has$" ++ v.value) Nothing}}
+    | primary   '.' '{' VARID '=' '}' { \p\_\_\(v::Token)\_\_ -> case p of {
+                        // Con p n t -> Vbl p (v.{value <- ("upd$"++)} `qBy`  n) t;
+                        x         -> Mem x ("upd$" ++ v.value) Nothing}}
+    | primary   '.' '{' VARID GETS '}' { \p\_\_\(v::Token)\_\_ -> case p of {
+                        // Con p n t -> Vbl p (v.{value <- ("chg$"++)} `qBy`  n) t;
+                        x         -> Mem x ("chg$" ++ v.value) Nothing}}
+    | primary   '.' '{' getfields '}' { \x\(p::Token)\_\fs\_ ->
+                                let {
+                        u x [] = x;
+                        u x ((r, true , e):xs) = u (Mem x ("chg$" ++ Token.value r) Nothing  `nApp` e)  xs;
+                        u x ((r, false, e):xs) = u (Mem x ("upd$" ++ Token.value r) Nothing  `nApp` e)  xs;
+                        // C.{x=1} --> flip C.upd$x 1
+                        // C.{x=1, y <- negate} --> (flip C.upd$x 1 • flip C.chg$y negate)
+                        flp = Vbl (yyline p) (wellKnown p "flip") Nothing;
+                        bul = Vbl (yyline p) (wellKnown p "•")    Nothing;
+                        c p n []     = Con p n Nothing;
+                        c p n (f:fs) = fold cex (chup f) fs where {
+                            cex x f = bul `nApp` x `nApp` chup f;
+                            chup :: (Token, Bool, Exp) -> Exp;
+                            chup (r, true, e)  = flp `nApp` Vbl (yyline r) (r.{value <- ("chg$"++)} `qBy` n) Nothing `nApp` e;
+                            chup (r, false, e) = flp `nApp` Vbl (yyline r) (r.{value <- ("upd$"++)} `qBy` n) Nothing `nApp` e;
+                                }} in case x of {
+                        // Con p n _ -> c p n fs;
+                        _ ->         u x fs}}
     | primary '.' '[' expr ']'      { \p\_\_\v\_     -> Mem p "frozenGetAt" Nothing  `nApp` v}
     | primary '.' '[' expr '=' expr ']'
                                     { \p\_\_\v\_\x\_ -> Mem p "updAt" Nothing `nApp` v `nApp` x }
@@ -1188,49 +1172,48 @@ primary:
     ;
 
 term:
-    qvarid                          { \x   -> Vbl {pos=posLine x, name=posItem x, typ=Nothing} }
+    qvarid                          { \x   -> Vbl {pos=yyline (SName.id x), name=x, typ=Nothing} }
     | literal
-    | '_'                           { \t   -> Vbl {pos = yyline t, name = "_", typ=Nothing} }  // only valid as pattern
-    // | QUALIFIER VARID               { \q\v -> Vbl {pos=yyline v, typ=Nothing,
-    //                                                name = Token.value q ++ Token.value v }}
-    | qconid                        { \qc  -> Con (posLine qc) (posItem qc) Nothing}
-    | qconid '{'        '}'         { \qc\_\_    -> ConFS (posLine qc) (posItem qc) [] Nothing}
-    | qconid '{' fields '}'         { \qc\_\fs\_ -> ConFS (posLine qc) (posItem qc) fs Nothing}
-    | '(' ')'                       { \z\_ -> Con (yyline z)   "PreludeBase.()" Nothing}
-    | '(' commata ')'               { \z\n\_ -> Con (yyline z) (tuple (n+1)) Nothing}
-    | '(' unary ')'                 { \_\x\_ -> Vbl {pos=posLine x, name=posItem x, typ=Nothing} }
-    | '(' operator ')'              { \_\o\_ -> (varcon o) (yyline o) (Token.value o) Nothing}
-    | '(' '-' ')'                   { \_\m\_ -> (Vbl (yyline m) "PreludeBase.-" Nothing) }
+    | '_'                           { \t   -> Vbl {pos = yyline t, name = Simple t.{tokid=VARID, value="_"}, typ=Nothing} }  // only valid as pattern
+    | qconid                        { \qc  -> Con {pos=yyline (SName.id qc), name=qc, typ=Nothing} }
+    | qconid '{'        '}'         { \qc\_\_    -> ConFS {pos=yyline (SName.id qc), name=qc, fields=[], typ=Nothing}}
+    | qconid '{' fields '}'         { \qc\_\fs\_ -> ConFS {pos=yyline (SName.id qc), name=qc, fields=fs, typ=Nothing}}
+    | '(' ')'                       { \z\_   -> Con (yyline z) (With1 baseToken z.{tokid=CONID, value="()"}) Nothing}
+    | '(' commata ')'               { \z\n\_ -> Con (yyline z) (With1 baseToken z.{tokid=CONID, value=tuple (n+1)}) Nothing}
+    | '(' unop ')'                  { \_\x\_ -> Vbl {pos=yyline x, name=Simple x, typ=Nothing} }
+    | '(' operator ')'              { \_\o\_ -> (varcon o) (yyline o) (Simple o) Nothing}
+    | '(' '-' ')'                   { \_\m\_ -> (Vbl (yyline m) (With1 baseToken m) Nothing) }
     | '(' operator expr ')'         { \z\o\x\_ ->  let // (+1) --> flip (+) 1
-                                        flp = Vbl (yyline o) "PreludeBase.flip" Nothing
-                                        op  = (varcon o) (yyline o) (Token.value o) Nothing
+                                        flp = Vbl (yyline o) (With1 baseToken underlineToken.{value="flip"}) Nothing
+                                        op  = (varcon o) (yyline o) (Simple o) Nothing
                                         ex = nApp (nApp flp op) x
                                     in ex}
-    | '(' binex operator ')'           { \_\x\o\_ ->  // (1+) --> (+) 1
-                                        nApp ((varcon o) (yyline o) (Token.value o) Nothing) x}
-    | '(' binex '-' ')'           { \_\x\o\_ ->  // (1+) --> (+) 1
-                                        nApp ((varcon o) (yyline o) (Token.value o) Nothing) x}
-    | '(' expr ',' exprSC ')'       { \a\e\_\es\_ -> fold nApp (Con (yyline a)
-                                                                   (tuple (1+length es))
+    | '(' binex operator ')'        { \_\x\o\_ ->  // (1+) --> (+) 1
+                                        nApp ((varcon o) (yyline o) (Simple o) Nothing) x}
+    | '(' binex '-' ')'             { \_\x\o\_ ->  // (1+) --> (+) 1
+                                        nApp ((varcon o) (yyline o) (Simple o) Nothing) x}
+    | '(' expr ',' exprSC ')'       { \a\e\(x::Token)\es\_ -> fold nApp (Con (yyline a)
+                                                                   (With1 baseToken x.{tokid=CONID, value=tuple (1+length es)})
                                                                    Nothing)
                                                               (e:es)}
-    | '(' expr ';' exprSS ')'       { \a\e\_\es\_ -> fold nApp (Vbl (yyline a)
-                                                                   ("PreludeBase.strictTuple" ++
-                                                                        show (1+length es))
+    | '(' expr ';' exprSS ')'       { \a\e\(x::Token)\es\_ -> fold nApp (Vbl (yyline a)
+                                                                   (With1 baseToken x.{tokid=VARID, value="strictTuple" ++ show (1+length es)})
                                                                     Nothing)
                                                               (e:es)}
     | '(' expr ')'                  { \_\x\_ -> x }
-    | '[' ']'                       { \z\_ ->  Con (yyline z) "PreludeBase.[]" Nothing}
-    | '[' exprSC ']'                { \b\es\z -> foldr (\a\as -> nApp (nApp (Con (yyline b) ":" Nothing) a) as)
-                                                       (Con (yyline z)  "PreludeBase.[]" Nothing)
+    | '[' ']'                       { \z\_ ->  Con (yyline z) (With1 baseToken z.{tokid=CONID, value="[]"}) Nothing}
+    | '[' exprSC ']'                { \b\es\z -> foldr (\a\as -> nApp (nApp (Con (yyline b) (With1 baseToken b.{tokid=CONID, value=":"}) Nothing) a) as)
+                                                       (Con (yyline z)  (With1 baseToken z.{tokid=CONID, value="[]"}) Nothing)
                                                        es}
-    | '[' expr '|' lcquals ']'      { \_\e\b\qs\z -> do {
-                                        listComprehension (yyline b) e qs (Con (yyline z) "PreludeBase.[]" Nothing) }}
+    | '[' expr '|' lcquals ']'      { \(a::Token)\e\b\qs\(z::Token) -> do {
+                                        listComprehension (yyline b) e qs
+                                            (Con (yyline z) (With1 baseToken a.{tokid=CONID, value="[]"})
+                                            Nothing) }}
     ;
 
 commata:
     ','                             { const 1 }
-    | ',' commata                   { ((+) @ const 1) }
+    | ',' commata                   { ((+) • const 1) }
     ;
 
 fields:
@@ -1253,15 +1236,14 @@ getfields:
     ;
 
 getfield:
-      varid GETS expr               { \s\_\x ->  (posItem s, true,  x) }
-    | varid '=' expr                { \s\_\x ->  (posItem s, false, x) }
-    | varid                         { \s     ->  (posItem s, false, Vbl (posLine s) (posItem s) Nothing) }
+      VARID GETS expr               { \s\_\x ->  (s, true,  x) }
+    | VARID '=' expr                { \s\_\x ->  (s, false, x) }
+    | VARID                         { \s     ->  (s, false, Vbl (yyline s) (Simple s) Nothing) }
     ;
 
 field:
     varid '='  expr                  { \s\_\x ->  (posItem s, x) }
-    // varid GETS expr                { \s\_\x ->  (posItem s, x) }       // unofficial
-    | varid                          { \s     ->  (posItem s, Vbl (posLine s) (posItem s) Nothing) }
+    | varid                          { \s     ->  (posItem s, Vbl (posLine s) (Simple (posLine s).first) Nothing) }
     ;
 
 exprSC :
@@ -1297,7 +1279,7 @@ binop op = do
     YYM.return (vid tok)
 
 /// make a binary expression
-mkapp a op b = varcon op (yyline op) (Token.value op) Nothing `nApp` a `nApp` b
+mkapp a op b = varcon op (yyline op) (Simple op.{tokid=VARID}) Nothing `nApp` a `nApp` b
 
 
 
@@ -1327,27 +1309,36 @@ exprToPat (ConFS {pos,name,fields}) = do
         YYM.return (PConFS {pos,qname=name,fields=pfs})
     where
         fpat (n,x) = do p <- exprToPat x; YYM.return (n,p)
-exprToPat (Vbl  p "_" _) = do
+exprToPat (Vbl  p (Simple Token{value="_"}) _) = do
         u <- U.uniqid
         YYM.return (PVar p ("_" ++ show u))
-exprToPat (Vbl p (m~#^Prelude\.strictTuple(\d+)$#) _)
-        | Just s <- m.group 1 = YYM.return (PCon p (tuple s.atoi) [])
-exprToPat (Vbl n x _)   = YYM.return (PVar n (U.enclosed x))
+exprToPat (Vbl p (n@With1 Token{value="Prelude"} Token{value=m~#^strictTuple(\d+)$#}) _)
+        | Just s <- m.group 1 = YYM.return (PCon p n.{id<-Token.{value=tuple s.atoi}} [])
+exprToPat (Vbl n (Simple x) _)   = YYM.return (PVar n (U.enclosed x.value))
 exprToPat (Lit p k v _) = YYM.return (PLit p k v)
-exprToPat (App (Vbl _ "!" _) b _) = do p <- exprToPat b; YYM.return (PStrict p)
-
-exprToPat (App (App (Vbl _ "@" _) b _) c _)
-        | Vbl n x _ <- b = do cp <- exprToPat c; YYM.return (PAt n (U.enclosed x) cp)
-        | App (Vbl _ "!" _) (Vbl n x _) _ <- b = do cp <- exprToPat c; YYM.return (PStrict (PAt n (U.enclosed x) cp))
+exprToPat (App (Vbl _ (Simple Token{value="!"}) _) b _) = do
+    p <- exprToPat b
+    YYM.return (PStrict p)
+exprToPat (App (App (Vbl _ (Simple Token{value="@"}) _) b _) c _)
+        | Vbl n (Simple x) _ <- b = do
+            cp <- exprToPat c
+            YYM.return (PAt n (U.enclosed x.value) cp)
+        | App (Vbl _ (Simple Token{value="!"}) _) (Vbl n (Simple x) _) _ <- b = do
+            cp <- exprToPat c
+            YYM.return (PStrict (PAt n (U.enclosed x.value) cp))
         | otherwise = do
             bs <- U.showexM b
             yyerror (getpos b) (("pattern " ++ bs ++ " not allowed left from @"))
             exprToPat c
 
 
-exprToPat (App (App (Vbl _ "~" _) b _) c _)
-        | Vbl p x _ <- b = do cp <- regPat c; YYM.return (PMat p x cp)
-        | App (Vbl _ "!" _) (Vbl p x _) _ <- b = do cp <- regPat c; YYM.return (PStrict (PMat p x cp))
+exprToPat (App (App (Vbl _ (Simple Token{value="~"}) _) b _) c _)
+        | Vbl p (Simple x) _ <- b = do
+            cp <- regPat c
+            YYM.return (PMat p x.value cp)
+        | App (Vbl _ (Simple Token{value="!"}) _) (Vbl p (Simple x) _) _ <- b = do
+            cp <- regPat c
+            YYM.return (PStrict (PMat p x.value cp))
         | otherwise = do
             bs <- U.showexM b
             yyerror (getpos b) (("pattern " ++ bs ++ " not allowed left from ~"))
@@ -1410,7 +1401,7 @@ funhead (ex@Vbl {name}) = do
  */
 
 funhead (ex@App e1 e2 _)
-    | Vbl _ "!"  _ <- e1 = do
+    | Vbl _ (Simple Token{value="!"})  _ <- e1 = do
             pex <- exprToPat ex
             YYM.return (getpos pex, "let", [pex])
     | otherwise = do
@@ -1513,7 +1504,8 @@ refutable :: Pat -> Bool
 refutable (PVar _ _)     = false
 refutable (PAt _ _ p)    = refutable p
 refutable (PCon _ name ps)
-    | name `elem` [tuple n | n <- 2..26] = any refutable ps
+    | name.id.value == "()" && null ps = false
+    | name.id.value `elem` [tuple n | n <- 2..26] = any refutable ps
     | otherwise = true
 refutable (PConFS {qname}) = true
 refutable (PAnn p _)     = refutable p
@@ -1548,7 +1540,8 @@ refutable (PStrict p)    = refutable p
  */
 listComprehension pos e [] l2 = YYM.return (cons `nApp` e `nApp` l2)
      where
-        cons = Con {name = "PreludeBase.:", pos = pos, typ = Nothing}
+        f = Position.first pos
+        cons = Con {name = With1 baseToken f.{tokid=CONID, value=":"}, pos = pos, typ = Nothing}
 
 listComprehension pos e (q:qs) l2 = case q of
     Right defs                 -> do   // let defs
@@ -1560,15 +1553,18 @@ listComprehension pos e (q:qs) l2 = case q of
     Left (Just (pat, pos), xs) -> do   // pat <- x
         uid <- U.uniqid
         let
-            h     = "_h" ++ show uid ++ "line" ++ show pos
+            f     = Position.first pos
+            h     = Simple f.{tokid = VARID, value = "lc" ++ show uid }
+            us    = Simple f.{tokid = VARID, value = "_us" ++ show uid }
+            xsn   = Simple f.{tokid = VARID, value = "_xs" ++ show uid }
             hvar  = Vbl  pos h Nothing
-            usvar = Vbl  pos ("_us" ++ show uid) Nothing
+            usvar = Vbl  pos us Nothing
             uspat = PVar pos ("_us" ++ show uid)
-            xsvar = Vbl  pos ("_xs" ++ show uid) Nothing
+            xsvar = Vbl  pos xsn Nothing
             xspat = PVar pos ("_xs" ++ show uid)
             anpat = PVar pos "_"
-            pnil  = PCon pos "PreludeBase.[]" []
-            pcons p ps = PCon pos "PreludeBase.:" [p, ps]  // p:ps
+            pnil  = PCon pos (With1 baseToken f.{tokid=CONID, value="[]"}) []
+            pcons p ps = PCon pos (With1 baseToken f.{tokid=CONID, value=":"}) [p, ps]  // p:ps
             calt1 = CAlt {pos = pos, env = Nil, pat = pnil, ex = l2 }  // [] -> l2
         hxs <- listComprehension pos e qs (hvar `nApp` xsvar)
         let
@@ -1578,7 +1574,7 @@ listComprehension pos e (q:qs) l2 = case q of
             calt3 = CAlt {pos = pos, env = Nil, pat = pcons anpat xspat, ex = hvar `nApp` xsvar}
             calts = if refutable pat then [calt2, calt1, calt3] else [calt2, calt1]
             ecas = Case CNormal usvar calts  Nothing
-            hdef = FunDcl {pos = pos, vis = Private, name=h, pats=[uspat], expr=ecas, doc = Nothing}
+            hdef = FunDcl {pos = pos, vis = Private, name=h.id.value, pats=[uspat], expr=ecas, doc = Nothing}
         YYM.return (Let Nil [hdef] (nApp hvar xs) Nothing)
   where
         rest = listComprehension pos e qs l2
@@ -1599,7 +1595,7 @@ mkMonad line [e]
             YYM.return x
     | Right _ <- e = do
             yyerror line ("last statement in a monadic do block must not be  let decls")
-            YYM.return (Vbl line "PreludeBase.undefined" Nothing)
+            YYM.return (Vbl line (With1 baseToken line.first.{tokid=VARID, value="undefined"}) Nothing)
 
 mkMonad line (e:es)
     | Left (Nothing,  x) <- e
@@ -1610,20 +1606,23 @@ mkMonad line (e:es)
         = do
             rest <- mkMonad line es
             let res = if refutable pat
-                      // LET in = x IN in >>= \of -> CASE of OF pat -> do ...; _ -> fail in "pattern failed"
-                    then Let Nil [indef x] (bind  `nApp` invar `nApp` (Lam Nil ofpat (failcase pat rest) Nothing)) Nothing
+                      // x >>= \of -> CASE of OF pat -> do ...; _ -> fail in "pattern failed"
+                    then bind  `nApp`  x `nApp` (Lam Nil ofpat (failcase pat rest) Nothing)
                     else bind  `nApp`  x `nApp` (Lam Nil pat rest Nothing)
             YYM.return res
     | Right defs <- e = do
             rest <- mkMonad line es
             YYM.return (Let Nil defs rest  Nothing)
     where
-        indef e = FunDcl {pos = (getpos e), vis = Private, name="in", pats=[], expr=e, doc = Nothing}
-        bind0 = Vbl line "PreludeBase.>>" Nothing
-        bind  = Vbl line "PreludeBase.>>=" Nothing
-        invar = Vbl line "in" Nothing
-        ofvar = Vbl line "of" Nothing
-        failvar = Vbl line "PreludeBase.fail" Nothing
+        -- indef e = FunDcl {pos = (getpos e), vis = Private, name="in", pats=[], expr=e, doc = Nothing}
+        f = Position.first line
+        wellknown x = With1 baseToken f.{tokid=VARID, value=x}
+        local x = Simple f.{tokid=VARID, value=x}
+        bind0 = Vbl line (wellknown ">>") Nothing
+        bind  = Vbl line (wellknown ">>=") Nothing
+        -- invar = Vbl line (local "in") Nothing
+        ofvar = Vbl line (local "of") Nothing
+        failvar = Vbl line (wellknown "fail") Nothing
         ofpat = PVar line  "of"
         def   = PVar line  "_"
         failcase pat rest = Case CNormal ofvar [alt1, alt2]  Nothing where
@@ -1676,11 +1675,12 @@ litregexp x = do
 bignum :: Token -> String
 bignum x = strhead x.value (x.value.length-1)
 
+classContext :: String -> [ContextS] -> String -> StG [SName]
 classContext clas ctxs cvar = mapSt sup ctxs
     where
         sup (Ctx {pos, cname, tau = TVar {var}}) | var == cvar = stio cname
         sup (Ctx {pos, cname}) = do
-            yyerror pos (("Illegal constraint, only " ++ cname ++ " " ++ cvar ++ " is allowed"))
+            yyerror pos (("Illegal constraint, only " ++ show cname ++ " " ++ cvar ++ " is allowed"))
             stio cname
 
 yyEOF = Token {tokid=CHAR, value=" ", line=maxBound, col=maxBound, offset=maxBound}.position
