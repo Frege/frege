@@ -1116,10 +1116,10 @@ unex:
 primary:
     term
     | DO  '{' dodefs  '}'             { \d\_\defs\_   -> do mkMonad (yyline d) defs }
-    | primary   '.' VARID             { \p\_\(v::Token) -> Mem p (v.value) Nothing}
-    | primary   '.' operator          { \p\_\v -> do {v <- binop v;
-                                                    YYM.return (Mem p (posItem v) Nothing)}}
-    | primary   '.' unop              { \p\_\v -> Mem p (Token.value v) Nothing}
+    | primary   '.' VARID             { \p\_\(v::Token) -> Mem p v Nothing}
+    | primary   '.' operator          { \p\_\v -> do {v <- unqualified v;
+                                                    YYM.return (Mem p v Nothing)}}
+    | primary   '.' unop              { \p\_\v -> Mem p v Nothing}
     | QUALIFIER     '{' VARID '?' '}' { \q\_\(v::Token)\_\_ ->
                                             Vbl (yyline v) (With1 q v.{value <- ("has$" ++)}) Nothing}
     | QUALIFIER     '{' VARID '=' '}' { \q\_\(v::Token)\_\_ ->
@@ -1137,38 +1137,26 @@ primary:
                             chup (r, true, e)  = flp `nApp` Vbl (yyline r) (r.{value <- ("chg$"++)} `qBy` n) Nothing `nApp` e;
                             chup (r, false, e) = flp `nApp` Vbl (yyline r) (r.{value <- ("upd$"++)} `qBy` n) Nothing `nApp` e;
                                       }} in c fs }
-    | primary   '.' '{' VARID '?' '}' { \p\_\_\(v::Token)\_\_ -> case p of {
-                        // Con p n t -> Vbl p (v.{value <- ("has$"++)} `qBy`  n) t;
-                        x         -> Mem x ("has$" ++ v.value) Nothing}}
-    | primary   '.' '{' VARID '=' '}' { \p\_\_\(v::Token)\_\_ -> case p of {
-                        // Con p n t -> Vbl p (v.{value <- ("upd$"++)} `qBy`  n) t;
-                        x         -> Mem x ("upd$" ++ v.value) Nothing}}
-    | primary   '.' '{' VARID GETS '}' { \p\_\_\(v::Token)\_\_ -> case p of {
-                        // Con p n t -> Vbl p (v.{value <- ("chg$"++)} `qBy`  n) t;
-                        x         -> Mem x ("chg$" ++ v.value) Nothing}}
+    | primary   '.' '{' VARID '?' '}' { \p\_\_\(v::Token)\_\_ -> Mem p v.{value <- ("has$"++)} Nothing}
+    | primary   '.' '{' VARID '=' '}' { \p\_\_\(v::Token)\_\_ -> Mem p v.{value <- ("upd$"++)} Nothing}
+    | primary   '.' '{' VARID GETS '}' {\p\_\_\(v::Token)\_\_ -> Mem p v.{value <- ("chg$"++)} Nothing}
     | primary   '.' '{' getfields '}' { \x\(p::Token)\_\fs\_ ->
                                 let {
                         u x [] = x;
-                        u x ((r, true , e):xs) = u (Mem x ("chg$" ++ Token.value r) Nothing  `nApp` e)  xs;
-                        u x ((r, false, e):xs) = u (Mem x ("upd$" ++ Token.value r) Nothing  `nApp` e)  xs;
-                        // C.{x=1} --> flip C.upd$x 1
-                        // C.{x=1, y <- negate} --> (flip C.upd$x 1 • flip C.chg$y negate)
-                        flp = Vbl (yyline p) (wellKnown p "flip") Nothing;
-                        bul = Vbl (yyline p) (wellKnown p "•")    Nothing;
-                        c p n []     = Con p n Nothing;
-                        c p n (f:fs) = fold cex (chup f) fs where {
-                            cex x f = bul `nApp` x `nApp` chup f;
-                            chup :: (Token, Bool, Exp) -> Exp;
-                            chup (r, true, e)  = flp `nApp` Vbl (yyline r) (r.{value <- ("chg$"++)} `qBy` n) Nothing `nApp` e;
-                            chup (r, false, e) = flp `nApp` Vbl (yyline r) (r.{value <- ("upd$"++)} `qBy` n) Nothing `nApp` e;
-                                }} in case x of {
-                        // Con p n _ -> c p n fs;
-                        _ ->         u x fs}}
-    | primary '.' '[' expr ']'      { \p\_\_\v\_     -> Mem p "frozenGetAt" Nothing  `nApp` v}
+                        u x ((r::Token, true , e):xs) = u (Mem x r.{value <- ("chg$" ++)} Nothing  `nApp` e)  xs;
+                        u x ((r::Token, false, e):xs) = u (Mem x r.{value <- ("upd$" ++)} Nothing  `nApp` e)  xs;
+                                } in u x fs}
+    | primary '.' '[' expr ']'      { \p\(t::Token)\_\v\_  -> 
+                                        Mem p t.{tokid=VARID, value="frozenGetAt"} Nothing  
+                                            `nApp` v}
     | primary '.' '[' expr '=' expr ']'
-                                    { \p\_\_\v\_\x\_ -> Mem p "updAt" Nothing `nApp` v `nApp` x }
+                                    { \p\(t::Token)\_\v\_\x\_ -> 
+                                        Mem p t.{tokid=VARID, value="updAt"} Nothing 
+                                            `nApp` v `nApp` x }
     | primary '.' '[' expr GETS expr ']'
-                                    { \p\_\_\v\_\x\_ -> Mem p "setAt" Nothing `nApp` v `nApp` x }
+                                    { \p\(t::Token)\_\v\_\x\_ -> 
+                                        Mem p t.{tokid=VARID, value="setAt"} Nothing 
+                                            `nApp` v `nApp` x }
     ;
 
 term:
