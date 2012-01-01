@@ -1008,7 +1008,7 @@ guards:
 
 calt:
     pattern aeq expr              { \p\a\e ->
-                                        CAlt {pos=yyline a, env=Nil, pat=p, ex=e}}
+                                        CAlt {env=Nil, pat=p, ex=e}}
     | pattern guards                { \p\gs -> guardedalt p gs}
     | calt wherelet                 {\(calt::CAltS)\defs ->
                                         let
@@ -1433,7 +1433,7 @@ guardedalt :: Pat -> [Guard] -> CAltS
 guardedalt p gds =
     case gdsexpr gds of
         x @ Case CWhen _ (alt:_) _
-              -> CAlt {pos = alt.pos, env = alt.env, pat=p, ex = x}
+              -> CAlt {env = alt.env, pat=p, ex = x}
         // wrong -> error ("no casewhen : " ++ show wrong)
         // commented out deliberately as this
         // a) should never happen
@@ -1452,9 +1452,9 @@ gdsexpr gds = (flatten @ map trans) gds where
         tg ln ex [] = ex
         tg ln ex (Left (p, x):qs) = case p of
                 Nothing -> Case CWhen x [calt.{ pat = PLit {kind = LBool, value = "true", pos = ln}}] Nothing
-                Just (pat, line) -> Case CWhen x [calt.{ pat = pat, pos = line}] Nothing
+                Just (pat, line) -> Case CWhen x [calt.{ pat = pat }] Nothing
            where
-                calt = CAlt {pos = ln, env = Nil, pat = PVar {var = "_", pos = ln}, ex = tg ln ex qs}
+                calt = CAlt {env = Nil, pat = PVar {var = "_", pos = ln}, ex = tg ln ex qs}
         tg ln ex (Right _:_) = error ("line " ++ show ln ++ ": let definition in guard?")
         /*
          * [case e1 of { p1 -> x1 }, case e2 of { p2 -> x2 }, ...
@@ -1472,7 +1472,7 @@ gdsexpr gds = (flatten @ map trans) gds where
         flatten  ((x@Case CWhen xex (xalts@alt0:_) t):xs) =
             let
                 y = flatten xs
-                alt = CAlt {pos = alt0.pos, env = alt0.env, pat = PVar { var = "_", pos = alt0.pos}, ex = y}
+                alt = CAlt {env = alt0.env, pat = PVar { var = "_", pos = alt0.pat.pos}, ex = y}
             in
                 Case CWhen xex (xalts ++ [alt]) t
         // flatten  wrong = error ("flatten: not a case "  ++ show (map (Exp.show) wrong))
@@ -1553,13 +1553,13 @@ listComprehension pos e (q:qs) l2 = case q of
             anpat = PVar pos "_"
             pnil  = PCon pos (With1 baseToken f.{tokid=CONID, value="[]"}) []
             pcons p ps = PCon pos (With1 baseToken f.{tokid=CONID, value=":"}) [p, ps]  // p:ps
-            calt1 = CAlt {pos = pos, env = Nil, pat = pnil, ex = l2 }  // [] -> l2
+            calt1 = CAlt {env = Nil, pat = pnil, ex = l2 }  // [] -> l2
         hxs <- listComprehension pos e qs (hvar `nApp` xsvar)
         let
             // p:xs -> TQ [e|qs] (h xs)
-            calt2 = CAlt {pos = pos, env = Nil, pat = pcons pat xspat, ex = hxs}
+            calt2 = CAlt {env = Nil, pat = pcons pat xspat, ex = hxs}
             // _:xs -> h xs
-            calt3 = CAlt {pos = pos, env = Nil, pat = pcons anpat xspat, ex = hvar `nApp` xsvar}
+            calt3 = CAlt {env = Nil, pat = pcons anpat xspat, ex = hvar `nApp` xsvar}
             calts = if refutable pat then [calt2, calt1, calt3] else [calt2, calt1]
             ecas = Case CNormal usvar calts  Nothing
             hdef = FunDcl {pos = pos, vis = Private, name=h.id.value, pats=[uspat], expr=ecas, doc = Nothing}
@@ -1614,8 +1614,8 @@ mkMonad line (e:es)
         ofpat = PVar line  "of"
         def   = PVar line  "_"
         failcase pat rest = Case CNormal ofvar [alt1, alt2]  Nothing where
-            alt1 = CAlt {pos = line, env = Nil, pat = pat, ex = rest}
-            alt2 = CAlt {pos = line, env = Nil, pat = def, ex = failure }
+            alt1 = CAlt {env = Nil, pat = pat, ex = rest}
+            alt2 = CAlt {env = Nil, pat = def, ex = failure }
             // version 2 needed application to invar, we don't
             failure = failvar /*`nApp` invar*/  `nApp` Lit line LString "\"pattern failed\"" Nothing
 

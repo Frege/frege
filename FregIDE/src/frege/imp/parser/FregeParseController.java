@@ -160,7 +160,7 @@ public class FregeParseController extends ParseControllerBase implements
 						bp = wroot.append(jp.getOutputLocation()).toPortableString();
 						IClasspathEntry[] cpes = jp.getResolvedClasspath(true);
 						fp = "";
-						sp = "";
+						sp = ".";
 						for (IClasspathEntry cpe: cpes) {
 							if (cpe.getEntryKind() == IClasspathEntry.CPE_SOURCE) {
 								if (sp.length() > 0) sp += System.getProperty("path.separator");
@@ -180,6 +180,9 @@ public class FregeParseController extends ParseControllerBase implements
 			if (sp.equals("")) sp=".";
 		}
 		/**
+		 * The source path always includes the project directory, as otherwise source resolution in
+		 * linked directories will work only if one links below a source directory, which may not be
+		 * possible always.
 		 * @return the sp
 		 */
 		public String getSp() {
