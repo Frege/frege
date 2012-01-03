@@ -722,7 +722,7 @@ forall:
 
 rho:
     tapp EARROW rhofun              { \tau\t\rho -> do
-                                        context <- U.tauToCtx (yyline t) tau
+                                        context <- U.tauToCtx tau
                                         YYM.return (Rho.{context} rho)
                                     }
     | rhofun
@@ -793,7 +793,7 @@ classdef:
     }
     | CLASS CONID tapp EARROW varid wheredef {
         \_\i\tau\_\v\defs -> do
-            ctxs <- U.tauToCtx (yyline i) tau
+            ctxs <- U.tauToCtx tau
             sups <- classContext (Token.value i) ctxs (posItem v)
             YYM.return (ClaDcl {pos = yyline i, vis = Public, name = Token.value i,
                              clvar = TVar (posLine v) (posItem v),
@@ -1664,11 +1664,14 @@ bignum :: Token -> String
 bignum x = strhead x.value (x.value.length-1)
 
 classContext :: String -> [ContextS] -> String -> StG [SName]
-classContext clas ctxs cvar = mapSt sup ctxs
+classContext clas ctxs cvar = do
+        g <- getST
+        mapSt (sup g) ctxs
     where
-        sup (Ctx {pos, cname, tau = TVar {var}}) | var == cvar = stio cname
-        sup (Ctx {pos, cname}) = do
-            yyerror pos (("Illegal constraint, only " ++ show cname ++ " " ++ cvar ++ " is allowed"))
+        sup g (Ctx {pos, cname, tau = TVar {var}}) | var == cvar = stio cname
+        sup g (Ctx {pos, cname, tau}) = do
+            yyerror pos
+                ("illegal constraint on `" ++ nice tau g ++ "`, only `" ++ cvar ++ "` may be constrained here")
             stio cname
 
 yyEOF = Token {tokid=CHAR, value=" ", line=maxBound, col=maxBound, offset=maxBound}.position
