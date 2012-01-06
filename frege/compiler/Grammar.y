@@ -231,6 +231,8 @@ vid t = (Token.value t, Pos t t)
 //%type gquals          [Qual]
 //%type guard           Guard
 //%type guards          [Guard]
+//%type qualifiers      (Token -> SName)
+//%explain qualifiers   qualified type name
 //%explain package      a package
 //%explain packageclause a package clause
 //%explain packagename  a package name
@@ -804,7 +806,7 @@ classdef:
 
 instdef:
     INSTANCE tyname sigma wheredef {
-        \ins\t\r\defs -> InsDcl {pos = yyline ins, vis = Public, clas=t, typ=r, defs=defs, doc=Nothing}
+        \ins\t\r\defs -> InsDcl {pos = getpos r, vis = Public, clas=t, typ=r, defs=defs, doc=Nothing}
     }
     ;
 
@@ -1112,6 +1114,10 @@ unex:
     | unop unex                        { \u\p -> nApp (Vbl {pos=yyline u, name=Simple u, typ=Nothing}) p}
     ;
 
+qualifiers:
+    QUALIFIER                         { With1 }
+    | QUALIFIER QUALIFIER             { With2 }
+    ;
 
 primary:
     term
@@ -1120,22 +1126,22 @@ primary:
     | primary   '.' operator          { \p\_\v -> do {v <- unqualified v;
                                                     YYM.return (Mem p v Nothing)}}
     | primary   '.' unop              { \p\_\v -> Mem p v Nothing}
-    | QUALIFIER     '{' VARID '?' '}' { \q\_\(v::Token)\_\_ ->
-                                            Vbl (yyline v) (With1 q v.{value <- ("has$" ++)}) Nothing}
-    | QUALIFIER     '{' VARID '=' '}' { \q\_\(v::Token)\_\_ ->
-                                            Vbl (yyline v) (With1 q v.{value <- ("upd$" ++)}) Nothing}
-    | QUALIFIER     '{' VARID GETS '}' { \q\_\(v::Token)\_\_ ->
-                                            Vbl (yyline v) (With1 q v.{value <- ("chg$" ++)}) Nothing}
-    | QUALIFIER     '{' getfields '}' { \q\(p::Token)\fs\_ -> let {
-                        n   = Simple q;
+    | qualifiers    '{' VARID '?' '}' { \q\_\(v::Token)\_\_ ->
+                                            Vbl (yyline v) (q v.{value <- ("has$" ++)}) Nothing}
+    | qualifiers    '{' VARID '=' '}' { \q\_\(v::Token)\_\_ ->
+                                            Vbl (yyline v) (q v.{value <- ("upd$" ++)}) Nothing}
+    | qualifiers    '{' VARID GETS '}' { \q\_\(v::Token)\_\_ ->
+                                            Vbl (yyline v) (q v.{value <- ("chg$" ++)}) Nothing}
+    | qualifiers    '{' getfields '}' { \q\(p::Token)\fs\_ -> let {
+                        // n   = Simple q;
                         flp = Vbl (yyline p) (wellKnown p "flip") Nothing;
                         bul = Vbl (yyline p) (wellKnown p "•")    Nothing;
                         c []     = undefined;
                         c (f:fs) = fold cex (chup f) fs where {
                             cex x f = bul `nApp` x `nApp` chup f;
                             chup :: (Token, Bool, Exp) -> Exp;
-                            chup (r, true, e)  = flp `nApp` Vbl (yyline r) (r.{value <- ("chg$"++)} `qBy` n) Nothing `nApp` e;
-                            chup (r, false, e) = flp `nApp` Vbl (yyline r) (r.{value <- ("upd$"++)} `qBy` n) Nothing `nApp` e;
+                            chup (r, true, e)  = flp `nApp` Vbl (yyline r) (q r.{value <- ("chg$"++)}) Nothing `nApp` e;
+                            chup (r, false, e) = flp `nApp` Vbl (yyline r) (q r.{value <- ("upd$"++)}) Nothing `nApp` e;
                                       }} in c fs }
     | primary   '.' '{' VARID '?' '}' { \p\_\_\(v::Token)\_\_ -> Mem p v.{value <- ("has$"++)} Nothing}
     | primary   '.' '{' VARID '=' '}' { \p\_\_\(v::Token)\_\_ -> Mem p v.{value <- ("upd$"++)} Nothing}
@@ -1146,16 +1152,16 @@ primary:
                         u x ((r::Token, true , e):xs) = u (Mem x r.{value <- ("chg$" ++)} Nothing  `nApp` e)  xs;
                         u x ((r::Token, false, e):xs) = u (Mem x r.{value <- ("upd$" ++)} Nothing  `nApp` e)  xs;
                                 } in u x fs}
-    | primary '.' '[' expr ']'      { \p\(t::Token)\_\v\_  -> 
-                                        Mem p t.{tokid=VARID, value="frozenGetAt"} Nothing  
+    | primary '.' '[' expr ']'      { \p\(t::Token)\_\v\_  ->
+                                        Mem p t.{tokid=VARID, value="frozenGetAt"} Nothing
                                             `nApp` v}
     | primary '.' '[' expr '=' expr ']'
-                                    { \p\(t::Token)\_\v\_\x\_ -> 
-                                        Mem p t.{tokid=VARID, value="updAt"} Nothing 
+                                    { \p\(t::Token)\_\v\_\x\_ ->
+                                        Mem p t.{tokid=VARID, value="updAt"} Nothing
                                             `nApp` v `nApp` x }
     | primary '.' '[' expr GETS expr ']'
-                                    { \p\(t::Token)\_\v\_\x\_ -> 
-                                        Mem p t.{tokid=VARID, value="setAt"} Nothing 
+                                    { \p\(t::Token)\_\v\_\x\_ ->
+                                        Mem p t.{tokid=VARID, value="setAt"} Nothing
                                             `nApp` v `nApp` x }
     ;
 
@@ -1164,8 +1170,8 @@ term:
     | literal
     | '_'                           { \t   -> Vbl {pos = yyline t, name = Simple t.{tokid=VARID, value="_"}, typ=Nothing} }  // only valid as pattern
     | qconid                        { \qc  -> Con {pos=yyline (SName.id qc), name=qc, typ=Nothing} }
-    | qconid '{'        '}'         { \qc\_\_    -> ConFS {pos=yyline (SName.id qc), name=qc, fields=[], typ=Nothing}}
-    | qconid '{' fields '}'         { \qc\_\fs\_ -> ConFS {pos=yyline (SName.id qc), name=qc, fields=fs, typ=Nothing}}
+    | qconid '{'        '}'         { \qc\_\z    -> ConFS {pos=Pos (SName.id qc) z, name=qc, fields=[], typ=Nothing}}
+    | qconid '{' fields '}'         { \qc\_\fs\z -> ConFS {pos=Pos (SName.id qc) z, name=qc, fields=fs, typ=Nothing}}
     | '(' ')'                       { \z\_   -> Con (yyline z) (With1 baseToken z.{tokid=CONID, value="()"}) Nothing}
     | '(' commata ')'               { \z\n\_ -> Con (yyline z) (With1 baseToken z.{tokid=CONID, value=tuple (n+1)}) Nothing}
     | '(' unop ')'                  { \_\x\_ -> Vbl {pos=yyline x, name=Simple x, typ=Nothing} }

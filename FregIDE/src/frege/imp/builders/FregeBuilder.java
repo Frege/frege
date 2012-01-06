@@ -1,5 +1,7 @@
 package frege.imp.builders;
 
+import java.io.FileWriter;
+import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.util.Iterator;
@@ -267,6 +269,17 @@ public class FregeBuilder extends FregeBuilderBase {
 				   new PrintWriter(System.out),
 				   new PrintWriter(errs),
 				   new CompProgress());
+				
+				// write java error messages to some file.
+				if (errs.toString().length() > 0) try {
+					FileWriter f = new FileWriter(target + ".errors");
+					f.append(errs.toString());
+					f.close();
+				}
+				catch (IOException e) {
+					getPlugin().writeErrorMsg("could not write java compiler errors " + e.getMessage());
+				}
+				
 				if (!success) {
 					TPosition pos = (TPosition) TPosition.packageStart(result)._e();
 					TToken module = TPosition.first(pos);
