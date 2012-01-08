@@ -258,10 +258,10 @@ public class FregeBuilder extends FregeBuilderBase {
 								Box.mk(System.getProperty("path.separator")), 
 								ourPath)._e()).j;
 				// construct the commandline
-				final String cmdline = "-cp " + fp 
-						+ " -d " + bp 
+				final String cmdline = "-cp " + "\"" + fp + "\"" 
+						+ " -d " + "\"" + bp + "\"" 
 						+ " -Xemacs -1.7 -encoding UTF-8 "
-						+ target;
+						+ "\"" + target + "\"";
 				getPlugin().writeInfoMsg("batch-compile " + cmdline);
 				final StringWriter errs = new StringWriter();
 				success = org.eclipse.jdt.core.compiler.batch.BatchCompiler.compile(
@@ -270,7 +270,7 @@ public class FregeBuilder extends FregeBuilderBase {
 				   new PrintWriter(errs),
 				   new CompProgress());
 				
-				// write java error messages to some file.
+				/* write java error messages to some file.
 				if (errs.toString().length() > 0) try {
 					FileWriter f = new FileWriter(target + ".errors");
 					f.append(errs.toString());
@@ -279,6 +279,7 @@ public class FregeBuilder extends FregeBuilderBase {
 				catch (IOException e) {
 					getPlugin().writeErrorMsg("could not write java compiler errors " + e.getMessage());
 				}
+				*/
 				
 				if (!success) {
 					TPosition pos = (TPosition) TPosition.packageStart(result)._e();
@@ -291,6 +292,7 @@ public class FregeBuilder extends FregeBuilderBase {
 					Pattern p = Pattern.compile(":\\d+:\\s+error:(.*)");
 					for (String s : msgs) {
 						if (s == null) continue;
+						getPlugin().writeInfoMsg(s);
 						Matcher m = p.matcher(s);
 						if (m.find()) {
 							String se = m.group(1);
