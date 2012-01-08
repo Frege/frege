@@ -13,9 +13,17 @@ import org.eclipse.swt.graphics.RGB;
 import org.eclipse.swt.widgets.Display;
 
 import frege.FregePlugin;
+import frege.compiler.Data.TQName.DLocal;
+import frege.compiler.Data.TSubSt;
 import frege.compiler.Data.TToken;
+import frege.compiler.Data.TGlobal;
 import frege.compiler.Data.TTokenID;
 import frege.compiler.Data.IShow_Token;
+import frege.compiler.Data.TQName;
+import frege.prelude.Base.TEither.DRight;
+import frege.prelude.Base.TMaybe;
+import frege.prelude.Base.TEither;
+import frege.imp.parser.FregeParseController;
 import frege.imp.preferences.FregePreferencesConstants;
 
 
@@ -23,9 +31,11 @@ import frege.imp.preferences.FregePreferencesConstants;
 public class FregeTokenColorer extends TokenColorerBase implements ITokenColorer {
 	protected final TextAttribute
 			normalAttribute, impAttribute,
-			docuAttribute, conidAttribute, identAttribute,
-			commentAttribute, specialAttribute, opAttribute,
-			keywordAttribute, literalAttribute, errorAttribute;
+			identAttribute, docuAttribute,
+			commentAttribute, specialAttribute, 
+			keywordAttribute, literalAttribute, errorAttribute,
+			nsAttribute, typeAttribute, itypeAttribute, 
+			conAttribute, iconAttribute;
 
 	//  protected final TextAttribute commentAttribute, stringAttribute;
 
@@ -34,54 +44,79 @@ public class FregeTokenColorer extends TokenColorerBase implements ITokenColorer
 		
 		Display display = Display.getDefault();
 		IPreferencesService service = FregePlugin.getInstance().getPreferencesService();
-		Color docuColor = new Color (display, 
-				StringConverter.asRGB(service.getStringPreference(FregePreferencesConstants.P_DOCUCOLOR), 
-						display.getSystemColor(SWT.COLOR_DARK_YELLOW).getRGB())); 
+		
+		final boolean boldns = service.getBooleanPreference(FregePreferencesConstants.P_BOLDNS);
+		final boolean italic = service.getBooleanPreference(FregePreferencesConstants.P_ITALICIMPORTS);
+		
 		Color commColor = new Color (display, 
 				StringConverter.asRGB(service.getStringPreference(FregePreferencesConstants.P_COMMCOLOR),
-						display.getSystemColor(SWT.COLOR_DARK_YELLOW).getRGB())); 
-		Color conidColor = new Color (display, 
-				StringConverter.asRGB(service.getStringPreference(FregePreferencesConstants.P_CONIDCOLOR), 
+						display.getSystemColor(SWT.COLOR_DARK_BLUE).getRGB())); 
+		Color tconColor = new Color (display, 
+				StringConverter.asRGB(service.getStringPreference(FregePreferencesConstants.P_TCONCOLOR), 
 						display.getSystemColor(SWT.COLOR_DARK_RED).getRGB()));
+		Color dconColor = new Color (display, 
+				StringConverter.asRGB(service.getStringPreference(FregePreferencesConstants.P_DCONCOLOR), 
+						display.getSystemColor(SWT.COLOR_DARK_YELLOW).getRGB()));
 		Color varidColor = new Color (display, 
 				StringConverter.asRGB(service.getStringPreference(FregePreferencesConstants.P_VARIDCOLOR), 
 						display.getSystemColor(SWT.COLOR_BLACK).getRGB()));
-		Color impColor = new Color (display, 
-				StringConverter.asRGB(service.getStringPreference(FregePreferencesConstants.P_GLOBALCOLOR), 
-						display.getSystemColor(SWT.COLOR_BLUE).getRGB()));
 		Color keywdColor = new Color (display, 
 				StringConverter.asRGB(service.getStringPreference(FregePreferencesConstants.P_KEYWORDCOLOR), 
 						display.getSystemColor(SWT.COLOR_DARK_MAGENTA).getRGB()));
 		Color litColor = new Color (display, 
 				StringConverter.asRGB(service.getStringPreference(FregePreferencesConstants.P_LITERALCOLOR), 
 						display.getSystemColor(SWT.COLOR_DARK_CYAN).getRGB()));
-		Color opColor = new Color (display, 
-				StringConverter.asRGB(service.getStringPreference(FregePreferencesConstants.P_OPCOLOR), 
-						display.getSystemColor(SWT.COLOR_DARK_GREEN).getRGB()));
 		Color errColor = new Color (display, 
 				StringConverter.asRGB(service.getStringPreference(FregePreferencesConstants.P_ERRORCOLOR), 
 						display.getSystemColor(SWT.COLOR_RED).getRGB()));
 		Color spcColor = new Color (display, 
 				StringConverter.asRGB(service.getStringPreference(FregePreferencesConstants.P_SPECIALCOLOR), 
 						display.getSystemColor(SWT.COLOR_DARK_MAGENTA).getRGB()));
-		docuAttribute    = new TextAttribute(docuColor, null, SWT.ITALIC);
 		commentAttribute = new TextAttribute(commColor, null, SWT.NORMAL);
-		conidAttribute   = new TextAttribute(conidColor, null, SWT.NORMAL);
+		docuAttribute    = new TextAttribute(commColor, null, SWT.ITALIC);
 		normalAttribute  = new TextAttribute(display.getSystemColor(SWT.COLOR_BLACK), null, SWT.NORMAL);
-		identAttribute   = new TextAttribute(varidColor, null, SWT.NORMAL);
-		impAttribute     = new TextAttribute(impColor, null, SWT.NORMAL);
 		keywordAttribute = new TextAttribute(keywdColor, null, SWT.BOLD);
 		literalAttribute = new TextAttribute(litColor, null, SWT.NORMAL);
-		opAttribute      = new TextAttribute(opColor, null, SWT.NORMAL);
 		errorAttribute   = new TextAttribute(errColor, null, SWT.NORMAL);
 		specialAttribute = new TextAttribute(spcColor, null, SWT.BOLD);
 		
+		identAttribute   = new TextAttribute(varidColor, null, SWT.NORMAL);
+		impAttribute     = new TextAttribute(varidColor, null, italic ? SWT.ITALIC : SWT.NORMAL);
+		nsAttribute      = new TextAttribute(tconColor,  null, boldns ? SWT.BOLD : SWT.NORMAL);
+		typeAttribute	 = new TextAttribute(tconColor,  null, SWT.NORMAL);
+		itypeAttribute   = new TextAttribute(tconColor,  null, italic ? SWT.ITALIC : SWT.NORMAL);
+		conAttribute     = new TextAttribute(dconColor,  null, SWT.NORMAL);
+		iconAttribute    = new TextAttribute(dconColor,  null, italic ? SWT.ITALIC : SWT.NORMAL);
+	}
+	
+	public TextAttribute getKind(FregeParseController controller, TToken tok, TextAttribute normalAttribute) {
+		TGlobal g = (TGlobal) controller.getCurrentAst();
+		final TMaybe mb = (TMaybe) TGlobal.resolved(g, tok)._e();
+		final TMaybe.DJust just = mb._Just();
+		if (just == null) return normalAttribute;
+		final TEither et = (TEither) just.mem1._e();
+		final DRight right = et._Right();
+		if (right == null) return nsAttribute;			// since it is Left ()
+		final TQName qname = (TQName) right.mem1._e();
+		final DLocal local = qname._Local();
+		if (local != null) return normalAttribute;		// local var
+		final boolean our = TQName.M.our(qname, g);
+		final TQName.DTName tname = qname._TName();
+		if (tname != null) return our? typeAttribute : itypeAttribute;
+		final TQName.DMName mname = qname._MName();
+		if (mname != null && TToken.tokid(tok).j == TTokenID.CONID.j)
+			return our ? conAttribute : iconAttribute;
+		return our ? normalAttribute : impAttribute;
 	}
 
+	@Override 
 	public TextAttribute getColoring(IParseController controller, Object o) {
 		if (o == null)
 			return null;
-		final TToken token = (TToken) o;
+		return getColoring((FregeParseController) controller, (TToken) o);
+	}
+	
+	public TextAttribute getColoring(final FregeParseController controller, final TToken token) {
 		final int tid = TToken.tokid(token).j;
 		
 		if (tid >= TTokenID.PACKAGE.j && tid <= TTokenID.INFIXR.j) 	return keywordAttribute;
@@ -89,13 +124,17 @@ public class FregeTokenColorer extends TokenColorerBase implements ITokenColorer
 		if (tid == TTokenID.COMMENT.j)								return commentAttribute;
 		if (tid == TTokenID.CONID.j 
 				|| tid == TTokenID.QUALIFIER.j
-				|| tid == TTokenID.QCONID.j)	return conidAttribute;
-		if (tid == TTokenID.VARID.j || tid == TTokenID.QVARID.j)	return identAttribute;
+				|| tid == TTokenID.VARID.j) {
+			return  getKind(controller, token, identAttribute);
+		}
+			
+		// if (tid == TTokenID.VARID.j || tid == TTokenID.QVARID.j)	return identAttribute;
 		if (tid >= TTokenID.INTCONST.j && tid <= TTokenID.REGEXP.j) return literalAttribute;
 		if (tid == TTokenID.LEXERROR.j) 							return errorAttribute;
 
 		if (tid >= TTokenID.DCOLON.j && tid <= TTokenID.EARROW.j)	return specialAttribute;
-		if (tid >= TTokenID.LOP0.j && tid <= TTokenID.SOMEOP.j) 	return opAttribute;
+		if (tid >= TTokenID.LOP0.j && tid <= TTokenID.SOMEOP.j) 	
+			return getKind(controller, token, identAttribute);
 		if (tid == TTokenID.CHAR.j && TToken.value(token).length() > 0) 
 			switch (TToken.value(token).charAt(0)) {
 				case '_': return  specialAttribute;
@@ -111,13 +150,13 @@ public class FregeTokenColorer extends TokenColorerBase implements ITokenColorer
 				case '}': return normalAttribute;
 				case ',': return normalAttribute;
 				case '.': return normalAttribute;
-				case '!': return opAttribute;
-				case '?': return opAttribute;
-				case '-': return opAttribute;
+				case '!': return identAttribute;
+				case '?': return identAttribute;
+				case '-': return identAttribute;
 				default: break;
 		}
-		System.err.println("Don't know how to colour " + IShow_Token.show(token) + " ?");
-		return super.getColoring(controller, token);
+		// System.err.println("Don't know how to colour " + IShow_Token.show(token) + " ?");
+		return errorAttribute;
 	}
 
 	public IRegion calculateDamageExtent(IRegion seed) {

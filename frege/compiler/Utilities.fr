@@ -1262,9 +1262,10 @@ accessforbidden we sym
     | MName (TName p _) _ <- Symbol.name sym = sym.vis == Private && p != we
     | otherwise = Prelude.error ("Strange symbol")
 
-resolve  :: (String -> QName) -> Position -> SName -> StG [QName]
-resolve3 :: (String -> QName) -> Position -> SName -> StG [Symbol]
-resolve fname pos sname = do
+
+private resolve3 :: (String -> QName) -> Position -> SName -> StG [Symbol]
+protected resolve  :: (String -> QName) -> Position -> SName -> StG [QName]
+protected resolve fname pos sname = do
     g   <- getST
     syms <- resolve3 fname pos sname
     logmsg TRACE5 pos (text ("resolve: " ++ show sname ++ " --> " ++ show (map (flip nice g) syms)))
@@ -1286,7 +1287,7 @@ resolve fname pos sname = do
                         ++ QName.show symbol.name ++ ", " ++ show symbol.vis ++ ")"))
 
 -- resolve3 keeps the original name, i.e. 'Int.<=>' will not be resolved to 'Ord.<=>'
-resolve3 fname pos (Simple Token{value=qs}) = do
+private resolve3 fname pos (Simple Token{value=qs}) = do
     g <- getST
     let s = enclosed qs
     let local = Local s
@@ -1315,7 +1316,7 @@ resolve3 fname pos (Simple Token{value=qs}) = do
             more acc env = foldr (:) acc [ v.name.base | v <- values env,
                                     not (v::Symbol).{clas?} ]
 -- T.v  T.C  N.v  N.C N.T
-resolve3 _ pos (With1 Token{value=n} Token{value=qv}) = do
+private resolve3 _ pos (snm@With1 Token{value=n} Token{value=qv}) = do
     g <- getST
     let v = enclosed qv
     let tname   = TName g.thisPack n
@@ -1328,7 +1329,11 @@ resolve3 _ pos (With1 Token{value=n} Token{value=qv}) = do
         -- mresult = [ n | (n, Just _) <- zip members (map find members) ]
     case g.namespaces.lookup (NSX n) of
         Just pack -> case g.packages.lookup pack of
-            Just env -> case ((VName pack v).findit g, (TName pack v).findit g) of
+            Just env -> do
+              -- register qualifier as name space
+              changeST Global.{sub <- SubSt.{
+                    idKind <- insertkv (KeyTk snm.ty) (Left())}}
+              case ((VName pack v).findit g, (TName pack v).findit g) of
                 (Nothing, Nothing)
                     | null mlist -> do
                         error pos (msgdoc ("Cannot resolve `" ++ (VName pack v).nice g
@@ -1336,9 +1341,12 @@ resolve3 _ pos (With1 Token{value=n} Token{value=qv}) = do
                             ++ (VName pack (doyoumean v (es env ++ msts))).nice g ++ "` perhaps?"))
                         stio []
                     | otherwise = stio mlist
-                (Just s, Nothing) -> stio (s : mlist)
-                (Nothing, Just t) -> stio (t : mlist)
-                (Just s,  Just t) -> stio (s : t : mlist)
+                (Just s, Nothing) -> do
+                        stio (s : mlist)
+                (Nothing, Just t) -> do
+                        stio (t : mlist)
+                (Just s,  Just t) -> do
+                        stio (s : t : mlist)
             Nothing -> Prelude.error ("cannot happen, no symtab for " ++ show pack)
         Nothing -> case mbtsym of
             Nothing -> do
@@ -1346,7 +1354,11 @@ resolve3 _ pos (With1 Token{value=n} Token{value=qv}) = do
                             ++ n ++ "` is not a type, class or namespace, "
                             ++ "did you mean `" ++ doyoumean n (tsns g) ++ "` perhaps?"))
                 stio []
-            Just sym -> case member of
+            Just sym -> do
+              -- register qualifier as type name
+              changeST Global.{sub <- SubSt.{
+                    idKind <- insertkv (KeyTk snm.ty) (Right sym.name)}} 
+              case member of
                 Just mem -> stio [mem]
                 Nothing -> do
                     error pos (msgdoc ("Can't resolve `" ++ mname.nice g ++ "`, did you mean `"
@@ -1363,18 +1375,27 @@ resolve3 _ pos (With1 Token{value=n} Token{value=qv}) = do
     es :: Symtab -> [String]
     es e = map (QName.base • Symbol.name) (values e)
 
-resolve3 _ pos (With2 Token{value=n} Token{value=t} Token{value=qm}) = do
+private resolve3 _ pos (snm@With2 Token{value=n} Token{value=t} Token{value=qm}) = do
     g <- getST
     let m = enclosed qm
     case g.namespaces.lookup (NSX n) of
-        Just pack -> case g.packages.lookup pack of
+        Just pack -> do
+          -- register 1st qualifier as name space
+          changeST Global.{sub <- SubSt.{
+                    idKind <- insertkv (KeyTk snm.ns) (Left())}} 
+          case g.packages.lookup pack of
             Just env -> let tname = TName pack t in case tname.findit g of
                 Nothing -> do
                     error pos (msgdoc ("can't resolve `" ++ tname.nice g
                             ++ "`, did you mean `"
                             ++ (TName pack (doyoumean t (ts env))).nice g ++ "` perhaps?"))
                     stio []
-                Just sym -> let mname = MName tname m in case mname.findit g of
+                Just sym -> do
+                  -- register 2nd qualifier as type name
+                  changeST Global.{sub <- SubSt.{
+                    idKind <- insertkv (KeyTk snm.ty) (Right sym.name)}} 
+                  let mname = MName tname m 
+                  case mname.findit g of
                     Nothing -> do
                         error pos (msgdoc ("can't resolve `" ++ mname.nice g
                             ++ "`, did you mean `"
@@ -1415,8 +1436,16 @@ resolveVName fname pos name = do
                                                               -- same is known globally
                   Just (SymV{name=cop}) <- (VName g.thisPack op).findit g,
                   MName cname _ <- cop,                       -- and is linked to a member
-                  Just (SymC{}) <- cname.findit g = stio cop  -- of a type class
-                | otherwise -> stio x
+                  Just (SymC{}) <- cname.findit g = do        -- of a type class
+                    -- register id
+                    changeST Global.{sub <- SubSt.{
+                        idKind <- insertkv (KeyTk name.id) (Right cop)}}
+                    stio cop
+                | otherwise -> do
+                    -- register id
+                    changeST Global.{sub <- SubSt.{
+                        idKind <- insertkv (KeyTk name.id) (Right x)}}
+                    stio x
             []  | null qnames = stio (fname name.id.value)
                 | otherwise   = do
                     g <- getST
@@ -1427,7 +1456,11 @@ resolveTName pos name = do
         qnames <- resolve (VName pPreludeBase) pos name
         let tnames = filter isTName qnames
         case tnames of
-            [x] -> stio (Just x)
+            [x] -> do
+                -- register id as type name
+                changeST Global.{sub <- SubSt.{
+                    idKind <- insertkv (KeyTk name.id) (Right x)}} 
+                stio (Just x)
             []  -> do
                 when ((not • null) qnames) do
                     error pos (msgdoc ("`" ++ show name ++ "` is not a type, class or instance."))

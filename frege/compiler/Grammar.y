@@ -1263,7 +1263,7 @@ addDoc second (Just first) = Just (first ++ "\n" ++ second)
 /// return 'Con' if it is (:)
 varcon o
     | Token.value o == ":" = Con
-    | Token.value o == "Prelude.:" = Con
+    // Token.value o == "Prelude.:" = Con
     | m ~ #(\w+'*`?$)# <- Token.value o, Just s <- m.group 1, (s.charAt 0).isUpperCase = Con
     | otherwise = Vbl
 
@@ -1273,7 +1273,7 @@ binop op = do
     YYM.return (vid tok)
 
 /// make a binary expression
-mkapp a op b = varcon op (yyline op) (Simple op.{tokid=VARID}) Nothing `nApp` a `nApp` b
+mkapp a op b = varcon op (yyline op) (Simple op) Nothing `nApp` a `nApp` b
 
 
 

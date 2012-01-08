@@ -100,54 +100,55 @@ public class FregeInstancePreferencesTab extends InstancePreferencesTab {
 			fregeLibDetailsLink.setEnabled(false);
 			fDetailsLinks.add(fregeLibDetailsLink);
 		
-		ColorFieldEditor docuColor = fPrefUtils.makeNewColorField(
-			page, this, fPrefService,
-			"instance", "docuColor", "Documentation color ",
-			"",
-			parent,
-			true, true,
-			false);
-		fields.add(docuColor);
+//		ColorFieldEditor docuColor = fPrefUtils.makeNewColorField(
+//			page, this, fPrefService,
+//			"instance", "docuColor", "Documentation color ",
+//			"",
+//			parent,
+//			true, true,
+//			false);
+//		fields.add(docuColor);
 
 		ColorFieldEditor commColor = fPrefUtils.makeNewColorField(
 			page, this, fPrefService,
-			"instance", "commColor", "Comment color     ",
+			"instance", "commColor", "Comments        ",
 			"",
 			parent,
 			true, true,
 			false);
 		fields.add(commColor);
 
-		ColorFieldEditor conidColor = fPrefUtils.makeNewColorField(
+		ColorFieldEditor tconColor = fPrefUtils.makeNewColorField(
 			page, this, fPrefService,
-			"instance", "conidColor", "Constructor id color",
+			"instance", "tconColor", "Types/Namespaces",
 			"",
 			parent,
 			true, true,
 			false);
-		fields.add(conidColor);
+		fields.add(tconColor);
+
+		ColorFieldEditor dconColor = fPrefUtils.makeNewColorField(
+			page, this, fPrefService,
+			"instance", "dconColor", "Constructors    ",
+			"",
+			parent,
+			true, true,
+			false);
+		fields.add(dconColor);
+
 
 		ColorFieldEditor varidColor = fPrefUtils.makeNewColorField(
 			page, this, fPrefService,
-			"instance", "varidColor", "Variable id color   ",
+			"instance", "varidColor", "Variables       ",
 			"",
 			parent,
 			true, true,
 			false);
 		fields.add(varidColor);
-
-		ColorFieldEditor globalColor = fPrefUtils.makeNewColorField(
-				page, this, fPrefService,
-				"instance", "globalColor", "Imported Variables color",
-				"",
-				parent,
-				true, true,
-				false);
-		fields.add(globalColor);
 		
 		ColorFieldEditor keywordColor = fPrefUtils.makeNewColorField(
 			page, this, fPrefService,
-			"instance", "keywordColor", "Keyword color       ",
+			"instance", "keywordColor", "Keywords        ",
 			"",
 			parent,
 			true, true,
@@ -156,25 +157,16 @@ public class FregeInstancePreferencesTab extends InstancePreferencesTab {
 
 		ColorFieldEditor specialColor = fPrefUtils.makeNewColorField(
 			page, this, fPrefService,
-			"instance", "specialColor", "Special symbol color",
+			"instance", "specialColor", "Special symbols ",
 			"",
 			parent,
 			true, true,
 			false);
 		fields.add(specialColor);
 
-		ColorFieldEditor opColor = fPrefUtils.makeNewColorField(
-			page, this, fPrefService,
-			"instance", "opColor", "Operator color      ",
-			"",
-			parent,
-			true, true,
-			false);
-		fields.add(opColor);
-
 		ColorFieldEditor literalColor = fPrefUtils.makeNewColorField(
 			page, this, fPrefService,
-			"instance", "literalColor", "Literal color       ",
+			"instance", "literalColor", "Literals        ",
 			"",
 			parent,
 			true, true,
@@ -183,13 +175,33 @@ public class FregeInstancePreferencesTab extends InstancePreferencesTab {
 
 		ColorFieldEditor errorColor = fPrefUtils.makeNewColorField(
 			page, this, fPrefService,
-			"instance", "errorColor", "Error token color   ",
+			"instance", "errorColor", "Lexical errors    ",
 			"",
 			parent,
 			true, true,
 			false);
 		fields.add(errorColor);
 
+		BooleanFieldEditor italicImports = fPrefUtils.makeNewBooleanField(
+			page, this, fPrefService,
+			"instance", "italicImports", "Show imported items in italics",
+			"Gives a visual clue about whether a name was imported.",
+			parent,
+			true, true,
+			true, false,
+			false);
+		fields.add(italicImports);
+		
+		BooleanFieldEditor boldNS = fPrefUtils.makeNewBooleanField(
+			page, this, fPrefService,
+			"instance", "boldNS", "Show name spaces in bold face",
+			"Gives a visual clue about whether a qualifier is not a type, but a namespace.",
+			parent,
+			true, true,
+			true, false,
+			false);
+		fields.add(boldNS);
+		
 		return fields.toArray(new FieldEditor[fields.size()]);
 	}
 }

@@ -365,7 +365,7 @@ public class FregeParseController extends ParseControllerBase implements
 	}
 
 	@Override
-	public Object getCurrentAst() {
+	public TGlobal getCurrentAst() {
 		return global;
 	}
 	
