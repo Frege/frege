@@ -40,13 +40,16 @@ public class JavaUtils {
 	}
 
 
-	public static int runJavac(final String cmd) {
+	public static int runJavac(final String[] cmd) {
 		try {
 			// String cmd = "javac -cp " + cp + " -d " + d + " " + src;
 			int cex = 0;
+			StringBuilder sb = new StringBuilder();
+			for (String s : cmd) { sb.append(s); sb.append(" "); }
+			System.err.println("running: " + sb.toString());
 			Process jp = Runtime.getRuntime().exec(cmd);
 			// if (Common.verbose)
-				System.err.println("running: " + cmd);
+				
 			java.io.InputStream is = jp.getErrorStream();
 			while ((cex = is.read()) >= 0) {
 				System.err.write(cex);
