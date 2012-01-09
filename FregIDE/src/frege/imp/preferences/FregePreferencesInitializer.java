@@ -33,17 +33,19 @@ public class FregePreferencesInitializer extends PreferencesInitializer {
 		String darkCyan   = StringConverter.asString(display.getSystemColor(SWT.COLOR_DARK_CYAN).getRGB());
 
 		service.setStringPreference(IPreferencesService.DEFAULT_LEVEL, FregePreferencesConstants.P_SOURCEFONT, "Consolas");
-		service.setIntPreference(IPreferencesService.DEFAULT_LEVEL, FregePreferencesConstants.P_TABWIDTH, 4);
-		service.setBooleanPreference(IPreferencesService.DEFAULT_LEVEL, FregePreferencesConstants.P_SPACESFORTABS, true);
+		// service.setIntPreference(IPreferencesService.DEFAULT_LEVEL, FregePreferencesConstants.P_TABWIDTH, 4);
+		// service.setBooleanPreference(IPreferencesService.DEFAULT_LEVEL, FregePreferencesConstants.P_SPACESFORTABS, true);
 		service.setBooleanPreference(IPreferencesService.DEFAULT_LEVEL, FregePreferencesConstants.P_ITALICIMPORTS, true);
 		service.setBooleanPreference(IPreferencesService.DEFAULT_LEVEL, FregePreferencesConstants.P_BOLDNS, true);
-		service.setStringPreference(IPreferencesService.DEFAULT_LEVEL, FregePreferencesConstants.P_COMMCOLOR, darkBlue);
+		service.setStringPreference(IPreferencesService.DEFAULT_LEVEL, FregePreferencesConstants.P_DOCUCOLOR, darkBlue);
+		service.setStringPreference(IPreferencesService.DEFAULT_LEVEL, FregePreferencesConstants.P_COMMCOLOR, darkCyan);
 		service.setStringPreference(IPreferencesService.DEFAULT_LEVEL, FregePreferencesConstants.P_TCONCOLOR, darkRed);
 		service.setStringPreference(IPreferencesService.DEFAULT_LEVEL, FregePreferencesConstants.P_DCONCOLOR, darkYellow);
 		service.setStringPreference(IPreferencesService.DEFAULT_LEVEL, FregePreferencesConstants.P_VARIDCOLOR, black);
+		service.setStringPreference(IPreferencesService.DEFAULT_LEVEL, FregePreferencesConstants.P_IMPORTCOLOR, black);
 		service.setStringPreference(IPreferencesService.DEFAULT_LEVEL, FregePreferencesConstants.P_KEYWORDCOLOR, darkMagenta);
 		service.setStringPreference(IPreferencesService.DEFAULT_LEVEL, FregePreferencesConstants.P_SPECIALCOLOR, darkMagenta);
-		service.setStringPreference(IPreferencesService.DEFAULT_LEVEL, FregePreferencesConstants.P_LITERALCOLOR, darkCyan);
+		service.setStringPreference(IPreferencesService.DEFAULT_LEVEL, FregePreferencesConstants.P_LITERALCOLOR, blue);
 		service.setStringPreference(IPreferencesService.DEFAULT_LEVEL, FregePreferencesConstants.P_ERRORCOLOR, red);
 		service.setStringPreference(IPreferencesService.DEFAULT_LEVEL, FregePreferencesConstants.P_FREGELIB, FregePlugin.getInstance().getFregeLib());
 		

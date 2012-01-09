@@ -111,9 +111,22 @@ public class FregeParseController extends ParseControllerBase implements
 		
 		@Override
 		public boolean hasNext() {
+			// skip { ; }
 			// we have a next if we are not the empty list and the token is in the region
-			return list._Cons() != null
-					&& within((TToken)list._Cons().mem1._e(), region);
+			DCons dcons = list._Cons(); 
+			while (dcons != null) {
+				TToken tok = (TToken) dcons.mem1._e();
+				if (tok.mem1 == TTokenID.CHAR.j
+						&& (tok.mem2.charAt(0) == '{'
+								|| tok.mem2.charAt(0) == '}'
+								|| tok.mem2.charAt(0) == ';')) {
+					list = (TList) dcons.mem2._e();
+					dcons = list._Cons();
+				}
+				else break;
+			}
+			return dcons != null
+					&& within((TToken)dcons.mem1._e(), region);
 		}
 		@Override
 		public TToken next() {

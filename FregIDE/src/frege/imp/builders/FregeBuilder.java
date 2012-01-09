@@ -292,7 +292,7 @@ public class FregeBuilder extends FregeBuilderBase {
 					Pattern p = Pattern.compile(":\\d+:\\s+error:(.*)");
 					for (String s : msgs) {
 						if (s == null) continue;
-						getPlugin().writeInfoMsg(s);
+						// getPlugin().writeInfoMsg(s);
 						Matcher m = p.matcher(s);
 						if (m.find()) {
 							String se = m.group(1);

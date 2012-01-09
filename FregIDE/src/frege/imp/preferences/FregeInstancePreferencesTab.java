@@ -54,36 +54,36 @@ public class FregeInstancePreferencesTab extends InstancePreferencesTab {
 		fDetailsLinks.add(sourceFontDetailsLink);
 
 
-		IntegerFieldEditor tabWidth = fPrefUtils.makeNewIntegerField(
-			page, this, fPrefService,
-			"instance", "tabWidth", "Tabulator Width",
-			"",
-			parent,
-			true, true,
-			true, "0",
-			false);
-		fields.add(tabWidth);
-
-		Link tabWidthDetailsLink = fPrefUtils.createDetailsLink(parent, tabWidth, tabWidth.getTextControl().getParent(), "Details ...");
-
-		tabWidthDetailsLink.setEnabled(true);
-		fDetailsLinks.add(tabWidthDetailsLink);
-
-
-		BooleanFieldEditor spacesForTabs = fPrefUtils.makeNewBooleanField(
-			page, this, fPrefService,
-			"instance", "spacesForTabs", "Tab inserts spaces",
-			"Is it strongly suggested to not have tabulator characters in Frege source code.",
-			parent,
-			true, true,
-			true, false,
-			false);
-		fields.add(spacesForTabs);
-
-		Link spacesForTabsDetailsLink = fPrefUtils.createDetailsLink(parent, spacesForTabs, spacesForTabs.getChangeControl().getParent(), "Details ...");
-
-		spacesForTabsDetailsLink.setEnabled(true);
-		fDetailsLinks.add(spacesForTabsDetailsLink);
+//		IntegerFieldEditor tabWidth = fPrefUtils.makeNewIntegerField(
+//			page, this, fPrefService,
+//			"instance", "tabWidth", "Tabulator Width",
+//			"",
+//			parent,
+//			true, true,
+//			true, "0",
+//			false);
+//		fields.add(tabWidth);
+//
+//		Link tabWidthDetailsLink = fPrefUtils.createDetailsLink(parent, tabWidth, tabWidth.getTextControl().getParent(), "Details ...");
+//
+//		tabWidthDetailsLink.setEnabled(true);
+//		fDetailsLinks.add(tabWidthDetailsLink);
+//
+//
+//		BooleanFieldEditor spacesForTabs = fPrefUtils.makeNewBooleanField(
+//			page, this, fPrefService,
+//			"instance", "spacesForTabs", "Tab inserts spaces",
+//			"Is it strongly suggested to not have tabulator characters in Frege source code.",
+//			parent,
+//			true, true,
+//			true, false,
+//			false);
+//		fields.add(spacesForTabs);
+//
+//		Link spacesForTabsDetailsLink = fPrefUtils.createDetailsLink(parent, spacesForTabs, spacesForTabs.getChangeControl().getParent(), "Details ...");
+//
+//		spacesForTabsDetailsLink.setEnabled(true);
+//		fDetailsLinks.add(spacesForTabsDetailsLink);
 
 		FileFieldEditor fregeLib = fPrefUtils.makeNewFileField(
 				page, this, fPrefService,
@@ -100,19 +100,19 @@ public class FregeInstancePreferencesTab extends InstancePreferencesTab {
 			fregeLibDetailsLink.setEnabled(false);
 			fDetailsLinks.add(fregeLibDetailsLink);
 		
-//		ColorFieldEditor docuColor = fPrefUtils.makeNewColorField(
-//			page, this, fPrefService,
-//			"instance", "docuColor", "Documentation color ",
-//			"",
-//			parent,
-//			true, true,
-//			false);
-//		fields.add(docuColor);
+		ColorFieldEditor docuColor = fPrefUtils.makeNewColorField(
+			page, this, fPrefService,
+			"instance", "docuColor", "Documentation",
+			"Color for documentation comments",
+			parent,
+			true, true,
+			false);
+		fields.add(docuColor);
 
 		ColorFieldEditor commColor = fPrefUtils.makeNewColorField(
 			page, this, fPrefService,
 			"instance", "commColor", "Comments        ",
-			"",
+			"Color for ordinary comments",
 			parent,
 			true, true,
 			false);
@@ -121,7 +121,7 @@ public class FregeInstancePreferencesTab extends InstancePreferencesTab {
 		ColorFieldEditor tconColor = fPrefUtils.makeNewColorField(
 			page, this, fPrefService,
 			"instance", "tconColor", "Types/Namespaces",
-			"",
+			"Color for type constrcutors, type aliases, classes and namespaces",
 			parent,
 			true, true,
 			false);
@@ -130,7 +130,7 @@ public class FregeInstancePreferencesTab extends InstancePreferencesTab {
 		ColorFieldEditor dconColor = fPrefUtils.makeNewColorField(
 			page, this, fPrefService,
 			"instance", "dconColor", "Constructors    ",
-			"",
+			"Color for data constrcutor names",
 			parent,
 			true, true,
 			false);
@@ -145,6 +145,15 @@ public class FregeInstancePreferencesTab extends InstancePreferencesTab {
 			true, true,
 			false);
 		fields.add(varidColor);
+		
+		ColorFieldEditor importColor = fPrefUtils.makeNewColorField(
+				page, this, fPrefService,
+				"instance", "importColor", "Imported Variables",
+				"Color for variables and functions defined in an imported package",
+				parent,
+				true, true,
+				false);
+		fields.add(importColor);
 		
 		ColorFieldEditor keywordColor = fPrefUtils.makeNewColorField(
 			page, this, fPrefService,
@@ -176,7 +185,7 @@ public class FregeInstancePreferencesTab extends InstancePreferencesTab {
 		ColorFieldEditor errorColor = fPrefUtils.makeNewColorField(
 			page, this, fPrefService,
 			"instance", "errorColor", "Lexical errors    ",
-			"",
+			"Signals unfinished block comments and quoted constructs",
 			parent,
 			true, true,
 			false);

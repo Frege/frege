@@ -48,9 +48,12 @@ public class FregeTokenColorer extends TokenColorerBase implements ITokenColorer
 		final boolean boldns = service.getBooleanPreference(FregePreferencesConstants.P_BOLDNS);
 		final boolean italic = service.getBooleanPreference(FregePreferencesConstants.P_ITALICIMPORTS);
 		
+		Color docuColor = new Color (display, 
+				StringConverter.asRGB(service.getStringPreference(FregePreferencesConstants.P_DOCUCOLOR),
+						display.getSystemColor(SWT.COLOR_DARK_BLUE).getRGB())); 
 		Color commColor = new Color (display, 
 				StringConverter.asRGB(service.getStringPreference(FregePreferencesConstants.P_COMMCOLOR),
-						display.getSystemColor(SWT.COLOR_DARK_BLUE).getRGB())); 
+						display.getSystemColor(SWT.COLOR_DARK_CYAN).getRGB())); 
 		Color tconColor = new Color (display, 
 				StringConverter.asRGB(service.getStringPreference(FregePreferencesConstants.P_TCONCOLOR), 
 						display.getSystemColor(SWT.COLOR_DARK_RED).getRGB()));
@@ -59,6 +62,9 @@ public class FregeTokenColorer extends TokenColorerBase implements ITokenColorer
 						display.getSystemColor(SWT.COLOR_DARK_YELLOW).getRGB()));
 		Color varidColor = new Color (display, 
 				StringConverter.asRGB(service.getStringPreference(FregePreferencesConstants.P_VARIDCOLOR), 
+						display.getSystemColor(SWT.COLOR_BLACK).getRGB()));
+		Color importColor = new Color (display, 
+				StringConverter.asRGB(service.getStringPreference(FregePreferencesConstants.P_IMPORTCOLOR), 
 						display.getSystemColor(SWT.COLOR_BLACK).getRGB()));
 		Color keywdColor = new Color (display, 
 				StringConverter.asRGB(service.getStringPreference(FregePreferencesConstants.P_KEYWORDCOLOR), 
@@ -73,7 +79,7 @@ public class FregeTokenColorer extends TokenColorerBase implements ITokenColorer
 				StringConverter.asRGB(service.getStringPreference(FregePreferencesConstants.P_SPECIALCOLOR), 
 						display.getSystemColor(SWT.COLOR_DARK_MAGENTA).getRGB()));
 		commentAttribute = new TextAttribute(commColor, null, SWT.NORMAL);
-		docuAttribute    = new TextAttribute(commColor, null, SWT.ITALIC);
+		docuAttribute    = new TextAttribute(docuColor, null, SWT.ITALIC);
 		normalAttribute  = new TextAttribute(display.getSystemColor(SWT.COLOR_BLACK), null, SWT.NORMAL);
 		keywordAttribute = new TextAttribute(keywdColor, null, SWT.BOLD);
 		literalAttribute = new TextAttribute(litColor, null, SWT.NORMAL);
@@ -81,7 +87,7 @@ public class FregeTokenColorer extends TokenColorerBase implements ITokenColorer
 		specialAttribute = new TextAttribute(spcColor, null, SWT.BOLD);
 		
 		identAttribute   = new TextAttribute(varidColor, null, SWT.NORMAL);
-		impAttribute     = new TextAttribute(varidColor, null, italic ? SWT.ITALIC : SWT.NORMAL);
+		impAttribute     = new TextAttribute(importColor, null, italic ? SWT.ITALIC : SWT.NORMAL);
 		nsAttribute      = new TextAttribute(tconColor,  null, boldns ? SWT.BOLD : SWT.NORMAL);
 		typeAttribute	 = new TextAttribute(tconColor,  null, SWT.NORMAL);
 		itypeAttribute   = new TextAttribute(tconColor,  null, italic ? SWT.ITALIC : SWT.NORMAL);
@@ -106,7 +112,7 @@ public class FregeTokenColorer extends TokenColorerBase implements ITokenColorer
 		final TQName.DMName mname = qname._MName();
 		if (mname != null && TToken.tokid(tok).j == TTokenID.CONID.j)
 			return our ? conAttribute : iconAttribute;
-		return our ? normalAttribute : impAttribute;
+		return our ? identAttribute : impAttribute;
 	}
 
 	@Override 
@@ -125,7 +131,7 @@ public class FregeTokenColorer extends TokenColorerBase implements ITokenColorer
 		if (tid == TTokenID.CONID.j 
 				|| tid == TTokenID.QUALIFIER.j
 				|| tid == TTokenID.VARID.j) {
-			return  getKind(controller, token, identAttribute);
+			return  getKind(controller, token, normalAttribute);
 		}
 			
 		// if (tid == TTokenID.VARID.j || tid == TTokenID.QVARID.j)	return identAttribute;
@@ -134,7 +140,7 @@ public class FregeTokenColorer extends TokenColorerBase implements ITokenColorer
 
 		if (tid >= TTokenID.DCOLON.j && tid <= TTokenID.EARROW.j)	return specialAttribute;
 		if (tid >= TTokenID.LOP0.j && tid <= TTokenID.SOMEOP.j) 	
-			return getKind(controller, token, identAttribute);
+			return getKind(controller, token, normalAttribute);
 		if (tid == TTokenID.CHAR.j && TToken.value(token).length() > 0) 
 			switch (TToken.value(token).charAt(0)) {
 				case '_': return  specialAttribute;
