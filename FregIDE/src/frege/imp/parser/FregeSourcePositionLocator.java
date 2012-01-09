@@ -39,14 +39,14 @@ public class FregeSourcePositionLocator implements ISourcePositionLocator {
 	}
 
 	public Object findNode(Object ast, int startOffset, int endOffset) {
-		System.out.println("Looking for node spanning offsets " + startOffset + " => " + endOffset);
+		System.err.println("findNode( " + ast + ", " + startOffset + ", " +  endOffset + " ) called");
 		if (fNode[0] == null) {
 			//System.out.println("Selected node:  null");
 		} else {
 			//System.out.println("Selected node: " + fNode[0] + " [" +
 			//   fNode[0].getLeftIToken().getStartOffset() + ".." + fNode[0].getLeftIToken().getEndOffset() + "]");
 		}
-		return fNode[0];
+		return null;
 	}
 
 	public int getStartOffset(Object node) {
@@ -71,6 +71,7 @@ public class FregeSourcePositionLocator implements ISourcePositionLocator {
 	}
 
 	public IPath getPath(Object node) {
+		System.err.println("getPath( " + node + " )  called");
 		// TODO Determine path of compilation unit containing this node
 		return new Path("");
 	}
