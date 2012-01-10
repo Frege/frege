@@ -42,7 +42,7 @@ public class FregeInstancePreferencesTab extends InstancePreferencesTab {
 		FontFieldEditor sourceFont = fPrefUtils.makeNewFontField(
 			page, this, fPrefService,
 			"instance", "sourceFont", "Editor Font",
-			"",
+			"Editor font",
 			parent,
 			true, true,
 			false);
@@ -120,7 +120,7 @@ public class FregeInstancePreferencesTab extends InstancePreferencesTab {
 
 		ColorFieldEditor tconColor = fPrefUtils.makeNewColorField(
 			page, this, fPrefService,
-			"instance", "tconColor", "Types/Namespaces",
+			"instance", "tconColor", "Types etc.",
 			"Color for type constrcutors, type aliases, classes and namespaces",
 			parent,
 			true, true,
@@ -139,26 +139,26 @@ public class FregeInstancePreferencesTab extends InstancePreferencesTab {
 
 		ColorFieldEditor varidColor = fPrefUtils.makeNewColorField(
 			page, this, fPrefService,
-			"instance", "varidColor", "Variables       ",
-			"",
+			"instance", "varidColor", "Top level vars",
+			"Color for non-local variables defined in the current package",
 			parent,
 			true, true,
 			false);
 		fields.add(varidColor);
 		
 		ColorFieldEditor importColor = fPrefUtils.makeNewColorField(
-				page, this, fPrefService,
-				"instance", "importColor", "Imported Variables",
-				"Color for variables and functions defined in an imported package",
-				parent,
-				true, true,
-				false);
+			page, this, fPrefService,
+			"instance", "importColor", "Imported vars",
+			"Color for variables and functions defined in an imported package",
+			parent,
+			true, true,
+			false);
 		fields.add(importColor);
 		
 		ColorFieldEditor keywordColor = fPrefUtils.makeNewColorField(
 			page, this, fPrefService,
-			"instance", "keywordColor", "Keywords        ",
-			"",
+			"instance", "keywordColor", "Reserved words",
+			"Color for key words.",
 			parent,
 			true, true,
 			false);
@@ -167,7 +167,7 @@ public class FregeInstancePreferencesTab extends InstancePreferencesTab {
 		ColorFieldEditor specialColor = fPrefUtils.makeNewColorField(
 			page, this, fPrefService,
 			"instance", "specialColor", "Special symbols ",
-			"",
+			"Color for symbols ::, ->, <-, => and |",
 			parent,
 			true, true,
 			false);
@@ -175,8 +175,8 @@ public class FregeInstancePreferencesTab extends InstancePreferencesTab {
 
 		ColorFieldEditor literalColor = fPrefUtils.makeNewColorField(
 			page, this, fPrefService,
-			"instance", "literalColor", "Literals        ",
-			"",
+			"instance", "literalColor", "Literal values",
+			"Colors for literal numbers, strings, characters and regular expressions",
 			parent,
 			true, true,
 			false);
@@ -184,8 +184,8 @@ public class FregeInstancePreferencesTab extends InstancePreferencesTab {
 
 		ColorFieldEditor errorColor = fPrefUtils.makeNewColorField(
 			page, this, fPrefService,
-			"instance", "errorColor", "Lexical errors    ",
-			"Signals unfinished block comments and quoted constructs",
+			"instance", "errorColor", "Lexical errors",
+			"Color that signals unfinished block comments and quoted constructs",
 			parent,
 			true, true,
 			false);

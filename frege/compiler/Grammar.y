@@ -1423,7 +1423,7 @@ funhead ex = do
 /**
  * construct a function definition as list
  */
-fundef (pos, name, pats) expr = [FunDcl {pos=pos, vis=Public, name, pats, expr, doc=Nothing}];
+fundef (pos, name, pats) expr = [FunDcl {poss=[pos], vis=Public, name, pats, expr, doc=Nothing}];
 
 /**
  * construct a function with guards
@@ -1568,7 +1568,7 @@ listComprehension pos e (q:qs) l2 = case q of
             calt3 = CAlt {env = Nil, pat = pcons anpat xspat, ex = hvar `nApp` xsvar}
             calts = if refutable pat then [calt2, calt1, calt3] else [calt2, calt1]
             ecas = Case CNormal usvar calts  Nothing
-            hdef = FunDcl {pos = pos, vis = Private, name=h.id.value, pats=[uspat], expr=ecas, doc = Nothing}
+            hdef = FunDcl {poss = [pos], vis = Private, name=h.id.value, pats=[uspat], expr=ecas, doc = Nothing}
         YYM.return (Let Nil [hdef] (nApp hvar xs) Nothing)
   where
         rest = listComprehension pos e qs l2
@@ -1608,7 +1608,7 @@ mkMonad line (e:es)
             rest <- mkMonad line es
             YYM.return (Let Nil defs rest  Nothing)
     where
-        -- indef e = FunDcl {pos = (getpos e), vis = Private, name="in", pats=[], expr=e, doc = Nothing}
+        -- indef e = FunDcl {poss = [getpos e], vis = Private, name="in", pats=[], expr=e, doc = Nothing}
         f = Position.first line
         wellknown x = With1 baseToken f.{tokid=VARID, value=x}
         local x = Simple f.{tokid=VARID, value=x}

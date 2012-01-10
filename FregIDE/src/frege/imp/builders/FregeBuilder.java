@@ -327,7 +327,7 @@ public class FregeBuilder extends FregeBuilderBase {
 	}
 
 	/**
-	 * Alwasy false, there is not such thing in Frege
+	 * Always false, there is not such thing in Frege
 	 */
 	@Override
 	protected boolean isNonRootSourceFile(IFile file) {
