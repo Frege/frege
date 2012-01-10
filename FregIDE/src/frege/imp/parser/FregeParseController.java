@@ -40,6 +40,7 @@ import org.eclipse.jface.text.IRegion;
 import org.osgi.service.prefs.BackingStoreException;
 
 import frege.FregePlugin;
+import frege.rt.Array;
 import frege.rt.Lambda;
 import frege.rt.Box;
 import frege.rt.FV;
@@ -88,56 +89,61 @@ public class FregeParseController extends ParseControllerBase implements
 		IParseController {
 
 	public static class TokensIterator implements Iterator<TToken> {
-		/** current list node */
-		private TList list;
+		/** current token array */
+		final private Array<FV> toks;
 		private IRegion region;
+		private int  inx;
+		
 		/** check if token is within region */
 		public static boolean within(TToken tok, IRegion region) {
 			return (TToken.offset(tok) + TToken.value(tok).length() >= region.getOffset()
 					&& TToken.offset(tok) <= region.getOffset() + region.getLength());
 		}
+		
 		/** construct an Iterator */
-		public TokensIterator(TList it, IRegion reg) { 
-			list = it;
+		public TokensIterator(Array<FV> it, IRegion reg) { 
+			toks = it;
 			region = reg;
-			while (true) {
-				TList.DCons cons = list._Cons();
-				if (cons == null) break;
-				TToken t = (TToken) cons.mem1._e();
+			inx = 0;
+			while (inx < toks.length()) {
+				TToken t = (TToken) toks.getAt(inx)._e(); 
 				if (within(t, reg)) break;
-				list = (TList) cons.mem2._e();
+				inx++;
 			}
+		}
+		
+		public static int skipBraces(final Array<FV> toks, int j) {
+			while (j < toks.length()) {
+				TToken tok = (TToken) toks.getAt(j)._e();
+				if (tok.mem1 == TTokenID.CHAR.j
+						&& (tok.mem2.charAt(0) == '{'
+								|| tok.mem2.charAt(0) == '}'
+								|| tok.mem2.charAt(0) == ';')) {
+					j++;
+				}
+				else break;
+			}
+			return j;
 		}
 		
 		@Override
 		public boolean hasNext() {
 			// skip { ; }
+			inx = skipBraces(toks, inx);
 			// we have a next if we are not the empty list and the token is in the region
-			DCons dcons = list._Cons(); 
-			while (dcons != null) {
-				TToken tok = (TToken) dcons.mem1._e();
-				if (tok.mem1 == TTokenID.CHAR.j
-						&& (tok.mem2.charAt(0) == '{'
-								|| tok.mem2.charAt(0) == '}'
-								|| tok.mem2.charAt(0) == ';')) {
-					list = (TList) dcons.mem2._e();
-					dcons = list._Cons();
-				}
-				else break;
-			}
-			return dcons != null
-					&& within((TToken)dcons.mem1._e(), region);
+			return inx < toks.length()
+					&& within((TToken)toks.getAt(inx)._e(), region);
 		}
+		
 		@Override
 		public TToken next() {
 			// give back next token
-			TList.DCons cons = list._Cons();
-			if (cons != null) {
-				list = (TList)  cons.mem2._e();
-				return (TToken) cons.mem1._e();
+			if (inx < toks.length()) {
+				return (TToken) toks.getAt(inx++)._e();
 			}
 			return null;
 		}
+		
 		@Override
 		public void remove() {
 			throw new UnsupportedOperationException("TokensIterator");
@@ -427,7 +433,7 @@ public class FregeParseController extends ParseControllerBase implements
 	
 	@Override
 	public Iterator<Data.TToken> getTokenIterator(IRegion region) {
-		System.out.println("getTokenIterator(): ");
+		System.err.println("getTokenIterator(): ");
 		return new TokensIterator(TSubSt.toks(TGlobal.sub(global)), region);
 		
 	}

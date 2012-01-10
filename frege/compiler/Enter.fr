@@ -53,15 +53,13 @@ protected version = v "$Revision$" where
     v _ = 0
 
 
-import frege.List (Tree, keys, values)
+import frege.List (Tree, keys, values, insertkv)
 -- import frege.IO(`<<`)
 
 import frege.compiler.Data
 import frege.compiler.Nice (text, msgdoc)
 import frege.compiler.Utilities     as U(vSym, linkq, pSigma)
 -- import frege.compiler.Transdef()  as T
-
-
 
 {--
  * In this pass, we insert placeholders in the symbol table
@@ -250,6 +248,8 @@ enter1 fname (FixDcl {pos})   = stio ()
 enter1 fname (d@ClaDcl {pos}) = do
         g <- getST
         let tname = TName g.thisPack d.name
+        changeST Global.{sub <-
+            SubSt.{idKind <- insertkv (KeyTk pos.first) (Right tname)}}
         U.enter (SymC {sid=0, pos=d.pos, vis=d.vis, doc=d.doc, name=tname,
                        tau=transTVar d.clvar, vkind=0, supers=[], insts=[], env=Nil})
 
@@ -324,17 +324,27 @@ enter1 fname (d@FunDcl {pos, name="let"}) = do
         enterpat (head d.pats)
     where
         enterpat  p     = foreach ((keys • U.patNames) p) (enterpvar (getpos p))
-        enterpvar pos v = U.enter (vSym pos (fname v)).{vis=d.vis, doc=d.doc}
+        enterpvar pos v = do
+            let !qname = fname v
+            changeST Global.{
+                sub <- SubSt.{
+                idKind <- insertkv (KeyTk (Position.first pos)) (Right qname)}}
+            U.enter (vSym pos qname).{vis=d.vis, doc=d.doc}
 
 
+enter1 fname (d@FunDcl {pos}) = do
+        let !qname = fname d.name
+        changeST Global.{
+          sub <- SubSt.{
+          idKind <- insertkv (KeyTk pos.first) (Right qname)}}
+        U.enter (vSym pos qname).{vis=d.vis, doc=d.doc}
 
-
-
-enter1 fname (d@FunDcl {pos}) =
-        U.enter (vSym pos (fname d.name)).{vis=d.vis, doc=d.doc}
-
-enter1 fname (d@NatDcl {pos}) =
-        U.enter (vSym pos (fname d.name)).{vis=d.vis, doc=d.doc,
+enter1 fname (d@NatDcl {pos}) = do
+        let !qname = fname d.name
+        changeST Global.{
+          sub <- SubSt.{
+          idKind <- insertkv (KeyTk pos.first) (Right qname)}}
+        U.enter (vSym pos qname).{vis=d.vis, doc=d.doc,
                                                 nativ=Just d.meth, pur=d.isPure}
 enter1 fname (d@AnnDcl {pos}) = do
         g <- getST
@@ -353,12 +363,18 @@ enter1 fname (d@AnnDcl {pos}) = do
                 U.changeSym sym.{pos <- d.pos.merge,
                                  doc = merge sym.doc sym.pos d.doc d.pos,
                                  anno = true}
+                changeST Global.{
+                    sub <- SubSt.{
+                        idKind <- insertkv (KeyTk pos.first) (Right sym.name)}}
             Just (sym@SymV {anno = true}) ->
                 U.error pos (msgdoc ("cannot annotate " ++ sym.nice g ++ " again"))
             Just sym ->
                 U.error pos (msgdoc ("cannot annotate " ++ sym.nice g))
-            Nothing -> -- either class method or implementation missing.
+            Nothing -> do -- either class method or implementation missing.
                 U.enter (vSym d.pos qname).{vis=d.vis, doc=d.doc, anno = true}
+                changeST Global.{
+                    sub <- SubSt.{
+                        idKind <- insertkv (KeyTk pos.first) (Right qname)}}
 
 
 enter1 fname (d@DatDcl {pos}) = do
@@ -375,13 +391,15 @@ enter1 fname (d@DatDcl {pos}) = do
                             newt = length d.ctrs == 1 `and` 1 == (length • DCon.flds • head) d.ctrs,
                             env=Nil}
         U.enter dsym
+        changeST Global.{
+            sub <- SubSt.{
+                idKind <- insertkv (KeyTk pos.first) (Right dname)}}
         foreach (zip U.numbers d.ctrs) (mkCon (MName dname))
         enter (MName dname) d.defs
     where
         mkCon :: (String -> QName) -> (Int, DConS) -> StG ()
         mkCon mname (cid, dcon) = do
             g <- getST
-            -- pSigma <- U.pSigma
             {-
              * information about fields of a constructor are essential
              * when translating patterns in pass 5
@@ -389,12 +407,16 @@ enter1 fname (d@DatDcl {pos}) = do
             let fs = map ConField.{typ = pSigma} dcon.flds  -- zip (map fst dcon.flds) (repeat pSigma)
                 fnms = [ n | Field {name = Just n} <- dcon.flds ]
                 ssig = S (take (length dcon.flds) allStrict)
+                !cqname = mname dcon.name
             foreach fnms (checkunique dcon.pos (mname dcon.name) fnms)
             U.enter (SymD {name = mname dcon.name, typ=pSigma, flds = fs,
                 cid=cid, sid=0, strsig = if dcon.strict then ssig else U,
                 pos=dcon.pos, vis=dcon.vis, doc=dcon.doc})
+            changeST Global.{
+                sub <- SubSt.{
+                    idKind <- insertkv (KeyTk dcon.pos.first) (Right cqname)}}
             when (dcon.vis != Private)
-                (U.enter (SymL {name = VName g.thisPack dcon.name, alias = mname dcon.name,
+                (U.enter (SymL {name = VName g.thisPack dcon.name, alias = cqname,
                     sid=0, pos=dcon.pos, vis=dcon.vis, {-doc=dcon.doc-}}))
         checkunique :: Position -> QName -> [String] -> String -> StG ()
         checkunique pos con fs f = do
@@ -407,20 +429,26 @@ enter1 fname (d@DatDcl {pos}) = do
 
 enter1 fname (d@JavDcl {pos}) = do
         g <- getST
-        let dname = TName g.thisPack d.name
+        let !dname = TName g.thisPack d.name
             dtcon = TCon {pos=d.pos, name=dname}
             dtau  = dtcon.mkapp (map transTVar d.vars)
         U.enter (SymT {sid=0, pos=d.pos, vis=d.vis, doc=d.doc, name=dname,
                        product = false, enum = false, newt = false, pur = d.isPure,
                        typ=ForAll (map Tau.var d.vars) (RhoTau [] dtau),
                        nativ = Just d.jclas, env=Nil})
+        changeST Global.{
+            sub <- SubSt.{
+                idKind <- insertkv (KeyTk pos.first) (Right dname)}}
         enter (MName dname) d.defs
 
 enter1 fname (d@TypDcl {pos}) = do
         g <- getST
-
+        let !dname = TName g.thisPack d.name
+        changeST Global.{
+            sub <- SubSt.{
+                idKind <- insertkv (KeyTk pos.first) (Right dname)}}
         U.enter (SymA {sid=0, pos=d.pos, vis=d.vis, doc=d.doc,
-                       name = TName g.thisPack d.name, typ = pSigma,
+                       name = dname, typ = pSigma,
                        vars = map transTVar d.vars})
 
 

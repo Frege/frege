@@ -1195,7 +1195,7 @@ term:
                                                                     Nothing)
                                                               (e:es)}
     | '(' expr ')'                  { \_\x\_ -> x }
-    | '[' ']'                       { \z\_ ->  Con (yyline z) (With1 baseToken z.{tokid=CONID, value="[]"}) Nothing}
+    | '[' ']'                       { \a\z ->  Con (Pos a z) (With1 baseToken z.{tokid=CONID, value="[]"}) Nothing}
     | '[' exprSC ']'                { \b\es\z -> foldr (\a\as -> nApp (nApp (Con (yyline b) (With1 baseToken b.{tokid=CONID, value=":"}) Nothing) a) as)
                                                        (Con (yyline z)  (With1 baseToken z.{tokid=CONID, value="[]"}) Nothing)
                                                        es}
