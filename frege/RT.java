@@ -352,4 +352,16 @@ public class RT {
         }
         return true;
     }
+
+    /**
+     * <p> Cheat with phantom types. </p>
+     * <p> This method is announced with type String a -&gt; Int -&gt; a
+     * but it always returns a (boxed) char.</p>
+     * <p> This is fine as long as nobody is able to actually create a
+     * value with type, say String Int. <br>
+     * This could be done only with another malicious native function, though.</p>
+     */
+    public final static Box.Char itemAt(final String value, final int offset) {
+        return Box.Char.mk(value.charAt(offset));
+    }
 }
