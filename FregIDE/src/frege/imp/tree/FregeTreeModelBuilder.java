@@ -1,5 +1,6 @@
 package frege.imp.tree;
 
+import org.eclipse.imp.editor.ModelTreeNode;
 import org.eclipse.imp.preferences.PreferenceValueParser.AbstractVisitor;
 import org.eclipse.imp.services.base.TreeModelBuilderBase;
 
@@ -11,6 +12,9 @@ public class FregeTreeModelBuilder extends TreeModelBuilderBase {
 		if (root == null || !(root instanceof TGlobal))
 			return;
 		TGlobal global = (TGlobal) root;
+		
+		// fModelRoot = createTopItem(global, ModelTreeNode.DEFAULT_CATEGORY);
+		
 		FregeModelVisitor visitor = new FregeModelVisitor();
 
 		// rootNode.accept(visitor);
@@ -50,6 +54,9 @@ public class FregeTreeModelBuilder extends TreeModelBuilderBase {
 		// START_HERE
 		public boolean visit(TGlobal g) {
 			System.err.println("visiting: " + g.toString());
+			createSubItem("item 2");
+			createSubItem("item 2");
+			createSubItem("item 2");
 			return true;
 		}
 	}
