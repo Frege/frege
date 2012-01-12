@@ -5,9 +5,17 @@ import org.eclipse.core.runtime.Path;
 
 import org.eclipse.imp.parser.ISourcePositionLocator;
 
+import frege.compiler.Data.IShow_Token;
 import frege.compiler.Data.TGlobal;
 import frege.compiler.Data.TSubSt;
 import frege.compiler.Data.TToken;
+import frege.compiler.Data.TTokenID;
+import frege.prelude.Base.TEither;
+import frege.prelude.Base.TEither.DRight;
+import frege.prelude.Base.TMaybe;
+import frege.prelude.Base.TMaybe.DJust;
+import frege.rt.Array;
+import frege.rt.Box.Int;
 import frege.rt.FV;
 import frege.rt.Lazy;
 
@@ -41,13 +49,57 @@ public class FregeSourcePositionLocator implements ISourcePositionLocator {
 		return findNode(ast, offset, offset);
 	}
 
+	/**
+	 * Binary search for a token that starts at start and ends not after end.
+	 * 
+	 * @param arr     an Array of Tokens
+	 * @param start   start of selected range
+	 * @param end     end of selected range (inklusive)
+	 * @return        a Token or null if not found
+	 */
+	public static TToken binsearch(Array<FV> arr, int start, int end) {
+		int from = 0;
+		int to = arr.length();
+		while (from < to) {
+			int it = (from + to) / 2;
+			TToken at = (TToken) arr.getAt(it)._e();
+			int off = TToken.offset(at);
+			int len = TToken.length(at);
+			if (off + len <= start) {	// the searched token is more right
+				from = it+1; continue;
+			}
+			if (off > end) {	// its more left
+				to = it; continue;
+			}
+			if (off + len >= start && off+len > end) return at;
+			return null;
+		}
+		return null;
+	}
+	
 	public Object findNode(Object ast, int startOffset, int endOffset) {
 		System.err.print("findNode( " + ast + ", " + startOffset + ", " +  endOffset + " ) called: ");
 		if (ast != null && ast instanceof TGlobal) {
 			// find out the token we are working with
 			TGlobal global = (TGlobal) ast;
-			frege.rt.Array<FV> arr = TSubSt.toks( TGlobal.sub(global) );
-			// TToken res = binsearch(arr, 0, arr.length(), startOffset, endOffset);
+			Array<FV> arr = TSubSt.toks( TGlobal.sub(global) );
+			TToken res = binsearch(arr, startOffset, endOffset);
+			if (res == null)
+				System.err.println(" no such token");
+			else {
+				System.err.println(IShow_Token.show(res));
+				/*
+				final int tid = TToken.tokid(res).j;
+				if (tid != TTokenID.VARID.j && tid != TTokenID.CONID.j
+						&& (tid < TTokenID.LOP0.j ||  tid > TTokenID.SOMEOP.j)) return null;
+				final TMaybe mb = (TMaybe) TGlobal.resolved(g, tok)._e();
+				final DJust just = mb._Just();
+				if (just == null) return null;
+				final TEither lr = (TEither) just.mem1._e();
+				final DRight right = lr._Right();
+				*/
+			}
+			return res;
 		}
 		else {
 			System.err.println("no compiler state");
