@@ -52,7 +52,7 @@ package frege.compiler.Grammar where
  */
 
 -- import frege.IO(stdout, stderr, <<, BufferedReader)
-import frege.List(Tree, keyvalues, keys)
+import frege.List(Tree, keyvalues, keys, insertkv)
 import frege.compiler.Data      as D
 import frege.compiler.Nice      except (group, annotation)
 import frege.compiler.Utilities as U(
@@ -132,7 +132,7 @@ vid t = (Token.value t, Pos t t)
 //%type boundvar        String
 //%type operators       [String]
 //%type boundvars       [String]
-//%type packageclause   (String, Maybe String)
+//%type packageclause   (String, Maybe String, Token)
 //%type unop            Token
 //%type operator        Token
 //%type rop13           Token
@@ -413,8 +413,14 @@ vid t = (Token.value t, Pos t t)
 %%
 
 package:
-    packageclause ';' definitions               { \(a,d)\_\b     -> (a,b,d) }
-    | packageclause WHERE '{' definitions '}'   { \(a,d)\_\_\b\_ -> (a,b,d) }
+    packageclause ';' definitions               { \(a,d,p)\w\b     -> do {
+                                                        changeST Global.{sub <- SubSt.{
+                                                            thisPos = Pos p w}};
+                                                        YYM.return (a,b,d) }}
+    | packageclause WHERE '{' definitions '}'   { \(a,d,p)\w\_\b\_ -> do {
+                                                        changeST Global.{sub <- SubSt.{
+                                                            thisPos = Pos p w}};
+                                                        YYM.return (a,b,d) }}
     ;
 
 nativename:
@@ -426,7 +432,10 @@ nativename:
     ;
 
 packagename:
-    CONID                       { \t -> Token.value t }
+    CONID                       { \t     -> do {
+                                                changeST Global.{sub <- SubSt.{
+                                                    idKind <- insertkv (KeyTk t) (Left())}};
+                                                YYM.return (Token.value t) }}
     | VARID '.' packagename     { \a\_\c -> repljavakws (Token.value a) ++ "." ++ c }
     | QUALIFIER packagename     { \a\c   -> Token.value a ++ "." ++ c }
     ;
@@ -438,18 +447,18 @@ docs:
     ;
 
 packageclause:
-    docs PACKAGE packagename                { \docu\_\b   -> (b, Just docu) }
-    | PACKAGE packagename                   { \_\b        -> (b, Nothing) }
-    | docs PROTECTED PACKAGE packagename    { \docu\_\_\b   -> do {
+    docs PACKAGE packagename                { \docu\p\b   -> (b, Just docu, p) }
+    | PACKAGE packagename                   { \p\b        -> (b, Nothing, p) }
+    | docs PROTECTED PACKAGE packagename    { \docu\p\_\b   -> do {
                                                     g <- getST;
                                                     changeST Global.{options = g.options.{
                                                         flags = U.setFlag g.options.flags INPRELUDE}};
-                                                    YYM.return (b, Just docu) }}
-    | PROTECTED PACKAGE packagename         { \_\_\b   -> do {
+                                                    YYM.return (b, Just docu, p) }}
+    | PROTECTED PACKAGE packagename         { \p\_\b   -> do {
                                                     g <- getST;
                                                     changeST Global.{options = g.options.{
                                                         flags = U.setFlag g.options.flags INPRELUDE}};
-                                                    YYM.return (b, Nothing) }}
+                                                    YYM.return (b, Nothing, p) }}
     ;
 
 semicoli:
@@ -542,10 +551,12 @@ import:
     | IMPORT packagename VARID CONID importliste { \i\p\a\c\l -> do
             when (Token.value a != "as") do
                 yyerror (yyline a) (show "as" ++ " expected instead of " ++ show (Token.value a))
+            changeST Global.{sub <- SubSt.{idKind <- insertkv (KeyTk c) (Left()) }}
             YYM.return ImpDcl {pos = yyline i, pack = p, imports = l, as = Just (Token.value c)}
         }
-    | IMPORT packagename CONID importliste { \i\p\c\l ->
-            ImpDcl {pos = yyline i, pack = p, imports = l, as = Just (Token.value c)}
+    | IMPORT packagename CONID importliste { \i\p\c\l -> do
+            changeST Global.{sub <- SubSt.{idKind <- insertkv (KeyTk c) (Left()) }}
+            YYM.return ImpDcl {pos = yyline i, pack = p, imports = l, as = Just (Token.value c)}
         }
     ;
 
