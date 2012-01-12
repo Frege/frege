@@ -40,12 +40,9 @@ public class EnableFregeNature implements IWorkbenchWindowActionDelegate {
 			isJava = fProject.hasNature("org.eclipse.jdt.core.javanature");
 			
 		} catch (CoreException e) {
-			// e.printStackTrace();
-			// System.out.println("The " + nd.getNatureId() + " is not supported, or so it seems.");
+			// remain silent in actions
 		}
-//		System.err.println("Our project "
-//			+ (isJava ? " has the " : " does not have ")
-//			+ " java nature.");
+
 		if (isJava) {
 			IJavaProject jp = JavaCore.create(fProject);
 			try {
@@ -81,11 +78,8 @@ public class EnableFregeNature implements IWorkbenchWindowActionDelegate {
 				fProject = (IProject) first;
 			}
 			else if (first == null) return;
-			// FIXME: cannot set frege nature on non java project at his time
-			// because build and run will need the frege library
-			// and I have no idea yet how to make a run configuration
-			// for it.
-			// TODO: we can get the frege lib from the preferences on build
+			// Cannot set frege nature on non java project.
+			// Only a java project gives us a build path and run configurations. 
 			try {
 				action.setEnabled(fProject.hasNature("org.eclipse.jdt.core.javanature"));
 			} catch (CoreException e) {

@@ -5,7 +5,11 @@ import org.eclipse.core.runtime.Path;
 
 import org.eclipse.imp.parser.ISourcePositionLocator;
 
+import frege.compiler.Data.TGlobal;
+import frege.compiler.Data.TSubSt;
 import frege.compiler.Data.TToken;
+import frege.rt.FV;
+import frege.rt.Lazy;
 
 /**
  * NOTE:  This version of the ISourcePositionLocator is for use when the Source
@@ -26,10 +30,9 @@ import frege.compiler.Data.TToken;
  * @since May 15, 2007
  */
 public class FregeSourcePositionLocator implements ISourcePositionLocator {
-	private final Object[] fNode = new Object[1];
-
-	private int fStartOffset;
-	private int fEndOffset;
+//	private final Object[] fNode = new Object[1];
+//	private int fStartOffset;
+//	private int fEndOffset;
 
 	public FregeSourcePositionLocator() {
 	}
@@ -39,12 +42,15 @@ public class FregeSourcePositionLocator implements ISourcePositionLocator {
 	}
 
 	public Object findNode(Object ast, int startOffset, int endOffset) {
-		System.err.println("findNode( " + ast + ", " + startOffset + ", " +  endOffset + " ) called");
-		if (fNode[0] == null) {
-			//System.out.println("Selected node:  null");
-		} else {
-			//System.out.println("Selected node: " + fNode[0] + " [" +
-			//   fNode[0].getLeftIToken().getStartOffset() + ".." + fNode[0].getLeftIToken().getEndOffset() + "]");
+		System.err.print("findNode( " + ast + ", " + startOffset + ", " +  endOffset + " ) called: ");
+		if (ast != null && ast instanceof TGlobal) {
+			// find out the token we are working with
+			TGlobal global = (TGlobal) ast;
+			frege.rt.Array<FV> arr = TSubSt.toks( TGlobal.sub(global) );
+			// TToken res = binsearch(arr, 0, arr.length(), startOffset, endOffset);
+		}
+		else {
+			System.err.println("no compiler state");
 		}
 		return null;
 	}

@@ -187,6 +187,7 @@ public class RT {
             super(err, cause);
         }
         /** <p>This function actually never returns. </p> */
+	@SuppressWarnings("unused")
         public final boolean die()  { if (true) throw this; return false; }
     }
     /**

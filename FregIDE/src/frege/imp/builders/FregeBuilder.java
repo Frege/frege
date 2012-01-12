@@ -155,8 +155,9 @@ public class FregeBuilder extends FregeBuilderBase {
 		boolean succ = false;
 		try {
 			getPlugin().writeInfoMsg("Building frege file: " + file.getName());
-			succ = runParserForCompiler(file, monitor); 
-			doRefresh(file.getProject());
+			succ = runParserForCompiler(file, monitor);
+			// do wee need that?
+			// doRefresh(file.getProject());
 		} catch (Exception e) {
 			// catch Exception, because any exception could break the
 			// builder infrastructure.
