@@ -5,6 +5,7 @@ import org.eclipse.imp.preferences.PreferenceValueParser.AbstractVisitor;
 import org.eclipse.imp.services.base.TreeModelBuilderBase;
 
 import frege.compiler.Data.TGlobal;
+import frege.compiler.Data.TSubSt;
 
 public class FregeTreeModelBuilder extends TreeModelBuilderBase {
 	@Override
@@ -21,7 +22,7 @@ public class FregeTreeModelBuilder extends TreeModelBuilderBase {
 		visitor.visit(global);
 	}
 
-	private class FregeModelVisitor /* extends AbstractVisitor */ {
+	public class FregeModelVisitor /* extends AbstractVisitor */ {
 		/*
 		@Override
 		public void unimplementedVisitor(String s) {
@@ -53,10 +54,9 @@ public class FregeTreeModelBuilder extends TreeModelBuilderBase {
 		*/
 		// START_HERE
 		public boolean visit(TGlobal g) {
-			System.err.println("visiting: " + g.toString());
-			createSubItem("item 2");
-			createSubItem("item 2");
-			createSubItem("item 2");
+			// System.err.println("visiting: " + g.toString());
+			final TSubSt sub = TGlobal.sub(g);
+			createSubItem(new PackageItem( TSubSt.thisPack(sub).j, TSubSt.thisPos(sub)));
 			return true;
 		}
 	}

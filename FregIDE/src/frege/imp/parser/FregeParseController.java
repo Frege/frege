@@ -228,7 +228,7 @@ public class FregeParseController extends ParseControllerBase implements
 
 	private TGlobal global;
 	private final ISourcePositionLocator   fSourcePositionLocator   
-					= new FregeSourcePositionLocator();
+					= new FregeSourcePositionLocator(this);
     private final SimpleAnnotationTypeInfo fSimpleAnnotationTypeInfo
     				= new SimpleAnnotationTypeInfo();
 	private IMessageHandler msgHandler = null;
@@ -286,7 +286,7 @@ public class FregeParseController extends ParseControllerBase implements
 
 	
 	public ISourcePositionLocator getNodeLocator() {
-		return new FregeSourcePositionLocator(); // FregeASTNodeLocator();
+		return fSourcePositionLocator;
 	}
 	
 

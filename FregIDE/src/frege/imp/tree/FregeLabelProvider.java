@@ -11,6 +11,8 @@ import org.eclipse.imp.services.ILabelProvider;
 import org.eclipse.imp.language.ILanguageService;
 import frege.FregePlugin;
 import frege.IFregeResources;
+import frege.compiler.Data.TPack;
+
 import org.eclipse.imp.utils.MarkerUtils;
 import org.eclipse.jface.resource.ImageRegistry;
 import org.eclipse.jface.viewers.ILabelProviderListener;
@@ -24,14 +26,22 @@ public class FregeLabelProvider implements ILabelProvider {
 	private static ImageRegistry sImageRegistry = FregePlugin.getInstance()
 			.getImageRegistry();
 
-	private static Image DEFAULT_IMAGE = sImageRegistry
+	final public static Image DEFAULT_IMAGE = sImageRegistry
 			.get(IFregeResources.FREGE_DEFAULT_IMAGE);
-	private static Image FILE_IMAGE = sImageRegistry
+	final public static Image OUTLINE_IMAGE = sImageRegistry
+			.get(IFregeResources.FREGE_DEFAULT_OUTLINE_ITEM);
+	final public static Image PACKAGE_IMAGE = sImageRegistry
+			.get(IFregeResources.FREGE_PACKAGE_OUTLINE_ITEM);
+	final public static Image IMPORT_IMAGE = sImageRegistry
+			.get(IFregeResources.FREGE_IMPORT_OUTLINE_ITEM);
+	final public static Image FILE_IMAGE = sImageRegistry
 			.get(IFregeResources.FREGE_FILE);
-	private static Image FILE_WITH_WARNING_IMAGE = sImageRegistry
+	final public static Image FILE_WITH_WARNING_IMAGE = sImageRegistry
 			.get(IFregeResources.FREGE_FILE_WARNING);
-	private static Image FILE_WITH_ERROR_IMAGE = sImageRegistry
+	final public static Image FILE_WITH_ERROR_IMAGE = sImageRegistry
 			.get(IFregeResources.FREGE_FILE_ERROR);
+	final public static Image FILE_WITH_INFO_IMAGE = sImageRegistry
+			.get(IFregeResources.FREGE_FILE_INFO);
 
 	public Image getImage(Object element) {
 		if (element instanceof IFile) {
@@ -45,22 +55,24 @@ public class FregeLabelProvider implements ILabelProvider {
 				return FILE_WITH_ERROR_IMAGE;
 			case IMarker.SEVERITY_WARNING:
 				return FILE_WITH_WARNING_IMAGE;
+			case IMarker.SEVERITY_INFO:
+				return FILE_WITH_INFO_IMAGE;
 			default:
 				return FILE_IMAGE;
 			}
 		}
-		/*
-		ASTNode n = (element instanceof ModelTreeNode) ? (ASTNode) ((ModelTreeNode) element)
-				.getASTNode() : (ASTNode) element;
-				*/
-		return getImageFor(element);
+		Object n = (element instanceof ModelTreeNode) 
+				? ((ModelTreeNode) element).getASTNode() 
+				: element;
+				
+		return getImageFor(n);
 		
 	}
 
 	public static Image getImageFor(Object n) {
-		// TODO:  return specific images for specific node
-		// types, as images are available and appropriate
-		return DEFAULT_IMAGE;
+		if (n instanceof ITreeItem)
+			return ((ITreeItem) n).getImage();
+		return OUTLINE_IMAGE;
 	}
 
 	public String getText(Object element) {
@@ -72,33 +84,8 @@ public class FregeLabelProvider implements ILabelProvider {
 	}
 
 	public static String getLabelFor(Object n) {
-		// START_HERE
-//		if (n instanceof IcompilationUnit)
-//			return "Compilation unit";
-//		if (n instanceof block)
-//			return "Block";
-//		if (n instanceof assignmentStmt) {
-//			assignmentStmt stmt = (assignmentStmt) n;
-//			return stmt.getidentifier().toString() + "="
-//					+ stmt.getexpression().toString();
-//		}
-//		if (n instanceof declarationStmt0) {
-//			declaration decl = (declaration) ((declarationStmt0) n)
-//					.getdeclaration();
-//			return decl.getprimitiveType() + " "
-//					+ decl.getidentifier().toString();
-//		}
-//		if (n instanceof declarationStmt1) {
-//			declaration decl = (declaration) ((declarationStmt1) n)
-//					.getdeclaration();
-//			return decl.getprimitiveType() + " "
-//					+ decl.getidentifier().toString();
-//		}
-//		if (n instanceof functionDeclaration) {
-//			functionHeader hdr = (functionHeader) ((functionDeclaration) n)
-//					.getfunctionHeader();
-//			return hdr.getidentifier().toString();
-//		}
+		if (n instanceof ITreeItem)
+			return ((ITreeItem) n).getLabel();
 		return "instance of (" + n.getClass().getName() + ")";
 	}
 

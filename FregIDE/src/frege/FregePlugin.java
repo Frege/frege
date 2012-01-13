@@ -67,24 +67,37 @@ public class FregePlugin extends PluginBase {
 			org.eclipse.jface.resource.ImageRegistry reg) {
 		org.osgi.framework.Bundle bundle = getBundle();
 		org.eclipse.core.runtime.IPath path = ICONS_PATH
-				.append("frege_default_image.gif");//$NON-NLS-1$
+				.append("tag.png");//$NON-NLS-1$
 		org.eclipse.jface.resource.ImageDescriptor imageDescriptor = createImageDescriptor(
 				bundle, path);
 		reg.put(IFregeResources.FREGE_DEFAULT_IMAGE, imageDescriptor);
 
-		path = ICONS_PATH.append("frege_default_outline_item.gif");//$NON-NLS-1$
+		path = ICONS_PATH.append("tag_outline.png");//$NON-NLS-1$
 		imageDescriptor = createImageDescriptor(bundle, path);
 		reg.put(IFregeResources.FREGE_DEFAULT_OUTLINE_ITEM, imageDescriptor);
+		
+		path = ICONS_PATH.append("package.png");//$NON-NLS-1$
+		imageDescriptor = createImageDescriptor(bundle, path);
+		reg.put(IFregeResources.FREGE_PACKAGE_OUTLINE_ITEM, imageDescriptor);
+		
+		path = ICONS_PATH.append("import.png");//$NON-NLS-1$
+		imageDescriptor = createImageDescriptor(bundle, path);
+		reg.put(IFregeResources.FREGE_IMPORT_OUTLINE_ITEM, imageDescriptor);
 
-		path = ICONS_PATH.append("frege_file.gif");//$NON-NLS-1$
+		// path = ICONS_PATH.append("frege_file.gif");//$NON-NLS-1$
+		path = ICONS_PATH.append("page_green.png");//$NON-NLS-1$
 		imageDescriptor = createImageDescriptor(bundle, path);
 		reg.put(IFregeResources.FREGE_FILE, imageDescriptor);
 
-		path = ICONS_PATH.append("frege_file_warning.gif");//$NON-NLS-1$
+		path = ICONS_PATH.append("page_warning.png");//$NON-NLS-1$
 		imageDescriptor = createImageDescriptor(bundle, path);
 		reg.put(IFregeResources.FREGE_FILE_WARNING, imageDescriptor);
 
-		path = ICONS_PATH.append("frege_file_error.gif");//$NON-NLS-1$
+		path = ICONS_PATH.append("page_info.png");//$NON-NLS-1$
+		imageDescriptor = createImageDescriptor(bundle, path);
+		reg.put(IFregeResources.FREGE_FILE_INFO, imageDescriptor);
+		
+		path = ICONS_PATH.append("page_red.png");//$NON-NLS-1$
 		imageDescriptor = createImageDescriptor(bundle, path);
 		reg.put(IFregeResources.FREGE_FILE_ERROR, imageDescriptor);
 	}

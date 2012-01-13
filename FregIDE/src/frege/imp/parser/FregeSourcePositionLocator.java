@@ -7,9 +7,12 @@ import org.eclipse.imp.parser.ISourcePositionLocator;
 
 import frege.compiler.Data.IShow_Token;
 import frege.compiler.Data.TGlobal;
+import frege.compiler.Data.TPack;
+import frege.compiler.Data.TPosition;
 import frege.compiler.Data.TSubSt;
 import frege.compiler.Data.TToken;
 import frege.compiler.Data.TTokenID;
+import frege.imp.tree.ITreeItem;
 import frege.prelude.Base.TEither;
 import frege.prelude.Base.TEither.DRight;
 import frege.prelude.Base.TMaybe;
@@ -41,8 +44,10 @@ public class FregeSourcePositionLocator implements ISourcePositionLocator {
 //	private final Object[] fNode = new Object[1];
 //	private int fStartOffset;
 //	private int fEndOffset;
+	final private FregeParseController parser;
 
-	public FregeSourcePositionLocator() {
+	public FregeSourcePositionLocator(FregeParseController parser) {
+		this.parser = parser;
 	}
 
 	public Object findNode(Object ast, int offset) {
@@ -107,26 +112,35 @@ public class FregeSourcePositionLocator implements ISourcePositionLocator {
 		return null;
 	}
 
+	public int getStartOffset(TToken node) { return node==null ? 0 : TToken.offset(node); }
+	public int getStartOffset(TPosition pos) { return TPosition.start(pos); }
 	public int getStartOffset(Object node) {
-		if (node != null && node instanceof TToken) {
-			return TToken.offset((TToken)node);
-		}
-		return 0;
+		
+		if (node != null && node instanceof TToken)
+			return getStartOffset((TToken)node);
+		
+		if (node != null && node instanceof ITreeItem)
+			return getStartOffset(((ITreeItem)node).getPosition());
+		
+		System.err.println("getStartOffSet( " + node + ") called");
+		return 0; 
 	}
 
-	public int getEndOffset(Object node) {
-		if (node != null && node instanceof TToken) {
-			return TToken.offset((TToken)node) + TToken.length((TToken) node) - 1;
-		}
-		return 0;
-	}
+	public int getEndOffset(TPosition pos) { return TPosition.end(pos)-1; }
+	public int getEndOffset(Object node) { return getStartOffset(node) + getLength(node) - 1; }
+		
+	public int getLength(TToken node) { return TToken.length(node); }
+	public int getLength(TPosition pos) { return 1+TPosition.end(pos)-TPosition.start(pos); }
 
 	public int getLength(Object node) {
-		if (node != null && node instanceof TToken) {
-			return TToken.length((TToken)node);
-		}
-		return 0;
-	}
+		if (node != null && node instanceof TToken)
+			return getLength((TToken)node);
+		
+		if (node != null && node instanceof ITreeItem)
+			return getLength(((ITreeItem)node).getPosition());
+		System.err.println("getLength( " + node + ") called");
+		return 1; 
+	}	
 
 	public IPath getPath(Object node) {
 		System.err.println("getPath( " + node + " )  called");
