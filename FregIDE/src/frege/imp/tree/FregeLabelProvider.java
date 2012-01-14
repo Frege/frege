@@ -45,7 +45,7 @@ public class FregeLabelProvider implements ILabelProvider {
 
 	public Image getImage(Object element) {
 		if (element instanceof IFile) {
-			// TODO:  rewrite to provide more appropriate images
+			
 			IFile file = (IFile) element;
 			int sev = MarkerUtils.getMaxProblemMarkerSeverity(file,
 					IResource.DEPTH_ONE);
@@ -55,8 +55,8 @@ public class FregeLabelProvider implements ILabelProvider {
 				return FILE_WITH_ERROR_IMAGE;
 			case IMarker.SEVERITY_WARNING:
 				return FILE_WITH_WARNING_IMAGE;
-			case IMarker.SEVERITY_INFO:
-				return FILE_WITH_INFO_IMAGE;
+//			case IMarker.SEVERITY_INFO:
+//				return FILE_WITH_INFO_IMAGE;
 			default:
 				return FILE_IMAGE;
 			}

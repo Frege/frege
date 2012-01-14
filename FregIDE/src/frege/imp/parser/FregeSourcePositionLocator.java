@@ -3,6 +3,7 @@ package frege.imp.parser;
 import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.Path;
 
+import org.eclipse.imp.editor.ModelTreeNode;
 import org.eclipse.imp.parser.ISourcePositionLocator;
 
 import frege.compiler.Data.IShow_Token;
@@ -112,17 +113,18 @@ public class FregeSourcePositionLocator implements ISourcePositionLocator {
 		return null;
 	}
 
-	public int getStartOffset(TToken node) { return node==null ? 0 : TToken.offset(node); }
+	public int getStartOffset(TToken node) {   return node==null ? 0 : TToken.offset(node); }
 	public int getStartOffset(TPosition pos) { return TPosition.start(pos); }
 	public int getStartOffset(Object node) {
 		
 		if (node != null && node instanceof TToken)
-			return getStartOffset((TToken)node);
+			return TToken.offset((TToken)node);
 		
 		if (node != null && node instanceof ITreeItem)
-			return getStartOffset(((ITreeItem)node).getPosition());
+			return TPosition.start( ((ITreeItem)node).getPosition() );
 		
-		System.err.println("getStartOffSet( " + node + ") called");
+		if (node != null && node instanceof ModelTreeNode) return 0;
+		System.err.println("getStartOffSet( " + node + " ) called");
 		return 0; 
 	}
 
@@ -130,7 +132,7 @@ public class FregeSourcePositionLocator implements ISourcePositionLocator {
 	public int getEndOffset(Object node) { return getStartOffset(node) + getLength(node) - 1; }
 		
 	public int getLength(TToken node) { return TToken.length(node); }
-	public int getLength(TPosition pos) { return 1+TPosition.end(pos)-TPosition.start(pos); }
+	public int getLength(TPosition pos) { return TPosition.end(pos)-TPosition.start(pos); }
 
 	public int getLength(Object node) {
 		if (node != null && node instanceof TToken)
@@ -138,7 +140,9 @@ public class FregeSourcePositionLocator implements ISourcePositionLocator {
 		
 		if (node != null && node instanceof ITreeItem)
 			return getLength(((ITreeItem)node).getPosition());
-		System.err.println("getLength( " + node + ") called");
+		
+		if (node != null && node instanceof ModelTreeNode) return 0;
+		System.err.println("getLength( " + node + " ) called");
 		return 1; 
 	}	
 

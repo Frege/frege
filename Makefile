@@ -208,7 +208,8 @@ SOURCES  =      $(COMPS)/Scanner.fr   $(COMPS)/Classtools.fr \
 		$(COMPS)/Fixdefs.fr   $(COMPS)/Import.fr    $(COMPS)/Enter.fr \
 		$(COMPS)/TAlias.fr    $(COMPS)/Transdef.fr  $(COMPS)/Classes.fr \
 		$(COMPS)/Transform.fr $(COMPS)/Typecheck.fr $(COMPS)/TCUtil.fr \
-		$(COMPS)/GenMeta.fr   $(COMPS)/GenJava7.fr  $(COMPS)/GenUtil.fr
+		$(COMPS)/GenMeta.fr   $(COMPS)/GenJava7.fr  $(COMPS)/GenUtil.fr \
+		$(COMPS)/EclipseUtil.fr
 
 
 CLASSES  =       $(COMPF1)/Scanner.class   $(COMPF1)/Classtools.class \
@@ -219,7 +220,8 @@ CLASSES  =       $(COMPF1)/Scanner.class   $(COMPF1)/Classtools.class \
 		$(COMPF1)/TAlias.class    $(COMPF1)/Classes.class \
 		$(COMPF1)/Transform.class $(COMPF1)/Typecheck.class \
 		$(COMPF1)/GenUtil.class \
-		$(COMPF1)/GenMeta.class   $(COMPF1)/GenJava7.class
+		$(COMPF1)/GenMeta.class   $(COMPF1)/GenJava7.class \
+		$(COMPF1)/EclipseUtil.class
 
 #
 # GNU make apparently does not understand our meta rules
@@ -261,6 +263,8 @@ $(COMPF1)/GenMeta.class: $(COMPS)/GenMeta.fr
 $(COMPF1)/GenJava7.class: $(COMPS)/GenJava7.fr
 	$(FREGEC0) $?
 $(COMPF1)/GenUtil.class: $(COMPS)/GenUtil.fr
+	$(FREGEC0) $?
+$(COMPF1)/EclipseUtil.class: $(COMPS)/EclipseUtil.fr
 	$(FREGEC0) $?
 $(LIBF1)/Random.class: frege/lib/Random.fr
 	$(FREGEC0) $?
@@ -510,6 +514,7 @@ docu:       $(TOOLSF)/Doc.class \
 			$(DOCF)/TAlias.html     $(DOCF)/Transdef.html   $(DOCF)/Classes.html \
 			$(DOCF)/Transform.html  $(DOCF)/Typecheck.html  $(DOCF)/TCUtil.html \
 			$(DOCF)/GenUtil.html    $(DOCF)/GenMeta.html    $(DOCF)/GenJava7.html   \
+			$(DOCF)/EclipseUtil.html \
 			$(DOC)/lib/PP.html      $(DOC)/lib/ForkJoin.html \
 			$(DOC)/lib/Random.html  $(DOC)/lib/QuickCheck.html \
 			$(DOC)/tools/YYgen.html \
@@ -590,5 +595,7 @@ $(DOCF)/GenMeta.html: $(COMPF)/GenMeta.class
 	$(GENDOC) frege.compiler.GenMeta
 $(DOCF)/GenUtil.html: $(COMPF)/GenUtil.class
 	$(GENDOC) frege.compiler.GenUtil
+$(DOCF)/EclipseUtil.html: $(COMPF)/EclipseUtil.class
+	$(GENDOC) frege.compiler.EclipseUtil
 $(DOCF)/GenJava7.html: $(COMPF)/GenJava7.class
 	$(GENDOC) frege.compiler.GenJava7

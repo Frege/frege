@@ -26,7 +26,7 @@ public class PackageItem implements ITreeItem {
 	@Override
 	public String getLabel() {
 		// TODO Auto-generated method stub
-		return name;
+		return "module " + name;
 	}
 
 	@Override
