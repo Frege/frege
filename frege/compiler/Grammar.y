@@ -1644,7 +1644,7 @@ mkMonad _ _ = Prelude.error "empty monadic do block"
 // backslash
 bs = '\\';
 aQuote = '"';
-rex [] sb = cstos (reverse (aQuote:sb))
+rex [] sb = packed (reverse (aQuote:sb))
 rex ('"':cs) sb = rex cs (aQuote:bs:sb);
 rex ('\\':'#':cs) sb = rex cs ('#':sb);
 /*
@@ -1667,7 +1667,7 @@ rex ('\\':c:cs) sb    = rex cs (c:bs:bs:sb)
 rex (c:cs) sb = rex cs (c:sb)
 
 /// translate regex to java string
-reStr rs =  rex (stocs rs)  [ aQuote ]
+reStr rs =  rex (unpacked rs)  [ aQuote ]
 
 litregexp x = do
         let re = reStr (Token.value x)

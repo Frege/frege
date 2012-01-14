@@ -61,7 +61,9 @@ FREGEC3P = $(FREGECJP) -prefix c
 GENDOC   = $(FREGE)  frege.tools.Doc -d doc
 
 # Prelude files in the order they must be compiled
-PRELUDE  =  frege/prelude/Base.fr frege/prelude/Native.fr  frege/prelude/Text.fr \
+PRELUDE  =  frege/prelude/Base.fr frege/prelude/Native.fr \
+            frege/prelude/List.fr frege/prelude/Arrays.fr \
+            frege/prelude/Text.fr \
             frege/contrib/dgronau/Math.fr frege/contrib/dgronau/Floating.fr
 
 

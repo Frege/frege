@@ -224,7 +224,7 @@ public class Box<T>  extends Val {
             return new Byte((byte)c);
         }
         /** <p>The int value. This is so that one can imagine that Int is
-         * declared as <code> data Int = 0 | 1 | 2 ... | -maxint | ... | -1</p>
+         * declared as <code> data Byte = 0 | 1 | 2 ... | -maxint | ... | -1</p>
          * @return 0
          */
         final public int       _c() { return j; }
@@ -237,7 +237,7 @@ public class Box<T>  extends Val {
          * @param i   the index
          * @return <code>arr[i]</code>
          */
-        public static final int arrayGet(int[] arr, int i) { return arr[i]; }
+        public static final int arrayGet(byte[] arr, int i) { return arr[i]; }
         /**
          * <p> Get array length. </p>
          * @param arr the byte array
@@ -245,10 +245,9 @@ public class Box<T>  extends Val {
          */
         public static final int arrayLen(byte[] arr) { return arr.length; }
         /**
-         * <p> Create an array of type int[]. </p>
+         * <p> Create an array of type byte[]. </p>
          * @param size the size of the array
          */
-        @SuppressWarnings("unchecked")
         final public static byte[] arrayNew(int size) { return  new byte[size]; }
 
         /**
@@ -317,10 +316,9 @@ public class Box<T>  extends Val {
          */
         public static final int arrayLen(short[] arr) { return arr.length; }
         /**
-         * <p> Create an array of type int[]. </p>
+         * <p> Create an array of type short[]. </p>
          * @param size the size of the array
          */
-        @SuppressWarnings("unchecked")
         final public static short[] arrayNew(int size) { return  new short[size]; }
 
         /**
@@ -392,7 +390,6 @@ public class Box<T>  extends Val {
          * <p> Create an array of type int[]. </p>
          * @param size the size of the array
          */
-        @SuppressWarnings("unchecked")
         final public static int[] arrayNew(int size) { return  new int[size]; }
 
         /**
