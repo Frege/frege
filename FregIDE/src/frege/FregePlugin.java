@@ -67,7 +67,7 @@ public class FregePlugin extends PluginBase {
 			org.eclipse.jface.resource.ImageRegistry reg) {
 		org.osgi.framework.Bundle bundle = getBundle();
 		org.eclipse.core.runtime.IPath path = ICONS_PATH
-				.append("tag.png");//$NON-NLS-1$
+				.append("tag_outline.png");//$NON-NLS-1$
 		org.eclipse.jface.resource.ImageDescriptor imageDescriptor = createImageDescriptor(
 				bundle, path);
 		reg.put(IFregeResources.FREGE_DEFAULT_IMAGE, imageDescriptor);
@@ -83,7 +83,35 @@ public class FregePlugin extends PluginBase {
 		path = ICONS_PATH.append("import.png");//$NON-NLS-1$
 		imageDescriptor = createImageDescriptor(bundle, path);
 		reg.put(IFregeResources.FREGE_IMPORT_OUTLINE_ITEM, imageDescriptor);
+		
+		path = ICONS_PATH.append("tag_pink.png");//$NON-NLS-1$
+		imageDescriptor = createImageDescriptor(bundle, path);
+		reg.put(IFregeResources.FREGE_TYPE_OUTLINE_ITEM, imageDescriptor);
+		
+		path = ICONS_PATH.append("tag_purple.png");//$NON-NLS-1$
+		imageDescriptor = createImageDescriptor(bundle, path);
+		reg.put(IFregeResources.FREGE_CLASS_OUTLINE_ITEM, imageDescriptor);
+		
+		path = ICONS_PATH.append("tag_orange.png");//$NON-NLS-1$
+		imageDescriptor = createImageDescriptor(bundle, path);
+		reg.put(IFregeResources.FREGE_INST_OUTLINE_ITEM, imageDescriptor);
 
+		path = ICONS_PATH.append("tag_red.png");//$NON-NLS-1$
+		imageDescriptor = createImageDescriptor(bundle, path);
+		reg.put(IFregeResources.FREGE_DATA_OUTLINE_ITEM, imageDescriptor);
+		
+		path = ICONS_PATH.append("tag_yellow.png");//$NON-NLS-1$
+		imageDescriptor = createImageDescriptor(bundle, path);
+		reg.put(IFregeResources.FREGE_CON_OUTLINE_ITEM, imageDescriptor);
+		
+		path = ICONS_PATH.append("tag_green.png");//$NON-NLS-1$
+		imageDescriptor = createImageDescriptor(bundle, path);
+		reg.put(IFregeResources.FREGE_VAR_OUTLINE_ITEM, imageDescriptor);
+		
+		path = ICONS_PATH.append("tag.png");//$NON-NLS-1$
+		imageDescriptor = createImageDescriptor(bundle, path);
+		reg.put(IFregeResources.FREGE_LINK_OUTLINE_ITEM, imageDescriptor);
+		
 		// path = ICONS_PATH.append("frege_file.gif");//$NON-NLS-1$
 		path = ICONS_PATH.append("page_green.png");//$NON-NLS-1$
 		imageDescriptor = createImageDescriptor(bundle, path);

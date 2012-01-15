@@ -34,6 +34,23 @@ public class FregeLabelProvider implements ILabelProvider {
 			.get(IFregeResources.FREGE_PACKAGE_OUTLINE_ITEM);
 	final public static Image IMPORT_IMAGE = sImageRegistry
 			.get(IFregeResources.FREGE_IMPORT_OUTLINE_ITEM);
+	final public static Image TYPE_IMAGE = sImageRegistry
+			.get(IFregeResources.FREGE_TYPE_OUTLINE_ITEM);
+	final public static Image CLASS_IMAGE = sImageRegistry
+			.get(IFregeResources.FREGE_CLASS_OUTLINE_ITEM);
+	final public static Image INST_IMAGE = sImageRegistry
+			.get(IFregeResources.FREGE_INST_OUTLINE_ITEM);
+	final public static Image DATA_IMAGE = sImageRegistry
+			.get(IFregeResources.FREGE_DATA_OUTLINE_ITEM);
+	final public static Image CON_IMAGE = sImageRegistry
+			.get(IFregeResources.FREGE_CON_OUTLINE_ITEM);
+	final public static Image VAR_IMAGE = sImageRegistry
+			.get(IFregeResources.FREGE_VAR_OUTLINE_ITEM);
+	final public static Image LINK_IMAGE = sImageRegistry
+			.get(IFregeResources.FREGE_LINK_OUTLINE_ITEM);
+	final public static Image[] SYMBOL_IMAGES = new Image[] { 
+		DATA_IMAGE, LINK_IMAGE, CON_IMAGE, CLASS_IMAGE, INST_IMAGE, VAR_IMAGE, TYPE_IMAGE  
+		};
 	final public static Image FILE_IMAGE = sImageRegistry
 			.get(IFregeResources.FREGE_FILE);
 	final public static Image FILE_WITH_WARNING_IMAGE = sImageRegistry

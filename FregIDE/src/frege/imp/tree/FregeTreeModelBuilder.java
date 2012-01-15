@@ -8,6 +8,7 @@ import frege.List.TTree;
 import frege.compiler.Data.TGlobal;
 import frege.compiler.Data.TPosition;
 import frege.compiler.Data.TSubSt;
+import frege.compiler.Data.TSymbol;
 import frege.compiler.EclipseUtil;
 import frege.prelude.Base.TList;
 import frege.prelude.Base.TList.DCons;
@@ -59,10 +60,23 @@ public class FregeTreeModelBuilder extends TreeModelBuilderBase {
 			return true;
 		}
 		*/
+		public boolean visit(TGlobal g, TTree env) {
+			final TList syms = (TList) EclipseUtil.symbols(env)._e();
+			DCons elem = syms._Cons();
+			while (elem != null) {
+				final TSymbol sym = (TSymbol) elem.mem1._e();
+				elem = ((TList) elem.mem2._e())._Cons();
+				pushSubItem(new SymbolItem(g, sym));
+				if (TSymbol.M.has$env(sym))  visit(g, TSymbol.M.env(sym));
+				popSubItem();
+			}
+			return true;
+		}
 		
 		public boolean visit(TGlobal g) {
 			// System.err.println("visiting: " + g.toString());
 			final TSubSt sub = TGlobal.sub(g);
+			
 			pushSubItem(new PackageItem( TSubSt.thisPack(sub).j, TSubSt.thisPos(sub)));
 			{
 				final TList pnps = (TList) EclipseUtil.imports(g)._e();
@@ -77,7 +91,8 @@ public class FregeTreeModelBuilder extends TreeModelBuilderBase {
 				}
 			}
 			popSubItem();
-			return true;
+			
+			return visit(g, TGlobal.thisTab(g));
 		}
 	}
 }

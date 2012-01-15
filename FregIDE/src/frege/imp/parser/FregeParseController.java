@@ -45,11 +45,11 @@ import frege.rt.Lambda;
 import frege.rt.Box;
 import frege.rt.FV;
 import frege.rt.Lazy;
-import frege.prelude.Base.ILength__lbrack_rbrack;
 import frege.prelude.Base.TList.DCons;
 import frege.prelude.Base.TTuple2;
 import frege.prelude.Base.TList;
 import frege.prelude.Base.TTuple3;
+import frege.prelude.List.IListLike__lbrack_rbrack;
 import frege.compiler.Data.TFlag;
 import frege.compiler.Data.TGlobal;
 import frege.compiler.Data.TMessage;
@@ -307,13 +307,13 @@ public class FregeParseController extends ParseControllerBase implements
 		System.err.println("FregePath: " + fp);
 		global = TGlobal.upd$options(global, TOptions.upd$path(
 				TGlobal.options(global),
-				frege.prelude.Base.TRegex.splitted(
+				frege.prelude.Arrays.IStringSplitter_Regex.splitted(
 						((frege.rt.Box<Pattern>)frege.compiler.Utilities.pathRE._e()).j, 
 						fp)));
 		System.err.println("SourcePath: " + sp);
 		global = TGlobal.upd$options(global, TOptions.upd$sourcePath(
 				TGlobal.options(global),
-				frege.prelude.Base.TRegex.splitted(
+				frege.prelude.Arrays.IStringSplitter_Regex.splitted(
 						((frege.rt.Box<Pattern>)frege.compiler.Utilities.pathRE._e()).j, 
 						sp)));
 		System.err.println("Destination: " + bp);
@@ -352,7 +352,7 @@ public class FregeParseController extends ParseControllerBase implements
 		long t0 = System.nanoTime();
 		TList passes = (TList) frege.compiler.Main.passes._e();
 		monitor.beginTask(this.getClass().getName() + " parsing", 
-				1 + ILength__lbrack_rbrack.length(passes));
+				1 + IListLike__lbrack_rbrack.length(passes));
 		if (scanOnly)
 			try { Thread.sleep(300); } catch (InterruptedException e) {}
 		int index = 0;

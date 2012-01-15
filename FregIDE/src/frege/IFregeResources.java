@@ -10,6 +10,13 @@ public interface IFregeResources {
 	
 	public static final String FREGE_PACKAGE_OUTLINE_ITEM = "frege_package_outline_item";
 	public static final String FREGE_IMPORT_OUTLINE_ITEM = "frege_import_outline_item";
+	public static final String FREGE_TYPE_OUTLINE_ITEM  = "frege_type_outlline_item";
+	public static final String FREGE_CLASS_OUTLINE_ITEM  = "frege_class_outlline_item";
+	public static final String FREGE_INST_OUTLINE_ITEM  = "frege_inst_outlline_item";
+	public static final String FREGE_DATA_OUTLINE_ITEM  = "frege_data_outlline_item";
+	public static final String FREGE_VAR_OUTLINE_ITEM  = "frege_var_outlline_item";
+	public static final String FREGE_CON_OUTLINE_ITEM  = "frege_con_outlline_item";
+	public static final String FREGE_LINK_OUTLINE_ITEM  = "frege_link_outlline_item";
 
 	public static final String FREGE_FILE = "frege_file";
 
