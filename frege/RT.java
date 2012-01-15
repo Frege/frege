@@ -48,7 +48,7 @@ import java.io.*;
 /**
  *  <p> Utility functions for frege code. </p>
  */
-public class RT {
+public abstract class RT {
     /**
      * Get the constructor
      */
@@ -365,4 +365,10 @@ public class RT {
     public final static Box.Char itemAt(final String value, final int offset) {
         return Box.Char.mk(value.charAt(offset));
     }
+    /**
+     * <p> The empty polymorphic value of type StringJ a </p>
+     * <p> Referenced in frege.prelude.List.ListLike_StringJ
+     */
+   final public static String emptyString = "";
+     
 }

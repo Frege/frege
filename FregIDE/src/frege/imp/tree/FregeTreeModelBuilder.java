@@ -60,14 +60,14 @@ public class FregeTreeModelBuilder extends TreeModelBuilderBase {
 			return true;
 		}
 		*/
-		public boolean visit(TGlobal g, TTree env) {
+		public boolean visit(TGlobal g, TTree env, boolean top) {
 			final TList syms = (TList) EclipseUtil.symbols(env)._e();
 			DCons elem = syms._Cons();
 			while (elem != null) {
 				final TSymbol sym = (TSymbol) elem.mem1._e();
 				elem = ((TList) elem.mem2._e())._Cons();
 				pushSubItem(new SymbolItem(g, sym));
-				if (TSymbol.M.has$env(sym))  visit(g, TSymbol.M.env(sym));
+				if (TSymbol.M.has$env(sym))  visit(g, TSymbol.M.env(sym), false);
 				popSubItem();
 			}
 			return true;
@@ -92,7 +92,7 @@ public class FregeTreeModelBuilder extends TreeModelBuilderBase {
 			}
 			popSubItem();
 			
-			return visit(g, TGlobal.thisTab(g));
+			return visit(g, TGlobal.thisTab(g), true);
 		}
 	}
 }
