@@ -4,24 +4,22 @@ import org.eclipse.swt.graphics.Image;
 
 import frege.compiler.Data.TPosition;
 
-public class ImportItem implements ITreeItem {
+public class CategoryItem implements ITreeItem {
+	final String label;
 	final TPosition pos;
-	final String    ns, pack;
 	
-	public ImportItem(TPosition pos, String ns, String pack) {
-		this.pos = pos;
-		this.ns  = ns;
-		this.pack = pack;
+	public CategoryItem(String n, TPosition p) {
+		label = n; pos = p; 
 	}
-	
+
 	@Override
 	public Image getImage() {
-		return FregeLabelProvider.IMPORT_IMAGE;
+		return FregeLabelProvider.OUTLINE_IMAGE;
 	}
 
 	@Override
 	public String getLabel() {
-		return ns + ": " + pack;
+		return label;
 	}
 
 	@Override

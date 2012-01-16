@@ -7,6 +7,7 @@ import org.eclipse.imp.services.base.TreeModelBuilderBase;
 import frege.List.TTree;
 import frege.compiler.Data.TGlobal;
 import frege.compiler.Data.TPosition;
+import frege.compiler.Data.TQName;
 import frege.compiler.Data.TSubSt;
 import frege.compiler.Data.TSymbol;
 import frege.compiler.EclipseUtil;
@@ -30,45 +31,52 @@ public class FregeTreeModelBuilder extends TreeModelBuilderBase {
 		visitor.visit(global);
 	}
 
-	public class FregeModelVisitor /* extends AbstractVisitor */ {
-		/*
-		@Override
-		public void unimplementedVisitor(String s) {
-		}
+	final static public int data = 0;
+	final static public int link = 1;
+	final static public int dcon = 2;
+	final static public int clas = 3;
+	final static public int inst = 4;
+	final static public int func = 5;
+	final static public int type = 6;
+	final static public String[] categories = new String[] {
+		"Data Types", "Imported Items", "Constructors", "Type Classes", "Instances", 
+		"Functions and Values", "Type Aliases" 
+	};
+	final static public int[] order = new int[] {
+		link, clas, inst, type, data, dcon, func
+	};
 
-		public boolean visit(block n) {
-			pushSubItem(n);
-			return true;
-		}
-
-		public void endVisit(block n) {
-			popSubItem();
-		}
-
-		public boolean visit(declarationStmt0 n) {
-			createSubItem(n);
-			return true;
-		}
-
-		public boolean visit(declarationStmt1 n) {
-			createSubItem(n);
-			return true;
-		}
-
-		public boolean visit(assignmentStmt n) {
-			createSubItem(n);
-			return true;
-		}
-		*/
+	
+	public class FregeModelVisitor /* extends AbstractVisitor */ {		
 		public boolean visit(TGlobal g, TTree env, boolean top) {
 			final TList syms = (TList) EclipseUtil.symbols(env)._e();
-			DCons elem = syms._Cons();
-			while (elem != null) {
-				final TSymbol sym = (TSymbol) elem.mem1._e();
-				elem = ((TList) elem.mem2._e())._Cons();
-				pushSubItem(new SymbolItem(g, sym));
-				if (TSymbol.M.has$env(sym))  visit(g, TSymbol.M.env(sym), false);
-				popSubItem();
+			// do one category after the other according to the predefined order
+			for (int cat : order) {
+				if (!top) { // avoid unneeded list traversals
+					if (cat != func && cat != dcon) continue;
+				} 
+				else if (cat == dcon) continue;
+				
+				// go through the list of symbols and do the ones that equal the current category
+				DCons elem = syms._Cons();
+				boolean found = false;
+				while (elem != null) {
+					final TSymbol sym = (TSymbol) elem.mem1._e();
+					elem = ((TList) elem.mem2._e())._Cons();
+					if (sym.constructor() != cat) continue;
+					if (sym.constructor() == link && TQName.M.our(TSymbol.M.alias(sym), g)) continue;
+					if (top) {            // category labels at the top only before first item
+						if (!found) {
+							pushSubItem(new CategoryItem(categories[cat], TSymbol.M.pos(sym)));
+							found = true;
+						}
+					}
+					pushSubItem(new SymbolItem(g, sym));
+					if (TSymbol.M.has$env(sym))  visit(g, TSymbol.M.env(sym), false);
+					popSubItem();
+				}
+				if (found) popSubItem();
+				found = false;
 			}
 			return true;
 		}
@@ -76,9 +84,10 @@ public class FregeTreeModelBuilder extends TreeModelBuilderBase {
 		public boolean visit(TGlobal g) {
 			// System.err.println("visiting: " + g.toString());
 			final TSubSt sub = TGlobal.sub(g);
+			final String pack = TSubSt.thisPack(sub).j;
 			
-			pushSubItem(new PackageItem( TSubSt.thisPack(sub).j, TSubSt.thisPos(sub)));
-			{
+			pushSubItem(new PackageItem(pack, TSubSt.thisPos(sub)));
+			if  (! "".equals(pack)) {
 				final TList pnps = (TList) EclipseUtil.imports(g)._e();
 				DCons elem = pnps._Cons();
 				while (elem != null) {
@@ -86,13 +95,15 @@ public class FregeTreeModelBuilder extends TreeModelBuilderBase {
 					elem = ((TList) elem.mem2._e())._Cons();
 					final TPosition pos = (TPosition) tuple.mem1._e();
 					final String ns     = Box.<String>box(tuple.mem2._e()).j;
-					final String pack   = Box.<String>box(tuple.mem3._e()).j;
-					createSubItem(new ImportItem(pos, ns, pack));
+					final String p      = Box.<String>box(tuple.mem3._e()).j;
+					createSubItem(new ImportItem(pos, ns, p));
 				}
 			}
 			popSubItem();
 			
-			return visit(g, TGlobal.thisTab(g), true);
+			if  (! "".equals(pack)) 
+				return visit(g, TGlobal.thisTab(g), true);
+			return true;
 		}
 	}
 }
