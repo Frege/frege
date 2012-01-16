@@ -370,13 +370,14 @@ public class FregeParseController extends ParseControllerBase implements
 			System.err.println(desc + " took " 
 				+ (te-t1)/1000000 + "ms, cumulative "
 				+ (te-t0)/1000000 + "ms");
-			if (errors(g) > 0) return g;
+			monitor.worked(1);
 			global = g;
 			if (monitor.isCanceled()) {
 				System.err.println("cancelled in " + desc);
-				return global;
+				break;
 			}
-			monitor.worked(1);
+			
+			if (errors(g) > 0) break;
 			if (scanOnly && desc.startsWith("type check")) break;
 		}
 		
