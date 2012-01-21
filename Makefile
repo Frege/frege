@@ -509,7 +509,7 @@ $(RTDIR)/FregeCompiler.class: frege/rt/FregeCompiler.java
 docu:       $(TOOLSF)/Doc.class \
             $(DOC)/Prelude.html     $(DOC)/List.html        $(DOC)/IO.html \
             $(DOC)/prelude/Text.html    $(DOC)/prelude/Base.html \
-            $(DOC)/prelude/Native.html \
+            $(DOC)/prelude/Native.html $(DOC)/prelude/List.html $(DOC)/prelude/Arrays.html\
 			$(DOCF)/Scanner.html    $(DOCF)/Classtools.html $(DOCF)/Data.html \
 			$(DOCF)/Utilities.html  $(DOCF)/Main.html       $(DOCF)/Grammar.html \
 			$(DOCF)/Fixdefs.html    $(DOCF)/Import.html     $(DOCF)/Enter.html \
@@ -539,6 +539,10 @@ $(DOC)/prelude/Text.html: $(DIR)/prelude/Text.class
 	$(GENDOC) frege.prelude.Text
 $(DOC)/prelude/Native.html: $(DIR)/prelude/Native.class
 	$(GENDOC) frege.prelude.Native
+$(DOC)/prelude/List.html: $(DIR)/prelude/List.class
+	$(GENDOC) frege.prelude.List
+$(DOC)/prelude/Arrays.html: $(DIR)/prelude/Arrays.class
+	$(GENDOC) frege.prelude.Arrays
 $(DOC)/List.html: $(DIR)/List.class
 	$(GENDOC) frege.List
 $(DOC)/IO.html: $(DIR)/IO.class
