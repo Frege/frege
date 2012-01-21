@@ -5,6 +5,7 @@ import org.eclipse.imp.preferences.PreferenceValueParser.AbstractVisitor;
 import org.eclipse.imp.services.base.TreeModelBuilderBase;
 
 import frege.List.TTree;
+import frege.compiler.Data.TExprT;
 import frege.compiler.Data.TGlobal;
 import frege.compiler.Data.TPosition;
 import frege.compiler.Data.TQName;
@@ -13,6 +14,7 @@ import frege.compiler.Data.TSymbol;
 import frege.compiler.EclipseUtil;
 import frege.prelude.Base.TList;
 import frege.prelude.Base.TList.DCons;
+import frege.prelude.Base.TMaybe;
 import frege.prelude.Base.TTuple3;
 import frege.rt.Box;
 
@@ -73,6 +75,13 @@ public class FregeTreeModelBuilder extends TreeModelBuilderBase {
 					}
 					pushSubItem(new SymbolItem(g, sym));
 					if (TSymbol.M.has$env(sym))  visit(g, TSymbol.M.env(sym), false);
+					else if (TSymbol.M.has$expr(sym)) {
+						final TMaybe mbex       = TSymbol.M.expr(sym);
+						final TMaybe.DJust just = mbex._Just();
+						if (just != null) {
+							final TExprT expr = (TExprT) just.mem1._e();
+						}
+					}
 					popSubItem();
 				}
 				if (found) popSubItem();
