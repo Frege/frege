@@ -94,6 +94,7 @@ public class FregeTreeModelBuilder extends TreeModelBuilderBase {
 		}
 		
 		public boolean visit(TGlobal g, TExprT expr) {
+			System.err.println("visiting: " + g.toString() + ", " + expr.toString());
 			TList symbols = (TList) FregeParseController.funStG(
 					frege.compiler.EclipseUtil.exprSymbols(expr), g);
 			TList.DCons node = symbols._Cons();
@@ -107,7 +108,6 @@ public class FregeTreeModelBuilder extends TreeModelBuilderBase {
 		}
 		
 		public boolean visit(TGlobal g) {
-			// System.err.println("visiting: " + g.toString());
 			final TSubSt sub = TGlobal.sub(g);
 			final String pack = TSubSt.thisPack(sub).j;
 			
