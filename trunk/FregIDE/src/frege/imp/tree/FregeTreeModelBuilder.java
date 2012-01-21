@@ -75,17 +75,7 @@ public class FregeTreeModelBuilder extends TreeModelBuilderBase {
 							found = true;
 						}
 					}
-					pushSubItem(new SymbolItem(g, sym));
-					if (TSymbol.M.has$env(sym))  visit(g, TSymbol.M.env(sym), false);
-					else if (TSymbol.M.has$expr(sym)) {
-						final TMaybe mbex       = TSymbol.M.expr(sym);
-						final TMaybe.DJust just = mbex._Just();
-						if (just != null) {
-							final TExprT expr = (TExprT) just.mem1._e();
-							visit(g, expr);
-						}
-					}
-					popSubItem();
+					visit(g, sym);
 				}
 				if (found) popSubItem();
 				found = false;
@@ -93,15 +83,29 @@ public class FregeTreeModelBuilder extends TreeModelBuilderBase {
 			return true;
 		}
 		
+		public boolean visit(TGlobal g, TSymbol sym) {
+			pushSubItem(new SymbolItem(g, sym));
+			if (TSymbol.M.has$env(sym))  visit(g, TSymbol.M.env(sym), false);
+			else if (TSymbol.M.has$expr(sym)) {
+				final TMaybe mbex       = TSymbol.M.expr(sym);
+				final TMaybe.DJust just = mbex._Just();
+				if (just != null) {
+					final TExprT expr = (TExprT) just.mem1._e();
+					visit(g, expr);
+				}
+			}
+			popSubItem();
+			return true;
+		}
+		
 		public boolean visit(TGlobal g, TExprT expr) {
-			System.err.println("visiting: " + g.toString() + ", " + expr.toString());
+			// System.err.println("visiting: " + g.toString() + ", " + expr.toString());
 			TList symbols = (TList) FregeParseController.funStG(
 					frege.compiler.EclipseUtil.exprSymbols(expr), g);
 			TList.DCons node = symbols._Cons();
 			while (node != null) {
 				TSymbol sym = (TSymbol) node.mem1._e();
-				if (TSymbol.M.has$env(sym))
-					this.visit(g, TSymbol.M.env(sym), false);
+				visit(g, sym);
 				node = ((TList) node.mem2._e())._Cons();
 			}
 			return true;
