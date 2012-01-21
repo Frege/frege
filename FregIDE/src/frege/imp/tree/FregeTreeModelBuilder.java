@@ -12,6 +12,7 @@ import frege.compiler.Data.TQName;
 import frege.compiler.Data.TSubSt;
 import frege.compiler.Data.TSymbol;
 import frege.compiler.EclipseUtil;
+import frege.imp.parser.FregeParseController;
 import frege.prelude.Base.TList;
 import frege.prelude.Base.TList.DCons;
 import frege.prelude.Base.TMaybe;
@@ -50,6 +51,7 @@ public class FregeTreeModelBuilder extends TreeModelBuilderBase {
 
 	
 	public class FregeModelVisitor /* extends AbstractVisitor */ {		
+		
 		public boolean visit(TGlobal g, TTree env, boolean top) {
 			final TList syms = (TList) EclipseUtil.symbols(env)._e();
 			// do one category after the other according to the predefined order
@@ -80,12 +82,26 @@ public class FregeTreeModelBuilder extends TreeModelBuilderBase {
 						final TMaybe.DJust just = mbex._Just();
 						if (just != null) {
 							final TExprT expr = (TExprT) just.mem1._e();
+							visit(g, expr);
 						}
 					}
 					popSubItem();
 				}
 				if (found) popSubItem();
 				found = false;
+			}
+			return true;
+		}
+		
+		public boolean visit(TGlobal g, TExprT expr) {
+			TList symbols = (TList) FregeParseController.funStG(
+					frege.compiler.EclipseUtil.exprSymbols(expr), g);
+			TList.DCons node = symbols._Cons();
+			while (node != null) {
+				TSymbol sym = (TSymbol) node.mem1._e();
+				if (TSymbol.M.has$env(sym))
+					this.visit(g, TSymbol.M.env(sym), false);
+				node = ((TList) node.mem2._e())._Cons();
 			}
 			return true;
 		}
