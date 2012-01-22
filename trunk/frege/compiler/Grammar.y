@@ -1405,6 +1405,7 @@ funhead (ex@Vbl {name}) = do
  * > a b c = ....
  * Constructor applications like @(Just x)@ or @(x:xs)@ or @[a,b,c]@ are patterns.
  * Unary application @!p@ is also a pattern.
+ * And last but not least, x at p is a pattern.
  */
 
 funhead (ex@App e1 e2 _)
@@ -1415,6 +1416,9 @@ funhead (ex@App e1 e2 _)
         pat <- exprToPat x
         ps  <- mapSt exprToPat xs
         case pat of
+            PVar p "@"  -> do
+                at <- exprToPat ex 
+                YYM.return (p, "let", [at])
             PVar p var  -> YYM.return (p, var, ps)
             PCon p n [] -> YYM.return (p, "let", [PCon p n ps])
             _ -> do
