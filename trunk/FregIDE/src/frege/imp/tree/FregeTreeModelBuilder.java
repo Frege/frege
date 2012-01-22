@@ -20,11 +20,15 @@ import frege.prelude.Base.TTuple3;
 import frege.rt.Box;
 
 public class FregeTreeModelBuilder extends TreeModelBuilderBase {
+	private TGlobal prev = null;
 	@Override
 	public void visitTree(Object root) {
 		if (root == null || !(root instanceof TGlobal))
 			return;
 		TGlobal global = (TGlobal) root;
+		if (prev == null || FregeParseController.achievement(prev) <=  FregeParseController.achievement(global))
+			prev = global;
+		else global = prev;
 		
 		// fModelRoot = createTopItem(global, ModelTreeNode.DEFAULT_CATEGORY);
 		

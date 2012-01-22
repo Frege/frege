@@ -61,6 +61,7 @@ import frege.compiler.Data.TSubSt;
 import frege.compiler.Data.TToken;
 import frege.compiler.Data.TTokenID;
 import frege.compiler.Data;
+import frege.compiler.EclipseUtil;
 import frege.compiler.Main;
 
 /**
@@ -238,6 +239,15 @@ public class FregeParseController extends ParseControllerBase implements
 	public static int errors(TGlobal global) { return global == null ? 1 : TGlobal.errors(global); }
 	
 	/**
+	 * tell how far we are advanced
+	 */
+	public static int achievement(TGlobal global) {
+		if (global == null) return 0;
+		final TSubSt sub = TGlobal.sub(global);
+		return 2 * TSubSt.nextPass(sub) - (errors(global) > 0 ? 1 : 0);
+	}
+	
+	/**
 	 * run a {@link frege.compiler.data.TStIO} action and return the new TGlobal state
 	 * @return the new state
 	 */
@@ -371,7 +381,7 @@ public class FregeParseController extends ParseControllerBase implements
 				+ (te-t1)/1000000 + "ms, cumulative "
 				+ (te-t0)/1000000 + "ms");
 			monitor.worked(1);
-			global = g;
+			global = runStG(EclipseUtil.passDone._e(), g);
 			if (monitor.isCanceled()) {
 				System.err.println("cancelled in " + desc);
 				break;
