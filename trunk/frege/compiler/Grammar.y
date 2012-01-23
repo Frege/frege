@@ -1002,7 +1002,7 @@ gqual:
     expr                            { \e ->  Left (Nothing, e) }
     | expr GETS expr                { \p\g\e -> do
                                         pat <- exprToPat p
-                                        YYM.return (Left (Just (pat, yyline g), e)) }
+                                        YYM.return (Left (Just (pat, getpos pat), e)) }
     ;
 
 gquals:
@@ -1213,9 +1213,10 @@ term:
                                                        (Con (yyline z)  (With1 baseToken z.{tokid=CONID, value="[]"}) Nothing)
                                                        es}
     | '[' expr '|' lcquals ']'      { \(a::Token)\e\b\qs\(z::Token) -> do {
-                                        listComprehension (yyline b) e qs
-                                            (Con (yyline z) (With1 baseToken a.{tokid=CONID, value="[]"})
-                                            Nothing) }}
+				let {nil = z.{tokid=CONID, value="[]"}};
+				listComprehension (yyline b) e qs
+                                            (Con {name = With1 baseToken nil, pos = nil.position, typ = Nothing})
+                                    }}
     ;
 
 commata:
@@ -1552,7 +1553,8 @@ refutable (PStrict p)    = refutable p
 listComprehension pos e [] l2 = YYM.return (cons `nApp` e `nApp` l2)
      where
         f = Position.first pos
-        cons = Con {name = With1 baseToken f.{tokid=CONID, value=":"}, pos = pos, typ = Nothing}
+        con  = f.{tokid=CONID, value=":"}
+        cons = Con {name = With1 baseToken con, pos = con.position, typ = Nothing}
 
 listComprehension pos e (q:qs) l2 = case q of
     Right defs                 -> do   // let defs
@@ -1568,14 +1570,18 @@ listComprehension pos e (q:qs) l2 = case q of
             h     = Simple f.{tokid = VARID, value = "lc" ++ show uid }
             us    = Simple f.{tokid = VARID, value = "_us" ++ show uid }
             xsn   = Simple f.{tokid = VARID, value = "_xs" ++ show uid }
-            hvar  = Vbl  pos h Nothing
-            usvar = Vbl  pos us Nothing
-            uspat = PVar pos ("_us" ++ show uid)
-            xsvar = Vbl  pos xsn Nothing
-            xspat = PVar pos ("_xs" ++ show uid)
-            anpat = PVar pos "_"
-            pnil  = PCon pos (With1 baseToken f.{tokid=CONID, value="[]"}) []
-            pcons p ps = PCon pos (With1 baseToken f.{tokid=CONID, value=":"}) [p, ps]  // p:ps
+            nil   = f.{tokid=CONID, value="[]"}
+            cons  = f.{tokid=CONID, value=":"}
+            tolst = listSourceToList.{id <- Token.{line=f.line, col=f.col, offset=f.offset}}
+            hvar  = Vbl  h.id.position h Nothing
+            usvar = Vbl  us.id.position us Nothing
+            tlvar = Vbl  tolst.id.position tolst  Nothing 
+            uspat = PVar us.id.position ("_us" ++ show uid)
+            xsvar = Vbl  xsn.id.position xsn Nothing
+            xspat = PVar xsn.id.position ("_xs" ++ show uid)
+            anpat = PVar h.id.{value="_"}.position "_"
+            pnil  = PCon nil.position (With1 baseToken nil) []
+            pcons p ps = PCon cons.position (With1 baseToken cons) [p, ps]  // p:ps
             calt1 = CAlt {env = Nil, pat = pnil, ex = l2 }  // [] -> l2
         hxs <- listComprehension pos e qs (hvar `nApp` xsvar)
         let
@@ -1586,7 +1592,7 @@ listComprehension pos e (q:qs) l2 = case q of
             calts = if refutable pat then [calt2, calt1, calt3] else [calt2, calt1]
             ecas = Case CNormal usvar calts  Nothing
             hdef = FunDcl {poss = [pos], vis = Private, name=h.id.value, pats=[uspat], expr=ecas, doc = Nothing}
-        YYM.return (Let Nil [hdef] (nApp hvar xs) Nothing)
+        YYM.return (Let Nil [hdef] (nApp hvar (nApp tlvar xs)) Nothing)
   where
         rest = listComprehension pos e qs l2
 

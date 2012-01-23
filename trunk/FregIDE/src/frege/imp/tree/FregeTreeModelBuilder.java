@@ -135,7 +135,7 @@ public class FregeTreeModelBuilder extends TreeModelBuilderBase {
 			popSubItem();
 			
 			if  (! "".equals(pack)) 
-				return visit(g, TGlobal.thisTab(g), true);
+				return visit(g, EclipseUtil.thisTab(g), true);
 			return true;
 		}
 	}
