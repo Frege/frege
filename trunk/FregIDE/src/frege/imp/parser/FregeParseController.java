@@ -45,11 +45,11 @@ import frege.rt.Lambda;
 import frege.rt.Box;
 import frege.rt.FV;
 import frege.rt.Lazy;
-import frege.prelude.Base.TList.DCons;
-import frege.prelude.Base.TTuple2;
-import frege.prelude.Base.TList;
-import frege.prelude.Base.TTuple3;
-import frege.prelude.List.IListLike__lbrack_rbrack;
+import frege.prelude.PreludeBase.TList.DCons;
+import frege.prelude.PreludeBase.TTuple2;
+import frege.prelude.PreludeBase.TList;
+import frege.prelude.PreludeBase.TTuple3;
+import frege.prelude.PreludeList.IListLike__lbrack_rbrack;
 import frege.compiler.Data.TFlag;
 import frege.compiler.Data.TGlobal;
 import frege.compiler.Data.TMessage;
@@ -282,7 +282,7 @@ public class FregeParseController extends ParseControllerBase implements
 				: filePath;
 
 		global =  (TGlobal) 
-				frege.prelude.Base.TST.performUnsafe(
+				frege.prelude.PreludeBase.TST.performUnsafe(
 						(Lambda) frege.compiler.Main.standardOptions._e())._e();
 		createLexerAndParser(fullFilePath, project);
 

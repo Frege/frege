@@ -20,11 +20,11 @@ import frege.compiler.Data.TGlobal;
 import frege.compiler.Data.TTokenID;
 import frege.compiler.Data.IShow_Token;
 import frege.compiler.Data.TQName;
-import frege.prelude.Base.TEither.DRight;
-import frege.prelude.Base.TMaybe;
-import frege.prelude.Base.TEither;
 import frege.imp.parser.FregeParseController;
 import frege.imp.preferences.FregePreferencesConstants;
+import frege.prelude.PreludeBase.TEither;
+import frege.prelude.PreludeBase.TEither.DRight;
+import frege.prelude.PreludeBase.TMaybe;
 
 
 
@@ -96,7 +96,7 @@ public class FregeTokenColorer extends TokenColorerBase implements ITokenColorer
 	}
 	
 	public TextAttribute getKind(FregeParseController controller, TToken tok, TextAttribute normalAttribute) {
-		TGlobal g = (TGlobal) controller.getCurrentAst();
+		TGlobal g = controller.getCurrentAst();
 		final TMaybe mb = (TMaybe) TGlobal.resolved(g, tok)._e();
 		final TMaybe.DJust just = mb._Just();
 		if (just == null) return normalAttribute;

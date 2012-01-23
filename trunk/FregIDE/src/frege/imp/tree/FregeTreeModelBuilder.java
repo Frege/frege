@@ -13,10 +13,10 @@ import frege.compiler.Data.TSubSt;
 import frege.compiler.Data.TSymbol;
 import frege.compiler.EclipseUtil;
 import frege.imp.parser.FregeParseController;
-import frege.prelude.Base.TList;
-import frege.prelude.Base.TList.DCons;
-import frege.prelude.Base.TMaybe;
-import frege.prelude.Base.TTuple3;
+import frege.prelude.PreludeBase.TList;
+import frege.prelude.PreludeBase.TList.DCons;
+import frege.prelude.PreludeBase.TMaybe;
+import frege.prelude.PreludeBase.TTuple3;
 import frege.rt.Box;
 
 public class FregeTreeModelBuilder extends TreeModelBuilderBase {
@@ -66,7 +66,7 @@ public class FregeTreeModelBuilder extends TreeModelBuilderBase {
 				else if (cat == dcon) continue;
 				
 				// go through the list of symbols and do the ones that equal the current category
-				DCons elem = syms._Cons();
+				TList.DCons elem = syms._Cons();
 				boolean found = false;
 				while (elem != null) {
 					final TSymbol sym = (TSymbol) elem.mem1._e();
