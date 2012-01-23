@@ -122,10 +122,17 @@ rt-files: build/frege/compiler/Main.class
 fr-files: build/bfrege/compiler/Main.class
 	cd build && find frege -type f -name "*.java" -print >../fr-files
 
-sources.jar: rt-files fr-files
-	jar -cMf sources.jar @rt-files
-	cd build && jar -uMf ../sources.jar @../fr-files
-	cd FregIDE/src && jar -xvf ../../sources.jar
+SRCSREQ = $(PREL)/PreludeBase.class $(PREL)/PreludeNative.class $(PREL)/PreludeList.class $(PREL)/PreludeText.class
+
+sources: $(SRCSREQ)
+    $(FREGECC) -make frege.compiler.Main frege.PreludeProperties
+    find frege -type f -name "*.java" -print >rt-files
+    cd build && find frege -type f -name "*.java" -print >../fr-files
+	jar -cMf ../sources.jar @rt-files
+	cd build && jar -uMf ../../sources.jar @../fr-files
+	cd ../sources && jar -xf ../sources.jar
+	rm -f ../sources.jar rt-files fr-files
+	jar  -cf    ../sources/frege3.jar -C build frege
 
 $(DIR)/check1: $(DIR)/PreludeProperties.class
 	$(JAVA) -cp build frege.PreludeProperties && echo Prelude Properties checked >$(DIR)/check1
@@ -228,6 +235,14 @@ CLASSES  =       $(COMPF1)/Scanner.class   $(COMPF1)/Classtools.class \
 #
 # GNU make apparently does not understand our meta rules
 #
+$(PREL)/PreludeBase.class: frege/prelude/PreludeBase.fr
+	$(FREGECC) $?
+$(PREL)/PreludeNative.class: $(PREL)/PreludeBase.class frege/prelude/PreludeNative.fr
+	$(FREGECC) frege/prelude/PreludeNative.fr
+$(PREL)/PreludeList.class: $(PREL)/PreludeBase.class frege/prelude/PreludeList.fr
+	$(FREGECC) frege/prelude/PreludeList.fr
+$(PREL)/PreludeText.class: $(PREL)/PreludeList.class frege/prelude/PreludeText.fr
+	$(FREGECC) frege/prelude/PreludeText.fr
 $(DIR1)/IO.class: frege/IO.fr
 	$(FREGEC0) $?
 $(DIR1)/List.class: frege/List.fr
@@ -518,8 +533,9 @@ $(RTDIR)/FregeCompiler.class: frege/rt/FregeCompiler.java
 
 docu:       $(TOOLSF)/Doc.class \
             $(DOC)/Prelude.html     $(DOC)/List.html        $(DOC)/IO.html \
-            $(DOC)/prelude/Text.html    $(DOC)/prelude/Base.html \
-            $(DOC)/prelude/Native.html $(DOC)/prelude/List.html $(DOC)/prelude/Arrays.html\
+            $(DOC)/prelude/Text.html    $(DOC)/prelude/PreludeBase.html \
+            $(DOC)/prelude/PreludeNative.html $(DOC)/prelude/PreludeList.html \
+            $(DOC)/prelude/PreludeArrays.html\
 			$(DOCF)/Scanner.html    $(DOCF)/Classtools.html $(DOCF)/Data.html \
 			$(DOCF)/Utilities.html  $(DOCF)/Main.html       $(DOCF)/Grammar.html \
 			$(DOCF)/Fixdefs.html    $(DOCF)/Import.html     $(DOCF)/Enter.html \
@@ -543,14 +559,14 @@ doc/index.html: $(RUNTIME)
 #
 $(DOC)/Prelude.html: $(DIR)/Prelude.class
 	$(GENDOC) frege.Prelude
-$(DOC)/prelude/Base.html: $(DIR)/prelude/Base.class
-	$(GENDOC) frege.prelude.Base
-$(DOC)/prelude/Text.html: $(DIR)/prelude/Text.class
+$(DOC)/prelude/PreludeBase.html: $(DIR)/prelude/PreludeBase.class
+	$(GENDOC) frege.prelude.PreludeBase
+$(DOC)/prelude/PreludeText.html: $(DIR)/prelude/PreludeText.class
 	$(GENDOC) frege.prelude.Text
-$(DOC)/prelude/Native.html: $(DIR)/prelude/Native.class
-	$(GENDOC) frege.prelude.Native
-$(DOC)/prelude/List.html: $(DIR)/prelude/List.class
-	$(GENDOC) frege.prelude.List
+$(DOC)/prelude/PreludeNative.html: $(DIR)/prelude/PreludeNative.class
+	$(GENDOC) frege.prelude.PreludeNative
+$(DOC)/prelude/PreludeList.html: $(DIR)/prelude/PreludeList.class
+	$(GENDOC) frege.prelude.PreludeList
 $(DOC)/prelude/Arrays.html: $(DIR)/prelude/Arrays.class
 	$(GENDOC) frege.prelude.Arrays
 $(DOC)/List.html: $(DIR)/List.class
