@@ -61,9 +61,9 @@ FREGEC3P = $(FREGECJP) -prefix c
 GENDOC   = $(FREGE)  frege.tools.Doc -d doc
 
 # Prelude files in the order they must be compiled
-PRELUDE  =  frege/prelude/Base.fr frege/prelude/Native.fr \
-            frege/prelude/List.fr frege/prelude/Arrays.fr \
-            frege/prelude/Text.fr \
+PRELUDE  =  frege/prelude/PreludeBase.fr frege/prelude/PreludeNative.fr \
+            frege/prelude/PreludeList.fr frege/prelude/Arrays.fr \
+            frege/prelude/PreludeText.fr \
             frege/contrib/dgronau/Math.fr frege/contrib/dgronau/Floating.fr
 
 
@@ -101,7 +101,7 @@ sanitycheck:
 
 stage1: prel0 compiler0 $(TOOLSF0)/LexConvt.class $(TOOLSF0)/YYgen.class
 	cp frege/tools/yygenpar-fr frege/tools/YYgenparM-fr build/cfrege/tools
-	jar  -cf    fregec.jar -C build cfrege frege
+	jar  -cf    fregec.jar -C build cfrege -C build frege
 	jar  -uvfe  fregec.jar cfrege.compiler.Main
 	@echo you can do now backwards incompatible changes
 
@@ -306,7 +306,7 @@ PRE0 = $(DIR0)/IO.class $(DIR0)/List.class $(DIR0)/Tuples.class
 compiler0: $(DIR0)/check1 $(COMPF0)/Main.class
 	@echo stage 0 compiler ready
 
-$(COMPF0)/Main.class : $(PRE0) $(LIBF0)/PP.class frege/compiler/Grammar.fr # fregec.jar
+$(COMPF0)/Main.class : $(PRE0) frege/compiler/Grammar.fr # fregec.jar
 	$(FREGEC3)  -make frege.compiler.Main
 
 prel0:
@@ -314,8 +314,18 @@ prel0:
 	rm -rf $(DIR0)
 	$(FREGEC3P)  $(PRELUDE)
 	$(FREGEC3)  -make frege.Prelude
-$(DIR0)/PreludeProperties.class: $(PRE0) $(LIBF0)/Random.class $(LIBF0)/QuickCheck.class frege/PreludeProperties.fr
-	$(FREGEC3)  frege/PreludeProperties.fr
+$(DIR0)/PreludeProperties.class: $(PRE0) frege/PreludeProperties.fr
+	$(FREGEC3)  -make frege/PreludeProperties.fr
+$(DIR0)/IO.class: frege/IO.fr
+	$(FREGEC3)  frege/IO.fr
+$(DIR0)/List.class: frege/List.fr
+	$(FREGEC3)  frege/List.fr
+$(DIR0)/Tuples.class: frege/Tuples.fr
+	$(FREGEC3)  frege/Tuples.fr
+$(TOOLSF0)/LexConvt.class: frege/tools/LexConvt.fr
+	$(FREGEC3)  -make frege/tools/LexConvt.fr
+$(TOOLSF0)/YYgen.class: frege/tools/YYgen.fr
+	$(FREGEC3)  -make frege/tools/YYgen.fr
 $(DIR0)/check1: $(PRE0)  $(DIR0)/PreludeProperties.class
 	$(JAVA) -cp build cfrege.PreludeProperties && echo Prelude Properties checked >$(DIR0)/check1
 
