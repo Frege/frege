@@ -63,7 +63,7 @@ GENDOC   = $(FREGE)  frege.tools.Doc -d doc
 # Prelude files in the order they must be compiled
 PRELUDE  =  frege/prelude/PreludeBase.fr frege/prelude/PreludeNative.fr \
             frege/prelude/PreludeList.fr frege/prelude/Arrays.fr \
-            frege/prelude/PreludeText.fr \
+            frege/prelude/PreludeText.fr frege/prelude/Maybe.fr \
             frege/contrib/dgronau/Math.fr frege/contrib/dgronau/Floating.fr
 
 
@@ -535,7 +535,7 @@ docu:       $(TOOLSF)/Doc.class \
             $(DOC)/Prelude.html     $(DOC)/List.html        $(DOC)/IO.html \
             $(DOC)/prelude/Text.html    $(DOC)/prelude/PreludeBase.html \
             $(DOC)/prelude/PreludeNative.html $(DOC)/prelude/PreludeList.html \
-            $(DOC)/prelude/PreludeArrays.html\
+            $(DOC)/prelude/PreludeArrays.html $(DOC)/prelude/Maybe.html \
 			$(DOCF)/Scanner.html    $(DOCF)/Classtools.html $(DOCF)/Data.html \
 			$(DOCF)/Utilities.html  $(DOCF)/Main.html       $(DOCF)/Grammar.html \
 			$(DOCF)/Fixdefs.html    $(DOCF)/Import.html     $(DOCF)/Enter.html \
@@ -559,6 +559,8 @@ doc/index.html: $(RUNTIME)
 #
 $(DOC)/Prelude.html: $(DIR)/Prelude.class
 	$(GENDOC) frege.Prelude
+$(DOC)/prelude/Maybe.html: $(DIR)/prelude/Maybe.class
+	$(GENDOC) frege.prelude.Maybe
 $(DOC)/prelude/PreludeBase.html: $(DIR)/prelude/PreludeBase.class
 	$(GENDOC) frege.prelude.PreludeBase
 $(DOC)/prelude/PreludeText.html: $(DIR)/prelude/PreludeText.class

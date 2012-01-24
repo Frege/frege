@@ -54,7 +54,7 @@ package frege.compiler.Grammar where
 -- import frege.IO(stdout, stderr, <<, BufferedReader)
 import frege.List(Tree, keyvalues, keys, insertkv)
 import frege.compiler.Data      as D
-import frege.compiler.Nice      except (group, annotation)
+import frege.compiler.Nice      except (group, annotation, break)
 import frege.compiler.Utilities as U(
     posItem, posLine, unqualified, tuple)
 
