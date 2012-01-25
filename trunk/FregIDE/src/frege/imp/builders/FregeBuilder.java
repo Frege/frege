@@ -47,6 +47,8 @@ import frege.compiler.Main;
 import frege.imp.parser.FregeParseController;
 import frege.prelude.PreludeBase.TList;
 import frege.prelude.PreludeBase.TList.DCons;
+import frege.prelude.PreludeList.CEmpty;
+import frege.prelude.PreludeList;
 import frege.prelude.PreludeText;
 import frege.rt.Box;
 
@@ -254,9 +256,12 @@ public class FregeBuilder extends FregeBuilderBase {
 				final String bp = TOptions.dir( TGlobal.options(result) );
 				final TList ourPath = frege.compiler.Utilities.ourPath(TGlobal.options(result));
 				final String fp = Box.<String>box(
-						PreludeText.joined(
-								Box.mk(System.getProperty("path.separator")), 
-								ourPath)._e()).j;
+						PreludeText.joined.inst(
+								  new PreludeList.IListLike__lbrack_rbrack(),
+				                  new PreludeList.IListSource__lbrack_rbrack()).eval(
+				                		  ourPath, 
+				                		  Box.mk(System.getProperty("path.separator"))
+								)._e()).j;
 				// construct the commandline
 				final String cmdline = "-cp " + "\"" + fp + "\"" 
 						+ " -d " + "\"" + bp + "\"" 
