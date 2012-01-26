@@ -126,6 +126,7 @@ SRCSREQ = $(PREL)/PreludeBase.class $(PREL)/PreludeNative.class $(PREL)/PreludeL
 
 sources: $(SRCSREQ)
 	$(FREGECC) -make frege.compiler.Main frege.PreludeProperties
+	$(JAVA) -cp build frege.PreludeProperties
 	find frege -type f -name "*.java" -print >rt-files
 	cd build && find frege -type f -name "*.java" -print >../fr-files
 	jar -cMf ../sources.jar @rt-files
