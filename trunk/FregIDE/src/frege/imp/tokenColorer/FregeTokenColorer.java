@@ -1,5 +1,7 @@
 package frege.imp.tokenColorer;
 
+import java.util.regex.Pattern;
+
 import org.eclipse.imp.parser.IParseController;
 import org.eclipse.imp.preferences.IPreferencesService;
 import org.eclipse.imp.services.ITokenColorer;
@@ -30,12 +32,13 @@ import frege.prelude.PreludeBase.TMaybe;
 
 public class FregeTokenColorer extends TokenColorerBase implements ITokenColorer {
 	protected final TextAttribute
-			normalAttribute, impAttribute,
+			normalAttribute, impAttribute, iopAttribute,
 			identAttribute, docuAttribute,
 			commentAttribute, specialAttribute, 
 			keywordAttribute, literalAttribute, errorAttribute,
 			nsAttribute, typeAttribute, itypeAttribute, 
 			conAttribute, iconAttribute;
+	final Pattern pattern = Pattern.compile("^\\W+$");
 
 	//  protected final TextAttribute commentAttribute, stringAttribute;
 
@@ -88,6 +91,7 @@ public class FregeTokenColorer extends TokenColorerBase implements ITokenColorer
 		
 		identAttribute   = new TextAttribute(varidColor, null, SWT.NORMAL);
 		impAttribute     = new TextAttribute(importColor, null, italic ? SWT.ITALIC : SWT.NORMAL);
+		iopAttribute     = new TextAttribute(importColor, null, SWT.NORMAL);
 		nsAttribute      = new TextAttribute(tconColor,  null, boldns ? SWT.BOLD : SWT.NORMAL);
 		typeAttribute	 = new TextAttribute(tconColor,  null, SWT.NORMAL);
 		itypeAttribute   = new TextAttribute(tconColor,  null, italic ? SWT.ITALIC : SWT.NORMAL);
@@ -112,7 +116,9 @@ public class FregeTokenColorer extends TokenColorerBase implements ITokenColorer
 		final TQName.DMName mname = qname._MName();
 		if (mname != null && TToken.tokid(tok).j == TTokenID.CONID.j)
 			return our ? conAttribute : iconAttribute;
-		return our ? identAttribute : impAttribute;
+		final String b = TQName.M.base(qname);
+		final boolean op = pattern.matcher(b).find();
+		return our ? identAttribute : (op ? iopAttribute : impAttribute);
 	}
 
 	@Override 

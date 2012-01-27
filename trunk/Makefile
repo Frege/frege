@@ -534,9 +534,9 @@ $(RTDIR)/FregeCompiler.class: frege/rt/FregeCompiler.java
 
 docu:       $(TOOLSF)/Doc.class \
             $(DOC)/Prelude.html     $(DOC)/List.html        $(DOC)/IO.html \
-            $(DOC)/prelude/Text.html    $(DOC)/prelude/PreludeBase.html \
+            $(DOC)/prelude/PreludeText.html    $(DOC)/prelude/PreludeBase.html \
             $(DOC)/prelude/PreludeNative.html $(DOC)/prelude/PreludeList.html \
-            $(DOC)/prelude/PreludeArrays.html $(DOC)/prelude/Maybe.html \
+            $(DOC)/prelude/Arrays.html $(DOC)/prelude/Maybe.html \
 			$(DOCF)/Scanner.html    $(DOCF)/Classtools.html $(DOCF)/Data.html \
 			$(DOCF)/Utilities.html  $(DOCF)/Main.html       $(DOCF)/Grammar.html \
 			$(DOCF)/Fixdefs.html    $(DOCF)/Import.html     $(DOCF)/Enter.html \
@@ -565,7 +565,7 @@ $(DOC)/prelude/Maybe.html: $(DIR)/prelude/Maybe.class
 $(DOC)/prelude/PreludeBase.html: $(DIR)/prelude/PreludeBase.class
 	$(GENDOC) frege.prelude.PreludeBase
 $(DOC)/prelude/PreludeText.html: $(DIR)/prelude/PreludeText.class
-	$(GENDOC) frege.prelude.Text
+	$(GENDOC) frege.prelude.PreludeText
 $(DOC)/prelude/PreludeNative.html: $(DIR)/prelude/PreludeNative.class
 	$(GENDOC) frege.prelude.PreludeNative
 $(DOC)/prelude/PreludeList.html: $(DIR)/prelude/PreludeList.class
