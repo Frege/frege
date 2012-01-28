@@ -1,0 +1,1600 @@
+{- «•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»
+
+    Copyright © 2011, Ingo Wechsung
+    All rights reserved.
+
+    Redistribution and use in source and binary forms, with or
+    without modification, are permitted provided that the following
+    conditions are met:
+
+        Redistributions of source code must retain the above copyright
+        notice, this list of conditions and the following disclaimer.
+
+        Redistributions in binary form must reproduce the above
+        copyright notice, this list of conditions and the following
+        disclaimer in the documentation and/or other materials provided
+        with the distribution. Neither the name of the copyright holder
+        nor the names of its contributors may be used to endorse or
+        promote products derived from this software without specific
+        prior written permission.
+
+    THIS SOFTWARE IS PROVIDED BY THE
+    COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR
+    IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+    WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+    PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER
+    OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+    SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+    LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
+    USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED
+    AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+    LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
+    IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
+    THE POSSIBILITY OF SUCH DAMAGE.
+
+    «•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•» -}
+
+{--
+ * This package deals with various transformations.
+ * In compiler pass 7, we unroll let definitions like so:
+ * > let a = ex1; b = ex2 in ex3  ==> let a = ex1 in let b = ex2 in ex3
+ * provided /ex2/ does not reference /a/.
+ -}
+
+{-
+ * $Author$
+ * $Revision$
+ * $Date$
+ * $Id$
+ *
+ -}
+
+package frege.compiler.Transform where
+
+--- This is $Revision$
+protected version = v "$Revision$" where
+    v (m ~ #(\d+)#) | Just g <- m.group 1 = g.atoi
+    v _ = 0
+
+
+import frege.List (Tree, lookup, insert, update, keys, values, each,
+                    fromKeys, including, contains, union, isEmpty)
+import frege.compiler.Data
+import frege.compiler.Nice except (group, break)
+import frege.compiler.Utilities     as U()
+
+post = stio true
+
+--- find all our 'SymV' symbols
+allourvars = do
+    g <- getST
+    let collectedenvs = g.thisTab : [ Symbol.env sy | sy <- values g.thisTab, Symbol.{env?} sy ]
+        collectedvars = [ v | env <- collectedenvs, v@SymV {name} <- values env, name.our g]
+    stio collectedvars
+
+--- find all 'SymV' symbols, be they ours or not
+allvars = do
+    g <- getST
+    let envEnvs env = env : [Symbol.env sy | sy <- values env, Symbol.{env?} sy]
+        packEnvs = values g.packages
+        collectedenvs = fold (++) [] (map envEnvs packEnvs)
+        collectedvars = [ v | env <- collectedenvs, v@SymV {name} <- values env]
+    stio collectedvars
+
+pass7 = do
+    g <- getST
+
+    -- unroll let expressions
+    collectedvars <- allourvars
+    foreach collectedvars unrollSym
+
+    -- simplify let expressions by lifting local function bindings to the top
+    -- or inlining variables
+    collectedvars <- allourvars
+    foreach collectedvars unLetSym
+
+    stio ("expressions", 2 * length collectedvars)
+
+
+pass8 = do
+    g <- getST
+    -- rename every local varaible v to v ++ show sid
+    collectedvars <- allvars
+    foreach collectedvars renameSym
+    collectedvars <- allourvars
+    -- find closed lambdas and make them private global
+    foreach collectedvars closedLambdaSym
+    stio ("expressions", length collectedvars)
+
+
+{--
+ * Strictness analysis
+ *
+ * - native functions are strict in all arguments
+ * - constructors are lazy in all arguments (but we can adapt this later if the need arises)
+ * - every symbol will get a strictness signature and status StrictChecked
+ -}
+pass10 = do
+
+        ourvars <- allourvars
+        names <- mapSt U.fundep ourvars
+
+        let groups = U.tsort names
+
+        g <- getST
+        U.logmsg TRACES Position.null (text ("names: " ++ joined " " (map (flip QName.nice g • fst) names)))
+        U.logmsg TRACES Position.null (text ("groups: " ++ display (map (map (flip QName.nice g)) groups)))
+
+        foreach groups checkgroup
+
+        stio ("functions", length names)
+    where
+        checkgroup nms = do
+            foreach nms (strictName [])         -- compute strictness
+            returnNames [] nms                  -- compute return type of java methods
+
+{--
+ * In this pass, we make sure that all expressions are in
+ * a form we need for code generation. We say that an expression is, or is not /easy/.
+ *
+ * - Every simple expression is also easy.
+ * - A literal is simple.
+ * - A variable is simple.
+ * - A constructor name is simple.
+ * - @(x::t)@ has the same properties as @x@
+ * - @if a then b else c@ is easy if @b@ and @c@ are easy and @a@ is simple.
+ *   If @b@ and @c@ are also simple, then the whole expression is simple.
+ * - @a b@ is simple if @a@ and @b@ are both simple. Otherwise the application is
+ *   not easy.
+ * - @let v = x in e@ is easy, if @x@ and @e@ are both easy.
+ * - @\p -> x@ is easy, if @x@ is easy
+ * - @case x of { p1 -> a1; ...; pn -> an }@ is easy if @x@ is simple and
+ *   all alternatives @a1@ ... @an@ are easy.
+ *
+ * An example for an expression that is not easy would be @(\p -> e) x@.
+ * This is because
+ * for an application to be easy, all subexpressions must be simple, and a lambda
+ * abstraction can only be easy, but never simple.
+
+ * It can be made easy in 2 ways, provided @e@ is easy and @x@ is simple:
+ * 1. transform to @case x of p -> e@
+ * 2. @let v = \p -> e in v x@
+ *
+ * This pass should run before strictness analysis so that local definitions
+ * we need to introduce get strictness info.
+ -}
+pass9 = do
+    g <- getST
+    -- set lambdadepth for each symbol
+    collectedvars <- allourvars
+    foreach collectedvars depthSym
+    -- make all expressions easy
+    collectedvars <- allourvars
+    foreach collectedvars easySym
+    stio ("expressions", length collectedvars)
+
+easySym (vsym@SymV {pos})
+    | Just x <- vsym.expr = do
+        nx <- easyExpr x
+        U.changeSym vsym.{expr = Just nx}
+    | otherwise = stio ()
+easySym sym = do
+    g <- getST
+    U.fatal sym.pos (text ("easySym no SymV : " ++ sym.nice g))
+
+
+depthSym (vsym@SymV {pos})
+    | Just x <- vsym.expr = do
+        nx <- depthExpr x
+        let lambdaDepth (Lam {ex}) = 1 + lambdaDepth ex
+            lambdaDepth ex = 0
+            depth = lambdaDepth nx
+        when (depth > length sigmas) do
+                g <- getST
+                U.error vsym.pos (msgdoc (nice vsym.name g
+                    ++ ": lambdaDepth for expression " ++ nice nx g
+                    ++ " (" ++ show depth ++ ") is greater than arity (" ++ show (length sigmas)
+                    ++ ") for type " ++ nicer vsym.typ g))
+        if (depth == length sigmas)
+            then U.changeSym vsym.{expr = Just nx, depth}       -- fine!
+            else do
+                g <- getST                                      -- depth < sigmas, eta expand it
+                newx <- etaExpand nx
+                let newd = lambdaDepth newx
+                U.logmsg TRACE9 (vsym.pos) (text ("eta expanded "
+                    ++ nice vsym.name g ++ "::" ++ nice vsym.typ g
+                    ++ " to lambda depth " ++ show newd))
+                U.logmsg TRACE9 vsym.pos (text ("old expr: " ++ nice nx   g ++ " :: "
+                        ++ maybe "nix" (flip nice g) nx.typ))
+                U.logmsg TRACE9 vsym.pos (text ("new expr: " ++ nice newx g))
+                U.changeSym vsym.{expr = Just newx, depth = newd}
+    | otherwise = U.changeSym vsym.{depth = length sigmas}
+    where
+        (ret, sigmas) = U.returnType vsym.typ.rho
+        depthExpr = U.mapEx false depthX
+        depthX  x
+            | Let {env} <- x = do
+                env <- nested env (foreach (values env) depthSym)
+                stio (Left x.{env})
+            | otherwise = stio (Left x)
+
+
+depthSym sym = do
+    g <- getST
+    U.fatal sym.pos (text ("depthSym no SymV : " ++ sym.nice g))
+
+{--
+    Eta expansion, applied to a value @x@ with function type
+    yields another expression @\\n -> x n@ with the same type.
+
+    This is done as long as the lambda body has still function type.
+
+    This will remove points free stype from definitions like
+
+    > sum = fold (+) 0
+
+    and will turn it into
+
+    > sum n = fold (+) 0 n
+
+    thus promoting fully satisfied applications as often as possible.
+
+    Eta expansion must be done after type check and should be done before strictness check.
+-}
+etaExpand :: Expr -> StG Expr
+
+etaExpand (lam@Lam {}) = do                 -- eta (\a -> x) = \a -> eta x
+            nex <- etaExpand lam.ex
+            stio lam.{ex=nex}
+
+etaExpand (x@Ann {}) = do                   -- eta (x :: y) = (eta x :: y)
+            nex <- etaExpand x.ex
+            stio x.{ex=nex}
+
+etaExpand x = case x.typ of                 -- all other expressions
+    Just (ForAll [] (RhoTau ctx tau))
+--        | TFun farg fret <- tau = do
+--            uniq <- U.uniqid
+--            let var = "$" ++ show uniq
+--                pos  = getpos x
+--                arg = ForAll [] (RhoTau [] farg)
+--                res = RhoTau [] fret
+--                app = App x (Vbl {pos, name=Local var, typ = Just arg}) (Just (ForAll [] res))
+--                pat = PVar {pos,var}
+--                env = insert Nil pat.var (U.patLocal pos pat.var).{sid=uniq}
+--            body <- with env (etaExpand app)
+--            stio  Lam {env, pat, ex=body, typ = Just (ForAll [] (RhoFun ctx arg res))}
+        | otherwise = stio x
+    Just (ForAll [] (RhoFun ctx arg res)) = do
+            uniq <- U.uniqid
+            let var = "$" ++ show uniq
+                pos  = getpos x
+                app = App x (Vbl {pos, name=Local var, typ = Just arg}) (Just (ForAll [] res))
+                pat = PVar {pos,var}
+                env = insert Nil pat.var (U.patLocal pos pat.var).{sid=uniq}
+
+            body <- with env (etaExpand app)
+            stio  Lam {env, pat, ex=body, typ = x.typ}
+
+    Just sig = do
+        g <- getST
+        U.warn (getpos x) (msgdoc ("can't do eta expansion for an expression of type " ++ nice sig g))
+        U.hint (getpos x) (msgdoc ("try to write the surrounding binding in a eta expanded form"))
+        stio x
+    Nothing -> do
+        g <- getST
+        U.fatal (getpos x) (msgdoc ("eta expansion must be done after type check for "
+             ++ nice x g))
+        stio x
+
+
+
+
+
+-- constants for the rkind value
+--- simple expression withoud self-/forward references.
+rkSimple = 16
+--- can be called in tailcall
+rkSafeTC = 32
+noSafeTC = rkSafeTC `bxor` -1
+--- tail calls itself
+rkTail   = 8
+
+{--
+ * [usage] @returnKind group symbol@
+ * [computes] the return type (lazy=0, boxed=1) of the r-Method, and, if a w-Method is needed,
+ * the return kind of the w-Method (none, lazy=2, boxed=4, strict=6)
+ *
+ * - non nullary Constructors have implicitely 1101 (boxed mk-Method, boxed r-Method)
+ *   and are safe tail calls (as they return immediately with the new object)
+ * - Native methods have 5 or 7 (the native method *is* the w method, and if the return type
+ *   is a java type, then it is 7, otherwise 5 (Maybe, Either or ST s/IO). They make also
+ *   safe tail calls.
+ * - if functions with constraints have a w-Method, this will be an instance method,
+ *   otherwise a static one.
+ * - a function with a strict argument gets a w-Method
+ * - a CAF (lambdadepth = 0) will have no w-Method. The rkind will show if the CAF is
+ *   declared with a lazy type or not. The bit 16 is on if the expression is simple
+ *   and no self references or possibly forward references exist.
+ *   Forward references can appear in global symbols which reference any global
+ *   value from this package.
+ -}
+returnKind syms (sym@SymV {nativ = Just _}) = do
+        g <- getST
+        jt <- U.isJavaType ((fst • U.returnType) sym.typ.rho)
+        U.changeSym sym.{rkind = rkSafeTC + (if jt then 7 else 5)}
+
+returnKind syms (sym@SymV {expr = Just x, depth = 0}) = do
+        (w, x) <- returnExprKind syms sym x
+        self   <- references [sym.sid] x        -- is it self-referential?
+        rec    <- references syms x             -- is it recursive
+        (_, deps) <- U.fundep sym
+        let fwrefs
+                | Local _ <- sym.name = rec > 0
+                | otherwise = not (null deps)        -- possible forward references?
+            b32 = if rec > 0 then 0 else 32
+            b16 = if isSimple x && not fwrefs && self == 0 then 16 else 0
+            rkind = if fwrefs then 0 + b16 + b32
+                else if self > 0 then 0 + b16 + b32
+                    else b32 + b16 + ord sym.strsig.isStrict
+        U.changeSym sym.{rkind, expr = Just x}
+
+returnKind syms (sym@SymV {expr = Just x}) = do
+        (w, x) <- returnExprKind syms sym x
+        let r = if w `band` 6 <= 2 then 0 else 1
+            b16 = if isSimple x then 16 else 0
+            rkind = case sym.strsig of
+                    S ss | any Strictness.isStrict ss = b16+r+w
+                    otherwise = r+b16+(w `band` (rkTail + rkSafeTC))
+        -- when (rkind `band` rkSafeTC == 0) do
+        --    g <- getST
+        --    U.hint sym.pos (nice sym g ++ " is no safe tail call.")
+        U.changeSym sym.{rkind, expr = Just x}
+
+--- assume abstract class functions are tail call safe
+returnKind syms (sym@SymV {expr = Nothing, name = MName _ _}) = U.changeSym sym.{rkind=2+rkSafeTC}
+returnKind _ _ = stio ()     -- abstract methods
+
+{--
+ * how often the symbol with 'Symbol.sid' is referenced in 'Expr' @x@
+ -}
+references sids x = U.foldEx true refs 0 x
+    where
+        refs n (Vbl {pos,name}) = do
+            -- g <- getST
+            -- U.logmsg TRACE7 pos ("references " ++ show n ++ " " ++ show sids ++ "  " ++ nice name g)
+            sym <- U.findV name
+            if sym.sid `elem` sids then stio (Right (n+1)) else stio (Left n)
+        refs n (Ifte c t e _) = do
+            crefs <- references sids c
+            trefs <- references sids t
+            erefs <- references sids e
+            stio (Right (n + crefs + max trefs erefs))
+        refs n (Case {ex,alts}) = do
+            xrefs <- references sids ex
+            arefs <- mapSt altRefs alts
+            stio (Right (n + xrefs + fold max 0 arefs))
+        refs n (Lam {env,ex}) = do
+            lrefs <- with env (references sids ex)
+            stio (Right (n+2*lrefs))
+        refs n x = do
+            -- g <- getST
+            -- U.logmsg TRACE7 (getpos x) ("references " ++ show n ++ " " ++ show sids ++ "  " ++ nice x g)
+            stio (Left n)
+        altRefs (CAlt {env,ex}) = with env (references sids ex)
+
+{--
+ * [usage] @returnExprKind syms symbol x@
+ *
+ * Look for the return expressions in @x@ and compute the minimum return kind.
+ * If any symbol in @syms@ is called, it is regarded as recursive and not fit
+ * for tailcall.
+ *
+ * A return expression is an application, literal, variable or constructor.
+ *
+ * - When it is a literal, unboxed return (6) is possible.
+ * - When it is a local lambda or case bound variable,
+ *   return will be according to the variable's strictness boxed or lazy.
+ *   Otherwise, it's the return kind of the variable.
+ * - Constructor is either a function or a nullary constructor - both are boxed.
+ * - A tail recursive application is either 6 or 4, depending on return type
+ * - A tail call to a native function or a constructor is 4 or 6 depending on their w-value
+ * - Otherwise, if the application is saturated or a lambda/case-bound variable is applied,
+ *   it's lazy.
+ * - Unsaturated applications are boxed (function types)
+ -}
+returnExprKind syms sym (x@Lit {pos}) = stio (rkSafeTC + 6,x)
+returnExprKind syms sym (x@Con {pos}) = stio (rkSafeTC + 4,x)
+returnExprKind syms sym (x@Ann {ex})  = do
+        (n,ex) <- returnExprKind syms sym ex
+        stio (n, x.{ex})
+
+returnExprKind syms sym (x@Vbl {name}) = do
+    symv <- U.findV name
+    g    <- getST
+    case symv.expr of
+        Nothing -> case symv.name of
+            Local _ -> if symv.strsig.isStrict
+                        then case U.returnType symv.typ.rho of
+                            (tau, _) = do
+                                jt <- U.isJavaType tau
+                                stio (if jt then rkSafeTC + 6 else rkSafeTC + 4, x)
+                        else stio (rkSafeTC + 2, x)               -- lambda/case bound
+            _ -> case U.returnType symv.typ.rho of
+                (_,[]) -> stio (rkSafeTC + (symv.rkind `band` 1)*2 + 2, x)
+                _      -> stio (rkSafeTC + 4, x)        -- global function
+        Just (Lam {env}) -> stio (rkSafeTC + 4, x)      -- return a local function
+        Just vx -> let !r = symv.rkind `band` rkSafeTC in if symv.strsig.isStrict then do
+                        jt <- U.isJavaType (fst (U.returnType symv.typ.rho))
+                        if jt then stio (r+6,x) else stio (r+4,x)
+                    else stio (r+2,x)
+returnExprKind syms sym (ex@App a b typ) = do
+    (_, a) <- returnExprKind syms sym a
+    (_, b) <- returnExprKind syms sym b
+    let (f,_) = head flatx
+        args  = tail flatx
+        flatx = U.flatx ex
+        app = App a b typ
+    case f of
+        Vbl {name} -> do
+            symf <- U.findV name
+            let r = symf.rkind `band` rkSafeTC
+                rw0 = symf.rkind `band` (rkSafeTC + 6)
+                rw = if rw0 `band` 6 == 0 then rw0 `bor` ((symf.rkind `band` 1)*2 + 2) else rw0
+            if isJust symf.nativ then stio (rkSafeTC + (symf.rkind `band` 6), app)
+              else if (length args < symf.depth) then stio (rkSafeTC + 4, app) -- unsaturated
+              -- else if (length args > symf.depth) then stio (r+2, app) // over saturated
+              else case symf.expr of
+                    Nothing -> case name of
+                        Local _ -> stio (rkSafeTC + 2, app)  -- application of lambda/case bound
+                        _       -> stio (rw,app)             -- global fun
+                    Just _ -> do
+                        g <- getST
+                        if symf.sid == Symbol.sid sym
+                            then do
+                                jt <- U.isJavaType (fst (U.returnType symf.typ.rho))
+                                if jt then stio (rkSafeTC+8+6, app) else stio (rkSafeTC+8+4, app)
+                            else if r == 0 || (symf.sid `elem` syms)
+                                then stio (2, app)      -- lazy recursive application
+                                else stio (rw, app)     -- same as called
+        Con {name} -> stio (rkSafeTC+4, app)
+        _ -> do
+                n <- references syms f
+                if n > 0
+                    then stio (2, app)                   -- better safe than sorry
+                    else stio (rkSafeTC + 2, app)
+            {-
+              do
+                g <- getST
+                U.fatal (getpos ex) ("returnExprKind: funny application " ++ nice ex g)
+                -}
+
+returnExprKind syms sym (Ifte c t e typ) = do
+    rec <- references syms c    --
+    (_,  c) <- returnExprKind syms sym c
+    (w1, t) <- returnExprKind syms sym t
+    (w2, e) <- returnExprKind syms sym e
+    let res = if rec > 0 then minRkind w1 w2 `band` noSafeTC else minRkind w1 w2
+    stio (res, Ifte c t e typ)
+
+returnExprKind syms sym (x@Lam {ex,env}) = with env do
+        (n, ex) <- returnExprKind syms sym ex
+        stio (n, x.{ex})
+returnExprKind syms sym (x@Let {ex,env}) = with env do
+        let nms = map Symbol.name (values env)
+        returnNames syms nms
+        (n, ex) <- returnExprKind syms sym ex
+        env <- getTop
+        stio (n, x.{ex,env})
+returnExprKind syms sym (x@Case {ex, alts}) = do
+    (_, ex) <- returnExprKind syms sym ex
+    rec     <- references syms ex
+    wsalts <- mapSt (altExprKind syms sym) alts
+    let m = foldl1 minRkind (map fst wsalts)
+        res = if rec > 0 then m `band` noSafeTC else m
+    stio (res, x.{ex, alts = map snd wsalts})
+returnExprKind syms sym _ = error "returnExprKindbad epr."
+
+altExprKind syms sym (alt@CAlt {env,ex}) = with env do
+     (n, ex) <- returnExprKind syms sym ex
+     env <- getTop
+     stio (n, alt.{env,ex})
+
+{--
+ * combine two rkinds by taking the minimum of the lower 3 bits and the maximum of
+ * the 2³ bit, which signifies tail recursion.
+ -}
+minRkind a b = safetc `bor` tailbit `bor` wrbits where
+    safetc  = (a `band` b) `band` rkSafeTC
+    tailbit = (a `bor` b) `band` 8
+    wrbits  = min (a `band` 7) (b `band` 7)
+
+{--
+ * [usage] returnNames names name
+ *
+ * gets the symbol and stores the information computed by 'returnKind' in the 'Symbol.rkind'
+ * field.
+ *
+ * The @names@ list gives the names that are mutually dependend on this one.
+ -}
+returnNames sids nms = do
+    syms  <- mapSt U.findV nms
+    foreach syms (returnKind (sids ++ map Symbol.sid syms))
+    -- returnKind nms sym
+    -- U.changeSym sym.{rkind}
+
+unrollSym (vsym@SymV {pos})
+    | Just x <- vsym.expr = do
+        nx <- unrollExpr x
+        U.changeSym vsym.{expr = Just nx}
+    | otherwise = stio ()       -- do nothing
+unrollSym sym = do
+    g <- getST
+    U.fatal sym.pos (text ("unrollSym no SymV : " ++ sym.nice g))
+
+unLetSym (vsym@SymV {pos})
+    | Just x <- vsym.expr = do
+        nx <- unLetExpr x
+        U.changeSym vsym.{expr = Just nx}
+    | otherwise = stio ()       -- do nothing
+unLetSym sym = do
+    g <- getST
+    U.fatal sym.pos (text ("unLetSym no SymV : " ++ sym.nice g))
+
+{-
+singleLetSym (vsym@SymV {pos})
+    | Just x <- vsym.expr = do
+        nx <- singleLetExpr x
+        U.changeSym vsym.{expr = Just nx}
+    | otherwise = stio ()       // do nothing
+singleLetSym sym = do
+    g <- getST
+    U.fatal sym.pos ("unrollSym no SymV : " ++ sym.nice g)
+    -}
+
+closedLambdaSym (vsym@SymV {pos})
+    | Just x <- vsym.expr = do
+        nx <- U.mapExBody true closedLambda x
+        U.changeSym vsym.{expr = Just nx}
+    | otherwise = stio ()
+closedLambdaSym sym = do
+    g <- getST
+    U.fatal sym.pos (text ("closedLambdaSym no SymV : " ++ sym.nice g))
+
+renameSym (vsym@SymV {})
+    | Just x <- vsym.expr = do
+        nx <- U.mapEx true renameLocals x
+        U.changeSym vsym.{expr = Just nx}
+    | otherwise = stio ()
+renameSym sym = do
+    g <- getST
+    U.fatal sym.pos (text ("renameSym no SymV : " ++ sym.nice g))
+
+--- map an environment to conatin changed names and symbols
+renamedEnv = Tree.fromList • map renamekv • each
+    where
+       renamekv (k, sym@SymV {name=Local s, sid}) = ((mangled s ++ "_" ++ U.base32 sid),
+                                              sym.{name = Local (mangled s ++ "_" ++ U.base32 sid)})
+       renamekv (k, sym) = error ("bad env, k=" ++ k ++ ", name = " ++ show sym.name)
+
+--- rename all local variables in patterns and expressions
+renameLocals (lam@Lam{env,pat,ex}) = with env do
+    g <- getST
+    let nenv = renamedEnv env
+    U.logmsg TRACE8 (getpos lam) (text ("renameLocals before: " ++ nice lam g ++ "  " ++ show ((keys env)) ++ "  " ++ show ((keys nenv))))
+    npat <- replPat pat
+    U.logmsg TRACE8 (getpos lam) (text ("renameLocals pattern " ++ nice npat g))
+    nex  <- replVar (map Symbol.sid (values env)) ex
+    let nlam = lam.{env=nenv, ex=nex, pat=npat}
+    U.logmsg TRACE8 (getpos lam) (text ("renameLocals after:  " ++ nice nlam g))
+    stio (Left nlam)
+renameLocals (cas@Case {alts}) = do
+    nalts <- mapSt renameAlt alts
+    stio (Left cas.{alts=nalts})
+renameLocals (letex@Let {env, ex})
+        | [(k, SymV {sid, expr=Just _})] <- each env = do        -- exactly 1 definition
+            g <- getST
+            U.logmsg TRACE8 (getpos letex) (text ("renameLocals before: " ++ nice letex g ++ "  " ++ show ((keys env))))
+            let repsym (k,v@SymV {sid, expr = Just x}) = do
+                    nx <- with env (replVar [sid] x)
+                    stio (k, v.{expr = Just nx})
+                repsym (k,v) = stio (k, v)
+            nlst <- mapSt repsym (each (renamedEnv env))
+            U.logmsg TRACE8 (getpos letex) (text ("renameLocals new: " ++ show (map (fst) nlst)))
+            nex <- with env (replVar [sid] ex)
+            let nenv = Tree.fromList nlst
+                nlet = letex.{ex=nex, env=nenv}
+            U.logmsg TRACE8 (getpos letex) (text ("renameLocals before: " ++ nice nlet g))
+            stio (Left nlet)
+renameLocals other = stio (Left other)
+
+--- rename local variables in a case alternative
+renameAlt :: CAlt -> StG CAlt
+renameAlt alt = with alt.env do
+    g <- getST
+    let nenv = renamedEnv alt.env
+        -- renameX = [replName (Symbol.sid sym) (Symbol.name sym) | (nm, sym) <- each nenv]
+        -- renameP = [replPat  (Symbol.sid sym) nm                | (nm, sym) <- each nenv]
+    U.logmsg TRACE8 (getpos alt.pat) (text ("renameAlt before: " ++ nice alt.pat g ++ " -> " ++ nice alt.ex g))
+    nex  <- replVar (map Symbol.sid (values alt.env)) alt.ex
+    npat <- replPat alt.pat
+    let nalt = alt.{env=nenv, ex=nex, pat=npat}
+    U.logmsg TRACE8 (getpos alt.pat) (text ("renameAlt after:  " ++ nice npat g ++ " -> " ++ nice nex g))
+    stio nalt
+
+unrollExpr    = U.mapEx true unrollLet
+unLetExpr x   = U.mapEx true unusedLet x >>= U.mapEx true unLet
+easyExpr      = U.mapEx true easyX
+
+unrollLet (x@Let {env,ex}) = do
+        g <- getST
+        U.logmsg TRACE7 (getpos x) (text ("unrollLet: " ++ x.nice g))
+        -- first do the subexpressions
+        let mapsub (sy@SymV {expr=Just x}) = do
+                    x <- unrollExpr x
+                    U.changeSym sy.{expr=Just x}
+            mapsub sy = error "mapsub: no var"
+        ex  <- with env (unrollExpr ex)
+        env <- with env do
+                let xs = [ sy | sy@SymV {expr=Just _} <- values env ]
+                foreach xs mapsub
+                env <- getTop
+                stio env
+        let kvs =  each env
+            ldep (k, SymV {expr=Just (Lam {ex})})
+                | #^.?let\$\d+$# <- k = do
+                    deps <- with env (letlocals ex)
+                    stio (k, deps)
+            ldep (k, SymV {expr=Nothing}) = stio (k, [])
+            ldep (k, SymV {expr=Just ex}) = do
+                    deps <- with env (letlocals ex)
+                    stio (k, deps)
+            ldep (_,_) = error "ldep: no var"
+        kdeps  <- mapSt ldep kvs
+        env    <- foldSt pbind env kdeps
+        let result = fold (sublet env) ex ((reverse • U.tsort) kdeps)
+        U.logmsg TRACE7 (getpos x) (text ("unrollLet: " ++ result.nice g))
+        stio (Right result)
+    where
+        sublet env inx [k]
+                | #^.?let\$\d+$# <- k,
+                  Just (vsym@SymV {expr=Just (Lam {env=ev,ex,pat})}) <- lookup env k
+                = Case (ck inx) ex [CAlt {env=ev, pat, ex=inx}] Nothing
+                where
+                    ck (Case {ckind}) = ckind
+                    ck _ = CNormal
+        sublet env xin locals = if isEmpty e then xin else Let e [] xin Nothing where
+            lookups = [ (s, env.lookup s) | s <- locals ]
+            e = fold put Tree.Nil [ (s, sym) | (s, Just sym) <- lookups ]
+            put t (k,v) = Tree.insert t k v
+        letlocals ex = do
+            env <- getTop
+            let thisSids = fromKeys [ sid | SymV {sid} <- values env ]
+            usedvars <- U.foldEx true (localvar thisSids) Nil ex
+            stio (keys usedvars)
+        localvar sidset acc (Vbl {name=nm@Local _}) = do
+                sym <- U.findV nm
+                if sidset `contains` sym.sid
+                    then stio (Left (acc `including` nm.base))
+                    else stio (Left acc)
+        localvar sidset acc _ = stio (Left acc)
+        -- here we decide whether to translate the pattern binding
+        -- conservatively (let$1 = x; a = case let$1 of (a,b) -> a; b = ...
+        -- or to a case (which is actually done in sublet later)
+        pbind :: Symtab -> (String, [String]) -> StG Symtab
+        pbind env (k, deps)
+            | k ~ #^.?let\$\d+$#,
+              Just (SymV {pos,expr = Just (Lam {pat,ex})}) <- lookup env k = do
+                let patnms = keys (U.patNames pat)
+                -- for n patnames we need n² unique names
+                uniqs <- mapSt (mapSt (const U.uniqid)) [ patnms | a <- patnms ]
+                U.logmsg TRACE7 pos (text (display patnms ++ " = " ++ show uniqs))
+                if any (`elem` patnms) deps  -- if any dependency is contained in pat names
+                    then stio (conservative ex pat patnms uniqs)
+                    else stio (fold Tree.delete env patnms)
+            | otherwise = stio env
+            where
+                conservative ex pat patnms uss = result where
+                    symv = unJust (env.lookup k)
+                    env1 = env.update k symv.{expr = Just ex}
+                    patsyms = zip uss [ (n, unJust (env.lookup n)) | n <- patnms ]
+                    result = fold (mkCase pat patnms) env1 patsyms
+                mkCase pat patnms env (us,(k,sym@(SymV {expr=Just v}))) =
+                    env.update k sym.{expr=Just cas} where
+                        pos = sym.pos
+                        ex  = Vbl {pos, name=Local k, typ=Nothing}
+                        ev  = fold mkPatvar Nil (zip us patnms)
+                        cas = Case CNormal v [CAlt {pat,ex,env=ev}] Nothing
+                        mkPatvar t (u,v) = insert t v (U.patLocal pos v).{sid=u}
+                mkCase _ _ _ _ = error "mkCase: no var"
+unrollLet x = stio (Left x)
+
+easyX x = do
+        g <- getST
+        (y, evts) <- makeEasy x
+        unless (null evts) do
+            U.logmsg TRACE9 (getpos x) (text ("uneasy expr: " ++ nice x g))
+        let nx = fold mkLet y evts
+        unless (null evts) do
+            U.logmsg TRACE9 (getpos x) (text ("eased  expr: " ++ nice nx g))
+        stio (Left nx)
+    where
+        mkLet ex env = Let {defs=[], ex, env, typ=ex.typ}
+        isEasy (App a b _)       = isSimple a && isSimple b
+        isEasy (Let {env,ex})    = isEasy ex &&
+                                   all isEasy [ x | SymV {expr = Just x} <- values env ]
+        isEasy (Lam {ex})        = isEasy ex
+        isEasy (Case {ex,alts})  = isSimple ex && all (isEasy • CAlt.ex) alts
+        isEasy (Ifte a b c _)    = isSimple a && isEasy b && isEasy c
+        isEasy (Ann {ex})        = isEasy ex
+        isEasy x                 = isSimple x
+
+        makeEasy (x@Lam {ex, env}) = with env do        -- so as to avoid bad symbols
+            (ex, envs) <- makeEasy ex
+            stio (x.{ex = fold mkLet ex envs}, [])
+        makeEasy (app@App a b t) = do
+            g <- getST
+            (a,evs1) <- makeEasy a
+            case a of
+                Lam {env,pat,ex} = do
+                    let cas = Case CNormal b [CAlt {pat, ex, env}] t
+                    U.logmsg TRACE9 (getpos app) (text ("beta reduction:  " ++ nice app g ++ "  ==>  "
+                                        ++ nice cas g))
+                    c <- easyExpr cas
+                    stio (c, evs1)
+                Case {alts,typ = Just csigma} = do     -- apply b to each alt
+                        let -- ctype = ForAll [] t
+                            nalts = [ (calt::CAlt).{ex = App calt.ex b t} | calt <- alts ]
+                            cas = a.{alts=nalts, typ=t}
+                        U.logmsg TRACE9 (getpos app) (text ("(case ...) " ++ nice b g
+                            ++ "  ==>  " ++ nice cas g))
+                        c <- easyExpr cas
+                        stio (c, evs1)
+                Ifte cnd thn els s = do
+                    let nthn = App thn b t
+                        nels = App els b t
+                        nif  = Ifte cnd nthn nels t
+                    U.logmsg TRACE9 (getpos app) (text ("(" ++ nice a g ++ ") " ++ nice b g
+                            ++ " ==> " ++ nice nif g))
+                    eif <- easyExpr nif
+                    stio (eif, evs1)
+                Let {} = do
+                    let nlet = a.{ex = App a.ex b t, typ = t}
+                    U.logmsg TRACE9 (getpos app) (text ("(" ++ nice a g ++ ") " ++ nice b g
+                            ++ " ==> " ++ nice nlet g))
+                    elet <- easyExpr nlet
+                    stio (elet, evs1)
+                _ = do
+                    (napp, evs2) <- makeSimple (App a b t)
+                    stio (napp, evs1++evs2)
+        -- makeEasy (x@App (Case ck cx calts) b ty)
+        -- makeEasy (x@App _ _ _)     = makeSimple x
+        makeEasy (x@Let {defs})    = stio (x, [])       -- will be made easy recursively
+        makeEasy (x@Case {ex})     = do
+            (ex, envs) <- makeSimple ex
+            stio (x.{ex}, envs)                         -- alts will be made easy recursively
+        makeEasy (x@Ifte a b c t)  = do                 -- branches will be made easy recursively
+            (a, envs) <- makeSimple a
+            stio (Ifte a b c t, envs)
+        makeEasy x | isEasy x    = stio (x, [])
+        makeEasy x = do
+            g <- getST
+            U.error (getpos x) (text ("don't know how to make easy:  " ++ nice x g))
+            stio (x, [])
+
+        makeSimple x | isSimple x = stio (x, [])
+        makeSimple (x@App a b t) = do
+            (a, ea) <- makeSimple a
+            (b, eb) <- makeSimple b
+            stio (App a b t, ea++eb)
+        makeSimple (x@Lam {typ = Just s, ex}) = do
+            g <- getST
+            -- (ex, envs) <- makeEasy ex
+            u <- U.uniqid
+            let pos = getpos x
+                nm = U.unusedName (Local ("ƒ" ++ show u ++ "_" ++ show pos)) g
+                sym = (U.patLocal pos nm.base).{typ = s, expr = Just x, state = Typechecked }
+                vbl = Vbl {pos, name=nm, typ = x.typ}
+            env <- nested Nil do
+                U.enter sym
+                depthSym sym
+            stio (vbl, env:[])
+        makeSimple (x@Let {env,ex}) = do        -- foo x = f (let x = ... in x) x
+                g <- getST                      -- float let higher: let xa = ... in f xa x
+                x <- foldSt (replace g) x (values env)
+                let newsyms = map (rename g) (values x.env)
+                env <- nested Nil (foreach newsyms U.enter)
+                (ex, envs) <- with env (makeSimple x.ex)
+                stio (ex, envs ++ [env])
+            where
+                replace g x sym                 -- replace references to sym with new name
+                    | Just _ <- (Symbol.name sym).find g = do
+                        let nm = U.unusedName (Symbol.name sym) g
+                        replName (Symbol.sid sym) nm x
+                    | otherwise = stio x
+                rename g sym = (Symbol.{name = nm} • Symbol.{sid = 0}) sym where
+                        nm = U.unusedName (Symbol.name sym) g
+        makeSimple (x@Case {typ = Just sig}) = do
+                g <- getST
+                let pos = getpos x
+                    nm = U.unusedName (Local ("case" ++ show pos)) g
+                    sym = (U.patLocal pos nm.base).{typ = sig, expr = Just x, state = Typechecked }
+                    vbl = Vbl {pos, name=nm, typ = x.typ}
+                env <- nested Nil (U.enter sym)
+                stio (vbl, env:[])
+        makeSimple (Ifte a b c t) = do
+                (a, envsa) <- makeSimple a
+                (b, envsb) <- withEnvs envsa (makeSimple b)
+                (c, envsc) <- withEnvs (envsa++envsb) (makeSimple c)
+                stio (Ifte a b c t, envsc ++ envsb ++ envsa)
+            where
+                withEnvs [] action = action
+                withEnvs (e:es) action = with e (withEnvs es action)
+        makeSimple x = do
+            g <- getST
+            U.error (getpos x) (text ("don't know how to make simple:  " ++ nice x g))
+            stio (x, [])
+
+{--
+ * [returns} *@true@* if expression is simple. See 'pass9' for more information.
+ *
+ * A simple exression can be translated to a java expression and will not need
+ * blocks, if-then-else constructs, auxiliary declarations etc.
+ -}
+isSimple (App a b _)     = isSimple a && isSimple b
+isSimple (Ifte a b c _)  = isSimple a && isSimple b && isSimple c
+isSimple (Ann {ex})      = isSimple ex
+isSimple (Vbl {pos})     = true
+isSimple (Lit {pos})     = true
+isSimple (Con {pos})     = true
+isSimple _               = false
+
+--- return the symbol ids of all local variables introduced in this expression and its subexpression
+innerSids ex = U.foldEx true collect Nil ex
+    where
+        envSids env = map Symbol.sid (values env)
+        collect t (Lam {env}) = stio (Left (fold including t (envSids env)))
+        collect t (Let {env}) = stio (Left (fold including t (envSids env)))
+        collect t (Case {alts}) = stio (Left (fold union t (map altSids alts)))
+        collect t x = stio (Left t)
+        altSids (CAlt {env}) = fromKeys (envSids env)
+
+--- @replSid sid r ex@ - replace variables referncing sid with r in ex
+replSid sid r ex = U.mapEx true action ex
+    where
+        action (v@Vbl {name=Local _}) = do
+            sym <- U.findV v.name
+            if sym.sid == sid then stio (Right r) else stio (Right v)
+        action x = stio (Left x)
+
+--- @replName sid nm ex@ - rename variables that references sid in ex
+replName sid nm ex = U.mapEx true action ex
+    where
+        action (v@Vbl {name}) = do
+            sym <- U.findV name
+            if sym.sid == sid then stio (Right v.{name=nm}) else stio (Right v)
+        action x = stio (Left x)
+
+-- rename all variables that are element of sids
+replVar sids = U.mapEx true action
+    where
+        action (v@Vbl {name=Local nm}) = do
+            sym <- U.findV v.name
+            if sym.sid `elem` sids
+                then stio (Right v.{name=Local (mangled nm ++ "_" ++ U.base32 sym.sid)})
+                else stio (Right v)
+        action x = stio (Left x)
+
+replPat pat = case pat of
+    PCon {pats} = do
+        npats <- mapSt replPat pats
+        stio pat.{pats = npats}
+    PConFS{} = U.fatal (getpos pat) (text "PConFS must not happen")
+    _ | pat.{var?} = do
+            sym <- U.findV (Local pat.var)
+            if pat.{pat?}       -- PAt !
+                then do
+                    p <- replPat pat.pat
+                    stio  pat.{var = mangled pat.var ++ "_" ++ U.base32 sym.sid, pat = p}
+                else stio pat.{var = mangled pat.var ++ "_" ++ U.base32 sym.sid}
+      | pat.{pat?} = do
+            p <- replPat pat.pat
+            stio pat.{pat=p}
+      | otherwise = stio pat
+
+--- find and remove unused local definitions
+unusedLet (x@Let {env,ex}) = do
+        let syms = values env
+        down <- with env (references (map Symbol.sid syms) ex)
+        if down == 0
+            then do
+                g <- getST
+                foreach syms (\(sym::Symbol) ->
+                    U.hint (getrange sym) (msgdoc (
+                       nicer sym g ++ " is not used anywhere.")))
+                stio (Left ex)
+            else stio (Left x)
+unusedLet x = stio (Left x)
+
+
+--- lift mutual recursive let functions to the top level
+unLet (x@Let {env,ex}) | length vals > 1 = do
+        g <- getST
+        freevbls <- toPass
+        case freevbls of
+            [] -> with env do
+                gsyms  <- mapSt globalize vals
+                foreach gsyms U.enter
+                let vgs = zip vals gsyms
+                syms   <- mapSt (mkGlobal vgs) vgs
+                newlet <- foldSt replsym ex vgs
+                U.logmsg TRACE7 pos (text ("changed  " ++ nice newlet g))
+                foreach syms U.changeSym
+                foreach (map Symbol.name syms) unLetName
+                stio (Left newlet)
+            xs -> do
+                let part1 = msgdoc ("implementation restriction: mutual recursive local functions"
+                        ++ " that use variables bound in enclosing lexical scopes"
+                        ++ " are currently not supported.")
+                    part2 = text "functions: " <+> sep "," (map (text • flip nice g • Symbol.name) vals)
+                    part3 = text "variables: " <+> sep "," (map (text • flip nice g • Symbol.name) freevbls)
+                    part4 = text "There are two possible workarounds:"
+                    part5 = text "- If possible, make" <+> lit (length vals - 1) <+> text "functions local to the remaining one."
+                    part6 = text "- Pass the variables as arguments."
+                U.error (getpos x) (part1 </> nest 4 (part2 </> part3 </> part4 </> part5 </> part6))
+                stio (Left x)
+    where
+        pos = getpos x
+
+        vals :: [Symbol]
+        vals = values env
+
+        exprs :: [Expr]
+        exprs = map (unJust • Symbol.expr) vals
+
+        freeSym :: Expr -> StG [Symbol]             -- free variables in expression
+        freeSym x = do
+                used  <- with env (U.localSyms x)
+                inner <- with env (innerSids   x)
+                stio (filter (not • (inner `contains`) • Symbol.sid) (keys used))
+
+        toPass :: StG [Symbol]           -- symbols we must pass to each global val
+        toPass = do
+            exsyms <- mapSt freeSym exprs
+            stio ((uniq • sort) [ s | ss <- exsyms, s <- ss, s `notElem` vals ])
+
+        globalize :: Symbol -> StG Symbol
+        globalize sym = do
+            g <- getST
+            let name = U.unusedName (VName (Global.thisPack g) (sym.name.base)) g
+            stio sym.{name, sid=0, expr = Nothing, vis = Private}
+
+        replsym :: Expr -> (Symbol, Symbol) -> StG Expr
+        replsym x (sym,gsym) = replName sym.sid gsym.name x
+
+
+        mkGlobal :: [(Symbol, Symbol)] -> (Symbol,Symbol) -> StG Symbol
+        mkGlobal vgs (sym,gsym) = do
+            let ex = unJust sym.expr
+            ex <- foldSt replsym ex vgs
+            -- sym <- globalize sym
+            g <- getST
+            U.logmsg TRACE7 pos (text ("global: " ++ gsym.name.nice g ++ " = " ++ nice ex g))
+            let typ = ForAll (U.freeTVars [] sym.typ.rho) sym.typ.rho
+            stio gsym.{expr = Just ex, typ}
+
+        unLetName nm = do
+            symv <- U.findV nm
+            unLetSym symv
+
+
+unLet (Let {env=letenv,ex=letex,typ=lettyp})
+        | [(x,sym)] <- each letenv,          -- let x = ... in ex
+          Just lam <- sym.expr,           -- let x = y   in ex
+          Lam {pat,env,ex,typ} <- lam = with letenv do           -- let x = \_ -> ... in ex
+    ex    <- with env (U.mapEx true unLet ex)
+    used  <- with env (U.localSyms ex)
+    inner <- with env (innerSids ex)
+    let thisSids = fold including inner (sym.sid:[ sid | SymV {sid} <- values env ])  -- including x
+    if all (thisSids `contains`) ((map Symbol.sid • keys) used)         -- ex uses only x and
+        then do
+            g <- getST
+            let name = U.unusedName (VName g.thisPack x)  g
+            ex <- with env (replName sym.sid name ex)  -- no reference to x anymore
+            letex <- replName sym.sid name letex  -- in the inner of the lambda or the let ex
+            let lamx = Lam {pat,env,ex,typ}
+            let typ  = ForAll (U.freeTVars [] sym.typ.rho) sym.typ.rho
+            U.enter sym.{sid = 0, name, expr = Just lamx, vis = Private, typ}
+            U.logmsg TRACE7 sym.pos (text ("let " ++ x ++ " = " ++ nice lamx g ++ " in ... replaced with " ++ nice letex g))
+            U.logmsg TRACE7 sym.pos (text ("new function is " ++ name.nice g))
+            unLet letex       -- other opportunities possible here
+        else do
+            U.changeSym sym.{expr = Just (Lam {pat,env,ex,typ})}
+            letex <- U.mapEx true unLet letex
+            env <- getTop
+            stio (Right (Let {env,ex=letex,typ=lettyp,defs=[]}))
+
+
+unLet (xlet@Let {env=letenv,ex=letex,typ=lettyp})
+        | [(x,sym)] <- each letenv,
+          Just cx <- sym.expr,          -- candidate expression
+          isSimple cx = do
+            self <- with letenv (references [sym.sid] cx)
+            down <- with letenv (references [sym.sid] letex)
+            if self == 0
+                && (down == 1       -- used exactly once, note that use
+                                    -- in a local function counts twice.
+                    {-|| isAtomic cx-})    -- or if it is just literal, variable or constructor
+                then do
+                    let inline = if U.isPSigma sym.typ then cx
+                                    else Ann {ex = cx, typ = Just sym.typ}
+                    ex <- with letenv (replSid sym.sid inline letex)
+                    g <- getST
+                    U.logmsg TRACE7 sym.pos (text ("let " ++ x ++ " = " ++ nice inline g ++ " in ... replaced with " ++ nice ex g))
+                    unLet ex
+                else stio (Left xlet)
+
+unLet x = stio (Left x)
+
+{--
+    tell if an expression is just a literal, variable or constructor name
+ -}
+isAtomic Vbl {} = true
+isAtomic Lit {} = true
+isAtomic Con {} = true
+isAtomic _      = false
+
+closedLambda (app@App (Lam {pat,env,ex,typ}) b ty) = do
+        g <- getST
+        let pos = getpos app
+        U.logmsg TRACE8 pos (text ("beta reduction on: " ++ nice app g))
+        let result = Case CNormal b [CAlt {pat,env,ex}] ty
+        U.logmsg TRACE8 pos (text ("results in: " ++ nice result g))
+        closedLambda result
+
+closedLambda (app@App a b ty) = do
+        a <- U.mapEx true closedLambda a
+        case a of
+            Lam {} -> closedLambda (App a b ty)
+            _ -> do
+                b <- U.mapEx true closedLambda b
+                stio (Right (App a b ty))
+
+closedLambda (Lam {pat,env,ex,typ = Just sigma}) = do
+        ex    <- with env (U.mapEx true closedLambda ex)     -- recurse
+        used  <- with env (U.localSyms ex)                 -- find local vars used
+        inner <- with env (innerSids ex)
+        let thisSids = fold including inner  [ sid | SymV {sid} <- values env ]
+        if all (thisSids `contains`) ((map Symbol.sid • keys) used)
+            then do
+                g <- getST
+                -- u <- U.uniqid
+                let name = U.unusedName (VName g.thisPack ("anon" ++ show (getpos ex))) g
+                    lamx = Lam {pat,env,ex,typ = Just sigma}
+                    sym0  = U.patLocal (getpos ex) "anonymous"
+                    typ   = ForAll (U.freeTVars [] sigma.rho) sigma.rho
+                    sym   = sym0.{name, expr=Just lamx, vis=Private, typ}
+                    var   = Vbl {pos=sym.pos, name, typ = Just sigma}
+                U.enter sym
+                U.logmsg TRACE8 sym.pos (text ("anonymous lambda  " ++ lamx.nice g ++ " replaced with " ++ var.nice g))
+                stio (Right var)
+            else stio (Right (Lam {pat,env,ex,typ = Just sigma}))
+
+closedLambda x = stio (Left x)
+
+{- ############################### strictness analysis ########################## -}
+{--
+ * [usage] @lambdaStrictess x@
+ * [returns] a list of 'Strictness' items derived from patterns of the lambda in @x@
+ *           or the empty list if @x@ is not a lambda
+ * [see]     'patternStrictness'
+ -}
+lambdaStrictness (x@Lam {env,pat,ex}) = with env do
+        sx <- lambdaStrictness ex
+        sp <- patternStrictness pat
+        stio (sp:sx)
+lambdaStrictness x = stio []        -- not a lambda
+
+{--
+ * [usage] @patternStrictness pat@
+ * [returns] the 'Strictness' value for the 'Pattern' @pat@
+ * [requires] The environment where the pattern bound variables are held must be active.
+ * [see] 'productCon'
+ *
+ * A pattern is /strict/, if it is /refutable/ or if it contains strict variables.
+ * A pattern is /refutable/ if the match can possibly fail. Variables and product constructor
+ * applications that contain only irrefutable patterns are irrefutable.
+ -}
+patternStrictness p = case p of
+        PVar {var} -> do
+            v <- U.findV (Local var)
+            stio v.strsig
+        PAt {pos,var,pat} -> do
+            ps <- patternStrictness pat
+            if ps == U then patternStrictness (PVar {pos,var}) else stio ps
+        PStrict {pat} -> do
+            ps <- patternStrictness pat
+            if ps == U then stio (S[]) else stio ps
+        PLit {pos} -> stio (S[])
+        PMat {pos} -> stio (S[])
+        PAnn {pat} -> patternStrictness pat
+        PCon {pos,qname,pats} = do
+                g <- getST
+                if not (productCon qname g) then stio (S[])
+                  else do
+                    ps <- mapSt patternStrictness pats
+                    if all (U==) ps then stio U else stio (S ps)
+        PConFS {pos} -> U.fatal pos (text ("patternStrictness: found PConFS")) -- not allowed anymore at this time
+
+{--
+ * [usage] @patternRefutable g pat@
+ * [returns] *true* if the pattern is refutable, *false* otherwise
+ -}
+patternRefutable g p = case p of
+    PVar {var}      -> false
+    PLit {pos}      -> true
+    PMat {pos}      -> true
+    PCon {pos,pats} -> not (productCon p.qname g) || any (patternRefutable g) pats
+    _ | p.{pat?}    -> patternRefutable g p.pat
+      | otherwise   -> false
+
+{--
+ * [usage] @productCon name g@
+ * [returns] *@true@* if @name@ names a constructor of a product type in @g@,
+ *           *@false@* if it is the name of a sum type
+ * [requires] @name@ must name a member of a data type in @g@
+ -}
+productCon (MName tname _) g = case tname.findit g of
+        Just (SymT {product}) -> product
+        other -> error ("productCon " ++ tname.nice g ++ " is not a type")
+productCon _ _ = false
+
+{--
+ * check a name for strictness, sids are already being checked
+ -}
+strictName sids nm = do
+    g <- getST
+    v <- U.findV nm
+    when (v.state != StrictChecked) do
+        U.logmsg TRACES v.pos (text ("strictness analysis for " ++ v.nice g))
+    let ari = U.arity v             -- ... based on type
+    case v of
+        SymV {state = StrictChecked} = stio []          -- do nothing
+        SymV {nativ = Just _} -> do
+            let strsig = S (take ari allStrict)
+            U.logmsg TRACES v.pos (text ("strictness for " ++ v.name.nice g ++ " is "
+                                    ++ show strsig))
+            U.changeSym v.{strsig, state = StrictChecked}
+            stio []
+        SymV {expr = Just (x@Lam {env,ex})} -> do
+            (x, syms) <- strictness (v.sid:sids) x
+            s <- lambdaStrictness x     -- collect strictness from patterns
+            U.logmsg TRACES v.pos (text ("strictness for " ++ v.name.nice g ++ " is "
+                                    ++ show (S s)
+                                    ++ " ignoring "
+                                    ++ joined ", " (map (flip nice g • Symbol.name) syms)))
+            U.changeSym v.{expr = Just x, strsig = S s, state = StrictChecked}
+            stio syms
+        SymV {expr = Just x} | ari >= 0 = do
+                y <- eta ari x
+                (y, syms) <- strictness (v.sid:sids) y
+                s <- lambdaStrictness y
+                let x = uneta ari y
+                U.logmsg TRACES v.pos (text ("strictness for " ++ v.name.nice g ++ " is "
+                                    ++ show (if null s then U else S s)))
+                U.changeSym v.{expr = Just x, strsig = if null s then U else S s, state = StrictChecked}
+                stio syms
+            where
+                eta 0 x = stio x
+                eta n x = do
+                    uniqs <- mapSt (const U.uniqid) (take n (repeat 0))
+                    let vars = [ "$" ++ show n | n <- uniqs ]
+                        pos  = getpos x
+                        mkapp ex n = nApp ex (Vbl {pos, name=Local n, typ = Nothing})
+                        -- mklam :: Expr -> Int -> Expr
+                        mklam ex n = Lam {env,pat,ex,typ=Nothing}
+                            where pat = PVar {pos,var="$" ++ show n}
+                                  env = insert Nil pat.var (U.patLocal pos pat.var).{sid=n}
+                        -- \a\b -> x a b
+                        body = fold mkapp    x vars
+                        lam  = fold mklam body (reverse uniqs)
+                    stio lam
+                uneta n x = unapp n • unlam n $ x
+                    where unlam 0 x = x
+                          unlam n (Lam {ex}) = unlam (n-1) ex
+                          unlam _ _ = error "unlam: no Lam"
+                          unapp 0 x = x
+                          unapp n (App a b _) = unapp (n-1) a
+                          unapp _ _ = error "unapp: no App"
+
+        SymV {state} -> do              -- pointless style or just var
+            let strsig = if ari == 0 then U else S (take ari allLazy)
+            U.logmsg TRACES v.pos (text ("strictness for " ++ v.name.nice g ++ " is "
+                                    ++ show strsig))
+            U.changeSym v.{strsig, state = StrictChecked}
+            stio []
+        other -> U.fatal other.pos (text ("strictness: strange symbol  " ++ other.nice g))
+
+
+{--
+ * [_usage_] @strictness sids x@
+ * [_returns_] a possibly modified expression and a list of local symbols that appear strict
+ *           under the assumption that @x@ itself is strict
+ * [_requires_] environment must be set up correctly and the list @sids@ contains the
+ *            symbol numbers of all named functions that are recursively checked to
+ *            avoid infinite recursion
+ *
+ * Strictness rules for various expressions:
+ * 1. if @\p -> x@ is strict then @x@ is strict
+ * 2. if @case x of alt1;...@ is strict, then @x@ is strict if the pattern in the first
+ *    case alternative is strict. Non immediate local
+ *    names from subexpressions are strict only when they appear strict in all alternatives.
+ * 3. if local variable @v@ is strict, then @v@ is strict
+ * 4. if application @f a b c@ is strict, and @f@ is a variable, @f@ is strict
+ * 5. if application @g x y@ is strict, and g has a strictness signature, then
+ *      the arguments are strict if the signatur at the corresponding position is.
+ *      Otherwise, if @g@ is checked recursively, assume all arguments as strict.
+ *      If @g@ is encountered the first time, look at @g@'s lambda and use
+ *      the lambda strictness for the arguments
+ * 6. if g is checked recursively, all argmnets are strict
+ * 7.
+ -}
+strictness :: [Int] -> Expr -> StG (Expr, [Symbol])
+strictness sids x = do
+        g <- getST
+        U.logmsg TRACES (getpos x) (text ("strictness for: " ++ nice x g))
+        let mine = if x.{env?} then map Symbol.sid (values x.env) else []
+            my   = filter ((`elem`    mine) • Symbol.sid)
+            them = filter ((`notElem` mine) • Symbol.sid)
+        case x of
+            Vbl {name=Local _} -> do
+                    v <- U.findV x.name
+                    U.logmsg TRACES (getpos x) (text ("strictness  " ++ nice x g ++ " :: " ++ names g [v]))
+                    stio (x, [v])
+            Vbl {name} -> do
+                    U.logmsg TRACES (getpos x) (text ("strictness  " ++ nice x g ++ " :: " ++ names g []))
+                    stio (x, [])
+            Con {name} ->  do
+                    U.logmsg TRACES (getpos x) (text ("strictness  " ++ nice x g ++ " :: " ++ names g []))
+                    stio (x, [])
+            Ifte c a b t -> do
+                    (c, sc) <- strictness sids c
+                    (a, sa) <- strictness sids a
+                    (b, sb) <- strictness sids b
+                    let syms = sc `uni` (sa `inter` sb)
+                    U.logmsg TRACES (getpos x) (text ("strictness  " ++ nice x g ++ " :: " ++ names g syms))
+                    stio (Ifte c a b t, syms)
+            Let {env,ex} -> with env do
+                    let ve = values env
+                    results <- mapSt (strictName sids) -- (map Symbol.sid (my syms)))
+                                (map Symbol.name
+                                    (filter ((`notElem` sids) • Symbol.sid)
+                                        ve))
+                    (ex, syms) <- strictness sids ex
+                    let strictSyms = my syms
+                        sSsids = map Symbol.sid strictSyms
+                        upper = [ sres  | (sym, sres) <- zip ve results,
+                                        Symbol.sid sym `elem` sSsids ]
+                        result = fold uni (them syms) upper
+                    foreach strictSyms mark
+                    env <- getTop
+                    U.logmsg TRACES (getpos x) (text ("strictness  " ++ nice x g ++ " :: " ++ names g result))
+                    stio (x.{env,ex}, result)
+            Lit {pos} ->  do
+                    U.logmsg TRACES (getpos x) (text ("strictness  " ++ nice x g ++ " :: " ++ names g []))
+                    stio (x, [])
+            App _ _ _ -> do
+                    (fx, syms) <- appstr (U.flatx x)
+                    U.logmsg TRACES (getpos x) (text ("strictness  " ++ nice x g ++ " :: " ++ names g syms))
+                    stio (U.unflatx fx, syms)
+            Lam {env,ex} -> with env do
+                    (ex, syms) <- strictness sids ex
+                    foreach (my syms) mark
+                    env <- getTop
+                    U.logmsg TRACES (getpos x) (text ("strictness  " ++ nice x g ++ " :: " ++ names g (them syms)))
+                    stio (x.{env,ex}, them syms)
+            Case {ex,alts} -> do
+                    s0 <- with (head alts).env do patternStrictness (head alts).pat
+                    U.logmsg TRACES (getpos x) (text ("first pattern is at least " ++ show s0))
+                    altsyms <- mapSt strictAlt alts
+                    let alts = map fst altsyms
+                        syms = foldl1 inter (map snd altsyms)
+                    -- extract S[...] of patterns
+                    s1 <- with (head alts).env do patternStrictness (head alts).pat
+                    U.logmsg TRACES (getpos x) (text ("first pattern is in fact  " ++ show s1))
+                    sx <- foldSt unisa s1 (tail alts)
+                    U.logmsg TRACES (getpos x) (text ("all patterns together are " ++ show sx))
+                    let ss = maxss s0 sx
+                    U.logmsg TRACES (getpos x) (text ("combined with minimum     " ++ show ss))
+                    (ex, xsyms) <- apply ex ss         -- take advantage of S[.....] if possible
+                    U.logmsg TRACES (getpos x) (text ("strictness  " ++ nice x g ++ " :: " ++ names g (uni syms xsyms)))
+                    stio (x.{ex, alts}, uni syms xsyms)
+            Ann {ex} -> do
+                    (ex,syms) <- strictness sids ex
+                    stio (x.{ex}, syms)
+            _ -> do
+                U.fatal (getpos x) (text ("no strictness rule, turn on -xs -xr " ++ show (getpos x)))
+                stio (x, [])
+    where
+        names g = show • map (flip QName.nice g • Symbol.name)
+        inter as = filter (\b -> elemBy (using Symbol.sid) b as)
+        uni as bs = as ++ [ b | b <- bs, not (elemBy (using Symbol.sid) b as)]
+        maxss (S s1) (S s2) = S (zipWith maxss s1 s2)
+        maxss U s = s
+        maxss s U = s
+        unisa :: Strictness -> CAlt -> StG Strictness
+        unisa sleft alt = do
+            sright <- with alt.env do patternStrictness alt.pat
+            stio (uniss sleft sright)
+          where
+            uniss (S s1) (S s2) = S (zipWith uniss s1 s2)
+            uniss U _ = U
+            uniss _ U = U
+
+
+        -- mark a symbol as strict
+        mark sym = do
+            g <- getST
+            U.logmsg TRACES (Symbol.pos sym) (text (nice sym.name g ++ " marked as strict"))
+            when (sym.strsig == U) do U.changeSym sym.{strsig = S[]}
+        -- strictness for case alternative, same as in lambda
+        strictAlt (alt@CAlt {env,pat,ex}) = do
+                (lam, syms) <- strictness sids (Lam {env,pat,ex,typ=Nothing})
+                stio (alt.{env=lam.env, ex=lam.ex}, syms)
+        subapp (a,b)   = apply a b
+        apply ex U     = do
+                            (x,_) <- strictness sids ex
+                            stio (x, [])      -- lazy
+        apply ex (S[]) = strictness sids ex -- strict
+        apply ex (S ss) = do
+            g <- getST
+            case U.flatx ex of
+                fex@((Con {name},_):xs) | productCon name g, length ss == length xs = do
+                        U.logmsg TRACES (getpos ex) (text ("apply " ++ show (S ss)
+                                                        ++ " to " ++ nice ex g))
+
+                        exsyms <- mapSt (\(a,b) -> apply a b) (zip (map fst xs) ss)
+                        let exs = map fst exsyms
+                            syms = foldl1 uni (map snd exsyms)
+                            flat = head fex : zip exs (map snd xs)
+                        U.logmsg TRACES (getpos ex) (text ("apply found: " ++ names g syms))
+                        stio (U.unflatx flat, syms)
+                _ -> strictness sids ex
+        convar (Con {name}) = true
+        convar (Vbl {name}) = true
+        convar _ = false
+        appstr (app@((f,mbt):as)) | not (convar f) = do
+            (f,syms) <- strictness sids f
+            fas <- mapSt (strictness sids) (map fst as)
+            let nas = zip (map fst fas) (map snd as)
+            stio ((f,mbt):nas, syms)
+        appstr (app@((f,mbt):as)) = do
+            g <- getST
+            v <- case f of
+                    Con {name} -> U.findD name
+                    Vbl {name} -> U.findV name
+                    _ -> U.fatal (getpos f) (text ("Can't handle " ++ nice f g ++ "  applications"))
+            let fsym | Local _ <- v.name = [v]
+                     | otherwise = []
+                mkAll = do
+                    fapp <- mapSt (strictness sids) (map fst app)
+                    let napp = zip (map fst fapp) (map snd app)
+                    stio (napp, fsym)
+            case v of
+                SymV {state = Typechecked, expr = Nothing} = mkAll
+                SymV {state = Typechecked, expr = Just (Lam {env})} = if v.sid `elem` sids
+                        then do
+                            -- assume all are strict
+                            asx <- mapSt (strictness sids) (map fst as)
+                            stio ((f,mbt):zip (map fst asx) (map snd as), fold uni fsym (map snd asx))
+                        else do
+                            strictName sids v.name
+                            appstr app              -- repeat
+                SymV {state = Typechecked, expr = Just x}
+                    | v.sid `notElem` sids = do
+                            -- inline pointless
+                            let fx = U.flatx x
+                            (fxas, syms) <- appstr (fx ++ as)
+                            let as = drop (length fx) fxas
+                            stio ((f,mbt):as, fsym ++ syms)
+                    | otherwise = mkAll
+                SymD {strsig = U} -> mkAll
+                SymD {strsig = S ss} -> do
+                        let xss = take (length as) (ss ++ repeat U)     -- make sure enough
+                        exsyms <- mapSt subapp (zip (map fst as) xss)
+                        stio ((f,mbt):zip (map fst exsyms) (map snd as), fold uni fsym (map snd exsyms))
+                SymV {state = StrictChecked, strsig = U} -> mkAll
+                SymV {state = StrictChecked, strsig = S ss} -> do
+                        let xss = take (length as) (ss ++ repeat U)     -- make sure enough
+                        U.logmsg TRACES (getpos f) (text ("appstr: xss=" ++ show xss ++ " for " ++ v.name.nice g))
+                        exsyms <- mapSt subapp (zip (map fst as) xss)
+                        stio ((f,mbt):zip (map fst exsyms) (map snd as), fold uni fsym (map snd exsyms))
+                SymV {sid} -> do
+                    U.fatal (v.pos) (text ("appstr: unexpected symbol " ++ nice v g
+                        ++ ", state=" ++ show v.state
+                        ++ ", expr="  ++ show (isJust v.expr)))
+                _ -> error "appstr: no appropriate sym"
+        appstr _ = error "appstr: []"
+
+{--
+ * [usage] @patsComplete g [pat, ...]@
+ * [return] @Just p@ where @p@ is a pattern that is missing in the set or @Nothing@
+ *      if the set of patterns is /complete/.
+ * [required] the list of patterns must not be empty
+ *
+ *
+ * A set of patterns is complete if it contains at least one irrefutable pattern
+ * or if all possible literals / constructors are listed and for every constructor
+ * the set of the subpatterns is complete.
+ -}
+patsComplete g [] = Just (PVar {pos=Position.null, var = "unguarded"})  -- if all case alts carry open case when
+patsComplete g ps
+    -- Prelude.traceLn ("patsComplete [" ++ joined "," (map (flip nice g) ps) ++ "]") = undefined
+    -- Prelude.traceLn ("patsComplete [" ++ joined "," (map (show • not • patternRefutable g) ps) ++ "]") = undefined
+    | any (not • patternRefutable g) ps = Nothing
+    | otherwise                         = missing canonicPats
+    where
+        -- refutables  = filter (patternRefutable g) canonicPats
+        canonicPats = map canonic ps
+        -- only PCon, PLit and PVar are considered
+        canonic (PMat {pos, value}) = PLit {pos, kind = LRegex, value}
+        canonic (p@PCon {pos}) = p.{pats <- map canonic}
+        canonic p | p.{pat?}   = canonic p.pat
+        canonic p              = p
+        pany                   = PVar {pos=Position.null, var = "_"}
+        -- compute the missing element from a list of refutable patterns
+        missingLiteral [] = Just pany
+        missingLiteral ls | any regex ls = Just (PLit {pos=Position.null, kind=LString,
+                                            value="\"any string not matched by regular expression\""})
+            where regex (PLit {kind = LRegex}) = true
+                  regex _                      = false
+        missingLiteral (ps@PLit {pos, kind}:_) = Just (PLit {pos, kind, value})
+            where value = (head • filter (`notElem` (map Pattern.value ps))) (lany kind)
+                  lany LBool = ["true", "false", "blödsinn"]
+                  lany LString = U.allBinders
+                  lany LChar   = map show (iterate Char.succ '!')
+                  lany LInt    = map show (iterate Int.succ 42)
+                  lany LLong   = map show (iterate Long.succ 42L)
+                  lany LBig    = map show (iterate Integer.succ 42n)
+                  lany LDouble = map show (iterate (0.42*)  3.14159)
+                  lany LFloat  = map show (iterate (0.42f*) 3.14159f)
+                  lany LRegex  = U.allBinders
+        missingLiteral _ = Just pany
+        -- compute the missing element from a list of refutable patterns
+        missing [] = Just pany                              -- _
+        missing (ps@(PLit {kind=LBool}:_)) = case map Pattern.value ps of
+            tfs -> if all (`elem` tfs) ["true", "false"]
+                then Nothing
+                else missingLiteral ps
+        missing (ps@(PLit {pos}:_))   = missingLiteral ps
+        missing (ps@(PCon {qname}:_))
+            | s:_ <- filter (not • (`elem` pnames) • Symbol.name) (cons qname) = Just (mkCon s)
+            | otherwise = case (filter isJust • map groupcheck) (group ps) of
+                some:_ -> some
+                []  -> Nothing
+            where
+                pnames = map Pattern.qname ps
+                cons (MName tname _) = case QName.findit tname g of
+                    Just (SymT {env}) -> U.envConstructors env
+                    _ -> []
+                cons _ = []
+                mkCon (SymD {name,flds}) = PCon {pos=Position.null, qname=name,
+                                                    pats = map (const pany) flds}
+                mkCon _ = error "mkCon: no constructor"
+                group [] = []
+                group (PCon {qname,pats}:ps) = (qname, pats:map Pattern.pats same):group other
+                    where
+                        same  = filter ((`==` qname) • Pattern.qname) ps
+                        other = filter ((`!=` qname) • Pattern.qname) ps
+                group _ = error "group: no PCon"
+        missing _ = error "missing: bad patterns"
+        -- check a group of patterns (QName, [[p11, p12, p13], [p21, p22, p23], ...])
+        groupcheck (qname, [])    = Just pany                   -- cannot happen
+        groupcheck (qname, []:_)  = Nothing                     -- nullary constructor
+        groupcheck (qname, patss) = anongroup (PCon Position.null qname) patss
+        -- [true, 2, c1]
+        -- [false, b2, 3]
+        -- [_, 1, _]            // irefs
+        anongroup recon grp
+            | length (head grp) == 1 = result (patsComplete g col1)     -- base case
+            | all (not • patternRefutable g) col1 = -- the first column has only irrefutables
+                anongroup (\ps -> recon (pany:ps)) cols
+            | all (patternRefutable g) col1 = anonRgrp recon grp
+            | Nothing <- anongroup recon irefs = Nothing
+            | Nothing <- anonRgrp recon refs = Nothing
+            -- there are some patterns with refutable heads and some with irrefutable ones
+            | otherwise = anonRgrp  recon (refs ++ nrefs)
+            where
+                col1 = map head grp
+                cols = map tail grp
+                result Nothing = Nothing
+                result (Just p) = Just (recon (p : map (const pany) (head cols)))
+                (refs, irefs) = partitioned (patternRefutable g <~ head) grp
+                nrefs = [ p:rest | _:rest <- irefs, p <- cons ]
+                cons = constructors (head (head refs))
+                -- constructors :: Pattern -> ([Pattern] ->
+                constructors (lit@PLit {kind=LBool}) = [ lit.{value=s} | s <- ["true", "false"] ]
+                constructors (con@PCon {qname=MName tname _}) = case QName.findit tname g of
+                    Just (SymT {env}) ->
+                        [ PCon con.pos sym.name (take (length sym.flds) dummies) |
+                            (sym::Symbol) <- U.envConstructors env ] where
+                                dummies = repeat (PVar con.pos "_")
+                    _ -> []
+                constructors _ = []
+                -- [[Just 1, a1, a2]         // refs
+                --  [Just x, b1, b2]]
+                -- [[Nothing, c1, c2]]            // irefs
+                -- transform this to  [[1, a1, a2], [x, b1, b2]]  and [[c1,c2]]
+                -- then check each as anon group
+                anonRgrp recon grp
+                    | Just x <- patsComplete g col1 = Just (recon (x : map (const pany) (head cols)))
+                    | otherwise = loop groups
+                    where
+                        constructor (PCon {qname}) = qname
+                        constructor (PLit {value}) = Local value
+                        constructor _ = error "constructor: ?"
+                        subpats (PCon {pats}) = pats
+                        subpats _             = []
+                        recreate (PCon {pos, qname}) = PCon pos qname
+                        recreate x                   = const x
+                        groups = group grp
+                        group [] = []
+                        group ps = pss1 : group xs where
+                          p1c = constructor (head (head ps))
+                          (pss1, xs) = partitioned samecon ps
+                          samecon p = constructor (head p) == p1c
+                        col1 = map head grp
+                        cols = map tail grp
+                        loop [] = Nothing           -- complete!
+                        loop (grp:grps) = case anongroup (f rest.length) ung of
+                                Nothing -> loop grps
+                                other   -> other
+                            where
+                                rec  = recreate (head (head grp))
+                                rest = subpats  (head (head grp))
+                                ung  = map uncon grp
+                                uncon (p:ps) = subpats p ++ ps
+                                uncon [] = undefined
+                                f n xs = recon (rec (take n xs) : drop n xs)
+
+{--
+ * checks whether an expression is a case expression made from a guard (CWhen)
+ * that has no trailing otherwise or irrefutable pattern match
+ * If so, returns the expression or pattern that could cause the CaseWhen to fall through
+ -}
+openCaseWhen :: Global -> Expr -> Maybe (Either Expr Pattern)
+openCaseWhen g (Case CWhen _ [alt1, alt2] _) = openCaseWhen g alt2.ex
+openCaseWhen g (e@Case CWhen x [alt1] _)
+    |  caseOtherwise g e              = Nothing           -- can't fall through
+    |  isPTrue alt1.pat, !(isXTrue x) = Just (Left x)
+    |  patternRefutable g alt1.pat    = Just (Right alt1.pat)
+    |  otherwise = openCaseWhen g alt1.ex
+openCaseWhen g (Let {ex}) = openCaseWhen g ex
+openCaseWhen _ _ = Nothing
+
+{--
+ * tells if this is the pattern "true"
+ -}
+isPTrue (PLit {kind=LBool, value="true"}) = true
+isPTrue p | p.{pat?} = isPTrue p.pat
+isPTrue _ = false
+
+{--
+ * tells if this is the constant "true"
+ -}
+isXTrue (Lit {kind=LBool, value="true"}) = true
+isXTrue (Vbl {name = VName p "otherwise"}) | pPreludeBase == p = true
+isXTrue _ = false
+
+{--
+ * tells us if this is the "otherwise" case
+ *  case true of true -> notopencase
+ -}
+caseOtherwise g (Case CWhen x [alt] _)
+    | isCaseWhen alt.ex = false
+    | isXTrue x && isPTrue alt.pat = true
+    | otherwise = !(patternRefutable g alt.pat)
+    where
+        isCaseWhen (Case CWhen _ _ _) = true
+        isCaseWhen _ = false
+caseOtherwise _ _ = false

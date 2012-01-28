@@ -1,0 +1,1015 @@
+{- «•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»
+
+    Copyright © 2011, Ingo Wechsung
+    All rights reserved.
+
+    Redistribution and use in source and binary forms, with or
+    without modification, are permitted provided that the following
+    conditions are met:
+
+        Redistributions of source code must retain the above copyright
+        notice, this list of conditions and the following disclaimer.
+
+        Redistributions in binary form must reproduce the above
+        copyright notice, this list of conditions and the following
+        disclaimer in the documentation and/or other materials provided
+        with the distribution. Neither the name of the copyright holder
+        nor the names of its contributors may be used to endorse or
+        promote products derived from this software without specific
+        prior written permission.
+
+    THIS SOFTWARE IS PROVIDED BY THE
+    COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR
+    IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+    WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+    PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER
+    OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+    SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+    LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
+    USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED
+    AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+    LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
+    IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
+    THE POSSIBILITY OF SUCH DAMAGE.
+
+    «•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•» -}
+
+{--
+
+    This program creates a parser from the result of running
+    @byacc -v@ on a yacc grammar. It reads the resulting
+    files "y.tab.c" and "y.output" in the
+    current directory and uses the information therein to
+    construct a frege program.
+
+    Each grammar rule is associated with a reduction function of type
+    >  item1 -> ... -> item2 -> result
+    where the item types are either tokens (provided as input to the parser)
+    or results of other grammar rules.
+    All rules of a nonterminal grammar symbol will have the same result type.
+    Example:
+
+    > %{
+    > package Calculator
+    > numberFrom :: Token -> Double
+    > %}
+    >
+    > %token NUMBER PI
+    > %start sum
+    > %%
+    > sum : product '+' product { \a\_\b -> a + b }  // was: $$ = $1 + $3
+    >       | product                                // was: $$ = $1
+    >       ;
+    > product: term '*' term { \a\b\c -> a * b }
+    >       | term
+    >       ;
+    > term: NUMBER              { numberFrom }
+    >       | PI                { const 3.14159 }
+    >       | '-' term          { \_\b -> negate b }
+    >       | '(' sum ')'       { \_\b\_ -> b }
+    >       ;
+    > %%
+    > data TokenID = NUMBER | PI | OPERATOR
+    > derive Show TokenID
+    > derive Ord TokenID
+
+    > data Token = N Double | Pi | Op Char
+    > derive Show Token
+
+    > yyshowToken = Token.show
+
+    > yyniceToken (N d) = show d
+    > yyniceToken Pi = "pi"
+    > yyniceToken (Op c) = show c
+
+    > yytoken :: Token -> TokenID
+    > yytoken (N _) = NUMBER
+    > yytoken Pi    = PI
+    > yytoken Op    = OPERATOR
+    >
+    > yychar :: Token -> Char
+    > yychar (Op c) = c
+    > yychar _ = const '§'  // paragraph symbol not used elsewhere
+    >
+    > yyfromId NUMBER = N 42.0
+    > yyfromId PI     = PI
+    > // yyfromId OPERATOR = not needed, as the parser knows nothing of OPERATOR
+    >
+    > yyfromCh :: Char -> Token
+    > yyfromCh c = Op c
+    >
+    > yyline = const 0      // no way to know in this example
+
+    So far, this is just a good old yacc grammar, except that the semantic actions
+    are frege expressions, and the code before an after the "%%" markers is
+    frege code.
+
+    Each semantic action is expected to be a function that
+    takes as many arguments as there are items in its rule.
+    Hence, in the first rule of nonterminal "sum" the left product will be bound
+    to /a/, the "+" token is ignored and the right product to /b/. A missing action
+    is equivalent to the identity function, therefore in the second rule of nonterminal
+    "sum", the sum will be just the product.
+
+    The parser generated from this will have a function
+    > yyparse :: [Token] -> Maybe Double
+    since Double is the result type of the rules associated with the start symbol and
+    tokens are obviously of type Token (due to application of user supplied function numberFrom).
+    The result will be 'Nothing' if the parser could not reduce the start symbol (i.e.,
+    when there were nonrecoverable syntax errors) and ('Just' x) otherwise, where /x/ is
+    the result of one of the semantic actions associated with the "%start" symbol.
+
+    The parser itself does not make any assumptions about what a token is. Instead, it
+    relies on the following user supplied functions:
+
+    > yytoken  :: token -> tid
+    > yyfromId :: tid -> token
+
+    where /token/ is the type of tokens and /tid/ is the type of the token constants
+    defined in the "%token" directive. The /yytoken/ function must be total, i.e. all possible
+    token values must produce some token constant, yet this does not have to be one of the
+    constants that is listed in the "%token" directive.
+
+    The /yyfromId/ function
+    must produce an example token value for each token constant the parser knows of
+    through the "%token" diretive. Both functions have to be there only when a "%token"
+    directive is present.
+
+
+    If the grammar uses character constants, the following functions must be present:
+
+    > yychar :: token -> Char
+    > yyfromCh :: Char -> token
+
+    The /yychar/ function must be total, all possible token values must be
+    mapped to some character. Use a character value that is not used in the
+    grammar for tokens that have no representation as a character value.
+
+    The /yyfromCh/ function maps back characters to token values. The /yyfrom../
+    functions are used in error recovery to supply tokens that are expected,
+    but missing.
+
+
+    Here is an example of how the parser may determine what to do in state 42:
+    > yyaction 42 tok = case yychar tok of
+    >       '*'   -> Shift 57
+    >       _ -> case yytoken tok of
+    >           NUMBER -> Shift 96
+    >           _      -> Reduce 5
+
+    In addition, the parser needs the following functions:
+    > yynice :: token -> String
+    > yyshow :: token -> String
+    > yyline :: token -> Show:a
+    > yyerror :: Show:a -> String -> c
+
+    /yynice/ is used by the parser to construct error messages like this
+    > "syntax error, expected ',', found " ++ yynice errortoken
+    > "syntax error, expected IDENTIFIER, found " ++ yynice errortoken
+    > "syntax error on " ++ yynice errortoken
+
+    /yyshow/ is used in trace output and is intended
+    for a most detailed display of tokens as
+    they are recognized by the parser.
+
+    /yyline/ is used to extract line number information from a token,
+    it is thus a good idea to design the lexical analyzer so that a token
+    is able to tell where it was found.
+
+    /yyerror/ is used to emit messages about syntax errors. The first argument
+    will be either the string "EOF" or the result of applying /yyline/ to a token.
+    The second argument is a string that describes the error. The result of yyerror is
+    evaluated, but ignored.
+-}
+package frege.tools.YYgen;
+
+{-
+ * $Revision$
+ * $Id$
+ * $Author$
+ * $Date$
+ * Undone Revisions: 300
+ -}
+
+{-
+ * This is my first frege program I wrote that really did something useful.
+ * The style is horrible (iw, May 9, 2009)
+ -}
+import frege.IO(FileReader, FileInputStream, BufferedReader, PrintWriter, `<<`,  stderr);
+import frege.List(Tree, keys, lookup);
+
+append = (++);
+grep = filter;
+
+-- write String as UTF-8 to stdout, stderr or other PrintStreams
+-- native stringOut frege.Run.stringOut :: String -> IO.PrintStream -> IO ();
+
+
+ressource Nothing  = "frege/tools/yygenpar-fr";
+ressource (Just _) = "frege/tools/YYgenparM-fr";
+
+yygenpar :: Maybe a -> IO [String];
+yygenpar how = do
+        thiscl <- IO.ClassLoader.current
+        exUcl <- IO.URLClassLoader.new urls thiscl
+        either noClassLoader (loadRessource how) exUcl
+    where
+        urls  = IO.URLArr.fromList []
+        noClassLoader (exc :: JException) = do
+            stderr << "Can't create loader (" << exc.getMessage << ")"
+            IO.exit 1
+            IO.return []
+;
+
+loadRessource :: Maybe a -> IO.URLClassLoader -> IO [String];
+loadRessource which loader = do
+        mbUrl <- loader.getResource (ressource which)
+        maybe noFile loadUrl mbUrl
+    where
+        noFile = do
+            stderr << "Can't find ressource " << (ressource which) << "\n"
+            IO.exit 1
+            IO.return []
+;
+
+loadUrl :: IO.URL -> IO [String];
+loadUrl url = do
+        eStream <- url.openStream
+        either noStream loadInputStream eStream
+    where
+        noStream (exc::JException) = do
+            stderr << "Can't get at resource (" << exc.getMessage << ")\n"
+            IO.exit 1
+            IO.return []
+;
+
+loadInputStream :: IO.InputStream -> IO [String];
+loadInputStream is = do
+        isx <- IO.InputStreamReader.encoded is "UTF-8"
+        isr <- case isx of
+            Left exc -> do
+                stderr << exc.getClass.getName << ": " << exc.getMessage << "\n"
+                -- fall back to unencoded input .....
+                IO.InputStreamReader.new is
+            Right isr -> IO.return isr
+        ifile <- BufferedReader.fromISR isr
+        lines <- ifile.getlines
+        IO.return (map uncr lines)
+;
+
+--- remove carriage returns from strings
+uncr s = (#\r#.matcher s).replaceAll "";
+
+openSrc Nothing s = BufferedReader.open s;
+openSrc (Just enc) s = do
+            fis <- IO.FileInputStream.open s
+            case fis of
+                Left err -> IO.return (Left err)
+                Right fis -> brFromIS enc fis.inputStream
+;
+
+brFromIS enc is = do
+            isr <- IO.InputStreamReader.encoded is enc
+            brFromISR isr
+;
+
+brFromISR eisr = case eisr of
+                Left  err -> IO.return (Left err)
+                Right isr -> do
+                    br <- BufferedReader.fromISR isr
+                    IO.return (Right br)
+;
+
+--- give back file content as list of lines
+fileContent :: String -> IO [String];
+fileContent fn = do
+        efile <- openSrc (Just "UTF-8") fn
+        either failure success efile
+    where
+        failure :: JException -> IO [String]
+        failure exc = error ("Can't read: " ++ exc.getMessage)
+        success :: BufferedReader -> IO [String]
+        success file = do
+            lines <- file.getlines
+            IO.return (map uncr lines)
+    ;
+
+scanlines lines = let
+    isTline #^\s*\d+\s*(\w+)\s*:# = true;
+    isTline _ = false;
+    tlineWord (m~#^\s*\d+\s*(\w+)\s*:#) = unJust (m.group 1);
+    tlineWord _ = undefined "should not happen";
+    tlines = grep isTline (takeUntil stateline lines);
+    twords = (uniq <~ sort <~ map tlineWord) tlines;
+    stateline #^state\s+(\d+)# = true;
+    stateline _ = false;
+    getstate (m~#^state\s+(\d+)#) =
+        let ds = unJust (m.group 1) in ds.atoi;
+    getstate _ = undefined "should not happen";
+    statisticline #^\d+ terminals# = true;
+    statisticline #^Rules never reduced:# = true;
+    statisticline #^State \d+ contains \d+ shift# = true;
+    statisticline _ = false;
+    endstate x = if stateline x then true else statisticline x;
+    statepart = dropUntil stateline lines;
+    emptyline #^\s*$# = true;
+    emptyline #^\d+: shift.reduce conflict# = true;
+    emptyline _ = false;
+    mkstates [] acc = acc;
+    mkstates (x:xs) acc =
+        if statisticline x then acc
+        else let
+            stnum = getstate x;
+            stlines = grep (\l -> !(emptyline l)) (takeUntil endstate xs);
+            nextstate = dropUntil endstate xs;
+        in mkstates nextstate ((stnum, stlines):acc);
+in (twords, reverse (mkstates statepart []));
+
+scanytablines lines = let
+    ccode #^(\#define|\#ifn?def|\#endif|\#line|static|int)# = true;
+    ccode _ = false;
+    emptyline #^\s*$# = true
+    emptyline _ = false
+    ccodeOrEmpty s = ccode s || emptyline s
+    stacksizeline #yystacksize YYSTACKSIZE# = true;
+    stacksizeline #static YYSTACKDATA yystack# = true;
+    stacksizeline _ = false;
+    beforetop = dropWhile ccodeOrEmpty lines;
+    top = takeUntil ccode beforetop;
+    istypeline #^/\*%type\s+(\w+)\s+(.+)\*/# = true;
+    istypeline _ = false;
+    isexplainline #^/\*%explain\s+(\w+)\s+(.+)\*/# = true;
+    isexplainline _ = false;
+    gettypeinfo (m~#^/\*%type\s+(\w+)\s+(.+)\*/#) = case (m.group 1, m.group 2) of
+        (Just w1, Just w2) -> (w1, w2)
+        x -> error ("bad %type  " ++ show x)
+    gettypeinfo _ = error "gettypeinfo: should not happen";
+    getexplain (m~#^/\*%explain\s+(\w+)\s+(.+)\*/#) = case (m.group 1, m.group 2) of
+        (Just w1, Just w2) -> (w1, w2)
+        x -> error ("bad %explain  " ++ show x)
+    getexplain _ = error "getexplain: should not happen";
+    typeinfo = (map gettypeinfo <~ grep istypeline) lines;
+    explanations = (Tree.fromList <~ map getexplain <~ grep isexplainline) lines;
+    aftertop = dropWhile ccode (dropUntil stacksizeline beforetop);
+    tail = takeUntil ccode aftertop;
+    switchline #^\s+switch\s+\(yyn\)# = true;
+    switchline _ = false;
+    caseline #^case\s+(\d+):# = true;
+    caseline _ = false;
+    breakline #^break;# = true;
+    breakline _ = false;
+    atswitch = dropUntil switchline lines;
+    extractnum (m~#^case\s+(\d+):#) =
+        let ds = unJust (m.group 1) in ds.atoi;
+    extractnum _ = undefined "should not happen";
+    mkcode (m~#(?s)^\s*\{(.+)\}\s*$#) =
+        let code = unJust (m.group 1) in code ++ "\n;\n";
+    mkcode s = error ("mkcode: should not happen" ++ s);
+    collectred [] = [];
+    collectred (x:xs) = if caseline x
+        then let
+            rnum = extractnum x;
+            frcode = dropWhile ccode xs;
+            nextcase = dropUntil caseline xs;
+            code = mkcode (joined "\n" (takeUntil breakline frcode));
+        in ((rnum, code): collectred nextcase)
+        else [];
+    reducers = collectred (dropUntil caseline atswitch);
+in (top, tail, reducers, typeinfo, explanations);
+
+compiletypes tinfo ts = let
+    a = "data YYAction = YYShift Int | YYRed Int | YYErr | YYAccept;\ndata YYsi res tok ";
+    b = map (\s -> "a"++show s) (1..length ts);
+    c = zip ts b;
+    dmap (a ,b) = case Tree.lookup (tinfo) a of {
+        Just s -> "YYNT" ++ a ++ " " ++ s;
+        Nothing | traceLn ("hint: declare a type for rule " ++ a) = undefined
+                | otherwise = "YYNT" ++ a ++ " " ++ b;
+    };
+    isnotdeclared (a, _) = isNothing (Tree.lookup (tinfo) a);
+    b' = map snd (grep isnotdeclared c);
+    d = map dmap c;
+in a ++ joined " " b' ++ " = \n\t  YYStart () | YYAcc res | YYTok tok\n\t| "
+     ++ joined "\n\t| " d ++ ";\n";
+
+genshowsi ts = let
+    a = [
+        "showsi (YYStart  _) = \"%start \"",
+        "showsi (YYAcc _) = \"%accept \"",
+        "showsi (YYTok x) = yyshow x"
+        ];
+    showt t = "showsi (YYNT" ++ t ++ " _) = \"<" ++ t ++ ">\"";
+    b = append a (map showt ts);
+
+in joined ";\n\t" b ++ ";\n";
+
+data Item = NT String | T String | Lit String | Acc | End | Def;
+data Prod = Prod Int Item [Item];
+data Todo = Shift | Reduce | Goto | Accept | Error;
+data Action = A Todo Item Int;
+derive Show Item; derive Eq Item; derive Ord Item;
+derive Show Prod;
+derive Show Todo;
+derive Show Action;
+instance Ord Prod where {
+        (p1@(Prod r1 i1 s1)) <=> (p2@(Prod r2 i2 s2)) =
+        if r1.!= r2 then r1.<=> r2
+        else if i1.== i2 && s1.== s2 then Eq
+        else if i1.== i2 then (length s2).<=> (length s1)
+        else error ("unequal productions with same id " ++ show p1 ++ " " ++ show p2);
+};
+
+data YYState = St
+                Int             -- state number
+                [Prod]          -- Prod reduce Item [stack]
+                [Action]        -- shifts/reduces/errors/accepts
+                [Action];       -- gotos
+derive Show YYState;
+
+mkState (_, []) = undefined "State without lines!";
+mkState (stnum, ss) = let
+    -- check1 = length ss;
+    isProdline #\s*(\w+|\$accept|\$end)\s*:\s*(.*)$# = true;
+    isProdline _ = false;
+    splitProdline (m~#\s*(\w+|\$accept|\$end)\s*:\s*(.*)$#) = case (m.group 1, m.group 2) of
+        (Just m1, Just m2) -> (m1, m2)
+        x -> undefined ("bad accept line?  " ++ show x)
+    splitProdline _ = undefined "should not happen";
+    prodLines = takeWhile isProdline ss;
+    rest = dropWhile isProdline ss;
+    classify (s@#^[A-Z]\w*#) = T s;
+    classify (s@#^[a-z]\w*#) = NT s;
+    classify (s@#^'#) = Lit s;
+    classify (s@#^\$accept$#) = Acc;
+    classify (s@#^\$end$#) = End;
+    classify (s@#^\.$#) = Def;
+    classify s = undefined ("Can't classify /" ++ s ++ "/");
+    getProdnum (m~#\((\d+)\)\s*$#) =
+        let ds = unJust (m.group 1) in ds.atoi;
+    getProdnum s = undefined ("No production number: " ++ s);
+    parsest mm = case mm ?~ #\G\s+# of {
+        Just mm' -> parsest mm';
+        Nothing -> case mm ?~ #\G\.# of {
+            Just _ -> [];
+            Nothing -> case mm ?~ #\G'..?'|\$?\w+# of {
+                Just mm' | (Just s) <- mm'.group 0 = s : parsest mm'
+                         | otherwise = undefined "Cannot parse stack 2 ";
+                Nothing -> undefined "Cannot parse stack ";
+            }
+        }
+    };
+    genprod x = let
+        (s1, s2) = splitProdline x;
+        lhs = classify s1;
+        pnum = getProdnum s2;
+        !mm  = unJust (##.matcher s2).find;
+        rhs' = parsest mm;
+        rhs  = map classify rhs';
+      in Prod pnum lhs rhs;
+    prods = map genprod prodLines;
+    isGotoline #^\s+\w+\s+goto\s+\d+# = true;
+    isGotoline _ = false;
+    parseaction (m ~ #^\s+('..?'|\$?\w+|\.)\s+(shift|reduce|goto)\s+(\d+)#) = let
+        m1 = unJust $ m.group 1;
+        m2 = unJust $ m.group 2;
+        m3 = unJust $ m.group 3;
+        item = classify m1;
+        !action = case m2 of {
+            "shift" -> Shift;
+            "reduce" -> Reduce;
+            "goto" -> Goto;
+            x -> undefined ("bad action "++x);
+        };
+        number = m3.atoi;
+      in A action item number;
+    parseaction (m~#^\s+('..?'|\$?\w+|\.)\s+(accept|error)#) = let
+        m1 = unJust (m.group 1);
+        m2 = unJust (m.group 2);
+        item = classify m1;
+        !action = case m2 of {
+            "error" -> Error;
+            "accept" -> Accept;
+            x -> error ("bad action "++x);
+        };
+      in A action item stnum;
+    parseaction s = IO.performUnsafe $ (do
+                stderr << "Bad action line: " << s << "\n";
+                IO.exit 1;
+                IO.return undefined;
+            )
+    nactions = map parseaction (grep (\l -> !(isGotoline l)) rest);
+    gactions = map parseaction (grep isGotoline rest);
+  in St stnum (prods) (nactions) (gactions);
+
+genitems [] = error "should not happen";
+genitems xs = reverse (map (curry genitem) (zip (1..length xs) xs));
+genitem 0 (NT s) = "(YYNT" ++ s ++ " _)";
+genitem 0 x = genitem 1 x;
+genitem n (NT s) = "(YYNT" ++ s ++ " yy" ++ show n ++ ")";
+genitem n (T s)  = "(YYTok yy"  ++ show n ++ ")";
+genitem n (Lit s)  = "(YYTok yy" ++ show n ++ ")";
+genitem n Def = error "Cannot happen: Def";
+genitem n End = error "Cannot happen here: End";
+genitem n Acc = "(YYAcc"  ++ " yy" ++ show n ++ ")";
+
+
+niceitem (NT s) = s;
+niceitem (T s) = s;
+niceitem (Lit "'\"'") = "'\\\"'";
+niceitem (Lit s) = s;
+niceitem Def = ".";
+niceitem End = "end";
+niceitem Acc = "accept";
+
+genst (St n ps srea goto) = let
+    defact (A _ Def _) = true;
+    defact _ = false;
+    sreacodelist' = map (\a -> genstate n ps a) srea;
+    sreacodelist = if any defact srea then sreacodelist'
+        else append sreacodelist' [genstate n ps (A Error Def n)];
+    j1 = sreacodelist;
+    -- j2 = append j1 errskip;
+in joined ";\n" j1 ++ ";\n";
+
+printstates states stdout = stdout >>= fio IO.return prState states -- (map prState states)
+    where
+        prState (St n ps srea gotos) out
+            | (acc:_) <- accept = do
+                    out <- IO.append out (genstate n ps acc) << ";\n"
+                    out <- IO.append out ("yyaccept (yyvs,_) = yybadprod " ++ show n ++ " yyvs;\n")
+                    -- prState (St n ps (filter (not <~ isAccept) srea) gotos) out
+                    yyaction
+            | otherwise = yyaction
+            where
+                yyaction = do
+                    out <- IO.append out ("private yyaction" ++ show n ++ " t = ")
+                    doCase (filter isCact actions) (filter isTact actions) (filter isDefact actions) out
+                doCase [] [] other out
+                    | [other] <- other = IO.append out (genst n other)
+                    | otherwise = error ("not exactly one default action in state " ++ show n)
+                doCase [] tacts other out = do
+                        out <- IO.append out "  case yytoken t of {\n"
+                        out <- fio IO.return (flip IO.append) (map (genst n) tacts) out
+                        out <- IO.append out "    _ -> "
+                        out <- doCase [] [] other out
+                        IO.append out "  };\n"
+                doCase cacts tacts other out = do
+                        out <- IO.append out "  case yychar t of {\n"
+                        out <- fio IO.return (flip IO.append) (map (genst n) cacts) out
+                        out <- IO.append out "  _ -> "
+                        out <- doCase [] tacts other out
+                        IO.append out "};\n"
+                accept = filter isAccept srea
+                actions = if any isDefact srea then srea else srea ++ [A Error Def n]
+                isDefact (A _ Def _) = true
+                isDefact _ = false
+                isTact (A _ (T _) _) = true
+                isTact _ = false
+                isCact (A _ (Lit _) _) = true
+                isCact _ = false
+                isAccept  (A Accept _ _) = true
+                isAccept _ = false
+                defact = head (filter isDefact actions)
+                genst n (A Shift item newst) =
+                    case item of
+                        T x   -> "    " ++ x ++ " -> YYShift " ++ show newst  ++ ";\n"
+                        Lit s -> "  "   ++ s ++ " -> YYShift " ++ show newst  ++ ";\n"
+                        _ -> error ("unexpected shift item " ++ show item ++ " in state " ++ show n)
+                genst n (A Error Def _)  = "YYErr;\n"
+                genst n (A Reduce on r) =
+                    case on of
+                        End -> "//yyeaction" ++ show n ++ " = YYRed " ++ show r ++ "\n"
+                        Def -> "YYRed " ++ show r ++ ";\n"
+                        T x   -> "    " ++ x ++ " -> YYRed " ++ show r ++ ";\n"
+                        Lit x -> "  "   ++ x ++ " -> YYRed " ++ show r ++ ";\n"
+                        _ -> error ("unexpected reduce item " ++ show on ++ " in state " ++ show n);
+                genst n x  = error ("dont know how to gen code for " ++ show x);
+
+;
+
+extrrule (St _ ps srea _) = let
+    isred (A Reduce _ r) = true;
+    isred _ = false;
+    getred (A Reduce _ r) = r;
+    getred _ = undefined "should not happen";
+    reds =  map getred (grep isred srea);
+    prods = grep (\(Prod r _ _) -> elem r reds) ps;
+in prods;
+extrrules sts = fold (\as\s -> append as (extrrule s)) [] sts;
+
+
+
+printpr monadic states reds stdout = let
+    prods = uniq (sort (extrrules states))
+    grules = (map genrule <~ uniqBy (\Prod a _ _\Prod b _ _ -> a==b)) prods
+    prlines xs = stdout >>= fio IO.return prline xs where
+        prline x out = IO.append out x << ";\n"
+    prprods (x:xs) | (Prod r _ _) <- x = do
+                prlines (map (\p -> genprod monadic p reds) (same r))
+                -- stdout << ";\n"
+                unless (emptystack (same r))
+                    (do
+                        stdout << "private yyprod" << r << " yyvals = yybadprod "
+                            << r << " yyvals;\n"
+                        void
+                    )
+                prprods (rest r)
+            where
+                emptystack ps = any e ps where e (Prod _ _ s) = null s
+                same r = x : takeWhile (\Prod p _ _ -> p == r) xs
+                rest r = dropWhile     (\Prod p _ _ -> p == r) xs
+    prprods [] = void
+  in do
+    prlines grules;
+    stdout << "yyrule _ = \"<unknown rule>\";\n\n";
+    prprods prods;
+    stdout << ";\n\n";
+    void
+;
+
+
+
+
+genacc n p  = let
+    atext = "yyaccept ";
+    !item = case p of {
+        Prod _ _ [x] -> x;
+        _ -> undefined "accept production with multiple items on stack";
+    };
+    btext = "yyvals@((" ++ show n ++ ", " ++ genitem 1 item ++ "):_)";
+    ctext = "yytoks";
+in  atext ++ " (" ++ btext ++ ", " ++ ctext ++ ") = yydbgAccept "
+        ++ show n ++ " (showst (take 1 yyvals)) "  ++ "`seq`\n\t"
+        ++ "([(" ++ show n ++ ", YYAcc yy1)], yytoks)";
+
+genrule (Prod r item stack) = let
+    atext = "yyrule " ++ show r;
+    itext = niceitem item;
+    stext = case stack of {
+        [] -> "<empty>";
+        _  -> joined " " (map niceitem stack);
+    };
+in atext ++ " = \"" ++ itext ++ ": " ++ stext ++ "\"";
+
+
+genprod monad (Prod r item stack) reds = let
+    genDO = isJust monad
+    red = case grep (\(i, _) -> i==r) reds of {
+        [_] -> case stack of {
+            [it] | it == item -> "";
+            _                 -> "reduce" ++ show r;
+            };
+        []  -> if length stack == 0
+                    then error ("reduce function for " ++ niceitem item ++ ": <empty> must not be missing.\n")
+                    else "";
+        _   -> error ("more than one reduce function for reduction " ++ show r);
+    };
+    -- look for monadic code
+    -- if the words do or return appear, the code is monadic
+    doInCode = fold (&&) (length red > 0)
+                [ any ( ~ #\b(do|return)\b#) lns  |
+                    (ri, code) <- reds,
+                    lns = #\n#.splitted code,
+                    ri == r ]
+    atext = "private yyprod" ++ show r;
+    btext = case stack of {
+        [] -> "yyvs";
+        xs -> let
+                items = genitems xs;
+                states = map (const "_") (1..length xs);
+                genits = map (\(a,b) -> "(" ++ a ++ ", " ++ b ++ ")") (zip states items);
+            in "(" ++ joined ":" genits ++ ":yyvs)";
+    };
+    hd = atext ++ " " ++ btext ++ " = "
+    reduce = if length red > 0
+        then red ++ " " ++ joined " " (map (\i -> "yy" ++ show i) (1..length stack))
+        else "yy" ++ show (length stack);
+    topitem = if length red > 0
+        then "YYNT" ++ niceitem item ++ " yyr"
+        else "YYNT" ++ niceitem item ++ " (" ++ reduce ++ ")";
+    p1 = if length red > 0
+         then " let !yyr = " ++ reduce ++ " in  (" ++ topitem ++ ", yyvs)"
+         else " (" ++ topitem ++  ", yyvs)"
+    p2 = if length red > 0
+         then if doInCode
+            then " do { yyr <- " ++ reduce ++    " ;YYM.return (" ++ topitem ++ ", yyvs)}"
+            else " do { let {!yyr = " ++ reduce ++ "}; YYM.return (" ++ topitem ++ ", yyvs)}"
+         else "YYM.return (" ++ topitem ++ ", yyvs)"
+in hd ++ (if genDO then p2 else p1);
+
+genstate n [] _ = undefined ("no productions in state " ++ show n);
+genstate n (p:ps) (A Shift item newst) = let
+    atext = "private yyaction" ++ show n;
+    btext = case item of {
+        -- NT x  -> "(" ++ x ++ " _)";
+        T x   -> x;
+        Lit s -> "(CHAR " ++ s ++ ")";
+        _ -> undefined ("unexpected shift item " ++ show item ++ " in state " ++ show n);
+    };
+    ctext = "YYShift " ++ show newst;
+in  atext ++ " " ++ btext ++ " = " ++ ctext;
+genstate n (p:ps) (A Error Def _)  = let
+    atext = "private yyaction" ++ show n;
+    btext = "_";
+    ctext = "YYErr";
+in atext ++ " " ++ btext ++ " = " ++ ctext;
+genstate n ps (A Accept End _) = joined ";\n" (map (\p -> genacc n p) ps);
+genstate n ps (A Reduce on r) = let
+    ac = case on of {
+        End -> "//yyeaction" ++ show n ++ " = YYRed " ++ show r;
+        Def -> let
+                 ea = "private yyeaction" ++ show n ++ " = YYRed " ++ show r;
+                 ta = "private yyaction" ++ show n ++ " _ = YYRed " ++ show r;
+                -- in ea ++ ";\n" ++ ta;
+                in ta;
+        T x   -> "private yyaction" ++ show n ++ " " ++ x ++ " = YYRed " ++ show r;
+        Lit x -> "private yyaction" ++ show n ++ " (CHAR " ++ x ++ ") = YYRed " ++ show r;
+        _ -> error ("unexpected reduce item " ++ show on ++ " in state " ++ show n);
+    };
+in  ac;
+
+genstate n p x  = error ("dont know how to gen code for " ++ show x);
+
+gengoto1 n (A Goto item newst) prods = let
+    getpitem (Prod _ i _) = i;
+    getpred  (Prod r _ _) = r;
+    myprods = grep (\p -> getpitem p == item) prods;
+    myreds  = map getpred myprods;
+in map (\r -> (n, r, newst)) myreds;
+gengoto1 n x _ = undefined ( "dont know how to gen goto for " ++ show x );
+
+
+gengotos1 prods (St n ps _ []) = [];
+gengotos1 prods (St n ps _ (g:gs)) =
+    append (gengoto1 n g prods) (gengotos1 prods (St n ps [] gs));
+
+gengoto2 (A Goto item newst) prods acc = let
+    getpitem (Prod _ i _) = i;
+    getpred  (Prod r _ _) = r;
+    myprods = grep (\p -> getpitem p == item) prods;
+    myreds  = map getpred myprods;
+in loop myreds acc where {
+    loop (r:rs) acc = loop rs  ((r,newst):acc);
+    loop [] acc     = acc;
+};
+gengoto2 x _ _ = undefined ( "dont know how to gen goto for " ++ show x );
+
+gengotos2 prods (St n _ _ gs) = loop gs [] where {
+        loop (g:gs') acc' = loop gs' (gengoto2 g prods acc');
+        loop []      acc' = (n, acc');
+    };
+sortfst (a, _) (b, _) = a < b;
+
+
+sortgos (a1, _, a3) (b1, _, b3) =
+    if a1 == b1 then a3 <=> b3 else a1 <=> b1;
+
+altgotos prods [] acc = sortBy sortgos acc;
+altgotos prods (s:sts) acc = let
+    gos = (gengotos1 prods s);
+    ac' = append acc gos;
+in altgotos prods sts ac';
+
+altgotos2 prods sts = loop sts [] where {
+    loop (s:st) acc = loop st (gengotos2 prods s:acc);
+    loop []     acc = acc;
+};
+
+listmax = 64;
+
+pracase :: Show a => String -> [(Int, a)] -> PrintWriter -> IO PrintWriter;
+pracase array xs out = do
+        out <- IO.append out "let \n"
+        out <- fio IO.return prsub nxss out
+        IO.append out ind << "  in "
+            << seqs  << " `seq` "
+            << array << ".fromInxList (" << subs << ");\n"
+    where
+        xss = split xs
+        nxss = zip (iterate succ 1) xss
+        ind = "    "
+        subs = mksubs " ++ "
+        seqs = mksubs " `seq` "
+        mksubs inter = fold (++) ""             -- --> "sub1 $inter sub2"
+                <~ intersperse inter   -- --> "sub1", inter, "sub2"
+                <~ map ("sub" ++)       -- --> "sub1", "sub2"
+                <~ map show             -- --> "1", "2"
+                <~ map fst $ nxss       -- (1, _), (2,_) -> 1,2
+        split xs
+            | length xs <= listmax = [xs]
+            | otherwise            = take listmax xs : split (drop listmax xs)
+        prsub (n, xs) out = do
+            out <- IO.append out ind << "sub" << n << " = ["
+            let dsp (a,b) = "  (" ++ display a ++ ", " ++ display b ++ ")"
+            out <- IO.append out
+                <~ fold (++) ""
+                <~ intersperse ",\n"
+                <~ map (ind ++)           -- --> "    (a, 'b')"
+                <~ map dsp $ xs           -- (a,b) --> "(a, 'b')"
+            IO.append out "];\n"
+;
+
+
+collecteactions (St _ _ srea goto) = let
+    okact (A Reduce End _) = true;
+    okact (A Reduce Def _) = true;
+    okact (A Accept End _) = true;
+    okact (A Error End _) = true;
+    okact _ = false;
+in any okact srea;
+
+collectacceptactions (St _ _ srea _) = let
+    okact (A Accept _ _) = true;
+    okact _ = false;
+in any okact srea;
+
+
+actions states = let
+    mkact (St n _ _ _) = (n, "yyaction"++ show n);
+in map mkact states;
+
+recoveries explanations states = let
+    mkrec (St n _ [A Shift (T x) _, A Error _ _] _)
+                       = (n, "yyexpect "
+                            ++ show n
+                            -- ++ " \"<" ++ x.toLowerCase ++ ">\" "
+                            ++ "(yyfromId " ++ x ++ ")");
+    mkrec (St n _ [A Shift (Lit s) _, A Error _ _] _)
+                       = (n, "yyexpect "
+                            ++ show n
+                            -- ++ " \"" ++ s ++ "\" "
+                            ++ "(yyfromCh " ++ s ++ ")");
+    mkrec (St n _ _ [A Goto (NT x) _]) = (n, "yybadstart " ++ show n ++ " " ++ show (explanation x));
+    mkrec (St n (Prod _ (NT x) _:_) _ _) = (n, "yyparsing  " ++ show n ++ " " ++ show (explanation x));
+    mkrec (St n _ _ (A Goto (NT x) _:_)) = (n, "yybadstart " ++ show n ++ " " ++ show (explanation x));
+    mkrec (St n (Prod _ Acc _:_) _ _) = (n, "yyrecover " ++ show n);
+    mkrec st = error ("Don't know how to recover from " ++ show st);
+    -- mkrec (St n _ _ _) = (n, "yyrecover " ++ show n);     // drop
+    explanation s
+        | Just e <- lookup explanations s = e
+        | traceLn("hint: explain what " ++ show s ++ " is.") = undefined
+        | otherwise = s;
+
+in map mkrec states;
+
+eactions states = let
+    mkeact (A Reduce End r) = "(YYRed " ++ show r ++ ")";
+    mkeact (A Reduce Def r) = "(YYRed " ++ show r ++ ")";
+    mkeact (A Error  End r) = "YYErr";
+    mkeact (A Accept End r) = "YYAccept";
+    -- mkeact (_:sts) = mkeact sts;
+    mkeact act  = error ("bad end action: " ++ show act)
+    -- mkeact [] = error "no action on end";
+    mkact (St n _ srea _)
+        | [enda] <- eas = (n, mkeact enda)
+        | otherwise =  error (show (length eas) ++ " end actions in state " ++ show n)
+        where
+            eas = filter endAction srea
+            endAction (A _ End _) = true
+            endAction (A Reduce Def _) = true
+            endAction _  = false
+    ;
+in map mkact (grep collecteactions states);
+
+numbertypes n [] tr = tr;
+numbertypes n (t:ts) tr = numbertypes (n+1) ts (Tree.insert tr t n);
+
+numprod (Prod r _ _) = (r, "yyprod" ++ show r);
+listred (i, code) = "private reduce" ++ show i ++ " = " ++  code;
+
+printreds reds stdout = stdout >>= fio IO.return prRed reds where
+    prRed red out = IO.append out (listred red)
+;
+
+gengos xs = let
+    pops = (uniq <~ sort) [ a | (a,_,_) <- xs ];
+    gengoi i = let
+            tups = (uniq <~ sort) [ (b,c) | (a,b,c) <- xs, a == i ];
+            -- maxc = fold \a\(_,i){max a i} 0 tups;
+            starti = "private yygo" ++ show i ++ " red = case red of {\n";
+            altsi [] = "";
+            altsi ((b,c):xs) = {- if c == maxc then "_ -> " ++ show c ++ ";\n"
+                else -} show b ++ " -> " ++ show c ++ ";\n" ++ altsi xs;
+            endi = "};\n";
+        in starti ++ altsi tups ++ endi;
+    gois = joined "\n" (map gengoi pops);
+    gocas i = show i ++ " -> yygo" ++ show i;
+    gocases = joined ";\n" (map gocas pops);
+    gotop = "yygos n red = let { goto = case n of {\n";
+    gobot = "\n_ -> undefined (\"yygos \" ++ show n ++ \" \" ++ show red);\n" ++
+        "} } in goto red;\n";
+    in gois ++ gotop ++ gocases ++ gobot;
+
+--* a function to print lists to an appendable
+fio :: Monad m => (r -> m r) -> (a -> r -> m r) -> [a] -> r -> m r;
+fio ret f (a:as) acc = f a acc >>=  fio ret f as;
+fio ret f []     acc = ret acc;
+
+{--
+ * create frege code for go tabs
+ -}
+printgos :: [(Int, [(Int,Int)])] -> PrintWriter -> IO PrintWriter;
+printgos pops jout =
+    do
+        jout <- fio IO.return (flip printgoi) pops jout
+        -- jout <- jout.append "public static int[][] yygoarr = new int[" << size << "][];\n"
+        jout <- IO.append jout "private yygos = " >>= pracase "Array" gcs
+        -- jout <- jout.append "static {\n"
+        -- jout <- fio IO.return (\e\(j::IO.PrintWriter)
+        --                  -> j.append "yygoarr[" << fst e << "] = " << snd e << ";\n") gcs jout
+        -- jout <- jout.append "}\n"
+        -- jout <- jout.append "public static int[] yygo(int i) { return yygoarr[i]; }\n"
+        IO.return jout
+    where
+        size = 1 + (fold max (negate 1) <~ map fst) gcs
+        gcs  = mkgos pops
+        mkgos cs = [ (n, "yygo" ++ show n ) | (n, _:_) <- cs ]
+        printgoi :: PrintWriter -> (Int, [(Int,Int)]) -> IO PrintWriter
+        printgoi jout (_,[]) = IO.return jout
+        printgoi jout (i,tupels) = IO.append jout go >>= pracase "IntArr" nztuples
+            where
+                go = "private yygo" ++ show i ++ " = "
+                länge = 1 + (fold max (negate 1) <~ map fst) ustuples
+                ustuples = uniq (sort tupels)
+                nztuples = filter wanted ustuples
+                wanted (a,b) = b != 0 || a+1 == länge
+
+
+;
+
+
+
+main ["-m", monad, file] = mainIO (Just monad) file;
+main [file]              = mainIO (Nothing::Maybe String) file;
+main _ = do
+        stderr << "usage: java frege.tools.YYgen [-m monad] xy.fr\n"
+        void
+;
+
+mainIO monadic file = do
+        newFile <- IO.File.new file
+        printer <- IO.PrintWriter.encoded newFile "UTF-8"
+        let stdout = case printer of
+                -- Right prw -> IO.return prw
+                Left err -> do
+                    stderr << "Can't write to " << file << ": " << err.getMessage << "\n"
+                    IO.exit 1
+                    IO.return undefined
+                Right prw -> IO.return prw
+        tlines <- fileContent "y.tab.c"
+        olines <- fileContent "y.output"
+        let (top, tail, reds, typeinfo, explanations) = scanytablines tlines
+            tinfo = fold (\tree\(a,b) -> Tree.insert tree a b) Nil typeinfo
+            (types, sts) = scanlines olines
+            states = map mkState sts
+            prods  = uniq (sort (extrrules states))
+            kt = keys (tinfo)
+            tnum = numbertypes 1 kt Tree.Nil
+            nprods = {- if length prods < 1000 then -} map numprod prods
+                    -- else error "Can't handle more than 1000 productions.\n"  // why?
+            gotree = Tree.insertlist Nil (altgotos2 prods states)
+            newgo = (gotree.keyvalues Lt)
+            -- [St astate _ _ _] = grep collectacceptactions states
+        stderr << "we have " << length newgo << " go elements\n";
+        stdout << "//begin top\n";
+        stdout << joined "\n" top << "\n//end top\n";
+        stdout -- "import frege.List (joined);\n"
+               << "import frege.IO ();\n"
+        maybe (stdout << "\n") (\x -> stdout << "type YYM = " << x << ";\n" ) monadic
+        stdout << compiletypes tinfo types;
+        stdout << genshowsi types;
+        stdout << "showst st = joined \" \" (map (\\(_,si) -> showsi si) (reverse st));\n"
+            << "yydebug = (maybe \"\" id (IO.getenv \"YYDEBUG\")).toLowerCase ~ #(1|yes|true|on)#;\n"
+            << "yytrace s = (if yydebug then trace s else false) `seq` ();\n"
+            << "yydbgAccept  s t = yytrace ("
+            << "\"in state \" ++ show s ++ \" accept  \" ++ show t ++  \"\\n\" );\n";
+        stderr << "doing states...";
+        printstates states stdout;
+        stderr << "ok\n";
+        stderr << "doing reds ...";
+        printreds reds stdout;
+        stderr << "ok\n";
+        stderr << "doing prods ...";
+        printpr monadic states reds stdout;
+        stderr << "ok\n";
+        stderr << "writing tables ...\n";
+        stdout  << "private yyprods = " >>= pracase "Array" (uniq nprods);
+        stdout  << "private yyacts  = " >>= pracase "Array" (actions states);
+        stdout  << "private yyrecs  = " >>= pracase "Array" (recoveries explanations states);
+        stdout  << "private yyeacts = " >>= pracase "Array" (eactions states);
+        stderr <<  "ok\n";
+        stderr << "doing gotos ...";
+        -- jout <- printer clname
+        stdout >>= printgos newgo;
+        stderr << "ok\n";
+        -- stdout << "protected native yygo " << clname << ".yygo :: Int -> Maybe IntArr;\n"
+        genparlines <- yygenpar monadic
+        stdout -- << gengos newgo << "\n"
+            -- "yyloop (yyvals@((" ++ show astate ++ ", _):_)) yytoks = yyaccept (yyvals, yytoks);\n"
+            << joined "\n" genparlines << "\n"
+            << "//begin tail\n" << joined "\n" tail << "\n//end tail\n"
+
+        pw <- stdout
+        pw.close
+        void
+;
