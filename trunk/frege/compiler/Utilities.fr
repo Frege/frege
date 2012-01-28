@@ -972,26 +972,31 @@ freeTauTVars bound collected (TFun a b)
 freeTauTVars _ collected _ = collected
 
 -- substSigma :: Tree String (TauT t) ->  SigmaT t -> StG (SigmaT t)
-substSigma t (ForAll bndrs rho) = ForAll bndrs (substRho t' rho)
-    where 
-        t' = fold Tree.delete t bndrs
-substRho t (RhoFun ctx sig rho) = RhoFun sctx ssig srho where
-        sctx = map (substCtx t) ctx
-        ssig = substSigma t sig
-        srho = substRho t rho
-substRho t (RhoTau ctx tau) = RhoTau (map (substCtx t) ctx) (substTau t tau)
-substTau t (TFun a b)       = TFun (substTau t a) (substTau t b)
-substTau t (tau@TCon _ _)   = tau
-substTau t (TApp a b)       = TApp (substTau t a) (substTau t b)
-substTau t (typ@Meta (flex@Flexi n r s)) = case flex.unsafeDeref of
-        Nothing  -> typ
-        Just tau -> substTau t tau
-substTau t (typ@Meta _)     = typ
+substSigma t (ForAll bndrs rho) = do
+        rho <- substRho t' rho
+        stio (ForAll bndrs rho)
+    where t' = fold Tree.delete t bndrs
+substRho t (RhoFun ctx sig rho) = do
+        ctx <- mapSt (substCtx t) ctx
+        sig <- substSigma t sig
+        rho <- substRho t rho
+        stio (RhoFun ctx sig rho)
+substRho t (RhoTau ctx tau) = liftM2 RhoTau (mapSt (substCtx t) ctx) (substTau t tau)
+substTau t (TFun a b)       = liftM2 TFun (substTau t a) (substTau t b)
+substTau t (tau@TCon _ _)   = stio tau
+substTau t (TApp a b)       = liftM2 TApp (substTau t a) (substTau t b)
+substTau t (typ@Meta (Flexi n r s)) = do
+        bound <- StIO.lift (r.get)
+        case bound of
+            Nothing  = stio typ
+            Just tau = substTau t tau
+substTau t (typ@Meta _)     = stio typ
 substTau t (typ@TVar {var}) = case Tree.lookupS t var of
-        Just tau -> tau
-        Nothing  -> typ
-substCtx t (x@Ctx {tau}) = x.{tau <- substTau t}
-        
+        Just tau -> stio tau
+        Nothing  -> stio typ
+substCtx t (x@Ctx {tau}) = do
+        tau <- substTau t tau
+        stio (x.{tau})
 
 {--
  * Make sure that the type application is indeed a type.
@@ -1217,7 +1222,7 @@ transTApp partial (con:as) = do
                                 as <- mapSt (transTau true) as  -- partial args allowed in alias
                                 let env = Tree.fromList (zip bs as)
                                     ras = drop (length bs) as
-                                    nt = substTau env tau
+                                nt <- substTau env tau
                                 case nt of
                                     TApp _ _  -> checkTApp partial (nt.flat ++ ras)
                                     nt | null ras  = stio nt
@@ -1926,6 +1931,8 @@ sigmaInst g sigma1 sigma2 = [ s | Just s <-  map (Tree.lookupS tree) (Sigma.boun
           --  Just t -> t
           --  _ -> TCon 0 (TName pPrelude "Void")
 
+
+
 {--
  * @tauToCtx pos tau@ tries to convert a tau to a context list.
  * @tau@ could be a tuple, in that case the list is made up of 'Ctx's
@@ -1960,4 +1967,3 @@ tauToCtx tau
         isTvApp (TVar {}) = true
         isTvApp (TApp a b) = isTvApp a && isTvApp b
         isTvApp _ = false
-
