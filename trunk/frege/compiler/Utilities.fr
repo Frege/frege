@@ -481,11 +481,11 @@ showex lambdachar x global = showprec 17 x where
                  | otherwise = Prelude.error ("can't show expression with constructor " ++ show (constructor x))
 
 
-instance Nice Nice q => ExprT q where
+instance Nice (Nice q, QNameMatcher q) => ExprT q where
     nice  = showex "\\"
     nicer = showex "λ"
 
-instance Nice Nice q => PatternT q where
+instance Nice (Nice q, QNameMatcher q) => PatternT q where
     nice p g = showp 17 p
         where
             -- optree = Global.optab g
@@ -521,13 +521,13 @@ instance Nice Nice q => PatternT q where
             showp 1  p = showp 0 p
             showp _  p = Prelude.error ("can't show pattern with constructor" ++ show (constructor p))
 
-instance Nice Nice t => SigmaT t where
+instance Nice (Nice t, QNameMatcher t) => SigmaT t where
     nice (ForAll bndrs rho) g | null bndrs = rho.nice g
                               | otherwise  = "forall " ++ joined " " bndrs ++ "." ++ rho.nice g
     nicer (ForAll bndrs rho) g | null bndrs = rho.nicer g
                               | otherwise  = "forall " ++ joined " " bndrs ++ "." ++ rho.nicer g
 
-instance Nice Nice t => RhoT t where
+instance Nice (Nice t, QNameMatcher t) => RhoT t where
     nice (RhoFun ctx sigma rho) g
         | ForAll (_:_) _ <- sigma = nicectx ctx g ++ "(" ++ sigma.nice g ++ ") -> " ++ rho.nice g
         | isFun sigma             = nicectx ctx g ++ "(" ++ sigma.nice g ++ ") -> " ++ rho.nice g
@@ -539,7 +539,7 @@ instance Nice Nice t => RhoT t where
         | otherwise               = nicerctx ctx g ++ sigma.nicer g ++ " -> " ++ rho.nicer g
     nicer (RhoTau ctx tau) g      = nicerctx ctx g ++ tau.nicer g
 
-nicectx :: Nice t => [ContextT t] -> Global -> String
+nicectx :: (Nice t, QNameMatcher t) => [ContextT t] -> Global -> String
 nicectx [] g = ""
 nicectx xs g
     | [ctx] <- xs = single ctx ++ " => "
@@ -548,7 +548,7 @@ nicectx xs g
         single (Ctx pos name tau _) = nice (TApp (TCon {pos,name}) tau) g
 
 
-nicerctx :: Nice t => [ContextT t] -> Global -> String
+nicerctx :: (Nice t, QNameMatcher t) => [ContextT t] -> Global -> String
 nicerctx [] g = ""
 nicerctx xs g
     | [ctx] <- xs = single ctx ++ " => "
@@ -556,8 +556,8 @@ nicerctx xs g
     where
         single (Ctx pos name tau _) = nicer (TApp (TCon {pos,name}) tau) g
 
-instance Nice Nice t => TauT t where
-    nicer t g = showt 2 t
+instance Nice (Nice t, QNameMatcher t) => TauT t where
+    nicer t g = showt 2 (unAlias g t)
         where
             showt 2 (TFun a b)   = showt 1 a ++ "->" ++ showt 2 b
             showt 2 x            = showt 1 x
@@ -586,13 +586,99 @@ instance Nice Nice t => TauT t where
             showt 0 x             = "(" ++ showt 2 x ++ ")"
             showt _ x             = Prelude.error ("can't show type with constructor" ++ show (constructor x))
 
+-- ------------------------- code for reifying type aliases in taus ------------------------------------
+--- helper type class to make 'unAlias' type-wise work on all 'TauT'
+protected class QNameMatcher n where
+    private match :: Global -> n -> QName -> Bool
+    private fakeQName :: n -> QName
+
+instance QNameMatcher SName where
+    match _ _ _ = false
+    fakeQName s = TName (Pack.new "fake.Pack") s.id.value 
+
+instance QNameMatcher QName where
+    match g q1 q2 = q1.findit g == q2.findit g
+    fakeQName q = q
+
+{--
+    'unAlias' tries to replace a TApp with an application of a type alias that would give the same type back.
+    This does work for 'Tau' only, source 'TauS's 'TName's will never match.
+    
+    Note that 'unAlias' returns a pseudo type that is *no good for anything* except printing!
+    -} 
+unAlias :: QNameMatcher a => Global -> TauT a -> Tau
+unAlias g tau = unAlias (fake tau)
+    where
+        fake (TFun a b)      = TFun (fake a) (fake b)
+        fake (TApp a b)      = TApp (fake a) (fake b)
+        fake TVar{pos,var}   = TVar pos var
+        fake (Meta x)        = TVar Position.null ("t" ++ show x.uid)
+        fake TCon{pos,name}  = TCon{pos, name = fakeQName name}
+        
+        unAlias  tau = case tau of
+                TFun a b       -> TFun (unAlias a) (unAlias b) 
+                TApp a b       -> case mapMaybe (aliased tau) aliases of
+                                        []      -> TApp (unAlias a) (unAlias b)
+                                        (ali:_) -> ali
+                _              -> tau
+            where
+                
+                aliased (tau1@TApp a b) (SymA{pos,name,typ}) = case rho of
+                        RhoTau [] tau2 -> case unify Nil tau2 tau1 of
+                            Just subst -> Just (substTau env aApp) 
+                                where env = Tree.map unAlias subst
+                            Nothing    -> Nothing
+                        _              -> Nothing
+                    where
+                        rho = typ.rho
+                        aApp :: Tau
+                        aApp = fold TApp (TCon pos name) (map (TVar pos) typ.bound) 
+                        
+                aliased _ _ = Nothing
+                
+                aliases = [ sym | any <- values g.thisTab, sym@SymA{} <- Symbol.follow any g]
+                
+                
+                substTau env (TFun a b)  = TFun (substTau env a) (substTau env b)
+                substTau env (TApp a b)  = TApp (substTau env a) (substTau env b)
+                substTau env (TVar{var}) 
+                    | Just tau <- lookup env var = tau
+                substTau env tau         = tau 
+                
+                
+                unify t (TFun a b) (TFun c d) = do
+                        t1 <- unify t  a c
+                        t2 <- unify t1 b d
+                        return t2
+                unify t (Meta x) (Meta y) | x.uid == y.uid = Just t
+                unify t TCon{name=name1} TCon{name=name2} |  match g name1 name2 = Just t
+                unify t (TApp a b) (TApp c d) = do
+                        t1 <- unify t  a c
+                        t2 <- unify t1 b d
+                        return t2
+                unify t TVar{var} tau = case lookup t var of
+                        Nothing  -> Just (insert t var tau)         -- extend substitution
+                        Just old -> case unify Nil old tau of       -- check if previous substitution matches current
+                            Just sub | all varSelf (each sub) = Just t
+                            _                                 = Nothing
+                    where     
+                        -- checks whether each variable would be substituted by itself
+                        -- if all substitutions are of this form, then we have type equality
+                        varSelf (s, TVar{var}) = s == var
+                        varSelf _              = false
+                unify t _ _ = Nothing
+
+
+
+
+
 isFun (ForAll _ rho) = isRhoFun rho
 isRhoFun (RhoFun _ _ _) = true
 isRhoFun (RhoTau _ tau) = isTauFun tau
 isTauFun (TFun a b)   = true
 isTauFun _            = false
 
-instance Nice Nice s => MetaTvT s where
+instance Nice (Nice s, QNameMatcher s) => MetaTvT s where
     nice (Rigid i s) g = "t" ++ show i ++ "#" ++ s
     nice (flexi@Flexi i _ s) g
         | (Just t, _) <- flexi.bound.performUnsafe g = "<" ++ t.nice g ++ ">"
