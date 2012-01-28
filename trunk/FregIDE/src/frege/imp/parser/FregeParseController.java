@@ -63,6 +63,7 @@ import frege.compiler.Data.TTokenID;
 import frege.compiler.Data;
 import frege.compiler.EclipseUtil;
 import frege.compiler.Main;
+import frege.imp.preferences.FregePreferencesConstants;
 
 /**
  * NOTE:  This version of the Parse Controller is for use when the Parse
@@ -227,6 +228,7 @@ public class FregeParseController extends ParseControllerBase implements
 		super(FregePlugin.getInstance().getLanguageID());
 	}
 
+	private int timeout;
 	private TGlobal global;
 	private final ISourcePositionLocator   fSourcePositionLocator   
 					= new FregeSourcePositionLocator(this);
@@ -331,6 +333,12 @@ public class FregeParseController extends ParseControllerBase implements
 				TGlobal.options(global), 
 				bp));
 		global = runStG(frege.compiler.Main.newLoader, global);
+		
+		IPreferencesService service = FregePlugin.getInstance().getPreferencesService();
+		if (service != null) {
+			timeout = service.getIntPreference(FregePreferencesConstants.P_PARSETIMEOUT);
+		}
+		else timeout = 250;
 	}
 
 	/**
@@ -339,11 +347,14 @@ public class FregeParseController extends ParseControllerBase implements
 	public TGlobal parse(String contents, boolean scanOnly,
 			IProgressMonitor monitor) {
 		
+		if (scanOnly && timeout > 0)
+			try { Thread.sleep(timeout); } catch (InterruptedException e) {}
+		if (monitor.isCanceled()) return global;
+		
 		msgHandler.clearMessages();
 		
 		final IProgressMonitor myMonitor = monitor;
-		
-		Lambda cancel = new frege.rt.Lam1() {
+		Lambda cancel = new frege.rt.Lam1() {			
 			public Lazy<FV> eval(Lazy<FV> realworld) {
 				return (myMonitor.isCanceled()) ? Box.Bool.t : Box.Bool.f;	
 			}
@@ -363,8 +374,7 @@ public class FregeParseController extends ParseControllerBase implements
 		TList passes = (TList) frege.compiler.Main.passes._e();
 		monitor.beginTask(this.getClass().getName() + " parsing", 
 				1 + IListLike__lbrack_rbrack.length(passes));
-		if (scanOnly)
-			try { Thread.sleep(300); } catch (InterruptedException e) {}
+		
 		int index = 0;
 		while (!monitor.isCanceled()) {
 			long t1 = System.nanoTime();

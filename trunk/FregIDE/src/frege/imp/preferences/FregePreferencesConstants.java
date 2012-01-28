@@ -12,7 +12,7 @@ package frege.imp.preferences;
  */
 public class FregePreferencesConstants {
 	public static final String P_SOURCEFONT = "sourceFont";
-	// public static final String P_TABWIDTH = "tabWidth";
+	public static final String P_PARSETIMEOUT = "parseTimeout";
 	// public static final String P_SPACESFORTABS = "spacesForTabs";
 	public static final String P_ITALICIMPORTS = "italicImports";
 	public static final String P_BOLDNS        = "boldNS";
