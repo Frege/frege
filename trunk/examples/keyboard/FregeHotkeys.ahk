@@ -1,13 +1,19 @@
 ﻿; Run this script with AutoHotkey, obtainable from www.autohotkey.com
-; ƒ•ƒ•ƒ••••ƒƒƒƒƒƒ
+; ƒ•ƒ•ƒ••••ƒƒƒƒƒƒ.......•
 
 #?::ListHotKeys
 
 
-CapsLock::
-SendInput {U+0192}
-SetCapsLockState Off
-return
+CapsLock::RWin
+
+
+
+;
+;  Right-Control as the compose key
+;
+>^.::SendInput {U+2022}
+
+
 
 ^.::SendInput  {U+2022}
 ^'::SendInput  {U+00B4}
