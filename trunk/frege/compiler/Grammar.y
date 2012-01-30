@@ -53,6 +53,7 @@ package frege.compiler.Grammar where
 
 -- import frege.IO(stdout, stderr, <<, BufferedReader)
 import frege.List(Tree, keyvalues, keys, insertkv)
+import Data.List as DL(elemBy)
 import frege.compiler.Data      as D
 import frege.compiler.Nice      except (group, annotation, break)
 import frege.compiler.Utilities as U(
@@ -125,6 +126,7 @@ vid t = (Token.value t, Pos t t)
 //%type commata         Int
 //%type semicoli        Int
 //%type packagename     (Pos String)
+//%type packagename1    (Pos String)
 //%type nativename      String
 //%type nativepur       Bool
 //%type docs            String
@@ -236,6 +238,7 @@ vid t = (Token.value t, Pos t t)
 //%explain package      a package
 //%explain packageclause a package clause
 //%explain packagename  a package name
+//%explain packagename1 a package name
 //%explain semicoli     the next definition
 //%explain varop        a variable or an operator
 //%explain operator     an operator
@@ -431,16 +434,20 @@ nativename:
     | STRCONST                  { \x -> let s = Token.value x; i = length s - 1 in substr s 1 i }
     ;
 
-packagename:
+packagename1:
     CONID                       { \t     -> do {
                                                 changeST Global.{sub <- SubSt.{
                                                     idKind <- insertkv (KeyTk t) (Left())}};
                                                 YYM.return (Token.value t, yyline t) }}
-    | VARID '.' packagename     { \a\_\(c,p) -> (repljavakws (Token.value a) ++ "." ++ c,
+    | VARID '.' packagename1    { \a\_\(c,p) -> (repljavakws (Token.value a) ++ "." ++ c,
                                                  (yyline a).merge p) }
-    | QUALIFIER packagename     { \a\(c,p)   -> (Token.value a ++ "." ++ c,
+    | QUALIFIER packagename1    { \a\(c,p)   -> (Token.value a ++ "." ++ c,
                                                  (yyline a).merge p) }
     ;
+
+packagename:
+    packagename1                { \(nm, pos) -> (magicPack nm, pos) }
+    ;                                        
 
 docs:
     DOCUMENTATION                       { Token.value }

@@ -21,24 +21,28 @@ DIR0 = build/cfrege
 PREL0  = $(DIR0)/prelude
 COMPF0  = $(DIR0)/compiler
 LIBF0   = $(DIR0)/lib
+DATA0   = $(DIR0)/data
 LIBJ0   = $(DIR0)/j
 TOOLSF0 = $(DIR0)/tools
 DIR1 = build/afrege
 PREL1  = $(DIR1)/prelude
 COMPF1  = $(DIR1)/compiler
 LIBF1   = $(DIR1)/lib
+DATA1   = $(DIR1)/data
 LIBJ1   = $(DIR1)/j
 TOOLSF1 = $(DIR1)/tools
 DIR2 = build/bfrege
 PREL2   = $(DIR2)/prelude
 COMPF2  = $(DIR2)/compiler
 LIBF2   = $(DIR2)/lib
+DATA2   = $(DIR2)/data
 LIBJ2   = $(DIR2)/j
 TOOLSF2 = $(DIR2)/tools
 DIR  = build/frege
 PREL    = $(DIR)/prelude
 COMPF   = $(DIR)/compiler
 LIBF    = $(DIR)/lib
+DATA   = $(DIR)/data
 LIBJ    = $(DIR)/j
 TOOLSF  = $(DIR)/tools
 COMPS   = frege/compiler
@@ -122,7 +126,7 @@ rt-files: build/frege/compiler/Main.class
 fr-files: build/bfrege/compiler/Main.class
 	cd build && find frege -type f -name "*.java" -print >../fr-files
 
-SRCSREQ = $(PREL)/PreludeBase.class $(PREL)/PreludeNative.class $(PREL)/PreludeList.class $(PREL)/PreludeText.class
+SRCSREQ = $(PREL)/PreludeBase.class $(PREL)/PreludeNative.class $(PREL)/PreludeList.class $(PREL)/PreludeText.class frege/compiler/Grammar.fr
 
 sources: $(SRCSREQ)
 	$(FREGECC) -make frege.compiler.Main frege.PreludeProperties
@@ -140,8 +144,10 @@ $(DIR)/check1: $(DIR)/PreludeProperties.class
 
 $(LIBF)/Random.class: $(DIR)/Prelude.class frege/lib/Random.fr
 	$(FREGEC2)  frege/lib/Random.fr
-$(LIBF)/QuickCheck.class: $(LIBF)/Random.class frege/lib/QuickCheck.fr
-	$(FREGEC2)  frege/lib/QuickCheck.fr
+$(DATA)/List.class: $(DIR)/Prelude.class frege/data/List.fr
+	$(FREGEC2)  frege/data/List.fr
+$(LIBF)/QuickCheck.class: $(LIBF)/Random.class $(DATA)/List.class frege/lib/QuickCheck.fr
+	$(FREGEC2)  -make frege/lib/QuickCheck.fr
 $(LIBF)/ForkJoin.class: $(DIR)/Prelude.class frege/lib/ForkJoin.fr
 	$(FREGEC2)  frege/lib/ForkJoin.fr
 #
@@ -288,7 +294,9 @@ $(LIBF1)/Random.class: frege/lib/Random.fr
 	$(FREGEC0) $?
 $(LIBF1)/PP.class: frege/lib/PP.fr
 	$(FREGEC0) $?
-$(LIBF1)/QuickCheck.class: frege/lib/QuickCheck.fr
+$(LIBF1)/QuickCheck.class: $(DATA1)/List.class frege/lib/QuickCheck.fr
+	$(FREGEC0) frege/lib/QuickCheck.fr
+$(DATA1)/List.class: frege/data/List.fr
 	$(FREGEC0) $?
 $(LIBF1)/ForkJoin.class: frege/lib/ForkJoin.fr
 	$(FREGEC0) $?
