@@ -139,6 +139,7 @@ vid t = (Token.value t, Pos t t)
 //%type operator        Token
 //%type rop13           Token
 //%type aeq             Token
+//%type varidkw         Token
 //%type varid           (Pos String)
 //%type varids          [Pos String]
 //%type qvarid          SName
@@ -257,6 +258,7 @@ vid t = (Token.value t, Pos t t)
 //%explain memspecs     a list of member imports
 //%explain qunop        a qualified unary operator
 //%explain unop         an unary operator
+//%explain varidkw      a variable name
 //%explain varid        a variable name
 //%explain varids       a list of field names
 //%explain qvarid       a qualified variable name
@@ -439,7 +441,7 @@ packagename1:
                                                 changeST Global.{sub <- SubSt.{
                                                     idKind <- insertkv (KeyTk t) (Left())}};
                                                 YYM.return (Token.value t, yyline t) }}
-    | VARID '.' packagename1    { \a\_\(c,p) -> (repljavakws (Token.value a) ++ "." ++ c,
+    | varidkw '.' packagename1  { \a\_\(c,p) -> (repljavakws (Token.value a) ++ "." ++ c,
                                                  (yyline a).merge p) }
     | QUALIFIER packagename1    { \a\(c,p)   -> (Token.value a ++ "." ++ c,
                                                  (yyline a).merge p) }
@@ -624,6 +626,17 @@ alias:
 
 varid:   VARID              { vid }
     ;
+    
+varidkw: 
+    VARID
+    | DATA                  { Token.{tokid = VARID} }
+    | TYPE                  { Token.{tokid = VARID} }
+    | NATIVE                { Token.{tokid = VARID} }
+    | PURE                  { Token.{tokid = VARID} }
+    | PACKAGE               { Token.{tokid = VARID} }
+    | IMPORT                { Token.{tokid = VARID} }
+    ;    
+    
 varids:
     varid                   { single }
     | varid ',' varids      { liste }

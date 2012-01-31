@@ -67,7 +67,7 @@ GENDOC   = $(FREGE)  frege.tools.Doc -d doc
 # Prelude files in the order they must be compiled
 PRELUDE  =  frege/prelude/PreludeBase.fr frege/prelude/PreludeNative.fr \
             frege/prelude/PreludeList.fr frege/prelude/Arrays.fr \
-            frege/prelude/PreludeText.fr frege/prelude/Maybe.fr \
+            frege/prelude/PreludeText.fr \
             frege/contrib/dgronau/Math.fr frege/contrib/dgronau/Floating.fr
 
 
@@ -144,7 +144,9 @@ $(DIR)/check1: $(DIR)/PreludeProperties.class
 
 $(LIBF)/Random.class: $(DIR)/Prelude.class frege/lib/Random.fr
 	$(FREGEC2)  frege/lib/Random.fr
-$(DATA)/List.class: $(DIR)/Prelude.class frege/data/List.fr
+$(DATA)/Maybe.class: $(DIR)/Prelude.class  frege/data/Maybe.fr
+	$(FREGEC2)  frege/data/Maybe.fr
+$(DATA)/List.class: $(DIR)/Prelude.class  $(DATA)/Maybe.class frege/data/List.fr
 	$(FREGEC2)  frege/data/List.fr
 $(LIBF)/QuickCheck.class: $(LIBF)/Random.class $(DATA)/List.class frege/lib/QuickCheck.fr
 	$(FREGEC2)  -make frege/lib/QuickCheck.fr
@@ -296,8 +298,10 @@ $(LIBF1)/PP.class: frege/lib/PP.fr
 	$(FREGEC0) $?
 $(LIBF1)/QuickCheck.class: $(DATA1)/List.class frege/lib/QuickCheck.fr
 	$(FREGEC0) frege/lib/QuickCheck.fr
-$(DATA1)/List.class: frege/data/List.fr
-	$(FREGEC0) $?
+$(DATA1)/List.class: $(DATA1)/Maybe.class frege/data/List.fr
+	$(FREGEC0) frege/data/List.fr
+$(DATA1)/Maybe.class: frege/data/Maybe.fr
+	$(FREGEC0) frege/data/Maybe.fr
 $(LIBF1)/ForkJoin.class: frege/lib/ForkJoin.fr
 	$(FREGEC0) $?
 
@@ -544,7 +548,7 @@ docu:       $(TOOLSF)/Doc.class \
             $(DOC)/Prelude.html     $(DOC)/List.html        $(DOC)/IO.html \
             $(DOC)/prelude/PreludeText.html    $(DOC)/prelude/PreludeBase.html \
             $(DOC)/prelude/PreludeNative.html $(DOC)/prelude/PreludeList.html \
-            $(DOC)/prelude/Arrays.html $(DOC)/prelude/Maybe.html \
+            $(DOC)/prelude/Arrays.html $(DOC)/frege/data/Maybe.html \
 			$(DOCF)/Scanner.html    $(DOCF)/Classtools.html $(DOCF)/Data.html \
 			$(DOCF)/Utilities.html  $(DOCF)/Main.html       $(DOCF)/Grammar.html \
 			$(DOCF)/Fixdefs.html    $(DOCF)/Import.html     $(DOCF)/Enter.html \
@@ -568,8 +572,8 @@ doc/index.html: $(RUNTIME)
 #
 $(DOC)/Prelude.html: $(DIR)/Prelude.class
 	$(GENDOC) frege.Prelude
-$(DOC)/prelude/Maybe.html: $(DIR)/prelude/Maybe.class
-	$(GENDOC) frege.prelude.Maybe
+$(DOC)/frege/data/Maybe.html: $(DIR)/frege/data/Maybe.class
+	$(GENDOC) frege.data.Maybe
 $(DOC)/prelude/PreludeBase.html: $(DIR)/prelude/PreludeBase.class
 	$(GENDOC) frege.prelude.PreludeBase
 $(DOC)/prelude/PreludeText.html: $(DIR)/prelude/PreludeText.class
