@@ -1073,7 +1073,6 @@ topex:
       IF expr THEN expr ELSE topex     { \_\c\_\t\_\e  -> Ifte c t e Nothing}
     | CASE  expr OF '{' calts   '}'    { \_\e\_\_\as\_ -> Case CNormal e as Nothing}
     | LET '{' letdefs '}' IN  topex    { \_\_\ds\_\_\e -> Let Nil ds e Nothing}
-    // | DO  '{' dodefs  '}'             { \d\_\defs\_   -> do mkMonad (yyline d) defs }
     | lambda
     | binex
 
@@ -1644,27 +1643,25 @@ mkMonad line (e:es)
             rest <- mkMonad line es
             let res = if refutable pat
                       // x >>= \of -> CASE of OF pat -> do ...; _ -> fail in "pattern failed"
-                    then bind  `nApp`  x `nApp` (Lam Nil ofpat (failcase pat rest) Nothing)
+                    then bind  `nApp`  x `nApp` (Lam Nil (ofpat pos) (failcase pos pat rest) Nothing)
                     else bind  `nApp`  x `nApp` (Lam Nil pat rest Nothing)
             YYM.return res
     | Right defs <- e = do
             rest <- mkMonad line es
             YYM.return (Let Nil defs rest  Nothing)
     where
-        -- indef e = FunDcl {poss = [getpos e], vis = Private, name="in", pats=[], expr=e, doc = Nothing}
         f = Position.first line
-        wellknown x = With1 baseToken f.{tokid=VARID, value=x}
+        wellknown x = With1 monadToken f.{tokid=VARID, value=x}
         local x = Simple f.{tokid=VARID, value=x}
         bind0 = Vbl line (wellknown ">>") Nothing
         bind  = Vbl line (wellknown ">>=") Nothing
-        -- invar = Vbl line (local "in") Nothing
-        ofvar = Vbl line (local "of") Nothing
-        failvar = Vbl line (wellknown "fail") Nothing
-        ofpat = PVar line  "of"
-        def   = PVar line  "_"
-        failcase pat rest = Case CNormal ofvar [alt1, alt2]  Nothing where
+        ofvar pos = Vbl pos (local "of") Nothing
+        failvar =   Vbl line (wellknown "fail") Nothing
+        ofpat pos = PVar pos  "of"
+        def pos   = PVar pos  "_"
+        failcase pos pat rest = Case CNormal (ofvar pos) [alt1, alt2]  Nothing where
             alt1 = CAlt {env = Nil, pat = pat, ex = rest}
-            alt2 = CAlt {env = Nil, pat = def, ex = failure }
+            alt2 = CAlt {env = Nil, pat = def pos, ex = failure }
             // version 2 needed application to invar, we don't
             failure = failvar /*`nApp` invar*/  `nApp` Lit line LString "\"pattern failed\"" Nothing
 
