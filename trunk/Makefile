@@ -116,7 +116,8 @@ frege.mk: Makefile mkmk.pl
 dist: fregec.jar
 	perl mkdist.pl
 
-fregec.jar: tools $(DIR)/check1
+fregec.jar: tools $(DIR)/check1 
+	$(FREGECC)  -make frege/StandardLibrary.fr
 	jar  -cf    fregec.jar -C build frege
 	jar  -uvfe  fregec.jar frege.compiler.Main
 
@@ -126,7 +127,7 @@ rt-files: build/frege/compiler/Main.class
 fr-files: build/bfrege/compiler/Main.class
 	cd build && find frege -type f -name "*.java" -print >../fr-files
 
-SRCSREQ = $(PREL)/PreludeBase.class $(PREL)/PreludeNative.class $(PREL)/PreludeList.class $(PREL)/PreludeText.class frege/compiler/Grammar.fr
+SRCSREQ = $(PREL)/PreludeBase.class $(PREL)/PreludeNative.class $(PREL)/PreludeList.class $(PREL)/PreludeMonad.class $(PREL)/PreludeText.class frege/compiler/Grammar.fr
 
 sources: $(SRCSREQ)
 	$(FREGECC) -make frege.compiler.Main frege.PreludeProperties
