@@ -4,7 +4,7 @@ use strict;
 use warnings;
 
 
-mkdir "dist" unless -d "dist";
+mkdir "../dist" unless -d "../dist";
 system q{find.exe build/frege -name "*.java" -exec rm.exe "{}" ";"};
 
 my $version = qx{java.exe -cp build frege.compiler.Main -version};
