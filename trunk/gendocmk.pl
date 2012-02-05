@@ -28,11 +28,11 @@ while (<$in>) {
     my $class = $fr;
     $class =~ s/\.fr$/.class/;
     $class = "build/$class";
-    print "$class: $fr\n";
-    print "\tjava -Xss1m -cp build frege.compiler.Main -d build -make $pack\n";
+#    print "$class: $fr\n";
+#    print "\tjava -Xss1m -cp build frege.compiler.Main -d build -make $pack\n";
     print "$html: $class\n";
     print "\tjava -Xss1m -cp build frege.tools.Doc -d doc $pack\n";
     push @all, $html;
 }
-print "all: ", join(" ", @all), "\n";
+print "docu: ", join(" ", @all), "\n";
 print "\techo Documentation up to date\n";

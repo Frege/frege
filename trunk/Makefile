@@ -68,7 +68,7 @@ GENDOC   = $(FREGE)  frege.tools.Doc -d doc
 PRELUDE  =  frege/prelude/PreludeBase.fr frege/prelude/PreludeNative.fr \
             frege/prelude/PreludeList.fr frege/prelude/PreludeMonad.fr \
             frege/prelude/PreludeText.fr frege/prelude/Arrays.fr \
-            frege/contrib/dgronau/Math.fr frege/contrib/dgronau/Floating.fr
+            frege/prelude/Math.fr frege/prelude/Floating.fr
 
 
 {frege/prelude}.fr{$(PREL1)}.class::
@@ -545,105 +545,68 @@ $(RTDIR)/FregeCompiler.class: frege/rt/FregeCompiler.java
 #   Documentation
 #
 
-docu:       $(TOOLSF)/Doc.class \
-            $(DOC)/Prelude.html     $(DOC)/List.html        $(DOC)/IO.html \
-            $(DOC)/prelude/PreludeText.html    $(DOC)/prelude/PreludeBase.html \
-            $(DOC)/prelude/PreludeNative.html $(DOC)/prelude/PreludeList.html \
-            $(DOC)/prelude/Arrays.html $(DOC)/frege/data/Maybe.html \
-			$(DOCF)/Scanner.html    $(DOCF)/Classtools.html $(DOCF)/Data.html \
-			$(DOCF)/Utilities.html  $(DOCF)/Main.html       $(DOCF)/Grammar.html \
-			$(DOCF)/Fixdefs.html    $(DOCF)/Import.html     $(DOCF)/Enter.html \
-			$(DOCF)/TAlias.html     $(DOCF)/Transdef.html   $(DOCF)/Classes.html \
-			$(DOCF)/Transform.html  $(DOCF)/Typecheck.html  $(DOCF)/TCUtil.html \
-			$(DOCF)/GenUtil.html    $(DOCF)/GenMeta.html    $(DOCF)/GenJava7.html   \
-			$(DOCF)/EclipseUtil.html \
-			$(DOC)/lib/PP.html      $(DOC)/lib/ForkJoin.html \
-			$(DOC)/lib/Random.html  $(DOC)/lib/QuickCheck.html \
-			$(DOC)/tools/YYgen.html \
-			$(DOC)/tools/Doc.html   $(DOC)/j/Lang.html      $(DOC)/j/Awt.html \
-			$(DOC)/j/Util.html      $(DOC)/j/Swing.html
-
 
 doc/index.html: $(RUNTIME)
 	javadoc -private -sourcepath . -d doc -encoding UTF-8 frege frege.rt
 
-
-#
-# docu targets
-#
-$(DOC)/Prelude.html: $(DIR)/Prelude.class
-	$(GENDOC) frege.Prelude
-$(DOC)/frege/data/Maybe.html: $(DIR)/frege/data/Maybe.class
-	$(GENDOC) frege.data.Maybe
-$(DOC)/prelude/PreludeBase.html: $(DIR)/prelude/PreludeBase.class
-	$(GENDOC) frege.prelude.PreludeBase
-$(DOC)/prelude/PreludeText.html: $(DIR)/prelude/PreludeText.class
-	$(GENDOC) frege.prelude.PreludeText
-$(DOC)/prelude/PreludeNative.html: $(DIR)/prelude/PreludeNative.class
-	$(GENDOC) frege.prelude.PreludeNative
-$(DOC)/prelude/PreludeList.html: $(DIR)/prelude/PreludeList.class
-	$(GENDOC) frege.prelude.PreludeList
-$(DOC)/prelude/Arrays.html: $(DIR)/prelude/Arrays.class
-	$(GENDOC) frege.prelude.Arrays
-$(DOC)/List.html: $(DIR)/List.class
-	$(GENDOC) frege.List
-$(DOC)/IO.html: $(DIR)/IO.class
-	$(GENDOC) frege.IO
-$(DOC)/lib/PP.html: $(DIR)/lib/PP.class
-	$(GENDOC) frege.lib.PP
-$(DOC)/lib/ForkJoin.html: $(DIR)/lib/ForkJoin.class
-	$(GENDOC) frege.lib.ForkJoin
-$(DOC)/lib/QuickCheck.html: $(DIR)/lib/QuickCheck.class
-	$(GENDOC) frege.lib.QuickCheck
-$(DOC)/lib/Random.html: $(DIR)/lib/Random.class
-	$(GENDOC) frege.lib.Random
-$(DOC)/tools/YYgen.html: $(DIR)/tools/YYgen.class
-	$(GENDOC) frege.tools.YYgen
-$(DOC)/tools/Doc.html: $(DIR)/tools/Doc.class
-	$(GENDOC) frege.tools.Doc
-$(DOC)/j/Lang.html: $(LIBJ)/Lang.class
-	$(GENDOC) frege.j.Lang
-$(DOC)/j/Awt.html: $(LIBJ)/Awt.class
-	$(GENDOC) frege.j.Awt
-$(DOC)/j/Swing.html: $(LIBJ)/Swing.class
-	$(GENDOC) frege.j.Swing
-$(DOC)/j/Util.html: $(LIBJ)/Util.class
-	$(GENDOC) frege.j.Util
-$(DOCF)/Classtools.html: $(COMPF)/Classtools.class
-	$(GENDOC) frege.compiler.Classtools
-$(DOCF)/Scanner.html: $(COMPF)/Scanner.class
-	$(GENDOC) frege.compiler.Scanner
-$(DOCF)/Data.html: $(COMPF)/Data.class
-	$(GENDOC) frege.compiler.Data
-$(DOCF)/Utilities.html: $(COMPF)/Utilities.class
-	$(GENDOC) frege.compiler.Utilities
-$(DOCF)/Main.html: $(COMPF)/Main.class
-	$(GENDOC) frege.compiler.Main
-$(DOCF)/Grammar.html: $(COMPF)/Grammar.class
-	$(GENDOC) frege.compiler.Grammar
-$(DOCF)/Import.html: $(COMPF)/Import.class
-	$(GENDOC) frege.compiler.Import
-$(DOCF)/Fixdefs.html: $(COMPF)/Fixdefs.class
-	$(GENDOC) frege.compiler.Fixdefs
-$(DOCF)/Enter.html: $(COMPF)/Enter.class
-	$(GENDOC) frege.compiler.Enter
-$(DOCF)/TAlias.html: $(COMPF)/TAlias.class
-	$(GENDOC) frege.compiler.TAlias
-$(DOCF)/Transdef.html: $(COMPF)/Transdef.class
-	$(GENDOC) frege.compiler.Transdef
-$(DOCF)/Classes.html: $(COMPF)/Classes.class
-	$(GENDOC) frege.compiler.Classes
-$(DOCF)/Transform.html: $(COMPF)/Transform.class
-	$(GENDOC) frege.compiler.Transform
-$(DOCF)/Typecheck.html: $(COMPF)/Typecheck.class
-	$(GENDOC) frege.compiler.Typecheck
-$(DOCF)/TCUtil.html: $(COMPF)/TCUtil.class
-	$(GENDOC) frege.compiler.TCUtil
-$(DOCF)/GenMeta.html: $(COMPF)/GenMeta.class
-	$(GENDOC) frege.compiler.GenMeta
-$(DOCF)/GenUtil.html: $(COMPF)/GenUtil.class
-	$(GENDOC) frege.compiler.GenUtil
-$(DOCF)/EclipseUtil.html: $(COMPF)/EclipseUtil.class
-	$(GENDOC) frege.compiler.EclipseUtil
-$(DOCF)/GenJava7.html: $(COMPF)/GenJava7.class
-	$(GENDOC) frege.compiler.GenJava7
+#### made by perl gendocmk.pl
+doc/frege/List.html: build/frege/List.class
+	java -Xss1m -cp build frege.tools.Doc -d doc frege.List
+doc/frege/tools/YYgen.html: build/frege/tools/YYgen.class
+	java -Xss1m -cp build frege.tools.Doc -d doc frege.tools.YYgen
+doc/frege/tools/Doc.html: build/frege/tools/Doc.class
+	java -Xss1m -cp build frege.tools.Doc -d doc frege.tools.Doc
+doc/frege/tools/LexConvt.html: build/frege/tools/LexConvt.class
+	java -Xss1m -cp build frege.tools.Doc -d doc frege.tools.LexConvt
+doc/frege/prelude/PreludeList.html: build/frege/prelude/PreludeList.class
+	java -Xss1m -cp build frege.tools.Doc -d doc frege.prelude.PreludeList
+doc/frege/prelude/Arrays.html: build/frege/prelude/Arrays.class
+	java -Xss1m -cp build frege.tools.Doc -d doc frege.prelude.Arrays
+doc/frege/prelude/Math.html: build/frege/prelude/Math.class
+	java -Xss1m -cp build frege.tools.Doc -d doc frege.prelude.Math
+doc/frege/prelude/PreludeMonad.html: build/frege/prelude/PreludeMonad.class
+	java -Xss1m -cp build frege.tools.Doc -d doc frege.prelude.PreludeMonad
+doc/frege/prelude/Floating.html: build/frege/prelude/Floating.class
+	java -Xss1m -cp build frege.tools.Doc -d doc frege.prelude.Floating
+doc/frege/prelude/PreludeText.html: build/frege/prelude/PreludeText.class
+	java -Xss1m -cp build frege.tools.Doc -d doc frege.prelude.PreludeText
+doc/frege/prelude/PreludeBase.html: build/frege/prelude/PreludeBase.class
+	java -Xss1m -cp build frege.tools.Doc -d doc frege.prelude.PreludeBase
+doc/frege/prelude/PreludeNative.html: build/frege/prelude/PreludeNative.class
+	java -Xss1m -cp build frege.tools.Doc -d doc frege.prelude.PreludeNative
+doc/frege/prelude/Maybe.html: build/frege/prelude/Maybe.class
+	java -Xss1m -cp build frege.tools.Doc -d doc frege.prelude.Maybe
+doc/frege/Prelude.html: build/frege/Prelude.class
+	java -Xss1m -cp build frege.tools.Doc -d doc frege.Prelude
+doc/frege/Tuples.html: build/frege/Tuples.class
+	java -Xss1m -cp build frege.tools.Doc -d doc frege.Tuples
+doc/frege/data/List.html: build/frege/data/List.class
+	java -Xss1m -cp build frege.tools.Doc -d doc frege.data.List
+doc/frege/data/Maybe.html: build/frege/data/Maybe.class
+	java -Xss1m -cp build frege.tools.Doc -d doc frege.data.Maybe
+doc/frege/lib/QuickCheck.html: build/frege/lib/QuickCheck.class
+	java -Xss1m -cp build frege.tools.Doc -d doc frege.lib.QuickCheck
+doc/frege/lib/ForkJoin.html: build/frege/lib/ForkJoin.class
+	java -Xss1m -cp build frege.tools.Doc -d doc frege.lib.ForkJoin
+doc/frege/lib/Random.html: build/frege/lib/Random.class
+	java -Xss1m -cp build frege.tools.Doc -d doc frege.lib.Random
+doc/frege/lib/PP.html: build/frege/lib/PP.class
+	java -Xss1m -cp build frege.tools.Doc -d doc frege.lib.PP
+doc/frege/control/NonEmpty.html: build/frege/control/NonEmpty.class
+	java -Xss1m -cp build frege.tools.Doc -d doc frege.control.NonEmpty
+doc/frege/control/Monoid.html: build/frege/control/Monoid.class
+	java -Xss1m -cp build frege.tools.Doc -d doc frege.control.Monoid
+doc/frege/control/Foldable.html: build/frege/control/Foldable.class
+	java -Xss1m -cp build frege.tools.Doc -d doc frege.control.Foldable
+doc/frege/IO.html: build/frege/IO.class
+	java -Xss1m -cp build frege.tools.Doc -d doc frege.IO
+doc/frege/j/Swing.html: build/frege/j/Swing.class
+	java -Xss1m -cp build frege.tools.Doc -d doc frege.j.Swing
+doc/frege/j/Awt.html: build/frege/j/Awt.class
+	java -Xss1m -cp build frege.tools.Doc -d doc frege.j.Awt
+doc/frege/j/Lang.html: build/frege/j/Lang.class
+	java -Xss1m -cp build frege.tools.Doc -d doc frege.j.Lang
+doc/frege/j/Util.html: build/frege/j/Util.class
+	java -Xss1m -cp build frege.tools.Doc -d doc frege.j.Util
+docu: doc/frege/List.html doc/frege/tools/YYgen.html doc/frege/tools/Doc.html doc/frege/tools/LexConvt.html doc/frege/prelude/PreludeList.html doc/frege/prelude/Arrays.html doc/frege/prelude/Math.html doc/frege/prelude/PreludeMonad.html doc/frege/prelude/Floating.html doc/frege/prelude/PreludeText.html doc/frege/prelude/PreludeBase.html doc/frege/prelude/PreludeNative.html doc/frege/prelude/Maybe.html doc/frege/Prelude.html doc/frege/Tuples.html doc/frege/data/List.html doc/frege/data/Maybe.html doc/frege/lib/QuickCheck.html doc/frege/lib/ForkJoin.html doc/frege/lib/Random.html doc/frege/lib/PP.html doc/frege/control/NonEmpty.html doc/frege/control/Monoid.html doc/frege/control/Foldable.html doc/frege/IO.html doc/frege/j/Swing.html doc/frege/j/Awt.html doc/frege/j/Lang.html doc/frege/j/Util.html
+	echo Documentation up to date

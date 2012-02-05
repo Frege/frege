@@ -1641,10 +1641,10 @@ mkMonad line (e:es)
     | Left (Just pps, x) <- e, (pat, pos) <- pps
         = do
             rest <- mkMonad line es
-            let res = if refutable pat
+            let res = /* if refutable pat
                       // x >>= \of -> CASE of OF pat -> do ...; _ -> fail in "pattern failed"
                     then bind  `nApp`  x `nApp` (Lam Nil (ofpat pos) (failcase pos pat rest) Nothing)
-                    else bind  `nApp`  x `nApp` (Lam Nil pat rest Nothing)
+                    else */ bind  `nApp`  x `nApp` (Lam Nil pat rest Nothing)
             YYM.return res
     | Right defs <- e = do
             rest <- mkMonad line es
