@@ -136,7 +136,7 @@ sources: $(SRCSREQ)
 	cd build && find frege -type f -name "*.java" -print >../fr-files
 	jar -cMf ../sources.jar @rt-files
 	cd build && jar -uMf ../../sources.jar @../fr-files
-	cd ../sources && jar -xf ../sources.jar
+	cd FregIDE/src && jar -xf ../../../sources.jar
 	rm -f ../sources.jar rt-files fr-files
 	jar  -cf    ../sources/frege3.jar -C build frege
 
