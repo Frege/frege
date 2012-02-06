@@ -12,7 +12,7 @@ use strict;
 open(my $in, qq{find frege -name "*.fr" -print|})
     or die "Can't run find: $!";
 
-my @all = ();
+my @all = qw(build/frege/tools/Doc.class);
 
 while (<$in>) {
     chomp;
