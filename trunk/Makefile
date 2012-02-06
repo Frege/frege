@@ -116,7 +116,7 @@ frege.mk: Makefile mkmk.pl
 dist: fregec.jar
 	perl mkdist.pl
 
-fregec.jar: tools $(DIR)/check1 
+fregec.jar: tools $(DIR)/check1
 	$(FREGECC)  -make frege/StandardLibrary.fr
 	jar  -cf    fregec.jar -C build frege
 	jar  -uvfe  fregec.jar frege.compiler.Main
@@ -165,9 +165,9 @@ $(LIBJ)/Swing.class: $(LIBJ)/Lang.class $(LIBJ)/Awt.class frege/j/Swing.fr
 $(LIBJ)/Util.class: $(LIBJ)/Lang.class frege/j/Util.fr
 	$(FREGECC) frege/j/Util.fr
 
-$(DIR)/PreludeProperties.class: $(COMPF)/Main.class $(LIBF)/QuickCheck.class frege/PreludeProperties.fr
+$(DIR)/PreludeProperties.class: $(LIBF)/QuickCheck.class frege/PreludeProperties.fr
 	$(FREGECC)   frege/PreludeProperties.fr
-$(TOOLSF)/Doc.class: $(COMPF)/Main.class frege/tools/Doc.fr
+$(TOOLSF)/Doc.class: frege/tools/Doc.fr
 	$(FREGECC)  -make frege.tools.Doc
 $(TOOLSF)/YYgen.class: frege/tools/YYgen.fr $(DIR)/Prelude.class
 	$(FREGECC)  -make frege/tools/YYgen.fr
@@ -218,8 +218,6 @@ $(DIR2)/Prelude.class: $(COMPF1)/Main.class frege/Prelude.fr $(PRELUDE)
 	$(FREGEC1P)  $(PRELUDE)
 	$(FREGEC1)  -make frege.Prelude
 
-$(DIR2)/prelude/Text.class: $(COMPF1)/Main.class
-	$(FREGEC1P)  -x9 -v frege/prelude/Text.fr
 
 SOURCES  =      $(COMPS)/Scanner.fr   $(COMPS)/Classtools.fr \
 				$(COMPS)/Data.fr      $(COMPS)/Utilities.fr \

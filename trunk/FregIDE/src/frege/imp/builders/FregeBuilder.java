@@ -256,11 +256,9 @@ public class FregeBuilder extends FregeBuilderBase {
 				final String bp = TOptions.dir( TGlobal.options(result) );
 				final TList ourPath = frege.compiler.Utilities.ourPath(TGlobal.options(result));
 				final String fp = Box.<String>box(
-						PreludeText.joined.inst(
-								  new PreludeList.IListLike__lbrack_rbrack(),
-				                  new PreludeList.IListSource__lbrack_rbrack()).eval(
-				                		  ourPath, 
-				                		  Box.mk(System.getProperty("path.separator"))
+						PreludeText.joined(
+				                		  Box.mk(System.getProperty("path.separator")),
+				                		  ourPath
 								)._e()).j;
 				// construct the commandline
 				final String cmdline = "-cp " + "\"" + fp + "\"" 
