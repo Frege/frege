@@ -147,7 +147,7 @@ $(LIBF)/Random.class: $(DIR)/Prelude.class frege/lib/Random.fr
 	$(FREGEC2)  frege/lib/Random.fr
 $(DATA)/Maybe.class: $(DIR)/Prelude.class  frege/data/Maybe.fr
 	$(FREGEC2)  frege/data/Maybe.fr
-$(DATA)/List.class: $(DIR)/Prelude.class  $(DATA)/Maybe.class frege/data/List.fr
+$(DATA)/List.class: $(DIR)/Prelude.class  frege/data/List.fr
 	$(FREGEC2)  frege/data/List.fr
 $(LIBF)/QuickCheck.class: $(LIBF)/Random.class $(DATA)/List.class frege/lib/QuickCheck.fr
 	$(FREGEC2)  -make frege/lib/QuickCheck.fr
@@ -297,7 +297,7 @@ $(LIBF1)/PP.class: frege/lib/PP.fr
 	$(FREGEC0) $?
 $(LIBF1)/QuickCheck.class: $(DATA1)/List.class frege/lib/QuickCheck.fr
 	$(FREGEC0) frege/lib/QuickCheck.fr
-$(DATA1)/List.class: $(DATA1)/Maybe.class frege/data/List.fr
+$(DATA1)/List.class: frege/data/List.fr
 	$(FREGEC0) frege/data/List.fr
 $(DATA1)/Maybe.class: frege/data/Maybe.fr
 	$(FREGEC0) frege/data/Maybe.fr

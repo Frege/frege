@@ -143,6 +143,7 @@ vid t = (Token.value t, Pos t t)
 //%type varid           (Pos String)
 //%type varids          [Pos String]
 //%type qvarid          SName
+//%type qvarids         [SName]
 //%type qconid          SName
 //%type qunop           (Pos String)
 //%type binop           (Pos String)
@@ -262,6 +263,7 @@ vid t = (Token.value t, Pos t t)
 //%explain varid        a variable name
 //%explain varids       a list of field names
 //%explain qvarid       a qualified variable name
+//%explain qvarids      a list of qualified variable names
 //%explain importitem   an import item
 //%explain alias        a simple name for a member or import item
 //%explain binop        a binary operator
@@ -470,6 +472,15 @@ packageclause:
                                                     changeST Global.{options = g.options.{
                                                         flags = U.setFlag g.options.flags INPRELUDE}};
                                                     YYM.return (fst b, Nothing, snd b) }}
+    | packageclause VARID '(' qvarids ')'   { \p\v\_\qs\_ -> do {
+                                                     g <- getST;
+                                                     when (Token.value v != "exporting") do {
+                                                        yyerror (yyline v) (show "exporting" ++ " expected instead of " ++ show (Token.value v))
+                                                     };
+                                                     changeST Global.{sub <- SubSt.{
+                                                            toExport = qs}};
+                                                     YYM.return p;}
+                                                 }                                                   
     ;
 
 semicoli:
@@ -639,7 +650,12 @@ varidkw:
     
 varids:
     varid                   { single }
-    | varid ',' varids      { liste }
+    | varid ',' varids      { liste  }
+    ;
+
+qvarids:
+    qvarid                  { single }
+    | qvarid ',' qvarids    { liste  }
     ;
 
 qvarid:  QUALIFIER QUALIFIER varop  { \n\t\v     -> With2 n t v}
