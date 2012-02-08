@@ -167,11 +167,11 @@ $(LIBJ)/Util.class: $(LIBJ)/Lang.class frege/j/Util.fr
 
 $(DIR)/PreludeProperties.class: $(LIBF)/QuickCheck.class frege/PreludeProperties.fr
 	$(FREGECC)   frege/PreludeProperties.fr
-$(TOOLSF)/Doc.class: frege/tools/Doc.fr
+$(TOOLSF)/Doc.class: frege/tools/Doc.fr $(COMPF)/Main.class
 	$(FREGECC)  -make frege.tools.Doc
-$(TOOLSF)/YYgen.class: frege/tools/YYgen.fr $(DIR)/Prelude.class
+$(TOOLSF)/YYgen.class: frege/tools/YYgen.fr $(COMPF)/Main.class
 	$(FREGECC)  -make frege/tools/YYgen.fr
-$(TOOLSF)/LexConvt.class: frege/tools/LexConvt.fr $(DIR)/Prelude.class
+$(TOOLSF)/LexConvt.class: frege/tools/LexConvt.fr  $(COMPF)/Main.class
 	$(FREGECC)  -make frege/tools/LexConvt.fr
 $(TOOLSF1)/YYgen.class: $(DIR1)/Prelude.class frege/tools/YYgen.fr
 	$(FREGEC0)  -make frege.tools.YYgen
@@ -263,7 +263,7 @@ $(COMPF1)/Utilities.class: 	$(COMPF1)/Classtools.class $(COMPF1)/Data.class $(CO
 	$(FREGEC0) $(COMPS)/Utilities.fr
 $(COMPF1)/Data.class: 	$(COMPS)/Data.fr
 	$(FREGEC0) $?
-$(COMPF1)/Nice.class: 	$(COMPS)/Nice.fr $(LIBF1)/PP.class $(COMPF1)/Data.class
+$(COMPF1)/Nice.class: 	$(COMPS)/Nice.fr $(LIBF1)/PP.class $(COMPF1)/Data.class $(DATA1)/List.class
 	$(FREGEC0) $(COMPS)/Nice.fr
 $(COMPF1)/Fixdefs.class: $(COMPS)/Fixdefs.fr
 	$(FREGEC0) $?

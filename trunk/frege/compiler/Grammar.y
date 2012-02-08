@@ -140,9 +140,12 @@ vid t = (Token.value t, Pos t t)
 //%type rop13           Token
 //%type aeq             Token
 //%type varidkw         Token
+//%type word            String
+//%type words           [String]
 //%type varid           (Pos String)
 //%type varids          [Pos String]
 //%type qvarid          SName
+//%type qvarop          SName
 //%type qvarids         [SName]
 //%type qconid          SName
 //%type qunop           (Pos String)
@@ -259,10 +262,13 @@ vid t = (Token.value t, Pos t t)
 //%explain memspecs     a list of member imports
 //%explain qunop        a qualified unary operator
 //%explain unop         an unary operator
+//%explain word         a word
+//%explain words        words
 //%explain varidkw      a variable name
 //%explain varid        a variable name
 //%explain varids       a list of field names
 //%explain qvarid       a qualified variable name
+//%explain qvarop       a qualified variable name
 //%explain qvarids      a list of qualified variable names
 //%explain importitem   an import item
 //%explain alias        a simple name for a member or import item
@@ -472,15 +478,26 @@ packageclause:
                                                     changeST Global.{options = g.options.{
                                                         flags = U.setFlag g.options.flags INPRELUDE}};
                                                     YYM.return (fst b, Nothing, snd b) }}
-    | packageclause VARID '(' qvarids ')'   { \p\v\_\qs\_ -> do {
+    | packageclause words '(' qvarids ')'   { \p\vs\v\qs\_ -> do {
                                                      g <- getST;
-                                                     when (Token.value v != "exporting") do {
-                                                        yyerror (yyline v) (show "exporting" ++ " expected instead of " ++ show (Token.value v))
+                                                     let {clause = unwords vs};
+                                                     let {expected = "inline candidates"};
+                                                     when (clause != expected) do {
+                                                        yyerror (yyline v) (show expected ++ " expected instead of " ++ show clause)
                                                      };
                                                      changeST Global.{sub <- SubSt.{
                                                             toExport = qs}};
                                                      YYM.return p;}
                                                  }                                                   
+    ;
+
+word: 
+    VARID                           { Token.value }
+    ;
+    
+words:
+    word                            { single }    
+    | word words                    { (:) }
     ;
 
 semicoli:
@@ -654,8 +671,8 @@ varids:
     ;
 
 qvarids:
-    qvarid                  { single }
-    | qvarid ',' qvarids    { liste  }
+    qvarop                  { single }
+    | qvarop ',' qvarids    { liste  }
     ;
 
 qvarid:  QUALIFIER QUALIFIER varop  { \n\t\v     -> With2 n t v}
@@ -669,6 +686,11 @@ qconid:  QUALIFIER QUALIFIER CONID  { \n\t\v     -> With2 n t v}
 
 varop:
     VARID | operator | unop
+
+qvarop:  QUALIFIER QUALIFIER varop  { \n\t\v     -> With2 n t v}
+    |    QUALIFIER varop            { \t\v       -> With1 t v}
+    |    varop                      { \v         -> Simple v }
+    ;     
 
 operator:
       LOP1 | LOP2 | LOP3 | LOP4 | LOP5 | LOP6 | LOP7 | LOP8 | LOP9 | LOP10 | LOP11 | LOP12 | LOP13 | LOP14 | LOP15 | LOP16
@@ -1667,12 +1689,13 @@ mkMonad line (e:es)
             YYM.return (Let Nil defs rest  Nothing)
     where
         f = Position.first line
+        pos x = Pos f.{tokid=VARID, value=x} (Position.last line)
         wellknown x = With1 monadToken f.{tokid=VARID, value=x}
         local x = Simple f.{tokid=VARID, value=x}
-        bind0 = Vbl line (wellknown ">>") Nothing
-        bind  = Vbl line (wellknown ">>=") Nothing
+        bind0 = Vbl (pos ">>") (wellknown ">>") Nothing
+        bind  = Vbl (pos ">>=") (wellknown ">>=") Nothing
         ofvar pos = Vbl pos (local "of") Nothing
-        failvar =   Vbl line (wellknown "fail") Nothing
+        failvar =   Vbl (pos "fail") (wellknown "fail") Nothing
         ofpat pos = PVar pos  "of"
         def pos   = PVar pos  "_"
         failcase pos pat rest = Case CNormal (ofvar pos) [alt1, alt2]  Nothing where
