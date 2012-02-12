@@ -1580,6 +1580,37 @@ funCode (sym@SymV {expr = Just x}) binds = do
                     {- else innerQualifiedFun sym binds -}
 funCode nofun binds = error "funClass: no function"
 
+{--
+    create new Lambda123() { ...} from \x -> e
+    -}
+lambdaEx :: Expr -> Tree Symbol Binding -> StG Binding
+lambdaEx (lam@Lam{env,pat,ex,typ=Just (sig@ForAll _ rho)}) binds = do
+    g <- getST
+    U.logmsg TRACEG (getpos ex) (text("lambdaEx: " ++ nice ex g ++ " :: " ++ nicer rho g))
+    rho <- TC.zonkRho rho
+    let depth = U.lambdaDepth ex + 1
+        argNames = drop (fold (+) 0 (map Symbol.depth g.genEnv)) GenJava7.argNames
+        (rty, atys) = U.returnTypeN depth rho
+        lambdaTyp  = Nativ ("Lam"  ++ show depth) []
+        fake = (U.patLocal (getpos lam) "\\lambda").{depth}
+    sjt  <- sigmaJT sig
+    rjt  <- rhoJT rty
+    ajts <- mapSt sigmaJT atys
+    -- strsig <- T.lambdaStrictness lam
+    workerArgs <- argDef attrFinal U atys argNames
+    stmts <- compiling fake (genLambda RLazy lam workerArgs binds) 
+    let worker = JMethod {attr = attrs [JFinal, JPublic],
+                          gargs = [],
+                          jtype = lazy rjt,
+                          name = "eval",
+                          args = reverse workerArgs,
+                          body = JBlock stmts}
+        theClass =  JNewClass lambdaTyp [] [worker]
+    return Bind{mode=RBoxed, ftype = sig, jtype = sjt, jex = theClass}
+
+lambdaEx ex binds = do
+    g <- getST
+    U.fatal (getpos ex) (text ("lambdaEx: bad lambda " ++ nice ex g))    
 
 {--
     Create @final Lambda123 name = new Lambda123() { ... }
@@ -3239,9 +3270,9 @@ genExpr _ rm (ifte@Ifte c t e (Just sigma)) binds = do
     ebind <- genExpr false rm      e binds
     stio (Bind rm sigma (Binding.jtype tbind) (JQC cbind.jex tbind.jex ebind.jex))
 
+genExpr _ rm (lam@Lam{}) binds = lambdaEx lam binds
 
 genExpr _ rm ex binds = do
     g <- getST
     let ft = unJust (Expr.typ ex)
-    jt <- sigmaJT ft
-    stio (Bind rm ft jt ((JAtom • show) (nicer ex g ++ " :: " ++ nicer (unJust ex.typ) g)))
+    U.fatal (getpos ex) (text ("Cannot genExpr: " ++ nicer ex g ++ " :: " ++ nicer ft g))

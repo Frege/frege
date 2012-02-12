@@ -63,25 +63,11 @@ import Data.List as DL(uniq, sort, partitioned, elemBy)
                     
 import frege.compiler.Data
 import frege.compiler.Nice except (group, break)
-import frege.compiler.Utilities     as U()
+import frege.compiler.Utilities     as U(allourvars, allvars)
+import frege.compiler.Typecheck     as TC(checkRho, substInst, zonkExpr)
+import frege.compiler.TCUtil        as TCU()
 
 post = stio true
-
---- find all our 'SymV' symbols
-allourvars = do
-    g <- getST
-    let collectedenvs = g.thisTab : [ Symbol.env sy | sy <- values g.thisTab, Symbol.{env?} sy ]
-        collectedvars = [ v | env <- collectedenvs, v@SymV {name} <- values env, name.our g]
-    stio collectedvars
-
---- find all 'SymV' symbols, be they ours or not
-allvars = do
-    g <- getST
-    let envEnvs env = env : [Symbol.env sy | sy <- values env, Symbol.{env?} sy]
-        packEnvs = values g.packages
-        collectedenvs = fold (++) [] (map envEnvs packEnvs)
-        collectedvars = [ v | env <- collectedenvs, v@SymV {name} <- values env]
-    stio collectedvars
 
 pass7 = do
     g <- getST
@@ -105,7 +91,7 @@ pass8 = do
     foreach collectedvars renameSym
     collectedvars <- allourvars
     -- find closed lambdas and make them private global
-    foreach collectedvars closedLambdaSym
+    unless (U.isOn g.options.flags INLINE) do foreach collectedvars closedLambdaSym
     stio ("expressions", length collectedvars)
 
 
@@ -188,9 +174,7 @@ easySym sym = do
 depthSym (vsym@SymV {pos})
     | Just x <- vsym.expr = do
         nx <- depthExpr x
-        let lambdaDepth (Lam {ex}) = 1 + lambdaDepth ex
-            lambdaDepth ex = 0
-            depth = lambdaDepth nx
+        let depth = U.lambdaDepth nx
         when (depth > length sigmas) do
                 g <- getST
                 U.error vsym.pos (msgdoc (nice vsym.name g
@@ -202,7 +186,7 @@ depthSym (vsym@SymV {pos})
             else do
                 g <- getST                                      -- depth < sigmas, eta expand it
                 newx <- etaExpand nx
-                let newd = lambdaDepth newx
+                let newd = U.lambdaDepth newx
                 U.logmsg TRACE9 (vsym.pos) (text ("eta expanded "
                     ++ nice vsym.name g ++ "::" ++ nice vsym.typ g
                     ++ " to lambda depth " ++ show newd))
@@ -572,7 +556,7 @@ renameSym sym = do
     g <- getST
     U.fatal sym.pos (text ("renameSym no SymV : " ++ sym.nice g))
 
---- map an environment to conatin changed names and symbols
+--- map an environment to contain changed names and symbols
 renamedEnv = Tree.fromList • map renamekv • each
     where
        renamekv (k, sym@SymV {name=Local s, sid}) = ((mangled s ++ "_" ++ U.base32 sid),
@@ -713,57 +697,57 @@ unrollLet x = stio (Left x)
 
 easyX x = do
         g <- getST
-        (y, evts) <- makeEasy x
-        unless (null evts) do
+        (y, evts) <- makeEasy 0 x
+        unless (isSimple x) do
             U.logmsg TRACE9 (getpos x) (text ("uneasy expr: " ++ nice x g))
         let nx = fold mkLet y evts
-        unless (null evts) do
+        unless (isSimple x) do
             U.logmsg TRACE9 (getpos x) (text ("eased  expr: " ++ nice nx g))
         stio (Left nx)
     where
+        after s x y = do
+            g <- getST
+            U.logmsg TRACE9 (getpos x) (text ("mkEasy before " ++ s ++ ":  " ++ nice x g))
+            U.logmsg TRACE9 (getpos x) (text ("mkEasy after  " ++ s ++ ":  " ++ nice y g))
         mkLet ex env = Let {defs=[], ex, env, typ=ex.typ}
         isEasy (App a b _)       = isSimple a && isSimple b
         isEasy (Let {env,ex})    = isEasy ex &&
                                    all isEasy [ x | SymV {expr = Just x} <- values env ]
-        isEasy (Lam {ex})        = isEasy ex
+        -- isEasy (Lam {ex})        = isEasy ex
         isEasy (Case {ex,alts})  = isSimple ex && all (isEasy • CAlt.ex) alts
         isEasy (Ifte a b c _)    = isSimple a && isEasy b && isEasy c
         isEasy (Ann {ex})        = isEasy ex
         isEasy x                 = isSimple x
 
-        makeEasy (x@Lam {ex, env}) = with env do        -- so as to avoid bad symbols
-            (ex, envs) <- makeEasy ex
-            stio (x.{ex = fold mkLet ex envs}, [])
-        makeEasy (app@App a b t) = do
+        -- makeEasy _ (x@Lam {ex, env}) = with env do        -- so as to avoid bad symbols
+        --     (ex, envs) <- makeEasy false ex
+        --     stio (x.{ex = fold mkLet ex envs}, [])
+        makeEasy args (app@App a b t) = do
             g <- getST
-            (a,evs1) <- makeEasy a
+            (a,evs1) <- makeEasy (args+1) a
             case a of
                 Lam {env,pat,ex} = do
                     let cas = Case CNormal b [CAlt {pat, ex, env}] t
-                    U.logmsg TRACE9 (getpos app) (text ("beta reduction:  " ++ nice app g ++ "  ==>  "
-                                        ++ nice cas g))
+                    after "beta reduction" app cas
                     c <- easyExpr cas
                     stio (c, evs1)
                 Case {alts,typ = Just csigma} = do     -- apply b to each alt
                         let -- ctype = ForAll [] t
                             nalts = [ (calt::CAlt).{ex = App calt.ex b t} | calt <- alts ]
                             cas = a.{alts=nalts, typ=t}
-                        U.logmsg TRACE9 (getpos app) (text ("(case ...) " ++ nice b g
-                            ++ "  ==>  " ++ nice cas g))
-                        c <- easyExpr cas
+                        after "distribution of arg" app cas
+                        c <- easyExpr  cas
                         stio (c, evs1)
                 Ifte cnd thn els s = do
                     let nthn = App thn b t
                         nels = App els b t
                         nif  = Ifte cnd nthn nels t
-                    U.logmsg TRACE9 (getpos app) (text ("(" ++ nice a g ++ ") " ++ nice b g
-                            ++ " ==> " ++ nice nif g))
-                    eif <- easyExpr nif
+                    after "distribution of arg" app nif
+                    eif <- easyExpr  nif
                     stio (eif, evs1)
                 Let {} = do
                     let nlet = a.{ex = App a.ex b t, typ = t}
-                    U.logmsg TRACE9 (getpos app) (text ("(" ++ nice a g ++ ") " ++ nice b g
-                            ++ " ==> " ++ nice nlet g))
+                    after "distribution of arg" app nlet
                     elet <- easyExpr nlet
                     stio (elet, evs1)
                 _ = do
@@ -771,19 +755,54 @@ easyX x = do
                     stio (napp, evs1++evs2)
         -- makeEasy (x@App (Case ck cx calts) b ty)
         -- makeEasy (x@App _ _ _)     = makeSimple x
-        makeEasy (x@Let {defs})    = stio (x, [])       -- will be made easy recursively
-        makeEasy (x@Case {ex})     = do
-            (ex, envs) <- makeSimple ex
-            stio (x.{ex}, envs)                         -- alts will be made easy recursively
-        makeEasy (x@Ifte a b c t)  = do                 -- branches will be made easy recursively
+        makeEasy _ (x@Let {defs})    = stio (x, [])       -- will be made easy recursively                      
+        makeEasy subapp (x@Case {ex,alts})     = do
+            let alt1 = head alts
+                sids = map (Symbol.sid) (values alt1.env)
+            n <- with alt1.env (references sids alt1.ex)
+            -- g <- getST
+            -- let x9 = U.isOn g.options.flags TRACE9
+            case alt1.pat of
+                PVar{} | length alts == 1, length sids == 1, (n < 2 || isAtomic ex) = do
+                     ax <- with alt1.env (replSid (head sids) ex alt1.ex)      -- case println of x -> x 42 ==> println 42
+                     after "case elimination" x ax
+                     makeEasy subapp ax
+                sonst -> do                         
+                    (ex, envs) <- makeSimple ex
+                    stio (x.{ex}, envs)                           -- alts will be made easy recursively
+        makeEasy _ (x@Ifte a b c t)  = do                 -- branches will be made easy recursively
             (a, envs) <- makeSimple a
             stio (Ifte a b c t, envs)
-        makeEasy x | isEasy x    = stio (x, [])
-        makeEasy x = do
+        makeEasy args (v@Vbl {name, typ = Just (ForAll [] rho)}) | not name.isLocal = do
+            g <- getST
+            if U.isOn g.options.flags INLINE 
+                then do
+                    sym <- U.findV v.name
+                    U.logmsg TRACE9 (getpos v) (text ("can we inline " ++ nicer sym g ++ "?"))
+                    case sym.expr of 
+                        Just x | sym.exported && (args >= sym.depth) = do
+                            U.logmsg TRACE9 (getpos v) (text ("replace " ++ nice v g  ++ " :: " ++ nicer rho g))
+                            x <- recycle x rho
+                            makeEasy args x
+                        _ -> stio (v, [])
+                else stio (v, [])             
+        makeEasy _ x | isEasy x    = stio (x, [])
+        makeEasy _ x = do
             g <- getST
             U.error (getpos x) (text ("don't know how to make easy:  " ++ nice x g))
             stio (x, [])
 
+        recycle expr rho = do
+            g <- getST
+            let tvs = U.freeTVars [] rho
+            rho <- TCU.instantiate (ForAll tvs rho)
+            x <- checkRho expr rho
+            x <- zonkExpr x
+            x <- U.mapEx true substInst x
+            U.logmsg TRACE9 (getpos expr) (text ("recycled  " ++ nice x g))
+            stio x 
+            
+        
         makeSimple x | isSimple x = stio (x, [])
         makeSimple (x@App a b t) = do
             (a, ea) <- makeSimple a
@@ -840,7 +859,7 @@ easyX x = do
 {--
  * [returns} *@true@* if expression is simple. See 'pass9' for more information.
  *
- * A simple exression can be translated to a java expression and will not need
+ * A simple expression can be translated to a java expression and will not need
  * blocks, if-then-else constructs, auxiliary declarations etc.
  -}
 isSimple (App a b _)     = isSimple a && isSimple b
@@ -849,6 +868,7 @@ isSimple (Ann {ex})      = isSimple ex
 isSimple (Vbl {pos})     = true
 isSimple (Lit {pos})     = true
 isSimple (Con {pos})     = true
+isSimple (Lam {pat})     = true
 isSimple _               = false
 
 --- return the symbol ids of all local variables introduced in this expression and its subexpression
@@ -1045,6 +1065,12 @@ isAtomic Vbl {} = true
 isAtomic Lit {} = true
 isAtomic Con {} = true
 isAtomic _      = false
+
+--- tell if a pattern is just a variable (or a strict variable)
+isPVar (PStrict p) = isPVar p
+isPVar (PVar{})    = true
+isPVar _           = false    
+
 
 closedLambda (app@App (Lam {pat,env,ex,typ}) b ty) = do
         g <- getST

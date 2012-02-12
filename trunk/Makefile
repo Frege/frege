@@ -56,8 +56,8 @@ FREGECC  = $(FREGE) frege.compiler.Main  -d build -hints
 FREGECCP = $(FREGEP) frege.compiler.Main  -d build -hints
 FREGEC0  = $(FREGECJ) -prefix a
 FREGEC0P = $(FREGECJP) -prefix a
-FREGEC1  = $(FREGE) afrege.compiler.Main -d build -hints -prefix b
-FREGEC1P = $(FREGEP) afrege.compiler.Main -d build -hints -prefix b
+FREGEC1  = $(FREGE) afrege.compiler.Main -d build -hints -prefix b 
+FREGEC1P = $(FREGEP) afrege.compiler.Main -d build -hints -prefix b 
 FREGEC2  = $(FREGE) -server bfrege.compiler.Main -d build -hints
 FREGEC2P = $(FREGEP) -server bfrege.compiler.Main -d build -hints
 FREGEC3  = $(FREGECJ) -prefix c
@@ -235,7 +235,7 @@ CLASSES  =       $(COMPF1)/Scanner.class   $(COMPF1)/Classtools.class \
 		$(COMPF1)/Fixdefs.class   $(COMPF1)/Import.class    $(COMPF1)/Enter.class \
 		$(COMPF1)/Transdef.class   $(COMPF1)/TCUtil.class   \
 		$(COMPF1)/TAlias.class    $(COMPF1)/Classes.class \
-		$(COMPF1)/Transform.class $(COMPF1)/Typecheck.class \
+		$(COMPF1)/Typecheck.class $(COMPF1)/Transform.class \
 		$(COMPF1)/GenUtil.class \
 		$(COMPF1)/GenMeta.class   $(COMPF1)/GenJava7.class \
 		$(COMPF1)/EclipseUtil.class
