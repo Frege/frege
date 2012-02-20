@@ -259,7 +259,7 @@ instance Positioned (ExprT a) where
     --- get the line number of an expression
     getpos (App a b _)    = (getpos a).merge (getpos b)
     getpos (Mem {ex})     = getpos ex
-    getpos (Lam _ p x _)  = p.getpos.merge x.getpos
+    getpos (Lam p x _)    = p.getpos.merge x.getpos
     getpos (Case _ e alts _) = (getpos e).merge (Position.merges (map Positioned.getrange alts))
     getpos (Let e _ x _)  = getpos x
     getpos (Ifte c a b _) = Position.merges (map getpos [c, a, b])
@@ -267,7 +267,7 @@ instance Positioned (ExprT a) where
     getpos e | e.{pos?}   = e.pos
              | otherwise  = Prelude.error ("can't determine expr pos " ++ show (constructor e))
 
-    getrange (Let e _ x _)  = (getpos x).merge (Position.merges (map Positioned.getpos (values e)))
+    -- getrange (Let e _ x _)  = (getpos x).merge (Position.merges (map Positioned.getpos (values e)))
     getrange x = getpos x
 
 
@@ -330,7 +330,30 @@ instance Positioned (PatternT a) where
     -- untyped 'Pattern', this is yet another identity function
     -- untyped p = p
 
---- get the variables in a pattern
+--- Get the variables in a pattern in the form of 'PVar's
+--- This does not care about duplicates, but duplicates are forbidden anyway.
+patVars :: PatternT a -> [PatternT a]
+patVars = loop [] where
+    loop acc (p@PVar{})           = p:acc
+    loop acc PAt{pos,var,uid,pat} = loop nacc pat where nacc = PVar{pos,var,uid} : acc
+    loop acc PMat{uid,pos,var}    = PVar{pos,var,uid} : acc
+    loop acc p | p.{pat?}         = loop acc p.pat
+    loop acc PCon{pats}           = fold loop acc pats
+    loop acc PConFS{fields}       = fold loop acc (map snd fields)
+    loop acc _                    = acc 
+
+--- Get the variables in a pattern in the form of 'Local's
+patNames :: PatternT a -> [QName]
+patNames = loop [] where
+    loop acc (p@PVar{})           = Local p.uid p.var:acc
+    loop acc PAt{pos,var,uid,pat} = loop nacc pat where nacc = Local uid var : acc
+    loop acc PMat{uid,pos,var}    = Local uid var : acc
+    loop acc p | p.{pat?}         = loop acc p.pat
+    loop acc PCon{pats}           = fold loop acc pats
+    loop acc PConFS{fields}       = fold loop acc (map snd fields)
+    loop acc _                    = acc 
+
+{- get the variables in a pattern
 patNames :: PatternT a -> OrdSet String
 patNames p = names Nil p where
     names t (PVar {var })     = t `including` var
@@ -341,7 +364,7 @@ patNames p = names Nil p where
     names t (PLit {pos})      = t
     names t (PAnn p _)        = names t p
     names t (PMat {var})      = t `including` var
-
+    -}
 
 
 --- get the 'Position' of a rho type
@@ -454,27 +477,28 @@ showex lambdachar x global = showprec 17 x where
                                         ++ showprec 17 a.ex ++ rest where
              rest | null as = "}"
                   | otherwise = "; ...}"
-    showprec 17 (Let t _ e _)
+    showprec 17 (Let kt _ e _)
         | length kt >  1  = "let " ++ dspl kt ++ " in " ++ showprec 17 e
-        | lambdachar != "\\" = "let " ++ head kt ++ "=" ++ sv (head vt) ++ " in ..."
-        | length kt == 1  = "let " ++ head kt ++ "=" ++ sv (head vt) ++ " in " ++ showprec 17 e
+        | lambdachar != "\\" = "let " ++ QName.base (head kt) ++ "=" ++ sv vt ++ " in ..."
+        | length kt == 1     = "let " ++ QName.base (head kt) ++ "=" ++ sv vt ++ " in " ++ showprec 17 e
         | otherwise = "let ... in " ++ showprec 17 e  -- Prelude.error "showprec empty let"
         where
-            kt = keys t
-            vt = values t
-            sv (vsym@SymV {expr})
+            -- kt = keys t
+            vt = [ s | k <- kt, s <- QName.findit k global ]
+            sv (vsym@SymV {expr}:_)
                 | Just x <- expr = if lambdachar == "\\"
                     then nice x global
                     else nicer x global          -- NOT "showprec 17 x"  as this imposes
                                                  -- a too restricted Expr to showprec
                                                  -- when no annotation prevents it
                 | otherwise = "???"
-            sv sym = Prelude.error ("showprec no variable: " ++ sym.nice global)
+            sv (sym:_) = Prelude.error ("showprec no variable: " ++ sym.nice global)
+            sv [] = "?"
             dspl [] = ""
-            dspl [x] = x
-            dspl (x:xs) = x ++ ", " ++ dspl xs
+            dspl [x] = QName.base x
+            dspl (x:xs) = QName.base x ++ ", " ++ dspl xs
 
-    showprec 17 (Lam _ p e _)  = lambdachar ++ PatternT.nice p global
+    showprec 17 (Lam p e _)  = lambdachar ++ PatternT.nice p global
                                         ++ " -> " ++ showprec 17 e
     showprec n (Ann x (Just t)) = "(" ++ showprec 17 x ++ "::" ++ t.nicer global ++ ")"
     showprec n (Ann x Nothing)  = "(" ++ showprec 17 x ++ "::" ++ "Nothing?" ++ ")"
@@ -510,11 +534,11 @@ instance Nice (Nice q, QNameMatcher q) => PatternT q where
             showp 0 p = "(" ++ showp 17 p ++ ")"
             showp 17 (PAnn p t) = showp 15 p ++ "::" ++ t.nice g
             showp 17 p = showp 15 p
-            showp 15 (PAt _ at p) = at ++ "@" ++ showp 15 p
+            showp 15 (PAt{var,pat}) = var ++ "@" ++ showp 15 pat
             showp 15 p = showp 13 p
             showp 13 (PCon {qname, pats=[p,ps]}) | qname.nice g ~ #:$# = showp 2 p ++ ":" ++ showp 13 ps
             showp 13 p = showp 2 p
-            showp 2  (PMat _ m r) = m ++ "~" ++ r
+            showp 2  (PMat{var,value}) = var ++ "~" ++ value
             showp 2  p = showp 1 p
             showp 1  (p@PCon {qname,pats})
                 | null pats || qname.nice g ~ #\(,+\)$# = showp 0 p
@@ -826,17 +850,24 @@ enter sym
                 Just _ -> enterOrUpdate
     | otherwise    = enterOrUpdate
     where
-        enterOrUpdate = do
-            g <- getST
-            case sym.name.find g of
-                Nothing -> enterByName sym
-                Just that
-                    | SymL {alias} <- that, alias.getpack != sym.name.getpack = do
-                            warn sym.pos (fill (break("hiding previously (line " ++ show that.pos
-                                ++ ") imported "
-                                ++ that.nice g ++ " through " ++ sym.nice g)))
-                            changeSym sym
-                    | otherwise = enterByName sym   -- error message follows
+        enterOrUpdate 
+            | Local{uid} <- sym.name = do
+                g <- getST
+                uid <- if uid > 0 then return uid else uniqid
+                case sym.name.find g of
+                    Nothing   -> changeST Global.{locals <- insertkv uid sym}
+                    Just that -> error sym.pos (text ("already entered: " ++ nice sym g ++ " with uid " ++ show uid)) 
+            | otherwise = do
+                g <- getST
+                case sym.name.find g of
+                    Nothing -> enterByName sym
+                    Just that
+                        | SymL {alias} <- that, alias.getpack != sym.name.getpack = do
+                                warn sym.pos (fill (break("hiding previously (line " ++ show that.pos
+                                    ++ ") imported "
+                                    ++ that.nice g ++ " through " ++ sym.nice g)))
+                                changeSym sym
+                        | otherwise = enterByName sym   -- error message follows
 
 
 
@@ -861,21 +892,21 @@ changeSym sym = do
                                 env <- updateSym typ.env sym.name.key sym
                                 updateGlobal t.pack t.key typ.{env}
                              | otherwise = fatal sym.pos (text "no environment:" <+> text (t.nice g))
-            Local s -> do
-                g <- getST
-                let k = sym.name.key
-                case (head g.env).lookup k of
+            Local uid s -> -- do
+                --  g <- getST
+                changeST Global.{locals <- updatekv uid sym}
+                {- case (head g.env).lookup k of
                     Just found -> do
                         env <- updateSym (head g.env) k sym
                         changeST Global.{env = env : tail g.env}
                         -- changeTop (const env)
-                    Nothing -> without (changeSym sym)
+                    Nothing -> without (changeSym sym) -}
 
-enterByName :: Symbol -> StG ()
-enterByName sym | sym.sid == 0 = do
+private enterByName :: Symbol -> StG ()
+private enterByName sym | sym.sid == 0 = do
         u <- uniqid
         enterByName sym.{sid=u}
-enterByName sym = do
+private enterByName sym = do
     g <- getST
     logmsg TRACE3 sym.pos (fill (break ("enterByName " ++ sym.nice g ++ " " ++ show sym.sid ++ " "
         ++ (if sym.{expr?} && not (isPSigma sym.typ)
@@ -894,15 +925,16 @@ enterByName sym = do
                             env <- insertSym typ.env sym.name.key sym
                             updateGlobal t.pack (t.key) typ.{env}
                          | otherwise = fatal sym.pos (msgdoc ("no environment: " ++ t.nice g))
-        Local s -> do
+        Local {} -> do
             g <- getST
-            env <- insertSym (head g.env) sym.name.key sym
+            fatal sym.pos (text ("local passed to enterbyname " ++ nice sym g))
+            -- env <- insertSym (head g.env) sym.name.key sym
             {-
             logmsg TRACE3 sym.pos ("length env: " ++ show (length g.env)
                                    ++ ", keys oldtop: " ++ show (keys (head g.env))
                                    ++ ", keys newtop: " ++ show (keys env))
                                    -}
-            changeST Global.{env = env : tail g.env}
+            -- changeST Global.{env = env : tail g.env}
             -- changeTop (const env)
 
 {- ############ find a specific symbol or die ############### -}
@@ -1140,13 +1172,58 @@ numbers = iterate (1+) 0
 envConstructors :: Symtab -> [Symbol]
 envConstructors env = sortBy (comparing Symbol.cid) [ sy | (sy::Symbol) <- values env, sy.{cid?} ]
 
+--- provide (a new) uid for a Pattern
+pReturn (p@PCon{}) = do
+    pats <- mapSt pReturn p.pats
+    return p.{pats}
+pReturn (p@PConFS{}) = do
+    let ret (nm, pat) = do p <- pReturn pat; return (nm, p)
+    fields <- mapSt ret p.fields
+    return p.{fields}
+pReturn (p@PStrict{pat}) = do
+    pat <- pReturn pat
+    return p.{pat}
+pReturn (p@PLit{}) = return p         
+pReturn p = do
+    uid <- uniqid
+    case p of
+        PVar{} -> return p.{uid}
+        PMat{} -> return p.{uid}
+        PAt{}  -> do
+            pat <- pReturn p.pat
+            return p.{pat,uid}
+
+--- the local 'QName' that belongs to this 'Pattern', it must have fields 'Pattern.uid' and 'Pattern.var'.
+pVarLocal :: PatternT a -> QName
+pVarLocal p  = Local p.uid p.var
+
 {-- @patLocal pos name@ creates a local variable symbol from pos and name -}
-patLocal pos name = vSym pos (Local name)
+patLocal pos uid name = vSym pos (Local uid name)
+
+--- set uid for a local symbol
+setuid uid = Symbol.{sid=uid, name <- QName.{uid}}
+
+{-- make a new local symbol for a 'PVar', enter and return it -}
+mkLocal PVar{pos,uid,var} = do
+    let sym = patLocal pos uid var
+    enter sym
+    stio sym
+
+--- update the local names uids in an expression that match one of the symbols by name 
+replaceLocals :: [Symbol] -> Expr -> StG (Either Expr Expr)
+replaceLocals syms (v@Vbl {name = Local 0 s}) = case DL.find (\sym -> (Symbol.name sym).base == s) syms of
+        Just sym -> stio (Right v.{name = sym.name})
+        other    -> stio (Right v)
+replaceLocals syms x = stio (Left x)
+         
 {--
  *  @vSym pos name@ creates a 'SymV' symbol with all fields except 'Symbol.pos'
- *  and 'Symbol.name' set to standard values
+ *  and 'Symbol.name' set to standard values.
+ * If the name is a 'Local' one, the 'Symbol.sid' is set to the 'QName.uid'
  -}
-vSym pos name = SymV {pos, sid=0, name, vis=Private, doc=Nothing,
+vSym pos name = SymV {pos, 
+                        sid= if QName.{uid?} name then name.uid else 0, 
+                                name, vis=Private, doc=Nothing,
                                 typ=pSigma, expr=Nothing, nativ=Nothing,
                                 pur=false, anno=false, exported=false, state=Unchecked,
                                 strsig = Strictness.U, depth = 0, rkind = 0 }
@@ -1347,7 +1424,7 @@ canonical g qname = case QName.findit qname g of
 
 -- access is forbidden to global private symbols from a different package
 accessforbidden we sym
-    | Local _   <- Symbol.name sym = false
+    | Local {}  <- Symbol.name sym = false
     | VName p _ <- Symbol.name sym = sym.vis == Private && p != we
     | TName p _ <- Symbol.name sym = sym.vis == Private && p != we
     | MName (TName p _) _ <- Symbol.name sym = sym.vis == Private && p != we
@@ -1381,12 +1458,12 @@ protected resolve fname pos sname = do
 private resolve3 fname pos (Simple Token{value=qs}) = do
     g <- getST
     let s = enclosed qs
-    let local = Local s
+    let -- local = Local s
         mname = fname s
         vname = VName g.thisPack s
         tname = TName g.thisPack s
         find x = QName.findit x g
-        names = [local, mname, vname, tname]
+        names = [mname, vname, tname]
         found = map find names
         result = [ sym | Just sym <- found ]                -- canonical through findit
 --                                  (Symbol.name sym).base == s,
@@ -1688,12 +1765,13 @@ foldEx b f a ex = do
                     a <- foldEx b f a g
                     foldEx b f a x
                 Let {env,ex}
-                    | b = with env do
-                        let xs = [ x | SymV {expr=Just x} <- values env ]
+                    | b = do
+                        syms <- mapSt findV env
+                        let xs = [ x | SymV {expr=Just x} <- syms ]
                         a <- foldSt (foldEx b f) a xs
                         foldEx b f a ex
-                    | otherwise = with env (foldEx b f a ex)
-                Lam {env,ex} = with env (foldEx b f a ex)
+                    | otherwise = foldEx b f a ex
+                Lam {ex} = foldEx b f a ex
                 Ifte {cnd,thn,els} = do
                     a <- foldEx b f a cnd
                     a <- foldEx b f a thn
@@ -1702,7 +1780,7 @@ foldEx b f a ex = do
                 Case {ex,alts} = do
                     a <- foldEx b f a ex
                     foldSt foldAlt a alts
-                  where foldAlt a (CAlt {env,ex}) = with env (foldEx b f a ex)
+                  where foldAlt a (CAlt {ex}) = foldEx b f a ex
                 Ann {ex} = foldEx b f a ex
 
 {--
@@ -1734,13 +1812,13 @@ mapEx b f x = do
                 x <- mapEx b f x
                 stio (App g x typ)
             Let {env,ex,defs,typ}
-                | b = with env do
-                    let xs = [ sy | sy@SymV {expr=Just _} <- values env ]
+                | b = do
+                    syms <- mapSt findV env
+                    let xs = [ sy | sy@SymV {expr=Just _} <- syms ]
                     foreach xs mapsub
                     ex  <- mapEx b f ex
-                    env <- getTop
                     stio (Let {env,ex,defs,typ})
-                | otherwise = with env do
+                | otherwise = do
                     ex <- mapEx b f ex
                     stio (Let {env,ex,defs,typ})
                 where mapsub (sy@SymV {expr=Just x}) = do
@@ -1750,9 +1828,9 @@ mapEx b f x = do
                         g <- getST
                         fatal sy.pos (text ("mapEx: strange symbol in let def rhs: "
                                     ++ sy.nice g))
-            Lam {env,pat,ex,typ} = with env do
+            Lam {pat,ex,typ} = do
                 ex <- mapEx b f ex
-                stio (Lam {env,pat,ex,typ})
+                stio (Lam {pat,ex,typ})
             Ifte {cnd,thn,els,typ} = do
                 cnd <- mapEx b f cnd
                 thn <- mapEx b f thn
@@ -1765,27 +1843,89 @@ mapEx b f x = do
                 ex <- mapEx b f ex
                 alts <- mapSt (mapAlt b f) alts
                 stio (Case {ckind,ex,alts,typ})
-              where mapAlt b f (CAlt {pat,env,ex}) = with env do
+              where mapAlt b f (CAlt {pat,ex}) = do
                         ex <- mapEx b f ex
-                        stio (CAlt {pat,env,ex})
+                        stio (CAlt {pat,ex})
             Ann {ex,typ} = do
                 ex <- mapEx b f ex
                 stio (Ann {ex,typ})
 
 --- a variant of 'mapEx' that passes all outer lambdas and invokes 'mapEx' on the body
-mapExBody b f (Lam {env,pat,ex,typ}) = do
-        ex <- with env (mapExBody b f ex)
-        stio (Lam {env,pat,ex,typ})
+mapExBody b f (Lam {pat,ex,typ}) = do
+        ex <- mapExBody b f ex
+        stio (Lam {pat,ex,typ})
 mapExBody b f x = mapEx b f x
 
-{-- @localSyms ex@ returns the set of all local symbols mentioned in /ex/
+{-- @localSyms ex@ returns the set of all local uids mentioned in /ex/
  -}
 localSyms ex = foldEx true collect Nil ex where
-    collect acc (Vbl {name=nm@Local _}) = do
-        sym <- findV nm
-        stio (Left (acc `including` sym))
+    collect acc (Vbl {name=nm@Local {uid}}) = do
+        --sym <- findV nm
+        stio (Left (acc `including` uid))
     collect acc _ = stio (Left acc)
 
+--- replace a set of uids
+replUids t = mapEx true rep where
+    rep (v@Vbl{name=Local{uid}}) = case lookup t uid of
+        Just nid -> stio (Right v.{name <- QName.{uid=nid}})
+        Nothing  -> stio (Right v)
+    rep x = stio (Left x)
+
+{-- 
+    Copy an expression, all patterns will be refreshed and references
+    renamed accordingly. The new expression will be untyped.
+    Let symbols will get their type removed unless they are annotated.
+    -}
+copyExpr = mapEx true copy where
+    copy (Lam{pat,ex}) = do
+        let qnames  = patNames pat
+            olduids = map QName.uid qnames 
+        pat <- pReturn pat
+        let newuids = map QName.uid (patNames pat)
+            tree    = Tree.fromList (zip olduids newuids)
+        ex <- replUids tree ex
+        mapM_ (copySym tree) qnames
+        stio (Left Lam{pat,ex,typ=Nothing})
+    copy (Case x ckind alts _) = do
+        alts <- mapSt copyAlt alts
+        stio (Left (Case x ckind alts Nothing)) 
+      where
+        copyAlt CAlt{pat,ex} = do             
+            let qnames  = patNames pat
+                olduids = map QName.uid qnames 
+            pat <- pReturn pat
+            let newuids = map QName.uid (patNames pat)
+                tree    = Tree.fromList (zip olduids newuids)
+            ex <- replUids tree ex
+            mapM_ (copySym tree) qnames
+            stio CAlt{pat,ex}
+    copy (Let{env,ex}) = do
+        let olduids = map QName.uid env
+        newuids <- sequence (map (const uniqid) olduids)
+        let tree = Tree.fromList (zip olduids newuids)            
+        nenv <- mapSt (copySym tree) env
+        ex   <- replUids tree ex
+        stio (Left Let{env=nenv,ex,typ=Nothing,defs=[]})
+    copy x = stio (Left x.{typ=Nothing})
+
+--- copy a local symbol 
+copySym tree qname = do
+    sym <- findV qname
+    case lookup tree (Symbol.sid sym) of
+        Just nuid ->  do
+                mbx <- maybeST sym.expr (replUids tree) 
+                let name = sym.name.{uid=nuid}
+                    nsig = if sym.anno then sym.typ else pSigma
+                    nsym = sym.{name, expr = mbx, sid = nuid, typ = nsig}
+                enter nsym
+                stio name
+        Nothing -> Prelude.error ("Can't find sid " ++ show sym.sid ++ " for name " ++ show sym.name)
+
+maybeST (Just f) act = do
+    f <- act f
+    stio (Just f)
+maybeST Nothing _ = stio Nothing
+                                            
 {-- @ourGlobalFuns mtree ex@ returns the set of all global symbols mentioned in /ex/
  *
  * /mtree/ is a 'Tree' 'String' ['Symbol'] mapping unqualified member names to
@@ -1795,7 +1935,7 @@ localSyms ex = foldEx true collect Nil ex where
 ourGlobalFuns :: Tree String [Symbol] -> Expr -> StG (Tree Symbol ())
 ourGlobalFuns mtree ex = foldEx true collect Nil ex where
     collect acc (Vbl {name})
-        | Local _ <- name = stio (Left acc)
+        | Local {} <- name = stio (Left acc)
         | otherwise = do
             sym <- findV name
             stio (Left (acc `including` sym))
@@ -1939,10 +2079,8 @@ base32 num
  * [return] a java identifier for the corresponding java object, if there is one
  * [requires] the named item must be in scope
  -}
-javaName g (q@Local s) = case QName.findit q g of
-    Just (SymV {sid}) = JName "" (mangled s)
-    other -> Prelude.error ("javaName: cannot find variable " ++ s)
-
+javaName :: Global -> QName -> JName
+javaName g (Local uid s) = JName "" (mangled s ++ "_" ++ show uid)
 
 javaName g qname = case qname.findit g of
         Just sym -> case sym of

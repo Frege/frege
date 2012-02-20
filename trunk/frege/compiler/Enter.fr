@@ -161,7 +161,7 @@ chgddef (d@DatDcl {pos}) = do
                         sv p = p
                 reppat v p = p
                 -- construct simple (pattern) variables
-                pvar s = PVar {var=s,pos}
+                pvar s = PVar {var=s,uid=0,pos}
                 var  s = Vbl  {name=Simple pos.first.{value=s},pos,typ = Nothing}
                 -- replace a variable named a with expr b in a list
                 rep a b vs = map (repvar a b) vs                -- replace Vbl ONLY!
@@ -176,24 +176,24 @@ chgddef (d@DatDcl {pos}) = do
                 vFalse = Lit {kind=LBool, value="false", pos, typ = Nothing}
                 vTrue  = Lit {kind=LBool, value="true", pos, typ = Nothing}
                 getExpr = Case CNoWarn this getAlts Nothing
-                getAlts = [ CAlt {env=Nil,pat=conpat con "a", ex=v}
+                getAlts = [ CAlt {pat=conpat con "a", ex=v}
                                                         | con <- cons, v <- occurs con f]
                 updExpr = Case CNoWarn this updAlts Nothing
                 conUpd :: Symbol -> ExprS -> ExprS
                 conUpd con v = mkApp (conval con) (rep v.name.id.value that (take (arity con) subvars))
-                updAlts = [ CAlt {env=Nil,pat=conpat con "a", ex = conUpd con v}
+                updAlts = [ CAlt {pat=conpat con "a", ex = conUpd con v}
                                                         | con <- cons, v <- occurs con f]
                 chgExpr = Case CNoWarn this chgAlts Nothing
                 conChg :: Symbol -> ExprS -> ExprS
                 conChg con v = mkApp (conval con) (rep v.name.id.value (nApp that v) (take (arity con) subvars))
-                chgAlts = [ CAlt {env=Nil,pat=reppat (Expr.name v).id.value (conpat con "a"), ex = conChg con v}
+                chgAlts = [ CAlt {pat=reppat (Expr.name v).id.value (conpat con "a"), ex = conChg con v}
                                                         | con <- cons, (v::ExprS) <- occurs con f]
                 hasExpr
                     | length cons == 1 = vTrue
                     | otherwise = Case CNoWarn this (hasAlts ++ [last]) Nothing
-                hasAlts = [ CAlt {env=Nil,pat=conpat con "_", ex = vTrue}
+                hasAlts = [ CAlt {pat=conpat con "_", ex = vTrue}
                                                         | con <- cons, v <- occurs con f]
-                last = CAlt {env=Nil, pat=pvar "no", ex = vFalse}
+                last = CAlt {pat=pvar "no", ex = vFalse}
             in [symf, symu, symc, symh]
 chgddef d = stio d      -- leave others unchanged
 
@@ -230,18 +230,17 @@ link sym = do
     U.enter (SymL {sid=0, pos=sym.pos, vis=sym.vis, -- doc=Nothing,
                    name=VName g.thisPack sym.name.base, alias=sym.name})
 
-
+--- reorder definitions so that annotations come last
+annosLast defs = nannos ++ annos where
+    (annos, nannos) = DL.partition isAnno defs
+    isAnno (AnnDcl {pos}) = true
+    isAnno _              = false 
 {--
     Create provisional symbols for many definitions in the symbol table.
     Takes care that annotations are processed after their implemetations
     so that 'changeSym' will work.
     -}
-enter fname defs = do
-    let isAnno (AnnDcl {pos}) = true
-        isAnno _              = false
-        annos  = filter isAnno         defs
-        nannos = filter (not • isAnno) defs
-    foreach (nannos ++ annos) (enter1 fname)
+enter fname defs = foreach (annosLast defs) (enter1 fname)
 
 {-- create provisional symbol for 1 definition in the symbol table -}
 enter1 :: (String -> QName) -> DefinitionS -> StG ()
@@ -320,22 +319,33 @@ enter1 !fname (!d@InsDcl {pos=!pos}) = do
 
 enter1 fname (d@DrvDcl {pos}) = U.fatal pos (text "FATAL: cannot enter a derive definition")
 
-enter1 fname (d@FunDcl {poss, name="let"}) = do
+{-
+enter1 fname (d@FunDcl {poss, name=´^let\$´}) = do
         g <- getST
         U.logmsg TRACE3 (head poss) (text ("enter: let "
             ++ show (map (flip PatternT.nice g) d.pats) ++ " = "
             ++ d.expr.nice g))
-        absurd (length d.pats != 1)  "illegal pattern bindings, turn on -x3"
-        enterpat (head d.pats)
+        when (length d.pats != 1)  do
+            U.fatal (head poss) (text "illegal pattern bindings, turn on -x3")
+        foreach (U.patVars (head d.pats)) enterpvar
     where
-        enterpat  p     = foreach ((keys • U.patNames) p) (enterpvar (getpos p))
-        enterpvar pos v = do
-            let !qname = fname v
-            changeST Global.{
-                sub <- SubSt.{
-                idKind <- insertkv (KeyTk (Position.first pos)) (Right qname)}}
-            U.enter (vSym pos qname).{vis=d.vis, doc=d.doc}
-
+        enterpvar :: PatternT a -> StG ()           -- actually, PVar only
+        enterpvar (pvar@PVar{pos,var,uid}) = do
+            let !qname = fname var
+            case qname of 
+                Local{} -> do
+                    pat <- U.pReturn pvar
+                    let qname = Local pat.uid pat.var
+                    changeST Global.{   
+                        sub <- SubSt.{
+                        idKind <- insertkv (KeyTk (Position.first pos)) (Right qname)}}
+                    U.enter (U.patLocal pos uid var)
+                other -> do
+                    changeST Global.{   
+                        sub <- SubSt.{
+                        idKind <- insertkv (KeyTk (Position.first pos)) (Right qname)}}
+                    U.enter (vSym pos qname).{vis=d.vis, doc=d.doc}
+-}
 
 enter1 fname (d@FunDcl {poss}) = do
         let !qname = fname d.name
@@ -519,7 +529,7 @@ deriveDcls pos clas forty ctrs = do
                                    pos.first.{tokid=CONID, value=base}
             _ -> error "constructor must be a member"
         -- [PVar c1, PVar c2, PVar c3, ...]
-        subpats "_" = repeat (pvar "_")
+        -- subpats "_" = repeat (pvar "_")
         subpats c = [ pvar (c ++ show a) | a <- 1..1000 ]
         subvars c = [ var  (c ++ show a) | a <- 1..1000 ]
         -- construct pattern  Con s1 s2 s3 ... sn
@@ -528,7 +538,7 @@ deriveDcls pos clas forty ctrs = do
             where pats = take (arity con) (subpats s)
         -- construct simple (pattern) variables
         pvar :: String -> PatternS
-        pvar s = PVar {var =s,pos=pos.change VARID s}
+        pvar s = PVar {var=s,uid=0,pos=pos.change VARID s}
         var :: String -> ExprS
         var  s = Vbl  {name=Simple pos.first.{tokid=VARID, value=s},pos=pos.change VARID s, typ = Nothing}
         gvar p s = Vbl {name=With1 pos.first.{tokid=CONID, value=p} pos.first.{tokid=VARID, value=s},
@@ -573,7 +583,7 @@ deriveDcls pos clas forty ctrs = do
         publicfun name pats expr = FunDcl {vis=Public, poss = [pos], name, pats, expr,
                         -- strict=false,
                         doc=Just "Function generated for derived istance."}
-        calt p x  = CAlt {env=Nil, pat=p, ex=x}
+        calt p x  = CAlt {pat=p, ex=x}
         -- construct  a ++ b
         mkapp a b = nApp (nApp vApp a) b
         -- construct "show v"

@@ -1330,7 +1330,7 @@ workerMethod g (sym@SymD {name, flds}) = case U.javaName g name of
         jname | Just (SymT {enum = true}) <- name.tynm.findit g = jname
               | otherwise = U.memberOf jname "mk"
 workerMethod g (sym@SymV {name, depth = 0}) = U.javaName g name
-workerMethod g (sym@SymV {name = Local _})  = (U.javaName g sym.name).{base=(workName g sym)}
+workerMethod g (sym@SymV {name = Local{}})  = (U.javaName g sym.name).{base=(workName g sym)}
 workerMethod g (sym@SymV {name, nativ=Nothing})
     | not (null sym.typ.rho.context)        = U.memberOf (U.javaName g name) (workName g sym)
 workerMethod g (sym@SymV {name})            = U.javaName g name
@@ -1353,7 +1353,7 @@ wrapperClass g (sym@SymD {}) = Nothing
     -- otherwise = Nothing
 wrapperClass g (sym@SymV {name, depth, sid})
     | depth == 0 = Nothing
-    | Local _ <- name = Just (JName "" ("L" ++ show sid))
+    | Local{} <- name = Just (JName "" ("L" ++ show sid))
     | null sym.typ.rho.context = Nothing
     | otherwise = Just (U.javaName g name)
 wrapperClass g sym = error ("wrapperClass: bad arg " ++ sym.nice g)
@@ -1396,7 +1396,7 @@ workName g (sym@SymV {name, typ, strsig, depth, rkind})
       onlyLazyArgs strsig = "eval"
     | otherwise = "work"
     where
-        local (Local _) = true
+        local (Local{}) = true
         local _         = false
         constrained sigma = not (null (Sigma.rho sigma).context)
         onlyLazyArgs (S uuu) = all (U==) uuu
@@ -1584,7 +1584,7 @@ funCode nofun binds = error "funClass: no function"
     create new Lambda123() { ...} from \x -> e
     -}
 lambdaEx :: Expr -> Tree Symbol Binding -> StG Binding
-lambdaEx (lam@Lam{env,pat,ex,typ=Just (sig@ForAll _ rho)}) binds = do
+lambdaEx (lam@Lam{pat,ex,typ=Just (sig@ForAll _ rho)}) binds = do
     g <- getST
     U.logmsg TRACEG (getpos ex) (text("lambdaEx: " ++ nice ex g ++ " :: " ++ nicer rho g))
     rho <- TC.zonkRho rho
@@ -1592,7 +1592,7 @@ lambdaEx (lam@Lam{env,pat,ex,typ=Just (sig@ForAll _ rho)}) binds = do
         argNames = drop (fold (+) 0 (map Symbol.depth g.genEnv)) GenJava7.argNames
         (rty, atys) = U.returnTypeN depth rho
         lambdaTyp  = Nativ ("Lam"  ++ show depth) []
-        fake = (U.patLocal (getpos lam) "\\lambda").{depth}
+        fake = (U.patLocal (getpos lam) 0 "\\lambda").{depth}
     sjt  <- sigmaJT sig
     rjt  <- rhoJT rty
     ajts <- mapSt sigmaJT atys
@@ -2208,13 +2208,15 @@ sComment = (JLocal • JComment)
  * if the control flow reaches the closing brace of the if this will be
  * an indication that the pattern match failed.
  -}
-match assert (PVar {var}) bind cont binds = do
-        vsym <- U.findV (Local var)
+match assert (PVar {uid,var}) bind cont binds = do
+        vsym <- U.findV local
         if vsym.strsig.isStrict then strictVar vsym else lazyVar vsym
     where
+        local = Local uid var
+        jname g = (U.javaName g local).base
         strictVar vsym = do
             g <- getST
-            (rbind, code) <- realize (Symbol.name vsym).base (notLazy bind)
+            (rbind, code) <- realize (jname g) (notLazy bind)
             let stmt = if null code
                     then [sComment ("bind  " ++ nice (Symbol.name vsym) g
                                         ++ "  to  " ++ showJex rbind.jex)]
@@ -2229,15 +2231,17 @@ match assert (PVar {var}) bind cont binds = do
             rest <- cont nbinds
             stio (bind, sComment comment:rest)
 
-match assert (p@PAt {pat,var}) bind cont binds = do
+match assert (p@PAt {pat,uid,var}) bind cont binds = do
         g <- getST
         prm <- patternRMode pat
-        vsym <- U.findV (Local var)
+        let local = Local uid var
+            jname = (U.javaName g local).base
+        vsym <- U.findV local
         let vrm = if vsym.strsig.isStrict then RBoxed else RLazy
             rm = min prm vrm
             ourBind = toMode rm bind
             comment = sComment ("match " ++ nice p g ++ " with " ++ nice ourBind g)
-        (rbind, code1) <- realize (Symbol.name vsym).base ourBind
+        (rbind, code1) <- realize jname ourBind
         let nbinds = insert binds vsym rbind
         (xbind, code2) <- match assert pat rbind cont nbinds
         stio (xbind, comment : code1++code2)
@@ -2405,9 +2409,9 @@ match assert (pat@PLit {kind, value}) bind cont binds
             ifc = if assert then JAssert jex : body else [JCond "if" jex body]
         stio (bind, (comment:code) ++ ifc)
 
-match assert (pat@PMat {pos, var, value}) bind cont binds = do
+match assert (pat@PMat {pos, uid, var, value}) bind cont binds = do
         g <- getST
-        vsym <- U.findV (Local var)
+        vsym <- U.findV (Local uid var)
         (bind,code) <- realize "$" (notLazy bind)
         mjt <- sigmaJT (TY.sigMatcher)
         let comment = sComment ("match  " ++ nice pat g
@@ -2418,7 +2422,7 @@ match assert (pat@PMat {pos, var, value}) bind cont binds = do
         xbnd <- genExpr false RNative lit binds
         let mbnd = Bind RNative (TY.sigMatcher) (strict mjt)
                     (JInvoke (JExMem xbnd.jex "matcher") [sbnd.jex])
-        (mbnd,code2) <- realize var mbnd
+        (mbnd,code2) <- realize (U.javaName g (Local uid var)).base mbnd
         body <- cont (binds.insert vsym mbnd)
 
         let  jex = JInvoke (JExMem mbnd.jex "find") []
@@ -2462,7 +2466,7 @@ matches assert _ _ _ _ = Prelude.error "matches: cannot happen when compiler is 
  * Set's up a 'Binding' for the corresponding method argument and
  * 'match'es its pattern against it with the enclosed expression as continuation.
  -}
-genLambda rm (Lam {pat, env, ex}) ((_, sig, jt, s) : args) binds = with env do
+genLambda rm (Lam {pat, ex}) ((_, sig, jt, s) : args) binds = do
     g <- getST
     let komplett = T.patsComplete g [pat]
         badguard = T.openCaseWhen g ex
@@ -2503,8 +2507,8 @@ genLambda _ _ _ _ = error "genLambda: bad arguments"
 patternRMode p = do
     g <- getST
     case p of
-        PVar {var} -> do
-            v <- U.findV (Local var)
+        PVar {uid,var} -> do
+            v <- U.findV (Local uid var)
             if v.strsig.isStrict
                 then case v.typ.rho of
                     RhoTau _ t -> do
@@ -2512,9 +2516,9 @@ patternRMode p = do
                         stio (if b then RNative else RBoxed)
                     _ -> stio RBoxed
                 else stio RLazy
-        PAt {pos,var,pat} -> do
+        PAt {pos,uid,var,pat} -> do
             rm <- patternRMode pat
-            if rm == RLazy then patternRMode (PVar {pos,var}) else stio rm
+            if rm == RLazy then patternRMode (PVar {pos,uid,var}) else stio rm
         PStrict {pat} -> patternRMode pat
         PLit {pos} -> stio RNative
         PMat {pos} -> stio RNative
@@ -2572,8 +2576,8 @@ genCaseStmt rm (x@Case {ckind,ex=cex,alts=calts}) binds = do
     -- itself a constructor application or a variable that is not referenced in its scope
         capp <- constrApp cex                      -- Just (Con, args) if this is Con a1 a2 ... an
         pats <- foldSt conUVarAlt true calts        -- true if all patterns are Con _ or _
-        stri <- with (head calts).env do patternStrictness (head calts).pat -- strsig of 1st pattern
-        rmex <- with (head calts).env do patternRMode (head calts).pat
+        stri <- patternStrictness (head calts).pat -- strsig of 1st pattern
+        rmex <- patternRMode (head calts).pat
         bcex <- genExpr false rmex cex binds              -- code for ordinary expression
         let makeBexs                                -- binds for cex or constr args
                 | pats, Just (con, xs) <- capp = case stri of
@@ -2637,7 +2641,7 @@ genCaseStmt rm (x@Case {ckind,ex=cex,alts=calts}) binds = do
         stio (comment : concat (reverse (jthrow:code)))
 
     where
-        genAlts complete binds codes con bexs ((calt@CAlt {env, pat, ex}):alts) = do
+        genAlts complete binds codes con bexs ((calt@CAlt {pat, ex}):alts) = do
             g <- getST
             let last = finalAlt g calt || null alts
             -- when = T.openCaseWhen g ex
@@ -2653,12 +2657,12 @@ genCaseStmt rm (x@Case {ckind,ex=cex,alts=calts}) binds = do
                 else genAlts complete binds codes con nbexs alts
         genAlts complete binds codes con bexs alts = error "genAlts: null alts"
 
-        genAlt noif binds codes mbcon bexs (alt@CAlt {env,pat,ex})
-            | Nothing  <- mbcon = with env do
+        genAlt noif binds codes mbcon bexs (alt@CAlt {pat,ex})
+            | Nothing  <- mbcon = do
                 g <- getST
-                (nbex, code) <- with env (match noif pat (head bexs) (genStmts rm ex) binds)
+                (nbex, code) <- match noif pat (head bexs) (genStmts rm ex) binds
                 stio ((altComm g:code):codes, [nbex])
-            | Just con <- mbcon = with env do
+            | Just con <- mbcon = do
                 stri <- patternStrictness pat
                 case pat of
                     PCon {qname} -> do
@@ -2702,10 +2706,10 @@ genCaseStmt rm (x@Case {ckind,ex=cex,alts=calts}) binds = do
         -- check if a pattern is a constructor application or an unused variable
         conUVarAlt false _ = stio false
         conUVarAlt true (CAlt {pat = PCon {pos}}) = stio true
-        conUVarAlt true (CAlt {env, pat = PVar {var}, ex}) = with env do
-            sym  <- U.findV (Local var)
+        conUVarAlt true (CAlt {pat = PVar {var,uid}, ex}) = do
+            sym  <- U.findV (Local uid var)
             refs <- T.references [sym.sid] ex
-            if refs == 0 then stio true else stio false
+            stio (refs == 0) 
         conUVarAlt _ _ = stio false
         -- check if there could match anything else after this alternative has matched
         finalAlt g (CAlt {pat,ex})
@@ -2723,39 +2727,23 @@ genCaseStmt rm nocase binds = error "genCaseStmt: no case"
  -}
 genStmts rm (x@Case {ckind,ex=cex,alts=calts}) binds = genCaseStmt rm x binds
 
-genStmts rm (x@Let {env=Node nn Nil Nil k symv, ex}) binds
-    | symv.depth == 0,
-      symv.strsig.isStrict,
-      symv.rkind `band` T.rkSimple != 0,
-      RhoTau [] t <- symv.typ.rho,
-      Just vx <- symv.expr = genStmts rm (cas vx) binds
-    where
-        cas vx = Case CWhen vx [alt] x.typ
-        alt = CAlt {
-                     env = Node nn Nil Nil k symv.{expr = Nothing},
-                     pat = PVar symv.pos symv.name.base,
-                     ex}
+genStmts rm (x@Let {env, ex}) binds = do
+    case env of
+        [k] -> do
+            symv <- U.findV k
+            case symv.expr of
+                Just vx
+                    | symv.depth == 0,
+                      symv.strsig.isStrict,
+                      symv.rkind `band` T.rkSimple != 0,
+                      RhoTau [] t <- symv.typ.rho = genStmts rm (cas vx) binds
+                    where
+                        cas vx = Case CWhen vx [alt] x.typ
+                        alt = CAlt {ex, pat = PVar symv.pos symv.name.uid symv.name.base}
+                _ -> genLet rm x binds
+        _ -> genLet rm x binds
 
-genStmts rm (x@Let {env,ex}) binds = with env do
-        g <- getST
-        (nbinds, stmtss) <- foldSt localdef (binds, []) (values env)
-        stmts <- genStmts rm ex nbinds
-        stio (comment g : ((map JLocal • concat • reverse) stmtss ++ stmts))
-    where
-        comment g = sComment (nicer x g)
-        localdef (binds, codes) sym = do
-            g <- getST
-            jt <- sigmaJT (Symbol.typ sym)
-            let isClass = sym.depth > 0 -- && not (null sym.typ.bound)
-                mode = if isClass       then RNative
-                        else if Symbol.rkind sym `band` 1 == 0 then RLazy else RBoxed
-                fjt  = if isClass       then Nativ "Lambda42" [] else jt
-                bjt  = if mode == RLazy then lazy fjt            else fjt
-                name = (U.javaName g sym.name).base
-                bind = Bind mode sym.typ bjt (JAtom name)
-                nbinds = insert binds sym bind
-            code <- symCode nbinds sym
-            stio (nbinds, code:codes)
+genStmts rm (x@Let {env,ex}) binds = genLet rm x binds
 
 genStmts rm (x@(Ifte c t e _)) binds {-| not (T.isSimple x) -} = do
         g <- getST
@@ -2795,6 +2783,30 @@ genStmts rm ex binds
 genStmts rm ex binds = do
         g <- getST
         stio [JError ("code for " ++ nicer ex g)]
+
+genLet rm (x@Let {env,ex}) binds = do
+        g <- getST
+        syms <- mapSt U.findV env
+        (nbinds, stmtss) <- foldSt localdef (binds, []) syms
+        stmts <- genStmts rm ex nbinds
+        stio (comment g : ((map JLocal • concat • reverse) stmtss ++ stmts))
+    where
+        comment g = sComment (nicer x g)
+        localdef (binds, codes) sym = do
+            g <- getST
+            jt <- sigmaJT (Symbol.typ sym)
+            let isClass = sym.depth > 0 -- && not (null sym.typ.bound)
+                mode = if isClass       then RNative
+                        else if Symbol.rkind sym `band` 1 == 0 then RLazy else RBoxed
+                fjt  = if isClass       then Nativ "Lambda42" [] else jt
+                bjt  = if mode == RLazy then lazy fjt            else fjt
+                name = (U.javaName g sym.name).base
+                bind = Bind mode sym.typ bjt (JAtom name)
+                nbinds = insert binds sym bind
+            code <- symCode nbinds sym
+            stio (nbinds, code:codes)
+
+
 
 impliesG g (Ctx _ d t1 _) (Ctx _ c t2 _) = U.isSuper c g d && sameTau t1 t2
 
@@ -2885,7 +2897,7 @@ instSymDirect pos sym sigma = do
     U.logmsg TRACEG pos (text ("instSym: gargs = " ++ show (map (flip nice g) inst)))
     jt       <- sigmaJT sigma
 
-    let str | Local _ <- sym.name, null sym.typ.bound = sym.typ.rho.{context = []}
+    let str | Local {} <- sym.name, null sym.typ.bound = sym.typ.rho.{context = []}
             | otherwise = sym.typ.rho
     strho    <- U.substRho (U.unifySigma g sym.typ sigma) str
     U.logmsg TRACEG pos (text ("instSym: strho = " ++ nice strho g))
@@ -2903,7 +2915,7 @@ instSymDirect pos sym sigma = do
                         sym <- U.findV (VName pPreludeBase "id")
                         instSymDirect pos sym sigma
                     else stio (Bind RBoxed sigma jt (JX.static (workerMethod g sym)))
-        SymV {name = Local _, expr = Just _} = U.fatal sym.pos (text ("instSymDirect: " ++ nicer sym g))
+        SymV {name = Local {}, expr = Just _} = U.fatal sym.pos (text ("instSymDirect: " ++ nicer sym g))
         SymV {name, depth, rkind}
             | Just wc <- wrapperClass g sym = do
                 let instx = (JX.xmem (workName g sym) • JX.invoke ctxs • JX.static)
@@ -2932,7 +2944,7 @@ instSym pos sym sigma = do
     U.logmsg TRACEG pos (text ("instSym: gargs = " ++ show (map (flip nice g) inst)))
     jt       <- sigmaJT sigma
 
-    let str | Local _ <- sym.name, null sym.typ.bound = sym.typ.rho.{context = []}
+    let str | Local {} <- sym.name, null sym.typ.bound = sym.typ.rho.{context = []}
             | otherwise = sym.typ.rho
     strho    <- U.substRho (U.unifySigma g sym.typ sigma) str
     U.logmsg TRACEG pos (text ("instSym: strho = " ++ nice strho g))
@@ -3004,7 +3016,7 @@ apply x b = do
  -}
 genExpr :: Bool -> RMode -> Expr -> Tree Symbol Binding -> StG Binding
 genExpr _ rm (Vbl {pos, name, typ = Just sigma}) binds
-    | Local nm <- name = do
+    | Local{} <- name = do
         sym <- U.findV name
         case lookup binds sym of
             Just b = stio (toMode rm b)
@@ -3142,7 +3154,7 @@ genExpr rflg rm (app@App a b (Just sigma)) binds = do
                         depth         = ari sym
                         aargs         = take depth args
                         rargs         = drop depth args
-                        sss           = case sym.strsig of
+                        sss           = case Symbol.strsig sym of
                                 S ss -> ss ++ allLazy
                                 U    -> allLazy
                     if acall || wcall then genDirect sym

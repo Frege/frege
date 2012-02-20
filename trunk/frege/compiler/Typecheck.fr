@@ -189,26 +189,26 @@ checkgroups (g1:gs) = do
 checkgroup nms = do
     -- g <- getST
     syms <- mapSt findV nms
-    -- we set up an environment with links to the checked Symbols so that 'envTvs'
-    -- will find them
-    -- let enterChecked = [ U.linkq (Local (show (Symbol.sid sym))) sym | sym <- syms ]
-        -- enter  = zipWith ($) locals syms
-    with Nil do
+    -- we set up typEnv with the names of the group members so that 'envTvs' will find them
+    changeST Global.{typEnv <- (nms ++)}
+    
+    -- with Nil do
         -- sequence_ enterChecked
-        foreach syms (\sym -> U.linkq (Local (show (Symbol.sid sym))) sym)
-        foreach nms checkName
-        syms <- mapSt findV nms
-        when (length syms > 1 || any ((==Recursive) • Symbol.state) syms)
+        -- foreach syms (\sym -> U.linkq (Local (show (Symbol.sid sym))) sym)
+    foreach nms checkName
+    syms <- mapSt findV nms
+    when (length syms > 1 || any ((==Recursive) • Symbol.state) syms)
             (foreach nms checkName)
+    changeST Global.{typEnv <- drop (length nms)}
     g <- getST
-    when (length g.env == 0)  do
+    when (length g.typEnv == 0)  do
         quantifyMany nms
-    when (length g.env > 0 && length nms == 1) do
+    when (length g.typEnv > 0 && length nms == 1) do
         quantifyOne nms
     foreach nms verbose
     foreach nms typeSanity
     g <- getST
-    when (g.errors == 0 && length g.env == 0) (foreach nms substInstMethod)
+    when (g.errors == 0 && length g.typEnv == 0) (foreach nms substInstMethod)
     -- changeST Global.{checking=g.checking}
   where
     verbose nm = do
@@ -445,18 +445,18 @@ zonkRigid bound ex = do
 
         zonk (x@Let {env,ex,typ = Just sig}) = do
                 sig <- substRigidSigma bound sig
-                env <- nested env do
-                        foreach [ sy | sy@SymV {expr=Just _} <- values env ] symWork
-                ex  <- with env do zonkRigid bound ex
-                stio (Right x.{env,ex,typ = Just sig})
-        zonk x | x.{env?} = do                  -- update also environment of lambda
-            env <- nested x.env do
-                foreach [ sy | sy@SymV {typ} <- values x.env ] symWork
+                syms <- mapSt U.findV env
+                foreach syms symWork
+                ex  <- zonkRigid bound ex
+                stio (Right x.{ex,typ = Just sig})
+        zonk (x@Lam {pat,ex,typ}) = do                  -- update also environment of lambda
+            syms <- mapSt U.findV (map U.pVarLocal (U.patVars pat))
+            foreach syms symWork
             case Expr.typ x of
                 Just sigma -> do
                     sigma <- substRigidSigma bound sigma
-                    stio (Left (x.{env, typ = Just sigma}))
-                Nothing -> stio (Left x.{env})
+                    stio (Left (x.{typ = Just sigma}))
+                Nothing -> stio (Left x)
         zonk (Case {ckind,ex,alts,typ}) = do
             ex  <- zonkRigid bound ex
             typ <- case typ of
@@ -467,11 +467,11 @@ zonkRigid bound ex = do
             alts <- mapSt zonkAlt alts
             stio (Right (Case ckind ex alts typ))
           where
-            zonkAlt (CAlt {pat,ex,env}) = do
-                env <- nested env do
-                    foreach [ sy | sy@SymV {typ} <- values env ] symWork
-                ex  <- with env do zonkRigid bound ex
-                stio (CAlt {pat,ex,env})
+            zonkAlt (CAlt {pat,ex}) = do
+                syms <- mapSt U.findV (map U.pVarLocal (U.patVars pat))
+                foreach syms symWork
+                ex  <- zonkRigid bound ex
+                stio (CAlt {pat,ex})
         zonk x = case Expr.typ x of
             Just sigma -> do
                 sigma <- substRigidSigma bound sigma
@@ -483,9 +483,9 @@ zonkExpr x = mapEx false zonk x
     where
         zonk (x@Let {env,typ = Just sig}) = do
                 sig <- zonkSigma sig
-                env <- nested env do
-                        foreach [ sy | sy@SymV {expr=Just _} <- values env ] symWork
-                stio (Left x.{env,typ = Just sig})
+                syms <- mapSt U.findV env
+                foreach syms symWork
+                stio (Left x.{typ = Just sig})
             where
                 symWork (symv@ SymV {pos, expr = Just ex, typ = sig}) = do
                         sig <- zonkSigma sig
@@ -672,37 +672,30 @@ tcRho' (x@Case {ex,alts}) ety
         let asig = (unJust • Expr.typ • CAlt.ex • head) alts
         instSigma x.{ex, alts} asig ety
     where
-        checkAlt rho ety (alt@CAlt {env,ex,pat})  = with env do
+        checkAlt rho ety (alt@CAlt {ex,pat})  = do
             checkPat pat (ForAll [] rho)
             ex <- tcRho ex ety
-            env <- getTop
-            stio alt.{env,ex}
-        tcAlt rho (alt@CAlt {env,ex,pat}) = with env do
+            stio alt.{ex}
+        tcAlt rho (alt@CAlt {ex,pat}) = do
             checkPat pat (ForAll [] rho)
             (rho, ex) <- inferRho ex
-            env <- getTop
-            stio (rho, alt.{env, ex})
+            stio (rho, alt.{ex})
 
-tcRho' (x@Let {env,ex}) ety = with env do
+tcRho' (x@Let {env,ex}) ety = do
     g <- getST
-    -- let save = g.checking
-    checkgroup ((map Symbol.name • values) env)
+    checkgroup env
     ex <- tcRho ex ety
-    env <- getTop
-    -- changeST Global.{checking=g.checking}
     instSigma x.{env, ex} (unJust ex.typ) ety
 
-tcRho' (x@Lam {env}) (ety@Infer _) = with env do
+tcRho' (x@Lam {}) (ety@Infer _) = do
     sigma     <- inferPat x.pat
     (rho, ex) <- inferRho x.ex
-    env       <- getTop
-    instRho (x.{env, ex}) (RhoFun [] sigma rho) ety
-tcRho' (x@Lam {pat,env,ex}) (ety@Check rho) = with env do
+    instRho (x.{ex}) (RhoFun [] sigma rho) ety
+tcRho' (x@Lam {pat,ex}) (ety@Check rho) = do
     (asig, brho) <- unifyFun x rho
     checkPat pat asig
     ex <- checkRho ex brho
-    env <- getTop
-    instRho x.{env,ex} (RhoFun [] asig brho) ety
+    instRho x.{ex} (RhoFun [] asig brho) ety
 
 tcRho' (x@Mem {ex,member}) ety = do
     g <- getST
@@ -806,15 +799,15 @@ tcPat' (p@PLit {pos,kind})  ety = case kind of
     LFloat  -> instPatSigma p (sigFloat) ety
     LRegex  -> instPatSigma p (sigString) ety
 
-tcPat' (p@PVar {var}) (ety@Check sig) = do
-    sym <- findV (Local var)
+tcPat' (p@PVar {uid,var}) (ety@Check sig) = do
+    sym <- findV (Local{uid, base=var})
     case U.isPSigma sym.typ of
         true  -> do  U.changeSym sym.{typ=sig, state=Typechecked}
                      instPatSigma p sig ety
         false -> instPatSigma p sym.typ ety
 
-tcPat' (p@PVar {var}) ety = do
-    sym <- findV (Local var)
+tcPat' (p@PVar {uid,var}) ety = do
+    sym <- findV (Local{uid, base=var})
     case U.isPSigma sym.typ of
         true -> do
             sig <- newSigmaTyVar var
@@ -822,9 +815,9 @@ tcPat' (p@PVar {var}) ety = do
             instPatSigma p sig ety
         false -> instPatSigma p sym.typ ety
 
-tcPat' (p@PMat {pos,var}) ety = do
-    checkPat (PVar {pos,var}) (sigMatcher)
-    instPatSigma p (sigString) ety
+tcPat' (p@PMat {pos,uid,var}) ety = do
+    checkPat (PVar {pos,uid,var}) sigMatcher
+    instPatSigma p sigString ety
 
 tcPat' (p@PCon {qname,pats}) ety = do
     sym <- findD qname
@@ -842,13 +835,13 @@ tcPat' (p@PAnn {pat,typ}) ety = do
 
 tcPat' (p@PStrict {pat}) ety = tcPat' pat ety
 
-tcPat' (p@PAt {pos,var,pat}) (ety@Infer _) = do
+tcPat' (p@PAt {pos,uid,var,pat}) (ety@Infer _) = do
     sig <- inferPat pat
-    checkPat (PVar {pos,var}) sig
+    checkPat (PVar {pos,uid,var}) sig
     instPatSigma p sig ety
-tcPat' (p@PAt {pos,var,pat}) (ety@Check sig) = do
+tcPat' (p@PAt {pos,uid,var,pat}) (ety@Check sig) = do
     checkPat pat sig
-    checkPat (PVar {pos,var}) sig
+    checkPat (PVar {pos,uid,var}) sig
     instPatSigma p sig ety
 
 tcPat' p _ = do

@@ -51,13 +51,14 @@ package frege.compiler.Grammar where
  * $Id$
  */
 
--- import frege.IO(stdout, stderr, <<, BufferedReader)
+
 import frege.List(Tree, keyvalues, keys, insertkv)
 import Data.List as DL(elemBy)
 import frege.compiler.Data      as D
 import frege.compiler.Nice      except (group, annotation, break)
 import frege.compiler.Utilities as U(
     posItem, posLine, unqualified, tuple)
+import frege.compiler.GUtil    
 
 
 version = v "$Revision$" where
@@ -65,53 +66,10 @@ version = v "$Revision$" where
     v _ = 0
 
 
-type ParseResult = (String, [Def], Maybe String)
-type Def = DefinitionT
-type Exp = ExprT SName
-type Pat = PatternT SName
-type Item = Token
-type Qual = Either (Maybe (Pos Pat), Exp) [Def]
-type Guard = (Position, [Qual], Exp)
-
-infixl 16 `nApp`
-
 // this will speed up the parser by a factor of 70, cause yyprods comes out monotyped.
 private yyprod1 :: [(Int, YYsi ParseResult Token)]
     -> StG (YYsi ParseResult Token, [(Int, YYsi ParseResult Token)])
 
-yyerror pos s = U.error pos (msgdoc s)
-yyline  = Token.position
-yyval   = Token.value
-
-yynice t = case tok of
-        DOCUMENTATION -> "documentation comment"
-        CHAR          -> show (tv).[0]
-        STRCONST      -> "literal " ++ start tv ++ "\""
-        LEXERROR      -> "error token " ++ start tv
-        EARROW        -> "'=>'"
-        ARROW         -> "'->'"
-        DCOLON        -> "'::'"
-        GETS          -> "'<-'"
-        _             -> if Token.line t > 0 then "token " ++ show tv else tv
-    where
-        tok = yytoken t
-        tv = Token.value t
-        start tv
-            | length tv > 8 = substr tv 0 7 ++ "..."
-            | otherwise = tv
-
-yyshow  = Token.show
-yyfromCh c = Token CHAR (ctos c) 0 0 0
-yyfromId n
-    | n >= PACKAGE, n <= INFIXR = Token n (String.toLowerCase (show n)) 1 0 0
-    | n == CONID = Token n "constructor or type name" 0 0 0
-    | n == VARID = Token n "variable name" 0 0 0
-    | otherwise = Token n (show n) 0 0 0
-yychar t
-    | Token.tokid t == CHAR = (Token.value t).[0]
-    | otherwise = '\0'
-yytoken t = Token.tokid t
-vid t = (Token.value t, Pos t t)
 
 /*
  The following definitions are not strictly necessary, but they help
@@ -1000,7 +958,7 @@ fundef:
     | fundef wherelet       { \fdefs\defs ->
         case fdefs of
             [fd@FunDcl {expr=x}] -> YYM.return [fd.{expr = nx}] where
-                                nx = Let Nil defs x Nothing
+                                nx = Let [] defs x Nothing
             _ -> do
                 yyerror (head fdefs).pos ("illegal function definition, where { ... } after annotation?")
                 YYM.return fdefs
@@ -1081,11 +1039,11 @@ guards:
 
 calt:
     pattern aeq expr              { \p\a\e ->
-                                        CAlt {env=Nil, pat=p, ex=e}}
+                                        CAlt {pat=p, ex=e}}
     | pattern guards                { \p\gs -> guardedalt p gs}
     | calt wherelet                 {\(calt::CAltS)\defs ->
                                         let
-                                            nx = Let Nil defs calt.ex Nothing;
+                                            nx = Let [] defs calt.ex Nothing;
                                         in calt.{ ex = nx } }
     ;
 
@@ -1097,8 +1055,8 @@ calts:
 
 
 lambda:
-      '\\' pattern lambda           { \_\p\l   -> Lam Nil p l Nothing}
-    | '\\' pattern ARROW  topex     { \_\p\_\x -> Lam Nil p x Nothing}
+      '\\' pattern lambda           { \_\p\l   -> Lam p l Nothing}
+    | '\\' pattern ARROW  topex     { \_\p\_\x -> Lam p x Nothing}
     ;
 
 
@@ -1110,7 +1068,7 @@ expr:
 topex:
       IF expr THEN expr ELSE topex     { \_\c\_\t\_\e  -> Ifte c t e Nothing}
     | CASE  expr OF '{' calts   '}'    { \_\e\_\_\as\_ -> Case CNormal e as Nothing}
-    | LET '{' letdefs '}' IN  topex    { \_\_\ds\_\_\e -> Let Nil ds e Nothing}
+    | LET '{' letdefs '}' IN  topex    { \_\_\ds\_\_\e -> Let [] ds e Nothing}
     | lambda
     | binex
 
@@ -1323,443 +1281,6 @@ exprSS:
     ;
 
 %%
-
-single x = [x]
-liste x _ xs = x:xs
-
-addDoc :: String -> Maybe String -> Maybe String
-addDoc second  Nothing = Just second
-addDoc second (Just first) = Just (first ++ "\n" ++ second)
-
-/// return 'Con' if it is (:)
-varcon o
-    | Token.value o == ":" = Con
-    // Token.value o == "Prelude.:" = Con
-    | m ~ #(\w+'*`?$)# <- Token.value o, Just s <- m.group 1, (s.charAt 0).isUpperCase = Con
-    | otherwise = Vbl
-
-/// check that operator is unqualified
-binop op = do
-    tok <- unqualified op
-    YYM.return (vid tok)
-
-/// make a binary expression
-mkapp a op b = varcon op (yyline op) (Simple op) Nothing `nApp` a `nApp` b
-
-
-
-/**
- * change the visibility of a definition
- */
-updVis :: Visibility -> DefinitionT  -> DefinitionT
-updVis v d = d.{vis = v}
-
-/**
- * set the visibility of a constructor to 'Private'
- */
-updCtr :: DConS -> DConS
-updCtr dc = dc.{vis = Private}
-
-/*
- * create an annotation
- */
-annotation :: SigmaS -> Pos String -> Def
-annotation sig (item, pos) = AnnDcl { pos=pos, vis=Public, name=item, typ=sig, doc=Nothing}
-
-exprToPat :: Exp -> YYM Global Pat
-
-exprToPat (Con {pos,name}) = YYM.return (PCon {pos,qname=name,pats=[]})
-exprToPat (ConFS {pos,name,fields}) = do
-        pfs <- mapSt fpat fields
-        YYM.return (PConFS {pos,qname=name,fields=pfs})
-    where
-        fpat (n,x) = do p <- exprToPat x; YYM.return (n,p)
-exprToPat (Vbl  p (Simple Token{value="_"}) _) = do
-        u <- U.uniqid
-        YYM.return (PVar p ("_" ++ show u))
-exprToPat (Vbl p (n@With1 Token{value="Prelude"} Token{value=m~#^strictTuple(\d+)$#}) _)
-        | Just s <- m.group 1 = YYM.return (PCon p n.{id<-Token.{value=tuple s.atoi}} [])
-exprToPat (Vbl n (Simple x) _)   = YYM.return (PVar n (U.enclosed x.value))
-exprToPat (Lit p k v _) = YYM.return (PLit p k v)
-exprToPat (App (Vbl _ (Simple Token{value="!"}) _) b _) = do
-    p <- exprToPat b
-    YYM.return (PStrict p)
-exprToPat (App (App (Vbl _ (Simple Token{value="@"}) _) b _) c _)
-        | Vbl n (Simple x) _ <- b = do
-            cp <- exprToPat c
-            YYM.return (PAt n (U.enclosed x.value) cp)
-        | App (Vbl _ (Simple Token{value="!"}) _) (Vbl n (Simple x) _) _ <- b = do
-            cp <- exprToPat c
-            YYM.return (PStrict (PAt n (U.enclosed x.value) cp))
-        | otherwise = do
-            bs <- U.showexM b
-            yyerror (getpos b) (("pattern " ++ bs ++ " not allowed left from @"))
-            exprToPat c
-
-
-exprToPat (App (App (Vbl _ (Simple Token{value="~"}) _) b _) c _)
-        | Vbl p (Simple x) _ <- b = do
-            cp <- regPat c
-            YYM.return (PMat p x.value cp)
-        | App (Vbl _ (Simple Token{value="!"}) _) (Vbl p (Simple x) _) _ <- b = do
-            cp <- regPat c
-            YYM.return (PStrict (PMat p x.value cp))
-        | otherwise = do
-            bs <- U.showexM b
-            yyerror (getpos b) (("pattern " ++ bs ++ " not allowed left from ~"))
-            exprToPat c
-        where
-            regPat (Lit {kind=LRegex, value=regex}) = YYM.return regex
-            regPat e = do
-                    es <- U.showexM e
-                    yyerror (getpos e) (("regex expected right from ~, found " ++ es))
-                    YYM.return "regex"
-
-
-
-exprToPat (e@App a b _) = do
-        pa <- exprToPat a;
-        pb <- exprToPat b;
-        case pa of
-            // PApp _ _ -> YYM.return (PApp pa pb)
-            PCon p n ps -> YYM.return (PCon p n (ps++[pb]))
-            _ -> do
-                es <- U.showexM e
-                yyerror (getpos e) (("illegal pattern, only constructor applications are allowed " ++ es))
-                YYM.return (PVar {pos=getpos e, var="_"})
-
-
-
-exprToPat (Ann e (Just t)) = do
-        p <- exprToPat e
-        YYM.return (PAnn p t)
-
-
-exprToPat e =
-    do
-        es <- U.showexM e
-        yyerror pos (("can't make pattern from " ++ es))
-        YYM.return (PVar pos "_")
-    where
-        pos = getpos e
-
-
-
-/**
- * Process left hand side of a  function or pattern binding
- * in case it's a variable it resolves to something like
- *
- *  @v = expr@ or
- *  @Nothing = expr@
- */
-funhead :: Exp -> YYM Global (Position, String, [Pat])
-funhead (ex@Vbl {name}) = do
-        pat <- exprToPat ex
-        case pat of
-            PVar p v ->  YYM.return  (p, v, [])
-            somepat  ->  YYM.return  (getpos somepat, "let", [somepat])
-/**
- * Otherwise it should be an application
- * > a b c = ....
- * Constructor applications like @(Just x)@ or @(x:xs)@ or @[a,b,c]@ are patterns.
- * Unary application @!p@ is also a pattern.
- * And last but not least, x at p is a pattern.
- */
-
-funhead (ex@App e1 e2 _)
-    | Vbl _ (Simple Token{value="!"})  _ <- e1 = do
-            pex <- exprToPat ex
-            YYM.return (getpos pex, "let", [pex])
-    | otherwise = do
-        pat <- exprToPat x
-        ps  <- mapSt exprToPat xs
-        case pat of
-            PVar p "@"  -> do
-                at <- exprToPat ex 
-                YYM.return (p, "let", [at])
-            PVar p var  -> YYM.return (p, var, ps)
-            PCon p n [] -> YYM.return (p, "let", [PCon p n ps])
-            _ -> do
-                es <- U.showexM ex
-                yyerror (getpos x) ("bad function head " ++ es)
-                YYM.return (getpos x, "bad", [pat])
-    where
-        flatex = map fst (U.flatx ex)
-        x = head flatex
-        xs = tail flatex
-
-
-funhead ex = do
-        let pos = getpos ex
-        es <- U.showexM ex
-        yyerror pos ("illegal left hand side of a function definition: " ++ es)
-        YYM.return (pos, "_", [])
-
-/**
- * construct a function definition as list
- */
-fundef (pos, name, pats) expr = [FunDcl {poss=[pos], vis=Public, name, pats, expr, doc=Nothing}];
-
-/**
- * construct a function with guards
- */
-fungds funhead gds = let
-                expr = gdsexpr gds;
-                (gdln,_,_)   = head gds;
-            in fundef funhead expr;
-
-
-
-guardedalt :: Pat -> [Guard] -> CAltS
-guardedalt p gds =
-    case gdsexpr gds of
-        x @ Case CWhen _ (alt:_) _
-              -> CAlt {env = alt.env, pat=p, ex = x}
-        // wrong -> error ("no casewhen : " ++ show wrong)
-        // commented out deliberately as this
-        // a) should never happen
-        // b) if it happens nevertheless, we'll need a hint as to what expr is this
-        //    but we can't show an expression outside of the StIO Monad, sorry.
-
-
-gdsexpr :: [Guard] -> Exp
-gdsexpr gds = (flatten @ map trans) gds where
-        trans (line,quals,ex) = tg line ex quals
-        /*
-        * tg ([], x) = x
-        * tg (p <- ex : qs, c) = casefallthru (ex) of { p -> TG(qs, c) }
-        * tf (ex:qs, c) = casefallthru (ex) of { true -> TG(qs, c) }
-        */
-        tg ln ex [] = ex
-        tg ln ex (Left (p, x):qs) = case p of
-                Nothing -> Case CWhen x [calt.{ pat = PLit {kind = LBool, value = "true", pos = ln}}] Nothing
-                Just (pat, line) -> Case CWhen x [calt.{ pat = pat }] Nothing
-           where
-                calt = CAlt {env = Nil, pat = PVar {var = "_", pos = ln}, ex = tg ln ex qs}
-        tg ln ex (Right _:_) = error ("line " ++ show ln ++ ": let definition in guard?")
-        /*
-         * [case e1 of { p1 -> x1 }, case e2 of { p2 -> x2 }, ...
-         * ->
-         * case e1 of {
-         *  p1 -> x1;
-         *  _ -> case e2 of {
-         *      p2 -> x2:
-         *      _ -> ...
-         *      }
-         *  }
-         */
-        flatten  []  = error "flatten []"
-        flatten  [x] = x
-        flatten  ((x@Case CWhen xex (xalts@alt0:_) t):xs) =
-            let
-                y = flatten xs
-                alt = CAlt {env = alt0.env, pat = PVar { var = "_", pos = alt0.pat.pos}, ex = y}
-            in
-                Case CWhen xex (xalts ++ [alt]) t
-        // flatten  wrong = error ("flatten: not a case "  ++ show (map (Exp.show) wrong))
-        // commented out deliberately as this
-        // a) should never happen
-        // b) if it happens nevertheless, we'll need a hint as to what expr is this
-        //    but we can't show an expression outside of the StIO Monad, sorry.
-
-/**
- * Check if a pattern is refutable where
- * any constructors except tuple constructors are regarded as refutable.
- * Thus, if the function returns @false@, the pattern is definitely irrefutable.
- * If it returns @true@, the pattern contains some constructor, but at this time
- * we can't decide yet if this is a product constructor.
- */
-refutable :: Pat -> Bool
-refutable (PVar _ _)     = false
-refutable (PAt _ _ p)    = refutable p
-refutable (PCon _ name ps)
-    | name.id.value == "()" && null ps = false
-    | name.id.value `elem` [tuple n | n <- 2..26] = any refutable ps
-    | otherwise = true
-refutable (PConFS {qname}) = true
-refutable (PAnn p _)     = refutable p
-// refutable (app@PApp _ _) = any refutable (U.flatp app)
-refutable (PLit _ _ _)   = true
-refutable (PMat _ _ _)   = true
-refutable (PStrict p)    = refutable p
-
-/**
- * List comprehension employs the follwoing translation scheme /TQ [e | Q] L/ where
- * [Q] stands for a possibly empty list of qualifiers
- * [e] for the expression left of the vertical bar in the list comprehension
- * [p] for a pattern
- * [Li] for a list valued expression
- * [B]  for a boolean valued expression
- *
- * When the parser recognizes a list comprehension @comp@, it is translated
- * immediately to an expression with @TQ comp []@
- *
- * > TQ [e | p <- L1, Q] L2
- * > = let h us = case us of {
- * >                 [] -> L2;
- * >                 p:xs' -> TQ [ e where Q ]  (h xs');
- * >                 _:xs' -> h xs';
- * >     } in h L1;
- * > TQ [e | B; Q]  L
- * > = if B then TQ [e | Q] L else L
- * > TQ [e | let p = x, Q]  L
- * > = let p = x in TQ [e | Q] L
- * > TQ [e | ]  L
- * > = e : L
- */
-listComprehension pos e [] l2 = YYM.return (cons `nApp` e `nApp` l2)
-     where
-        f = Position.first pos
-        con  = f.{tokid=CONID, value=":"}
-        cons = Con {name = With1 baseToken con, pos = con.position, typ = Nothing}
-
-listComprehension pos e (q:qs) l2 = case q of
-    Right defs                 -> do   // let defs
-        rest <- rest
-        YYM.return (Let Nil defs rest Nothing)
-    Left (Nothing, b)          -> do   // b
-        rest <- rest
-        YYM.return (Ifte b rest l2 Nothing)
-    Left (Just (pat, pos), xs) -> do   // pat <- x
-        uid <- U.uniqid
-        let
-            f     = Position.first pos
-            h     = Simple f.{tokid = VARID, value = "lc" ++ show uid }
-            us    = Simple f.{tokid = VARID, value = "_us" ++ show uid }
-            xsn   = Simple f.{tokid = VARID, value = "_xs" ++ show uid }
-            nil   = f.{tokid=CONID, value="[]"}
-            cons  = f.{tokid=CONID, value=":"}
-            tolst = listSourceToList.{id <- Token.{line=f.line, col=f.col, offset=f.offset}}
-            hvar  = Vbl  h.id.position h Nothing
-            usvar = Vbl  us.id.position us Nothing
-            tlvar = Vbl  tolst.id.position tolst  Nothing 
-            uspat = PVar us.id.position ("_us" ++ show uid)
-            xsvar = Vbl  xsn.id.position xsn Nothing
-            xspat = PVar xsn.id.position ("_xs" ++ show uid)
-            anpat = PVar h.id.{value="_"}.position "_"
-            pnil  = PCon nil.position (With1 baseToken nil) []
-            pcons p ps = PCon cons.position (With1 baseToken cons) [p, ps]  // p:ps
-            calt1 = CAlt {env = Nil, pat = pnil, ex = l2 }  // [] -> l2
-        hxs <- listComprehension pos e qs (hvar `nApp` xsvar)
-        let
-            // p:xs -> TQ [e|qs] (h xs)
-            calt2 = CAlt {env = Nil, pat = pcons pat xspat, ex = hxs}
-            // _:xs -> h xs
-            calt3 = CAlt {env = Nil, pat = pcons anpat xspat, ex = hvar `nApp` xsvar}
-            calts = if refutable pat then [calt2, calt1, calt3] else [calt2, calt1]
-            ecas = Case CNormal usvar calts  Nothing
-            hdef = FunDcl {poss = [pos], vis = Private, name=h.id.value, pats=[uspat], expr=ecas, doc = Nothing}
-        YYM.return (Let Nil [hdef] (nApp hvar (nApp tlvar xs)) Nothing)
-  where
-        rest = listComprehension pos e qs l2
-
-/**
- * This function provides the syntactic sugar for monadic @do@-expressions
- * by transforming
- * > do { e1; p2 <- e2; let defs; ...}
- * to
- * > e1 >> (e2 >>= (\n -> case n of p2 -> let defs in do ...
- * >                                _ -> e2.fail "pattern match failure"))
- */
-
-mkMonad line [e]
-    | Left (Nothing, x) <- e = YYM.return x
-    | Left (Just _, x)  <- e = do
-            yyerror line ("last statement in a monadic do block must not be  pat <- ex")
-            YYM.return x
-    | Right _ <- e = do
-            yyerror line ("last statement in a monadic do block must not be  let decls")
-            YYM.return (Vbl line (With1 baseToken line.first.{tokid=VARID, value="undefined"}) Nothing)
-
-mkMonad line (e:es)
-    | Left (Nothing,  x) <- e
-        =  do
-            rest <- mkMonad line es
-            YYM.return (bind0 `nApp` x `nApp` rest)
-    | Left (Just pps, x) <- e, (pat, pos) <- pps
-        = do
-            rest <- mkMonad line es
-            let res = /* if refutable pat
-                      // x >>= \of -> CASE of OF pat -> do ...; _ -> fail in "pattern failed"
-                    then bind  `nApp`  x `nApp` (Lam Nil (ofpat pos) (failcase pos pat rest) Nothing)
-                    else */ bind  `nApp`  x `nApp` (Lam Nil pat rest Nothing)
-            YYM.return res
-    | Right defs <- e = do
-            rest <- mkMonad line es
-            YYM.return (Let Nil defs rest  Nothing)
-    where
-        f = Position.first line
-        pos x = Pos f.{tokid=VARID, value=x} (Position.last line)
-        wellknown x = With1 monadToken f.{tokid=VARID, value=x}
-        local x = Simple f.{tokid=VARID, value=x}
-        bind0 = Vbl (pos ">>") (wellknown ">>") Nothing
-        bind  = Vbl (pos ">>=") (wellknown ">>=") Nothing
-        ofvar pos = Vbl pos (local "of") Nothing
-        failvar =   Vbl (pos "fail") (wellknown "fail") Nothing
-        ofpat pos = PVar pos  "of"
-        def pos   = PVar pos  "_"
-        failcase pos pat rest = Case CNormal (ofvar pos) [alt1, alt2]  Nothing where
-            alt1 = CAlt {env = Nil, pat = pat, ex = rest}
-            alt2 = CAlt {env = Nil, pat = def pos, ex = failure }
-            // version 2 needed application to invar, we don't
-            failure = failvar /*`nApp` invar*/  `nApp` Lit line LString "\"pattern failed\"" Nothing
-
-mkMonad _ _ = Prelude.error "empty monadic do block"
-
-
-// backslash
-bs = '\\';
-aQuote = '"';
-rex [] sb = packed (reverse (aQuote:sb))
-rex ('"':cs) sb = rex cs (aQuote:bs:sb);
-rex ('\\':'#':cs) sb = rex cs ('#':sb);
-/*
-rex ('\\':'n':cs) sb = rex cs (sb << '\\' << 'n');
-rex ('\\':'b':cs) sb = rex cs (sb << '\\' << 'b');
-rex ('\\':'t':cs) sb = rex cs (sb << '\\' << 't');
-rex ('\\':'f':cs) sb = rex cs (sb << '\\' << 'f');
-rex ('\\':'r':cs) sb = rex cs (sb << '\\' << 'r');
-rex ('\\':'0':cs) sb = rex cs (sb << '\\' << '0');
-rex ('\\':'1':cs) sb = rex cs (sb << '\\' << '1');
-rex ('\\':'2':cs) sb = rex cs (sb << '\\' << '2');
-rex ('\\':'3':cs) sb = rex cs (sb << '\\' << '3');
-rex ('\\':'4':cs) sb = rex cs (sb << '\\' << '4');
-rex ('\\':'5':cs) sb = rex cs (sb << '\\' << '5');
-rex ('\\':'6':cs) sb = rex cs (sb << '\\' << '6');
-rex ('\\':'7':cs) sb = rex cs (sb << '\\' << '7');
-*/
-rex ('\\':'\\':cs) sb = rex cs (bs:bs:bs:bs:sb)
-rex ('\\':c:cs) sb    = rex cs (c:bs:bs:sb)
-rex (c:cs) sb = rex cs (c:sb)
-
-/// translate regex to java string
-reStr rs =  rex (unpacked rs)  [ aQuote ]
-
-litregexp x = do
-        let re = reStr (Token.value x)
-        case regcomp (Token.value x) of
-            Left exc -> do
-                U.error (yyline x) (stack (text "regular expression syntax: " : map text (#\r?\n#.splitted exc.getMessage)))
-                YYM.return (Lit (yyline x) LRegex re Nothing)
-            Right _ ->
-                YYM.return (Lit (yyline x) LRegex re Nothing)
-
---- extract the value of a 'BIGCONST' literal without the trailing N
-bignum :: Token -> String
-bignum x = strhead x.value (x.value.length-1)
-
-classContext :: String -> [ContextS] -> String -> StG [SName]
-classContext clas ctxs cvar = do
-        g <- getST
-        mapSt (sup g) ctxs
-    where
-        sup g (Ctx {pos, cname, tau = TVar {var}}) | var == cvar = stio cname
-        sup g (Ctx {pos, cname, tau}) = do
-            yyerror pos
-                ("illegal constraint on `" ++ nice tau g ++ "`, only `" ++ cvar ++ "` may be constrained here")
-            stio cname
-
-yyEOF = Token {tokid=CHAR, value=" ", line=maxBound, col=maxBound, offset=maxBound}.position
 /**
  * the parser pass
  */
