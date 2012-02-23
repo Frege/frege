@@ -167,7 +167,7 @@ fatal n s = do
         is  = "F " ++ opt.source ++ ":" ++ ns ++ ": "
     doio do
         g.stderr.println (pretty 78 (text is <+> nest 8 s))
-    envDump
+    -- envDump
     doio do
         g.stderr.println ""
         g.stderr.close
@@ -395,7 +395,9 @@ showexM x = inState (showex "\\" x)
 showex lambdachar x global = showprec 17 x where
     optree = Global.optab global
     -- showprec :: Int -> ExprT Nice:q -> String
+    -- showprec   n (Vbl {pos, name=Local uid v}) | lambdachar=="\\" = v ++ "§" ++ show uid
     showprec   n (Vbl {pos, name})
+        | lambdachar == "\\" = sv
         | pos != Position.null && pos.first == pos.last  = pos.first.value
         | pos != Position.null && pos.first.vor pos.last = pos.first.value ++ pos.last.value
         | m ~ #^Prelude\w*\.(.+)$# <- sv, Just x <- m.group 1 = x
@@ -855,7 +857,15 @@ enter sym
                 g <- getST
                 uid <- if uid > 0 then return uid else uniqid
                 case sym.name.find g of
-                    Nothing   -> changeST Global.{locals <- insertkv uid sym}
+                    Nothing 
+                        | uid == sym.sid  -> do
+                            logmsg TRACE3 sym.pos (text("enterLocal: " ++ 
+                                show sym.sid ++
+                                " " ++ sym.nice g ++ " :: " ++ sym.typ.nice g ++ 
+                                ", " ++ show sym.state)) 
+                            changeST Global.{locals <- insertkv uid sym}
+                        | otherwise = fatal sym.pos (text ("enterLocal: uid=" ++
+                            show uid ++ ", sid=" ++ show sym.sid ++ " for " ++ show sym.name))
                     Just that -> error sym.pos (text ("already entered: " ++ nice sym g ++ " with uid " ++ show uid)) 
             | otherwise = do
                 g <- getST
@@ -877,7 +887,9 @@ changeSym sym | sym.sid == 0 = do
         changeSym sym.{sid=u}
 changeSym sym = do
         g <- getST
-        logmsg TRACE3 sym.pos (fill [text "changeSym", lit sym.sid,  text (sym.nice g)])
+        logmsg TRACE3 sym.pos (fill [text "changeSym", lit sym.sid,  text (sym.nice g ++ " :: " ++ 
+            (if sym.{typ?}   then sym.typ.nice g else "") ++ ", " ++ 
+            (if sym.{state?} then show sym.state else ""))])
         case sym.name of
             TName p b -> updateGlobal p sym.name.key sym
             VName p b -> updateGlobal p sym.name.key sym
@@ -892,8 +904,11 @@ changeSym sym = do
                                 env <- updateSym typ.env sym.name.key sym
                                 updateGlobal t.pack t.key typ.{env}
                              | otherwise = fatal sym.pos (text "no environment:" <+> text (t.nice g))
-            Local uid s -> -- do
+            Local uid s -> do
                 --  g <- getST
+                when (sym.sid != uid) do
+                    fatal sym.pos (text("changeSym: name =" ++ show sym.name
+                        ++ ", sid=" ++ show sym.sid))
                 changeST Global.{locals <- updatekv uid sym}
                 {- case (head g.env).lookup k of
                     Just found -> do
@@ -1476,8 +1491,8 @@ private resolve3 fname pos (Simple Token{value=qs}) = do
         rs -> stio rs
   where
     scope g (MName t _) | Just sym <- t.findit g
-                        = scopefrom (g.env ++ [sym.env, g.thisTab])
-    scope g _ = scopefrom (g.env ++ [g.thisTab])
+                        = scopefrom [sym.env, g.thisTab]
+    scope g _ = scopefrom [g.thisTab]
     scopefrom envs = fold more [] envs
         where
             more :: [String] -> Symtab -> [String]
@@ -1876,44 +1891,49 @@ replUids t = mapEx true rep where
     renamed accordingly. The new expression will be untyped.
     Let symbols will get their type removed unless they are annotated.
     -}
-copyExpr = mapEx true copy where
-    copy (Lam{pat,ex}) = do
+copyExpr t x = mapEx false (copy t) x where
+    ins t (k,v) = insert t k v
+    copy tree (Lam{pat,ex}) = do
         let qnames  = patNames pat
             olduids = map QName.uid qnames 
         pat <- pReturn pat
         let newuids = map QName.uid (patNames pat)
-            tree    = Tree.fromList (zip olduids newuids)
-        ex <- replUids tree ex
-        mapM_ (copySym tree) qnames
-        stio (Left Lam{pat,ex,typ=Nothing})
-    copy (Case x ckind alts _) = do
+            ntree   = fold ins tree (zip olduids newuids)
+        ex <- copyExpr ntree ex
+        mapM_ (copySym ntree) qnames
+        stio (Right Lam{pat,ex,typ=Nothing})
+    copy tree (Case ckind x alts _) = do
+        x    <- copyExpr tree x
         alts <- mapSt copyAlt alts
-        stio (Left (Case x ckind alts Nothing)) 
+        stio (Right (Case ckind x alts Nothing)) 
       where
         copyAlt CAlt{pat,ex} = do             
             let qnames  = patNames pat
                 olduids = map QName.uid qnames 
             pat <- pReturn pat
             let newuids = map QName.uid (patNames pat)
-                tree    = Tree.fromList (zip olduids newuids)
-            ex <- replUids tree ex
-            mapM_ (copySym tree) qnames
+                ntree   = fold ins tree (zip olduids newuids)
+            ex <- copyExpr ntree ex
+            mapM_ (copySym ntree) qnames
             stio CAlt{pat,ex}
-    copy (Let{env,ex}) = do
+    copy tree (Let{env,ex}) = do
         let olduids = map QName.uid env
         newuids <- sequence (map (const uniqid) olduids)
-        let tree = Tree.fromList (zip olduids newuids)            
-        nenv <- mapSt (copySym tree) env
-        ex   <- replUids tree ex
-        stio (Left Let{env=nenv,ex,typ=Nothing,defs=[]})
-    copy x = stio (Left x.{typ=Nothing})
+        let ntree = fold ins tree (zip olduids newuids)            
+        nenv <- mapSt (copySym ntree) env
+        ex   <- copyExpr ntree ex
+        stio (Right Let{env=nenv,ex,typ=Nothing,defs=[]})
+    copy tree (v@Vbl{name=Local{uid}}) = case lookup tree uid of
+        Just nid -> stio (Right v.{name <- QName.{uid=nid}})
+        Nothing  -> stio (Right v)
+    copy _ x = stio (Left x.{typ=Nothing})
 
 --- copy a local symbol 
 copySym tree qname = do
     sym <- findV qname
     case lookup tree (Symbol.sid sym) of
         Just nuid ->  do
-                mbx <- maybeST sym.expr (replUids tree) 
+                mbx <- maybeST sym.expr (copyExpr tree)  
                 let name = sym.name.{uid=nuid}
                     nsig = if sym.anno then sym.typ else pSigma
                     nsym = sym.{name, expr = mbx, sid = nuid, typ = nsig}

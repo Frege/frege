@@ -186,7 +186,7 @@ compiler: compiler2 $(COMPF)/Grammar.class $(COMPF)/Main.class library tools
 	cp frege/tools/yygenpar-fr frege/tools/YYgenparM-fr build/frege/tools
 	@echo Compiler ready
 
-$(COMPF)/Grammar.class: frege/compiler/Grammar.fr $(COMPF)/Scanner.class $(LIBF)/ForkJoin.class
+$(COMPF)/Grammar.class: frege/compiler/Grammar.fr $(COMPF)/Scanner.class $(COMPF)/GUtil.class
 	$(FREGEC2) -v frege/compiler/Grammar.fr
 frege/compiler/Grammar.fr: frege/compiler/Grammar.y
 	@echo 1 shift/reduce conflict is ok
@@ -196,6 +196,8 @@ frege/compiler/Grammar.fr: frege/compiler/Grammar.y
 	rm -f frege/compiler/Grammar.fr.bak
 $(COMPF)/Scanner.class: $(DIR)/Prelude.class frege/compiler/Scanner.fr
 	$(FREGEC2)  -make frege.compiler.Scanner
+$(COMPF)/GUtil.class: $(COMPF)/Scanner.class frege/compiler/GUtil.fr
+	$(FREGEC2)  frege/compiler/GUtil.fr
 $(COMPF)/Main.class: $(DIR)/Prelude.class frege/compiler/Main.fr
 	$(FREGEC2)  -make frege.compiler.Main
 $(DIR)/Prelude.class: $(COMPF2)/Main.class $(PRELUDE)
@@ -220,8 +222,9 @@ $(DIR2)/Prelude.class: $(COMPF1)/Main.class frege/Prelude.fr $(PRELUDE)
 
 
 SOURCES  =      $(COMPS)/Scanner.fr   $(COMPS)/Classtools.fr \
-				$(COMPS)/Data.fr      $(COMPS)/Utilities.fr \
-				$(COMPS)/Main.fr      $(COMPS)/Grammar.y \
+		$(COMPS)/Data.fr      $(COMPS)/Utilities.fr \
+		$(COMPS)/GUtil.fr \
+		$(COMPS)/Main.fr      $(COMPS)/Grammar.y \
 		$(COMPS)/Fixdefs.fr   $(COMPS)/Import.fr    $(COMPS)/Enter.fr \
 		$(COMPS)/TAlias.fr    $(COMPS)/Transdef.fr  $(COMPS)/Classes.fr \
 		$(COMPS)/Transform.fr $(COMPS)/Typecheck.fr $(COMPS)/TCUtil.fr \
@@ -230,8 +233,8 @@ SOURCES  =      $(COMPS)/Scanner.fr   $(COMPS)/Classtools.fr \
 
 
 CLASSES  =       $(COMPF1)/Scanner.class   $(COMPF1)/Classtools.class \
-				 $(COMPF1)/Data.class      $(COMPF1)/Utilities.class \
-				 $(COMPF1)/Grammar.class \
+		 $(COMPF1)/Data.class      $(COMPF1)/Utilities.class \
+		 $(COMPF1)/GUtil.class	$(COMPF1)/Grammar.class \
 		$(COMPF1)/Fixdefs.class   $(COMPF1)/Import.class    $(COMPF1)/Enter.class \
 		$(COMPF1)/Transdef.class   $(COMPF1)/TCUtil.class   \
 		$(COMPF1)/TAlias.class    $(COMPF1)/Classes.class \
@@ -309,7 +312,7 @@ PRE1 = $(DIR1)/Prelude.class $(DIR1)/IO.class $(DIR1)/List.class $(DIR1)/Tuples.
 compiler1: $(RUNTIME)  $(DIR1)/check1  $(LIBF1)/PP.class $(COMPF1)/Grammar.class $(COMPF1)/Main.class
 	@echo stage 1 compiler ready
 
-$(COMPF1)/Grammar.class: frege/compiler/Grammar.fr $(COMPF1)/Scanner.class
+$(COMPF1)/Grammar.class: frege/compiler/Grammar.fr $(COMPF1)/GUtil.class $(COMPF1)/Scanner.class
 	$(FREGEC0)  -make frege.compiler.Grammar
 $(COMPF1)/Scanner.class: $(PRE1) $(COMPF1)/Utilities.class frege/compiler/Scanner.fr
 	$(FREGEC0)  -make frege.compiler.Scanner
