@@ -264,6 +264,8 @@ $(COMPF1)/Classtools.class: frege/compiler/Classtools.fr
 	$(FREGEC0) $?
 $(COMPF1)/Utilities.class: 	$(COMPF1)/Classtools.class $(COMPF1)/Data.class $(COMPF1)/Nice.class $(COMPS)/Utilities.fr
 	$(FREGEC0) $(COMPS)/Utilities.fr
+$(COMPF1)/GUtil.class: $(COMPF1)/Scanner.class frege/compiler/GUtil.fr
+	$(FREGEC0)  frege/compiler/GUtil.fr
 $(COMPF1)/Data.class: 	$(COMPS)/Data.fr
 	$(FREGEC0) $?
 $(COMPF1)/Nice.class: 	$(COMPS)/Nice.fr $(LIBF1)/PP.class $(COMPF1)/Data.class $(DATA1)/List.class
