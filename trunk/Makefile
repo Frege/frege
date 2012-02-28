@@ -222,6 +222,7 @@ $(DIR2)/Prelude.class: $(COMPF1)/Main.class frege/Prelude.fr $(PRELUDE)
 
 
 SOURCES  =      $(COMPS)/Scanner.fr   $(COMPS)/Classtools.fr \
+		$(COMPS)/BaseTypes.fr \
 		$(COMPS)/Data.fr      $(COMPS)/Utilities.fr \
 		$(COMPS)/GUtil.fr \
 		$(COMPS)/Main.fr      $(COMPS)/Grammar.y \
@@ -233,6 +234,7 @@ SOURCES  =      $(COMPS)/Scanner.fr   $(COMPS)/Classtools.fr \
 
 
 CLASSES  =       $(COMPF1)/Scanner.class   $(COMPF1)/Classtools.class \
+		 $(COMPF1)/BaseTypes.class \
 		 $(COMPF1)/Data.class      $(COMPF1)/Utilities.class \
 		 $(COMPF1)/GUtil.class	$(COMPF1)/Grammar.class \
 		$(COMPF1)/Fixdefs.class   $(COMPF1)/Import.class    $(COMPF1)/Enter.class \
@@ -262,12 +264,14 @@ $(DIR1)/Tuples.class: frege/Tuples.fr
 	$(FREGEC0) $?
 $(COMPF1)/Classtools.class: frege/compiler/Classtools.fr
 	$(FREGEC0) $?
-$(COMPF1)/Utilities.class: 	$(COMPF1)/Classtools.class $(COMPF1)/Data.class $(COMPF1)/Nice.class $(COMPS)/Utilities.fr
+$(COMPF1)/BaseTypes.class: frege/compiler/BaseTypes.fr
+	$(FREGEC0) $?
+$(COMPF1)/Utilities.class: $(COMPF1)/BaseTypes.class $(COMPF1)/Classtools.class $(COMPF1)/Data.class $(COMPF1)/Nice.class $(COMPS)/Utilities.fr
 	$(FREGEC0) $(COMPS)/Utilities.fr
 $(COMPF1)/GUtil.class: $(COMPF1)/Scanner.class frege/compiler/GUtil.fr
 	$(FREGEC0)  frege/compiler/GUtil.fr
-$(COMPF1)/Data.class: 	$(COMPS)/Data.fr
-	$(FREGEC0) $?
+$(COMPF1)/Data.class: 	$(COMPF1)/BaseTypes.class $(COMPS)/Data.fr
+	$(FREGEC0)  $(COMPS)/Data.fr
 $(COMPF1)/Nice.class: 	$(COMPS)/Nice.fr $(LIBF1)/PP.class $(COMPF1)/Data.class $(DATA1)/List.class
 	$(FREGEC0) $(COMPS)/Nice.fr
 $(COMPF1)/Fixdefs.class: $(COMPS)/Fixdefs.fr
