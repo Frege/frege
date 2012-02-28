@@ -108,6 +108,10 @@ public class FregePlugin extends PluginBase {
 		imageDescriptor = createImageDescriptor(bundle, path);
 		reg.put(IFregeResources.FREGE_VAR_OUTLINE_ITEM, imageDescriptor);
 		
+		path = ICONS_PATH.append("bullet_blue.png");//$NON-NLS-1$
+		imageDescriptor = createImageDescriptor(bundle, path);
+		reg.put(IFregeResources.FREGE_LOCAL_OUTLINE_ITEM, imageDescriptor);
+		
 		path = ICONS_PATH.append("bullet_black.png");//$NON-NLS-1$
 		imageDescriptor = createImageDescriptor(bundle, path);
 		reg.put(IFregeResources.FREGE_LINK_OUTLINE_ITEM, imageDescriptor);

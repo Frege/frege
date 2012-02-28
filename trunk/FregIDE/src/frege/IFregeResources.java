@@ -15,6 +15,7 @@ public interface IFregeResources {
 	public static final String FREGE_INST_OUTLINE_ITEM  = "frege_inst_outlline_item";
 	public static final String FREGE_DATA_OUTLINE_ITEM  = "frege_data_outlline_item";
 	public static final String FREGE_VAR_OUTLINE_ITEM  = "frege_var_outlline_item";
+	public static final String FREGE_LOCAL_OUTLINE_ITEM  = "frege_local_outlline_item";
 	public static final String FREGE_CON_OUTLINE_ITEM  = "frege_con_outlline_item";
 	public static final String FREGE_LINK_OUTLINE_ITEM  = "frege_link_outlline_item";
 

@@ -46,6 +46,8 @@ public class FregeLabelProvider implements ILabelProvider {
 			.get(IFregeResources.FREGE_CON_OUTLINE_ITEM);
 	final public static Image VAR_IMAGE = sImageRegistry
 			.get(IFregeResources.FREGE_VAR_OUTLINE_ITEM);
+	final public static Image LOCAL_IMAGE = sImageRegistry
+			.get(IFregeResources.FREGE_LOCAL_OUTLINE_ITEM);
 	final public static Image LINK_IMAGE = sImageRegistry
 			.get(IFregeResources.FREGE_LINK_OUTLINE_ITEM);
 	final public static Image[] SYMBOL_IMAGES = new Image[] { 
