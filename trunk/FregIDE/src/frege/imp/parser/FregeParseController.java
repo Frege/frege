@@ -50,16 +50,16 @@ import frege.prelude.PreludeBase.TTuple2;
 import frege.prelude.PreludeBase.TList;
 import frege.prelude.PreludeBase.TTuple3;
 import frege.prelude.PreludeList.IListLike__lbrack_rbrack;
-import frege.compiler.Data.TFlag;
+import frege.compiler.BaseTypes.TFlag;
 import frege.compiler.Data.TGlobal;
 import frege.compiler.Data.TMessage;
 import frege.compiler.Data.TOptions;
-import frege.compiler.Data.TPosition;
+import frege.compiler.BaseTypes.TPosition;
 import frege.compiler.Data.TSeverity;
 import frege.compiler.Data.TStIO;
 import frege.compiler.Data.TSubSt;
-import frege.compiler.Data.TToken;
-import frege.compiler.Data.TTokenID;
+import frege.compiler.BaseTypes.TToken;
+import frege.compiler.BaseTypes.TTokenID;
 import frege.compiler.Data;
 import frege.compiler.EclipseUtil;
 import frege.compiler.Main;
@@ -302,7 +302,7 @@ public class FregeParseController extends ParseControllerBase implements
 	}
 	
 
-	@SuppressWarnings("unchecked")
+	
 	private void createLexerAndParser(IPath filePath, ISourceProject project) {
 		System.err.println("createLexerAndParser: " + filePath.toPortableString());
 		System.err.println("classpath: " + System.getProperty("java.class.path"));
@@ -453,7 +453,7 @@ public class FregeParseController extends ParseControllerBase implements
 	}
 	
 	@Override
-	public Iterator<Data.TToken> getTokenIterator(IRegion region) {
+	public Iterator<TToken> getTokenIterator(IRegion region) {
 		System.err.println("getTokenIterator(): ");
 		return new TokensIterator(TSubSt.toks(TGlobal.sub(global)), region);
 		

@@ -38,11 +38,12 @@ import org.eclipse.jdt.core.JavaModelException;
 
 
 import frege.FregePlugin;
+import frege.compiler.Data;
 import frege.compiler.Data.TGlobal;
 import frege.compiler.Data.TMessage;
 import frege.compiler.Data.TOptions;
-import frege.compiler.Data.TPosition;
-import frege.compiler.Data.TToken;
+import frege.compiler.BaseTypes.TPosition;
+import frege.compiler.BaseTypes.TToken;
 import frege.compiler.Main;
 import frege.imp.parser.FregeParseController;
 import frege.prelude.PreludeBase.TList;
@@ -285,7 +286,7 @@ public class FregeBuilder extends FregeBuilderBase {
 				*/
 				
 				if (!success) {
-					TPosition pos = (TPosition) TPosition.packageStart(result)._e();
+					TPosition pos = (TPosition) Data.packageStart(result)._e();
 					TToken module = TPosition.first(pos);
 					int line = TToken.line(module);
 					int chStart = TToken.offset(module);

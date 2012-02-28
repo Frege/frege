@@ -6,13 +6,13 @@ import org.eclipse.core.runtime.Path;
 import org.eclipse.imp.editor.ModelTreeNode;
 import org.eclipse.imp.parser.ISourcePositionLocator;
 
-import frege.compiler.Data.IShow_Token;
+import frege.compiler.BaseTypes.IShow_Token;
 import frege.compiler.Data.TGlobal;
 import frege.compiler.Data.TPack;
-import frege.compiler.Data.TPosition;
+import frege.compiler.BaseTypes.TPosition;
 import frege.compiler.Data.TSubSt;
-import frege.compiler.Data.TToken;
-import frege.compiler.Data.TTokenID;
+import frege.compiler.BaseTypes.TToken;
+import frege.compiler.BaseTypes.TTokenID;
 import frege.imp.tree.ITreeItem;
 import frege.prelude.PreludeBase.TEither;
 import frege.prelude.PreludeBase.TEither.DRight;

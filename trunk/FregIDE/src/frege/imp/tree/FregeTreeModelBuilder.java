@@ -7,7 +7,7 @@ import org.eclipse.imp.services.base.TreeModelBuilderBase;
 import frege.List.TTree;
 import frege.compiler.Data.TExprT;
 import frege.compiler.Data.TGlobal;
-import frege.compiler.Data.TPosition;
+import frege.compiler.BaseTypes.TPosition;
 import frege.compiler.Data.TQName;
 import frege.compiler.Data.TSubSt;
 import frege.compiler.Data.TSymbol;

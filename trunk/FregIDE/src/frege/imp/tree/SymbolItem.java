@@ -3,7 +3,7 @@ package frege.imp.tree;
 import org.eclipse.swt.graphics.Image;
 
 import frege.compiler.Data.TGlobal;
-import frege.compiler.Data.TPosition;
+import frege.compiler.BaseTypes.TPosition;
 import frege.compiler.Data.TSymbol;
 import frege.compiler.EclipseUtil;
 
