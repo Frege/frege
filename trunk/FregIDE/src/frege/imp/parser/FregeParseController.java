@@ -230,6 +230,8 @@ public class FregeParseController extends ParseControllerBase implements
 
 	private int timeout;
 	private TGlobal global;
+	private int  hash = 0;
+	private int  leng = 0;
 	private final ISourcePositionLocator   fSourcePositionLocator   
 					= new FregeSourcePositionLocator(this);
     private final SimpleAnnotationTypeInfo fSimpleAnnotationTypeInfo
@@ -351,6 +353,10 @@ public class FregeParseController extends ParseControllerBase implements
 			try { Thread.sleep(timeout); } catch (InterruptedException e) {}
 		if (monitor.isCanceled()) return global;
 		
+		if (contents.length() == leng && contents.hashCode() == hash)
+			return global;			// nothing really updated here
+		
+		
 		msgHandler.clearMessages();
 		
 		final IProgressMonitor myMonitor = monitor;
@@ -401,6 +407,8 @@ public class FregeParseController extends ParseControllerBase implements
 			if (scanOnly && desc.startsWith("type check")) break;
 		}
 		
+		leng = contents.length();
+		hash = contents.hashCode();
 		return global;
 	}
 

@@ -81,6 +81,8 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
  */
 //%type package         ParseResult
 //%type varop           Token
+//%type thenx           Token
+//%type elsex           Token
 //%type commata         Int
 //%type semicoli        Int
 //%type packagename     (Pos String)
@@ -197,6 +199,8 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type guard           Guard
 //%type guards          [Guard]
 //%type qualifiers      (Token -> SName)
+//%explain thenx        then branch
+//%explain elsex        else branch
 //%explain qualifiers   qualified type name
 //%explain package      a package
 //%explain packageclause a package clause
@@ -1065,8 +1069,19 @@ expr:
     | topex
     ;
 
+thenx: 
+    ';' THEN                           { flip const }
+    | THEN
+    ;
+
+elsex: 
+    ';' ELSE                           { flip const }
+    | ELSE
+    ;
+
+    
 topex:
-      IF expr THEN expr ELSE topex     { \_\c\_\t\_\e  -> Ifte c t e Nothing}
+      IF expr thenx expr elsex topex   { \_\c\_\t\_\e  -> Ifte c t e Nothing}
     | CASE  expr OF '{' calts   '}'    { \_\e\_\_\as\_ -> Case CNormal e as Nothing}
     | LET '{' letdefs '}' IN  topex    { \_\_\ds\_\_\e -> Let [] ds e Nothing}
     | lambda
