@@ -1,0 +1,542 @@
+package frege.data.Set where
+
+import frege.Prelude hiding (null, empty, filter, join, map, foldl, foldr)
+import Control.Monoid
+import Control.Foldable (Foldable)
+
+infixl 9 `\\`
+
+-- | /O(n+m)/. See 'difference'.
+(\\) :: Ord a => Set a -> Set a -> Set a
+m1 \\ m2 = difference m1 m2
+
+type Size = Int
+
+data Set a = private Tip | private Bin Size a (Set a) (Set a) 
+
+instance Monoid Ord a => Set a where
+    mempty  = empty
+    mappend = union
+    mconcat = unions
+
+instance Foldable Set where
+    foldF Set.Tip = mempty
+    foldF (Set.Bin _ k l r) = (Foldable.foldF l `mappend` k) `mappend` Foldable.foldF r
+    foldrF = foldr
+    foldlF = foldl
+    foldMapF _ Set.Tip = mempty
+    foldMapF f (Set.Bin _ k l r) = (Foldable.foldMapF f l `mappend` f k) `mappend` Foldable.foldMapF f r
+    toList = toAscList  
+    
+instance Empty Set where
+   null Set.Tip = true
+   null _ = false
+   empty = Set.Tip
+ 
+-- | /O(1)/. Is this the empty set?
+null :: Set a -> Bool
+null Set.Tip = true
+null _ = false
+
+-- | /O(1)/. The number of elements in the set.
+size :: Set a -> Int
+size Set.Tip = 0
+size (Set.Bin sz _ _ _) = sz
+
+private compResult :: Ord a => a -> a -> (b,b,b) -> b
+private compResult x y (lt, eq, gt) = case x <=> y of {LT -> lt;  EQ -> eq; GT -> gt}
+
+-- | /O(log n)/. Is the element in the set?
+member :: Ord a => a -> Set a -> Bool
+member !_ Set.Tip = false
+member !x (Set.Bin _ y l r) = compResult x y (member x l, true, member x r)
+
+-- | /O(log n)/. Is the element not in the set?
+notMember :: Ord a => a -> Set a -> Bool
+notMember a t = not $ member a t
+
+-- | /O(1)/. The empty set.
+empty :: Set a
+empty = Set.Tip
+
+-- | /O(1)/. Create a singleton set.
+singleton :: a -> Set a
+singleton x = Set.Bin 1 x Set.Tip Set.Tip
+
+-- | /O(log n)/. Insert an element in a set.
+-- If the set already contains an element equal to the given value,
+-- it is replaced with the new value.
+insert :: Ord a => a -> Set a -> Set a
+insert !x Set.Tip = singleton x
+insert !x (Set.Bin sz y l r) = 
+  compResult x y (balanceL y (insert x l) r, Set.Bin sz x l r, balanceR y l (insert x r))
+
+-- Insert an element to the set only if it is not in the set. Used by
+-- `union`.
+private insertR :: Ord a => a -> Set a -> Set a
+private insertR !x Set.Tip = singleton x
+private insertR !x (t @ Set.Bin _ y l r) = 
+  compResult x y (balanceL y (insertR x l) r, t, balanceR y l (insertR x r))
+
+-- | /O(log n)/. Delete an element from a set.
+delete :: Ord a => a -> Set a -> Set a
+delete !_ Set.Tip = Set.Tip
+delete !x (Set.Bin _ y l r) = 
+  compResult x y (balanceR y (delete x l) r, glue l r, balanceL y l (delete x r))
+
+-- | /O(n+m)/. Is this a proper subset? (ie. a subset but not equal).
+isProperSubsetOf :: Ord a => Set a -> Set a -> Bool
+isProperSubsetOf s1 s2 = (size s1 < size s2) && (isSubsetOf s1 s2)
+
+-- | /O(n+m)/. Is this a subset?
+-- @(s1 `isSubsetOf` s2)@ tells whether @s1@ is a subset of @s2@.
+isSubsetOf :: Ord a => Set a -> Set a -> Bool
+isSubsetOf t1 t2 = (size t1 <= size t2) && (isSubsetOfX t1 t2)
+
+private isSubsetOfX :: Ord a => Set a -> Set a -> Bool
+private isSubsetOfX Set.Tip _ = true
+private isSubsetOfX _ Set.Tip = false
+private isSubsetOfX (Set.Bin _ x l r) t = 
+    let (lt, found, gt) = splitMember x t
+    in found && isSubsetOfX l lt && isSubsetOfX r gt
+
+-- | /O(log n)/. The minimal element of a set.
+findMin :: Set a -> a
+findMin (Set.Bin _ x Set.Tip _) = x
+findMin (Set.Bin _ _ l _) = findMin l
+findMin Set.Tip = error "Set.findMin: empty set has no minimal element"
+
+-- | /O(log n)/. The maximal element of a set.
+findMax :: Set a -> a
+findMax (Set.Bin _ x _ Set.Tip)  = x
+findMax (Set.Bin _ _ _ r) = findMax r
+findMax Set.Tip = error "Set.findMax: empty set has no maximal element"
+
+-- | /O(log n)/. Delete the minimal element.
+deleteMin :: Set a -> Set a
+deleteMin (Set.Bin _ _ Set.Tip r) = r
+deleteMin (Set.Bin _ x l r) = balanceR x (deleteMin l) r
+deleteMin Set.Tip = Set.Tip
+
+-- | /O(log n)/. Delete the maximal element.
+deleteMax :: Set a -> Set a
+deleteMax (Set.Bin _ _ l Set.Tip) = l
+deleteMax (Set.Bin _ x l r) = balanceL x l (deleteMax r)
+deleteMax Set.Tip = Set.Tip
+
+private justS :: a -> Maybe a
+private justS !x = Just x
+
+-- | The union of a list of sets: (@'unions' == 'foldl' 'union' 'empty'@).
+unions :: Ord a => [Set a] -> Set a
+unions = foldlStrict union empty
+
+-- | /O(n+m)/. The union of two sets, preferring the first set when
+-- equal elements are encountered.
+-- The implementation uses the efficient /hedge-union/ algorithm.
+-- Hedge-union is more efficient on (bigset `union` smallset).
+union :: Ord a => Set a -> Set a -> Set a
+union Set.Tip t2  = t2
+union t1 Set.Tip  = t1
+union (Set.Bin _ x Set.Tip Set.Tip) t = insert x t
+union t (Set.Bin _ x Set.Tip Set.Tip) = insertR x t
+union t1 t2 = hedgeUnion Nothing Nothing t1 t2
+
+private hedgeUnion :: Ord a => Maybe a -> Maybe a -> Set a -> Set a -> Set a
+private hedgeUnion _  _ t1 Set.Tip = t1
+private hedgeUnion blo bhi Set.Tip (Set.Bin _ x l r) = join x (filterGt blo l) (filterLt bhi r)
+private hedgeUnion blo bhi (Set.Bin _ x l r) t2 = 
+      join x (hedgeUnion blo bmi l (trim blo bmi t2))
+             (hedgeUnion bmi bhi r (trim bmi bhi t2)) where bmi = justS x
+
+-- | /O(n+m)/. Difference of two sets. 
+-- The implementation uses an efficient /hedge/ algorithm comparable with /hedge-union/.
+difference :: Ord a => Set a -> Set a -> Set a
+difference Set.Tip _ = Set.Tip
+difference t1 Set.Tip = t1
+difference t1 t2 = hedgeDiff Nothing Nothing t1 t2
+
+private hedgeDiff :: Ord a => Maybe a -> Maybe a -> Set a -> Set a -> Set a
+private hedgeDiff _ _ Set.Tip _ = Set.Tip
+private hedgeDiff blo bhi (Set.Bin _ x l r) Set.Tip = join x (filterGt blo l) (filterLt bhi r)
+private hedgeDiff blo bhi t (Set.Bin _ x l r) = 
+   merge (hedgeDiff blo bmi (trim blo bmi t) l)
+         (hedgeDiff bmi bhi (trim bmi bhi t) r) where bmi = justS x
+
+-- | /O(n+m)/. The intersection of two sets.
+intersection :: Ord a => Set a -> Set a -> Set a
+intersection Set.Tip _ = Set.Tip
+intersection _ Set.Tip = Set.Tip
+intersection (t1 @ Set.Bin s1 x1 l1 r1) (t2 @ Set.Bin s2 x2 l2 r2) =
+   if s1 >= s2 then
+      let (lt,found,gt) = splitLookup x2 t1
+          tl = intersection lt l2
+          tr = intersection gt r2
+      in case found of
+      Just x -> join x tl tr
+      Nothing -> merge tl tr
+   else let (lt,found,gt) = splitMember x1 t2
+            tl = intersection l1 lt
+            tr = intersection r1 gt
+        in if found then join x1 tl tr else merge tl tr
+
+
+-- | /O(n)/. Filter all elements that satisfy the predicate.
+filter :: Ord a => (a -> Bool) -> Set a -> Set a
+filter _ Set.Tip = Set.Tip
+filter p (Set.Bin _ x l r)
+    | p x = join x (filter p l) (filter p r)
+    | otherwise = merge (filter p l) (filter p r)
+
+-- | /O(n)/. Partition the set into two sets, one with all elements that satisfy
+-- the predicate and one with all elements that don't satisfy the predicate.
+-- See also 'split'.
+partition :: Ord a => (a -> Bool) -> Set a -> (Set a,Set a)
+partition _ Set.Tip = (Set.Tip, Set.Tip)
+partition p (Set.Bin _ x l r) = case (partition p l, partition p r) of 
+  ((l1, l2), (r1, r2))
+    | p x -> (join x l1 r1, merge l2 r2)
+    | otherwise -> (merge l1 r1, join x l2 r2)
+
+-- | /O(n*log n)/. 
+-- @'map' f s@ is the set obtained by applying @f@ to each element of @s@.
+map :: (Ord a, Ord b) => (a->b) -> Set a -> Set b
+map f = fromList <~ Prelude.map f <~ toList
+
+-- | /O(n)/. The 
+mapMonotonic :: (a->b) -> Set a -> Set b
+mapMonotonic _ Set.Tip = Set.Tip
+mapMonotonic f (Set.Bin sz x l r) = Set.Bin sz (f x) (mapMonotonic f l) (mapMonotonic f r)
+
+-- | /O(n)/. Fold the elements in the set using the given right-associative
+-- binary operator, such that @'foldr' f z == 'Prelude.foldr' f z . 'toAscList'@.
+foldr :: (a -> b -> b) -> b -> Set a -> b
+foldr f z Set.Tip = z
+foldr f z (Set.Bin _ x l r) = foldr f (f x (foldr f z r)) l
+
+-- | /O(n)/. A strict version of 'foldr'. Each application of the operator is
+-- evaluated before using the result in the next application. This
+-- function is strict in the starting value.
+foldr' :: (a -> b -> b) -> b -> Set a -> b
+foldr' f !z Set.Tip = z
+foldr' f !z (Set.Bin _ x l r) = foldr' f (f x (foldr' f z r)) l
+
+-- | /O(n)/. Fold the elements in the set using the given left-associative
+-- binary operator, such that @'foldl' f z == 'Prelude.foldl' f z . 'toAscList'@.
+foldl :: (a -> b -> a) -> a -> Set b -> a
+foldl f z Set.Tip = z
+foldl f z (Set.Bin _ x l r) = foldl f (f (foldl f z l) x) r
+
+-- | /O(n)/. A strict version of 'foldl'. Each application of the operator is
+-- evaluated before using the result in the next application. This
+-- function is strict in the starting value.
+foldl' :: (a -> b -> a) -> a -> Set b -> a
+foldl' f !z Set.Tip = z
+foldl' f !z (Set.Bin _ x l r) = foldl' f (f (foldl' f z l) x) r
+
+-- | /O(n)/. The elements of a set.
+elems :: Set a -> [a]
+elems = toList
+
+-- | /O(n)/. Convert the set to an ascending list of elements.
+toAscList :: Set a -> [a]
+toAscList = foldr (:) []
+
+-- | /O(n*log n)/. Create a set from a list of elements.
+fromList :: Ord a => [a] -> Set a 
+fromList = foldlStrict (flip insert) empty 
+
+-- | /O(n)/. Build a set from an ascending list in linear time.
+-- /The precondition (input list is ascending) is not checked./
+fromAscList :: Eq a => [a] -> Set a 
+fromAscList xs
+  = fromDistinctAscList (combineEq xs) where
+  -- [combineEq xs] combines equal elements with [const] in an ordered list [xs]
+  combineEq xs'
+    = case xs' of
+        []     -> []
+        [x]    -> [x]
+        (x:xx) -> combineEq' x xx
+
+  combineEq' z [] = [z]
+  combineEq' z (x:xs')
+    | z == x = combineEq' z xs'
+    | otherwise = z : combineEq' x xs'
+
+-- | /O(n)/. Build a set from an ascending list of distinct elements in linear time.
+-- /The precondition (input list is strictly ascending) is not checked./
+private fromDistinctAscList :: [a] -> Set a 
+private fromDistinctAscList xs = build const (length xs) xs where
+    build c 0 xs'  = c Set.Tip xs'
+    build c 5 xs'  = case xs' of
+                       (x1:x2:x3:x4:x5:xx) 
+                            -> c (bin x4 (bin x2 (singleton x1) (singleton x3)) (singleton x5)) xx
+                       _ -> error "fromDistinctAscList build 5"
+    build c n xs'  = seq nr $ build (buildR nr c) nl xs' where
+        nl = n `div` 2
+        nr = n - nl - 1
+
+    buildR n c l (x:ys) = build (buildB l x c) n ys
+    buildR _ _ _ []     = error "fromDistinctAscList buildR []"
+    buildB l x c r zs   = c (bin x l r) zs
+
+
+instance Eq Eq a => Set a where
+    t1 == t2  = (size t1 == size t2) && (toAscList t1 == toAscList t2)
+
+instance Ord Ord a => Set a where
+    s1 <=> s2 = (toAscList s1) <=> (toAscList s2) 
+
+instance Show Show a => Set a where
+    show s =  "fromList " ++ show (toList s)
+
+private trim :: Ord a => Maybe a -> Maybe a -> Set a -> Set a
+private trim Nothing   Nothing   t = t
+private trim (Just lx) Nothing   t = greater lx t where 
+    greater lo (Set.Bin _ x _ r) | x <= lo = greater lo r
+    greater _  t' = t'
+private trim Nothing   (Just hx) t = lesser hx t  where 
+    lesser  hi (Set.Bin _ x l _) | x >= hi = lesser  hi l
+    lesser  _  t' = t'
+private trim (Just lx) (Just hx) t = middle lx hx t  where 
+    middle lo hi (Set.Bin _ x l r) 
+      | x <= lo = middle lo hi r
+      | x >= hi = middle lo hi l
+    middle _ _ t' = t'                   
+    
+private filterGt :: Ord a => Maybe a -> Set a -> Set a
+private filterGt Nothing t = t
+private filterGt (Just b) t = filter' b t where
+        filter' _   Set.Tip = Set.Tip
+        filter' b' (Set.Bin _ x l r) = compResult b' x (join x (filter' b' l) r, r, filter' b' r)
+
+private filterLt :: Ord a => Maybe a -> Set a -> Set a
+private filterLt Nothing t = t
+private filterLt (Just b) t = filter' b t where 
+        filter' _   Set.Tip = Set.Tip
+        filter' b' (Set.Bin _ x l r) =
+          compResult x b' (join x l (filter' b' r), l, filter' b' l)
+
+-- | /O(log n)/. The expression (@'split' x set@) is a pair @(set1,set2)@
+-- where @set1@ comprises the elements of @set@ less than @x@ and @set2@
+-- comprises the elements of @set@ greater than @x@.
+split :: Ord a => a -> Set a -> (Set a,Set a)
+split _ Set.Tip = (Set.Tip,Set.Tip)
+split x (Set.Bin _ y l r)
+  = compResult x y (
+      let (lt,gt) = split x l in (lt,join y gt r), 
+      (l,r), 
+      let (lt,gt) = split x r in (join y l lt,gt))
+
+-- | /O(log n)/. Performs a 'split' but also returns whether the pivot
+-- element was found in the original set.
+splitMember :: Ord a => a -> Set a -> (Set a,Bool,Set a)
+splitMember x t = let (l,m,r) = splitLookup x t in
+     (l,maybe false (const true) m,r)
+
+-- | /O(log n)/. Performs a 'split' but also returns the pivot
+-- element that was found in the original set.
+private splitLookup :: Ord a => a -> Set a -> (Set a,Maybe a,Set a)
+private splitLookup _ Set.Tip = (Set.Tip, Nothing, Set.Tip)
+private splitLookup x (Set.Bin _ y l r)
+   = compResult x y (
+       let (lt,found,gt) = splitLookup x l in (lt,found,join y gt r),
+       (l,Just y,r),
+       let (lt,found,gt) = splitLookup x r in (join y l lt,found,gt))
+
+protected join :: a -> Set a -> Set a -> Set a
+protected join x Set.Tip r  = insertMin x r
+protected join x l Set.Tip  = insertMax x l
+protected join x (l @ Set.Bin sizeL y ly ry) (r @ Set.Bin sizeR z lz rz)
+  | delta*sizeL < sizeR  = balanceL z (join x l lz) rz
+  | delta*sizeR < sizeL  = balanceR y ly (join x ry r)
+  | otherwise            = bin x l r
+
+-- insertMin and insertMax don't perform potentially expensive comparisons.
+insertMax,insertMin :: a -> Set a -> Set a 
+insertMax x Set.Tip = singleton x
+insertMax x (Set.Bin _ y l r) = balanceR y l (insertMax x r)
+
+insertMin x Set.Tip = singleton x
+insertMin x (Set.Bin _ y l r) = balanceL y (insertMin x l) r
+
+protected merge :: Set a -> Set a -> Set a
+protected merge Set.Tip r = r
+protected merge l Set.Tip = l
+protected merge (l @ Set.Bin sizeL x lx rx) (r @ Set.Bin sizeR y ly ry)
+    | delta*sizeL < sizeR = balanceL y (merge l ly) ry
+    | delta*sizeR < sizeL = balanceR x lx (merge rx r)
+    | otherwise = glue l r
+
+private glue :: Set a -> Set a -> Set a
+private glue Set.Tip r = r
+private glue l Set.Tip = l
+private glue l r   
+    | size l > size r = let (m,l') = deleteFindMax l in balanceR m l' r
+    | otherwise = let (m,r') = deleteFindMin r in balanceL m l r'
+
+-- | /O(log n)/. Delete and find the minimal element.
+-- 
+-- > deleteFindMin set = (findMin set, deleteMin set)
+
+deleteFindMin :: Set a -> (a,Set a)
+deleteFindMin (Set.Bin _ x Set.Tip r) = (x,r)
+deleteFindMin (Set.Bin _ x l r) = let (xm,l') = deleteFindMin l in (xm,balanceR x l' r)
+deleteFindMin Set.Tip = (error "Set.deleteFindMin: can not return the minimal element of an empty set", Set.Tip)
+
+-- | /O(log n)/. Delete and find the maximal element.
+-- 
+-- > deleteFindMax set = (findMax set, deleteMax set)
+deleteFindMax :: Set a -> (a,Set a)
+deleteFindMax t
+  = case t of
+      Set.Bin _ x l Set.Tip -> (x,l)
+      Set.Bin _ x l r -> let (xm,r') = deleteFindMax r in (xm,balanceL x l r')
+      Set.Tip -> (error "Set.deleteFindMax: can not return the maximal element of an empty set", Set.Tip)
+
+-- | /O(log n)/. Retrieves the minimal key of the set, and the set
+-- stripped of that element, or 'Nothing' if passed an empty set.
+minView :: Set a -> Maybe (a, Set a)
+minView Set.Tip = Nothing
+minView x = Just (deleteFindMin x)
+
+-- | /O(log n)/. Retrieves the maximal key of the set, and the set
+-- stripped of that element, or 'Nothing' if passed an empty set.
+maxView :: Set a -> Maybe (a, Set a)
+maxView Set.Tip = Nothing
+maxView x = Just (deleteFindMax x)
+
+private delta,ratio :: Int
+private delta = 3
+private ratio = 2
+
+private balanceL :: a -> Set a -> Set a -> Set a
+private balanceL x l r = case r of
+  Set.Tip -> case l of
+           Set.Tip -> Set.Bin 1 x Set.Tip Set.Tip
+           (Set.Bin _ _ Set.Tip Set.Tip) -> Set.Bin 2 x l Set.Tip
+           (Set.Bin _ lx Set.Tip (Set.Bin _ lrx _ _)) -> Set.Bin 3 lrx (Set.Bin 1 lx Set.Tip Set.Tip) (Set.Bin 1 x Set.Tip Set.Tip)
+           (Set.Bin _ lx (ll @ Set.Bin _ _ _ _) Set.Tip) -> Set.Bin 3 lx ll (Set.Bin 1 x Set.Tip Set.Tip)
+           (Set.Bin ls lx (ll @ Set.Bin lls _ _ _) (lr @ Set.Bin lrs lrx lrl lrr))
+             | lrs < ratio*lls -> Set.Bin (1+ls) lx ll (Set.Bin (1+lrs) x lr Set.Tip)
+             | otherwise -> Set.Bin (1+ls) lrx (Set.Bin (1+lls+size lrl) lx ll lrl) (Set.Bin (1+size lrr) x lrr Set.Tip)
+
+  (Set.Bin rs _ _ _) -> case l of
+           Set.Tip -> Set.Bin (1+rs) x Set.Tip r
+
+           (Set.Bin ls lx ll lr)
+              | ls > delta*rs  -> case (ll, lr) of
+                   (Set.Bin lls _ _ _, Set.Bin lrs lrx lrl lrr)
+                     | lrs < ratio*lls -> Set.Bin (1+ls+rs) lx ll (Set.Bin (1+rs+lrs) x lr r)
+                     | otherwise -> Set.Bin (1+ls+rs) lrx (Set.Bin (1+lls+size lrl) lx ll lrl) (Set.Bin (1+rs+size lrr) x lrr r)
+                   (_, _) -> error "Failure in Data.Map.balanceL"
+              | otherwise -> Set.Bin (1+ls+rs) x l r
+
+-- balanceR is called when right subtree might have been inserted to or when
+-- left subtree might have been deleted from.
+private balanceR :: a -> Set a -> Set a -> Set a
+private balanceR x l r = case l of
+  Set.Tip -> case r of
+           Set.Tip -> Set.Bin 1 x Set.Tip Set.Tip
+           (Set.Bin _ _ Set.Tip Set.Tip) -> Set.Bin 2 x Set.Tip r
+           (Set.Bin _ rx Set.Tip (rr @ Set.Bin _ _ _ _)) -> Set.Bin 3 rx (Set.Bin 1 x Set.Tip Set.Tip) rr
+           (Set.Bin _ rx (Set.Bin _ rlx _ _) Set.Tip) -> Set.Bin 3 rlx (Set.Bin 1 x Set.Tip Set.Tip) (Set.Bin 1 rx Set.Tip Set.Tip)
+           (Set.Bin rs rx (rl @ Set.Bin rls rlx rll rlr) (rr @ Set.Bin rrs _ _ _))
+             | rls < ratio*rrs -> Set.Bin (1+rs) rx (Set.Bin (1+rls) x Set.Tip rl) rr
+             | otherwise -> Set.Bin (1+rs) rlx (Set.Bin (1+size rll) x Set.Tip rll) (Set.Bin (1+rrs+size rlr) rx rlr rr)
+
+  (Set.Bin ls _ _ _) -> case r of
+           Set.Tip -> Set.Bin (1+ls) x l Set.Tip
+
+           (Set.Bin rs rx rl rr)
+              | rs > delta*ls  -> case (rl, rr) of
+                   (Set.Bin rls rlx rll rlr, Set.Bin rrs _ _ _)
+                     | rls < ratio*rrs -> Set.Bin (1+ls+rs) rx (Set.Bin (1+ls+rls) x l rl) rr
+                     | otherwise -> Set.Bin (1+ls+rs) rlx (Set.Bin (1+ls+size rll) x l rll) (Set.Bin (1+rrs+size rlr) rx rlr rr)
+                   (_, _) -> error "Failure in Data.Map.balanceR"
+              | otherwise -> Set.Bin (1+ls+rs) x l r
+   
+protected bin :: a -> Set a -> Set a -> Set a
+protected bin x l r = Set.Bin (size l + size r + 1) x l r
+
+private foldlStrict :: (a -> b -> a) -> a -> [b] -> a
+private foldlStrict f z []     = z
+private foldlStrict f z (x:xs) = let z' = f z x in z' `seq` foldlStrict f z' xs
+
+-- | /O(n)/. Show the tree that implements the set. The tree is shown
+-- in a compressed, hanging format.
+protected showTree :: Show a => Set a -> String
+protected showTree s = showTreeWith true false s
+
+protected showTreeWith :: Show a => Bool -> Bool -> Set a -> String
+protected showTreeWith hang wide t
+    | hang = (showsTreeHang wide [] t) ""
+    | otherwise = (showsTree wide [] [] t) ""
+
+--showsTree :: Show a => Bool -> [String] -> [String] -> Set a -> ShowS
+private showsTree wide lbars rbars t
+  = case t of
+      Set.Tip -> showsBars lbars <~ showString "|\n"
+      Set.Bin _ x Set.Tip Set.Tip
+          -> showsBars lbars <~ shows x <~ showString "\n" 
+      Set.Bin _ x l r
+          -> showsTree wide (withBar rbars) (withEmpty rbars) r <~
+             showWide wide rbars <~
+             showsBars lbars <~ shows x <~ showString "\n" <~
+             showWide wide lbars <~
+             showsTree wide (withEmpty lbars) (withBar lbars) l 
+
+private showsTreeHang :: Show a => Bool -> [String] -> Set a -> ShowS
+private showsTreeHang wide bars t
+  = case t of
+      Set.Tip -> showsBars bars <~ showString "|\n" 
+      Set.Bin _ x Set.Tip Set.Tip
+          -> showsBars bars <~ shows x <~ showString "\n" 
+      Set.Bin _ x l r
+          -> showsBars bars <~ shows x <~ showString "\n" <~ 
+             showWide wide bars <~
+             showsTreeHang wide (withBar bars) l <~
+             showWide wide bars <~
+             showsTreeHang wide (withEmpty bars) r 
+
+private concatStringList :: [String] -> String
+private concatStringList = Prelude.foldr (++) ""
+
+private showWide :: Bool -> [String] -> String -> String
+private showWide wide bars 
+    | wide      = showString (concatStringList (reverse bars)) <~ showString "|\n" 
+    | otherwise = id
+
+private showsBars :: [String] -> ShowS
+private showsBars [] = id
+private showsBars bars = showString (concatStringList (reverse (tail bars))) <~ showString node
+
+private node :: String
+private node = "+--"
+
+private withBar, withEmpty :: [String] -> [String]
+private withBar bars   = "|  " : bars
+private withEmpty bars = "   " : bars
+
+-- | /O(n)/. Test if the internal set structure is valid.
+protected valid :: Ord a => Set a -> Bool
+protected valid t = balanced t && ordered t && validsize t
+
+private ordered :: Ord a => Set a -> Bool
+private ordered t = bounded (const true) (const true) t where
+    bounded lo hi Set.Tip = true
+    bounded lo hi (Set.Bin _ x l r) = (lo x) && (hi x) && bounded lo (<x) l && bounded (>x) hi r
+
+private balanced :: Set a -> Bool
+private balanced Set.Tip = true
+private balanced (Set.Bin _ _ l r) = 
+    (size l + size r <= 1 || (size l <= delta * size r && size r <= delta * size l)) && balanced l && balanced r
+
+private validsize :: Set a -> Bool
+private validsize t = (realsize t == Just (size t)) where
+    realsize Set.Tip = Just 0
+    realsize (Set.Bin sz _ l r) = case (realsize l, realsize r) of
+                                    (Just n, Just m) | n + m + 1 == sz  -> Just sz
+                                    _ -> Nothing
+
+
