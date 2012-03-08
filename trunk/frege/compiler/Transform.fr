@@ -133,20 +133,26 @@ pass10 = do
  *   If @b@ and @c@ are also simple, then the whole expression is simple.
  * - @a b@ is simple if @a@ and @b@ are both simple. Otherwise the application is
  *   not easy.
- * - @let v = x in e@ is easy, if @x@ and @e@ are both easy.
- * - @\p -> x@ is easy, if @x@ is easy
+ * - @let v = x in e@ is easy, if @x@ is simple and @e@ is easy.
+ * - @\p -> x@ is simple, if @x@ is easy
  * - @case x of { p1 -> a1; ...; pn -> an }@ is easy if @x@ is simple and
  *   all alternatives @a1@ ... @an@ are easy.
  *
- * An example for an expression that is not easy would be @(\p -> e) x@.
+ * An example for an expression that is not easy would be 
+ * > f (case x of p -> e)
  * This is because
- * for an application to be easy, all subexpressions must be simple, and a lambda
- * abstraction can only be easy, but never simple.
-
- * It can be made easy in 2 ways, provided @e@ is easy and @x@ is simple:
- * 1. transform to @case x of p -> e@
- * 2. @let v = \p -> e in v x@
+ * for an application to be easy, all subexpressions must be simple, 
+ * and a case expression can only be easy, but never simple.
  *
+ * It can be seen, that an arbitrary expression can be made easy if there is
+ * a way to make any expression simple.
+ * The latter is indeed possible, because for any expression /x/ 
+ * > (\_ -> ex) C
+ * is simple, where /ex/ is an easy version of /x/. Together with the
+ * observation, that to make an expression easy, only /strictly smaller/
+ * expressions need to be made simple (and easy), 
+ * which guarantees progress and termination, the proof is complete.
+
  * This pass should run before strictness analysis so that local definitions
  * we need to introduce get strictness info.
  -}
@@ -162,7 +168,7 @@ pass9 = do
 
 easySym (vsym@SymV {pos})
     | Just x <- vsym.expr = do
-        nx <- easyExpr x
+        nx <- easyExpression x
         U.changeSym vsym.{expr = Just nx}
     | otherwise = stio ()
 easySym sym = do
@@ -314,11 +320,12 @@ returnKind syms (sym@SymV {expr = Just x, depth = 0}) = do
         self   <- references [sym.sid] x        -- is it self-referential?
         rec    <- references syms x             -- is it recursive
         (_, deps) <- U.fundep sym
+        sx     <- isSimple x
         let fwrefs
                 | Local{} <- sym.name = rec > 0
                 | otherwise = not (null deps)        -- possible forward references?
             b32 = if rec > 0 then 0 else 32
-            b16 = if isSimple x && not fwrefs && self == 0 then 16 else 0
+            b16 = if sx && not fwrefs && self == 0 then 16 else 0
             rkind = if fwrefs then 0 + b16 + b32
                 else if self > 0 then 0 + b16 + b32
                     else b32 + b16 + ord sym.strsig.isStrict
@@ -326,8 +333,9 @@ returnKind syms (sym@SymV {expr = Just x, depth = 0}) = do
 
 returnKind syms (sym@SymV {expr = Just x}) = do
         (w, x) <- returnExprKind syms sym x
+        sx     <- isSimple x
         let r = if w `band` 6 <= 2 then 0 else 1
-            b16 = if isSimple x then 16 else 0
+            b16 = if sx then 16 else 0
             rkind = case sym.strsig of
                     S ss | any Strictness.isStrict ss = b16+r+w
                     otherwise = r+b16+(w `band` (rkTail + rkSafeTC))
@@ -699,11 +707,12 @@ unrollLet x = stio (Left x)
 
 easyX x = do
         g <- getST
-        unless (isSimple x) do
+        sx <- isSimple x
+        unless (sx) do
             U.logmsg TRACE9 (getpos x) (text ("uneasy expr: " ++ nice x g))
         (y, evts) <- makeEasy 0 x
         let nx = fold mkLet y evts
-        unless (isSimple x) do
+        unless (sx) do
             U.logmsg TRACE9 (getpos x) (text ("eased  expr: " ++ nice nx g))
         stio (Left nx)
     where
@@ -712,14 +721,6 @@ easyX x = do
             U.logmsg TRACE9 (getpos x) (text ("mkEasy before " ++ s ++ ":  " ++ nice x g))
             U.logmsg TRACE9 (getpos x) (text ("mkEasy after  " ++ s ++ ":  " ++ nice y g))
         mkLet ex env = Let {defs=[], ex, env=[env], typ=ex.typ}
-        isEasy (App a b _)       = isSimple a && isSimple b
-        isEasy (Let {env,ex})    = isEasy ex {- &&
-                                   all isEasy [ x | SymV {expr = Just x} <- values env ] -}
-        -- isEasy (Lam {ex})        = isEasy ex
-        isEasy (Case {ex,alts})  = isSimple ex && all (isEasy • CAlt.ex) alts
-        isEasy (Ifte a b c _)    = isSimple a && isEasy b && isEasy c
-        isEasy (Ann {ex})        = isEasy ex
-        isEasy x                 = isSimple x
 
         -- makeEasy _ (x@Lam {ex, env}) = with env do        -- so as to avoid bad symbols
         --     (ex, envs) <- makeEasy false ex
@@ -781,7 +782,7 @@ easyX x = do
         makeEasy _ (x@Ifte a b c t)  = do                 -- branches will be made easy recursively
             (a, envs) <- makeSimple a
             stio (Ifte a b c t, envs)
-        makeEasy args (v@Vbl {name, typ = Just (ForAll [] rho)}) | not name.isLocal = do
+        makeEasy args (v@Vbl {name, typ = Just sig}) | not name.isLocal = do
             g <- getST
             if U.isOn g.options.flags INLINE 
                 then do
@@ -789,30 +790,20 @@ easyX x = do
                     -- U.logmsg TRACE9 (getpos v) (text ("can we inline " ++ nicer sym g ++ "?"))
                     case sym.expr of 
                         Just x | sym.exported && (args >= sym.depth) = do
-                            U.logmsg TRACE9 (getpos v) (text ("replace " ++ nice v g  ++ " :: " ++ nicer rho g))
-                            x <- recycle x rho
+                            U.logmsg TRACE9 (getpos v) (text ("replace " ++ nice v g  ++ " :: " ++ nicer sig g))
+                            x <- recycle x sig.rho
                             makeEasy args x
                         _ -> stio (v, [])
                 else stio (v, [])             
-        makeEasy _ x | isEasy x    = stio (x, [])
+        -- makeEasy _ x | isEasy x    = stio (x, [])
         makeEasy _ x = do
             g <- getST
             U.error (getpos x) (text ("don't know how to make easy:  " ++ nice x g))
             stio (x, [])
 
-        recycle expr rho = do
-            g <- getST
-            expr <- U.copyExpr Nil expr
-            let tvs = U.freeTVars [] rho
-            rho <- TCU.instantiate (ForAll tvs rho)
-            x <- checkRho expr rho
-            x <- zonkExpr x
-            x <- U.mapEx true substInst x
-            U.logmsg TRACE9 (getpos expr) (text ("recycled  " ++ nice x g))
-            stio x 
             
         
-        makeSimple x | isSimple x = stio (x, [])
+        -- makeSimple x | isSimple x = stio (x, [])
         makeSimple (x@App a b t) = do
             (a, ea) <- makeSimple a
             (b, eb) <- makeSimple b
@@ -840,21 +831,285 @@ easyX x = do
             U.error (getpos x) (text ("don't know how to make simple:  " ++ nice x g))
             stio (x, [])
 
+--- copy expr and re-establish type
+recycle expr rho = do
+    g <- getST
+    expr <- U.copyExpr Nil expr
+    expr <- U.untypeExpr expr
+    rho <- TCU.instantiate (ForAll (U.freeTVars [] rho) rho)
+    x <- checkRho expr rho
+    x <- zonkExpr x
+    x <- U.mapEx true substInst x
+    U.logmsg TRACE9 (getpos expr) (text ("recycled  " ++ nice x g))
+    stio x 
+
+recyclex :: Expr -> StG Expr
+recyclex expr = U.copyExpr Nil expr {- case expr.typ of
+    Just sigma -> recycle expr sigma
+    _ -> do
+        g <- getST
+        U.fatal (getpos expr) (text("recyclex untyped: " ++ nicer expr g)) -}
+
 {--
  * [returns} *@true@* if expression is simple. See 'pass9' for more information.
  *
  * A simple expression can be translated to a java expression and will not need
  * blocks, if-then-else constructs, auxiliary declarations etc.
  -}
-isSimple (App a b _)     = isSimple a && isSimple b
-isSimple (Ifte a b c _)  = isSimple a && isSimple b && isSimple c
+isSimple (App a b _)     = liftM2 (&&) (isSimple a) (isSimple b)
+isSimple (Ifte a b c _)  = liftM2 (&&) (isSimple a)
+                            (liftM2 (&&) (isSimple b) (isSimple c))
 isSimple (Ann {ex})      = isSimple ex
-isSimple (Vbl {pos})     = true
-isSimple (Lit {pos})     = true
-isSimple (Con {pos})     = true
-isSimple (Lam {pat})     = true
-isSimple _               = false
+isSimple (Vbl {pos})     = return true
+isSimple (Lit {pos})     = return true
+isSimple (Con {pos})     = return true
+isSimple (Lam {ex})      = isEasy ex
+isSimple _               = return false
 
+mkSimple (x@Vbl {pos})     = return x
+mkSimple (x@Lit {pos})     = return x
+mkSimple (x@Con {pos})     = return x
+--- @p -> x@ is simple if @x@ is easy
+mkSimple (x@Lam {ex})      = do
+    ex <- mkEasy ex
+    return x.{ex}
+mkSimple (x@Ann {ex}) = do
+    ex <- mkSimple ex
+    return x.{ex}
+mkSimple x = do
+        is <- isSimple x
+        if is then return x
+        else mkS x 
+    where
+        -- any expression can be made simple through (\_ -> easy x) ()
+        mkS x = do
+            e <- mkEasy x
+            let lam = Lam {pat = PCon {pos, qname=unitName, pats=[]}, 
+                           ex = e,
+                           typ = Just (
+                                ForAll [] (
+                                    RhoFun [] (TC.sigFor "()")
+                                           (unJust e.typ).rho))}
+                pos = Position.null                                           
+                unitName = MName (TC.tc "()").name "()"
+                uni = Vbl {pos, name=unitName, typ = Just (TC.sigFor "()")}
+            g <- getST
+            U.hint (getpos e) (text("extra class file needed for complicated expression " ++ nicer e g))                                           
+            return (App lam uni e.typ)
+{--
+ * [returns} *@true@* if expression is easy. See 'pass9' for more information.
+ *
+ * An easy expression can be translated to a series of java statements
+ * with a final return, i.e. to a valid method body.
+ -}
+
+isEasy (App a b _)       = liftM2 (&&) (isSimple a) (isSimple b)
+isEasy (Let {env,ex})    = do 
+    e <- isEasy ex
+    if e 
+    then do
+        syms <- mapSt U.findV env
+        -- ssss <- mapSt isSimple [ x | s <- syms, x <- Symbol.expr s ]
+        -- relaxed a bit cause we can handle it in the backend
+        ssss <- mapSt isEasy [ x | s <- syms, x <- Symbol.expr s ]
+        return (and ssss) 
+    else return false
+isEasy (Case {ex,alts})   = do
+    e <- isSimple ex
+    if e 
+    then liftM and $ mapSt (isEasy • CAlt.ex) alts
+    else return false
+isEasy (Ifte a b c _)     = do
+    e <- isSimple a
+    if e then liftM2 (&&) (isEasy b)  (isEasy c)
+    else return false
+isEasy (Ann {ex})        = isEasy ex
+isEasy x                 = isSimple x
+
+--- tracing wrapper for 'mkEasy'
+easyExpression x = do
+    g <- getST
+    if (U.isOn g.options.flags TRACE9)
+    then do
+        easy <- isEasy x
+        unless easy (U.logmsg TRACE9 (getpos x) (text("mkEasy before: " ++ nice x g)))
+        r <- mkEasy x
+        unless easy (U.logmsg TRACE9 (getpos r) (text("mkEasy after:  " ++ nice r g)))
+        return r
+    else mkEasy x 
+{--
+    Perform program transformations that ensure an easy expression.
+    This may imply making some sub expression simple, which, in turn,
+    may imply making this sub-expression at least easy.
+    The recursive process must terminate eventually at some expression that
+    is inherently easy, because there is no such rule as
+    > mkEasy x = mkSimple x
+    but only strictly smaller expressions are considered.
+        
+    Annotations are pushed inside for @let@, @case@ and @if@ like in
+    > if a then b else c :: t 
+    > if a then b :: t else c :: t
+    Hence if the result is  'Ann', the enclosed expression 
+    is guaranteed not to be @let@, @case@ or @if@.
+    This is important because many rules want to eliminate those in places where
+    simple expressions are expected.
+    
+    1. Easy lambda expressions are arrived at by making the body easy.
+    2. Easy @if@ eliminates @let@, @case@ and @if@ from the condition if present,
+       otherwise makes the condition simple and the alternatives easy.
+    3. Likewise, @case@ eliminates @let@, @case@ and @if@ from the scrutinized expression
+       or makes it simple and all alternatives easy.
+    4. Let makes the symbols' expression simple and the base expression easy.
+    5. Function application removes @let@, @case@ and @if@ from both function and 
+       argument. 
+    -}
+mkEasy (x@Lit{})    = return x
+mkEasy (x@Vbl{})    = return x
+mkEasy (x@Con{})    = return x
+mkEasy (ann@Ann {ex})
+    | Let{}  <- ex = mkEasy ex.{ex <- ann.{ex=}}
+    | Ifte{} <- ex = mkEasy ex.{thn <- ann.{ex=}, els <- ann.{ex=}}
+    | Case{} <- ex = mkEasy ex.{alts <- map substAlt}
+    | otherwise = do
+        ex <- mkEasy ex
+        return ann.{ex}
+    where substAlt :: CAlt -> CAlt
+          substAlt calt = calt.{ex <- ann.{ex=}}
+mkEasy (x@Lam {ex}) = do
+    ex <- mkEasy ex
+    return x.{ex}
+mkEasy (x@App a b t) = do
+        sb <- isSimple b
+        if sb then do
+            sa <- isSimple a
+            if sa then return x
+            else mkEasyFun x
+        else mkEasyArg x
+    where
+        -- hanlde
+        -- (let a = b in c) r => let a = b in c r
+        -- (if a then b else c) r => if a then b r else c r
+        -- (case a of {p1->b;p2->c}) r => case a of {p1->b r;p2->c r}
+        -- (\p -> a) r => case r of \p -> a
+        mkEasyFun (App f r t) = do
+            ef <- mkEasy f
+            -- simple <- isSimple ef
+            case ef of
+                Let{} -> mkEasy ef.{ex = App ef.ex r t, typ = t}
+                Ifte{} -> do
+                    r' <- recyclex r
+                    mkEasy ef.{thn = App ef.thn r t, els = App ef.els r' t, typ = t}
+                Case{} -> do
+                        alts <- mapSt adapt ef.alts
+                        mkEasy ef.{alts, typ=t}
+                    where
+                        adapt :: CAlt -> StG CAlt
+                        adapt calt = do
+                            r' <- recyclex r
+                            return calt.{ex = App calt.ex r' t}
+                Lam{} -> do 
+                    cas <- recycle (Case CNormal r [CAlt{pat=ef.pat, ex=ef.ex}] t) (unJust t).rho
+                    mkEasy cas
+                _ -> do
+                    sf <- mkSimple ef
+                    mkEasy (App sf r t)
+        -- handle
+        -- f (case a of {p1->x;p2->y}) ==> case a of {p1->f x;p2->f y}
+        -- f (if a then b else c) ==> if a then f b else f c
+        -- f (let a = b in c) ==> let a = b in f c  
+        mkEasyArg (App f arg t) = do
+            ea <- mkEasy arg
+            simple <- isSimple ea
+            case ea of
+                Let{} -> mkEasy ea.{ex = App f ea.ex t, typ = t}
+                Ifte a b c _ | not simple = do
+                    f' <- recyclex f
+                    mkEasy ea.{thn = App f b t, els = App f' c t, typ=t}
+                Case{} = do
+                        alts <- mapSt adapt ea.alts
+                        mkEasy ea.{alts, typ=t}
+                    where
+                        adapt :: CAlt -> StG CAlt
+                        adapt calt = do
+                            f' <- recyclex f
+                            return calt.{ex = App f' calt.ex t}
+                _ -> do
+                    sa <- mkSimple ea
+                    mkEasy (App f sa t)
+mkEasy (x@Let{env,ex}) = do             -- TODO: handle non-recursive let/case/if
+    syms <- mapSt U.findV env
+    foreach syms easySym 
+    ex <- mkEasy ex
+    return x.{ex}
+mkEasy (outer@Case{}) = do
+    ea     <- mkEasy outer.ex
+    simple <- isSimple ea
+    case ea of
+        -- case let a = b in c of {p1->x;p2->y}
+        -- let a = b in case c of {p1->x;p2->y}
+        Let{} -> mkEasy (Let {env = ea.env, defs = [], typ = outer.typ,
+                    ex = outer.{ex = ea.ex}})
+        -- case if a then b else c of {p1->x;p2->y}
+        -- if a then case b of {p1->x;p2->y} else case c of {p1->x;p2->y}
+        Ifte{} | not simple -> do
+            let thn = outer.{ex = ea.thn}
+            els <- recyclex outer.{ex = ea.els}
+            mkEasy ea.{thn,els,typ=outer.typ}
+        -- case case a of {b -> c; d -> e} of {f -> g; h -> i}
+        -- case a of {b -> case c of {f -> g; h -> i}; d -> case e of {f' -> g; h' -> i}}
+        Case{} -> do
+                alts <- mapSt adapt ea.alts
+                mkEasy ea.{alts, typ=outer.typ}
+            where
+                adapt :: CAlt -> StG CAlt
+                adapt calt = do
+                    ex <- recyclex outer.{ex = calt.ex}
+                    return calt.{ex}
+        _ -> do
+                sa  <- if simple then return ea else mkSimple ea
+                alts <- mapSt easyAlt outer.alts
+                return outer.{ex=sa, alts}
+            where
+                easyAlt calt = do
+                    ex <- mkEasy (CAlt.ex calt)
+                    return calt.{ex}
+        
+mkEasy (Ifte a x y t) = do
+    ea     <- mkEasy a
+    simple <- isSimple ea
+    case ea of
+        -- if let a = b in c then x else y
+        -- let a = b in if c then y else y
+        Let{} -> mkEasy (Let {env=ea.env,defs=[],typ=t,
+                    ex = Ifte ea.ex x y t})
+        -- if (if a then b else c) then x else y
+        -- if a then (if b then x else y) else (if c then x' else y')
+        Ifte a b c _ | not simple -> do
+            let thn = Ifte b x y t
+            x' <- recyclex x
+            y' <- recyclex y
+            let els = Ifte c x' y' t
+            mkEasy (Ifte a thn els t)
+        -- if (case a of p1 -> b; p2 -> c ...) then x else y
+        -- case a of p1 -> if b then x else y; p2 -> if c then x else y   
+        Case{ckind,ex=a,alts} -> do
+                alts <- mapSt adapt alts
+                mkEasy Case{ckind,ex=a,typ=t,alts} 
+            where
+                adapt :: CAlt -> StG CAlt
+                adapt calt = do
+                    ex <- recyclex (Ifte calt.ex x y t)
+                    return calt.{ex}
+        _ -> do
+            sa  <- if simple then return ea else mkSimple ea
+            ex  <- mkEasy x
+            ey  <- mkEasy y
+            return (Ifte sa ex ey t)
+-- should not happen
+mkEasy (x@ConFS{})  = return x
+mkEasy (x@Mem{})    = return x
+            
+    
 --- return the symbol ids of all local variables introduced in this expression and its subexpression
 innerSids ex = U.foldEx true collect Nil ex
     where
@@ -1025,10 +1280,12 @@ unLet (xlet@Let {env=letenv,ex=letex,typ=lettyp})
                 U.changeSym sym.{expr = Just (Lam {pat,ex,typ})}
                 letex <- U.mapEx true unLet letex
                 stio (Right (Let {env=letenv,ex=letex,typ=lettyp,defs=[]}))
-        Just cx | isSimple cx = do
-            self <- references [sym.sid] cx
-            down <- references [sym.sid] letex
-            if self == 0 && down == 1       -- used exactly once, note that use
+        Just cx = do
+            e <- isSimple cx
+            if e then do
+                self <- references [sym.sid] cx
+                down <- references [sym.sid] letex
+                if self == 0 && down == 1       -- used exactly once, note that use
                                             -- in a local function counts twice.
                     
                 then do
@@ -1039,6 +1296,7 @@ unLet (xlet@Let {env=letenv,ex=letex,typ=lettyp})
                     U.logmsg TRACE7 sym.pos (text ("let " ++ nice x g ++ " = " ++ nice inline g ++ " in ... replaced with " ++ nice ex g))
                     unLet ex
                 else stio (Left xlet)
+            else stio (Left xlet)
         other -> stio (Left xlet)
 unLet x = stio (Left x)
 
@@ -1082,16 +1340,21 @@ closedLambda (Lam {pat,ex,typ = Just sigma}) = do
             then do
                 g <- getST
                 -- u <- U.uniqid
+                
                 let name = U.unusedName (VName g.thisPack ("anon$" ++ show (getpos ex))) g
                     lamx = Lam {pat,ex,typ = Just sigma}
                     sym0  = U.patLocal (getpos ex) 0 "anonymous"
-                    typ   = ForAll (U.freeTVars [] sigma.rho) sigma.rho
-                    sym   = sym0.{name, expr=Just lamx, vis=Private, typ}
+                
+                typ  <- TCU.cleanSigma (ForAll (U.freeTVars [] sigma.rho) sigma.rho)
+                let sym   = sym0.{name, expr=Just lamx, vis=Private, typ}
                     var   = Vbl {pos=sym.pos, name, typ = Just sigma}
                 U.enter sym
                 sym <- U.findV sym.name
                 depthSym sym
-                U.logmsg TRACE8 sym.pos (text ("anonymous lambda  " ++ lamx.nice g ++ " replaced with " ++ var.nice g))
+                sym <- U.findV sym.name
+                U.logmsg TRACE8 sym.pos (text ("anonymous lambda  " ++ lamx.nice g 
+                        ++ " replaced with " ++ var.nice g
+                        ++ " :: " ++ sym.typ.nice g))
                 stio (Right var)
             else stio (Right (Lam {pat,ex,typ = Just sigma}))
 

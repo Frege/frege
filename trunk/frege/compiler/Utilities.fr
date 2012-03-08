@@ -1901,12 +1901,11 @@ replUids t = mapEx true rep where
 
 {-- 
     Copy an expression, all patterns will be refreshed and references
-    renamed accordingly. The new expression will be untyped.
-    Let symbols will get their type removed unless they are annotated.
+    renamed accordingly. The new expression will have the same type as the old one.
     -}
 copyExpr t x = mapEx false (copy t) x where
     ins t (k,v) = insert t k v
-    copy tree (Lam{pat,ex}) = do
+    copy tree (Lam{pat,ex,typ}) = do
         let qnames  = patNames pat
             olduids = map QName.uid qnames 
         pat <- pReturn pat
@@ -1914,11 +1913,11 @@ copyExpr t x = mapEx false (copy t) x where
             ntree   = fold ins tree (zip olduids newuids)
         ex <- copyExpr ntree ex
         mapM_ (copySym ntree) qnames
-        stio (Right Lam{pat,ex,typ=Nothing})
-    copy tree (Case ckind x alts _) = do
+        stio (Right Lam{pat,ex,typ})
+    copy tree (Case ckind x alts typ) = do
         x    <- copyExpr tree x
         alts <- mapSt copyAlt alts
-        stio (Right (Case ckind x alts Nothing)) 
+        stio (Right (Case ckind x alts typ)) 
       where
         copyAlt CAlt{pat,ex} = do             
             let qnames  = patNames pat
@@ -1929,17 +1928,18 @@ copyExpr t x = mapEx false (copy t) x where
             ex <- copyExpr ntree ex
             mapM_ (copySym ntree) qnames
             stio CAlt{pat,ex}
-    copy tree (Let{env,ex}) = do
+    copy tree (Let{env,ex,typ}) = do
         let olduids = map QName.uid env
         newuids <- sequence (map (const uniqid) olduids)
         let ntree = fold ins tree (zip olduids newuids)            
         nenv <- mapSt (copySym ntree) env
         ex   <- copyExpr ntree ex
-        stio (Right Let{env=nenv,ex,typ=Nothing,defs=[]})
+        stio (Right Let{env=nenv,ex,typ,defs=[]})
     copy tree (v@Vbl{name=Local{uid}}) = case lookup tree uid of
         Just nid -> stio (Right v.{name <- QName.{uid=nid}})
         Nothing  -> stio (Right v)
-    copy _ x = stio (Left x.{typ=Nothing})
+    copy _ (x@Ann{}) = stio (Left x)        -- keep annotations!
+    copy _ x = stio (Left x)
 
 --- copy a local symbol 
 copySym tree qname = do
@@ -1948,8 +1948,8 @@ copySym tree qname = do
         Just nuid ->  do
                 mbx <- maybeST sym.expr (copyExpr tree)  
                 let name = sym.name.{uid=nuid}
-                    nsig = if sym.anno then sym.typ else pSigma
-                    nsym = sym.{name, expr = mbx, sid = nuid, typ = nsig}
+                    -- nsig = if sym.anno || isNothing sym.expr then sym.typ else pSigma
+                    nsym = sym.{name, expr = mbx, sid = nuid}
                 enter nsym
                 stio name
         Nothing -> Prelude.error ("Can't find sid " ++ show sym.sid ++ " for name " ++ show sym.name)
@@ -1958,6 +1958,28 @@ maybeST (Just f) act = do
     f <- act f
     stio (Just f)
 maybeST Nothing _ = stio Nothing
+
+{--
+    @untypeExpr x@ removes all type information from @x@
+    all local symbols bound inside the expression are set back to 'pSigma' and state 'Unchecked'
+-}
+untypeExpr x = mapEx true unty x
+    where
+        untySy qn = do
+            sym <- findV qn
+            changeSym sym.{typ   = if sym.anno then sym.typ else pSigma,
+                           state = Unchecked}
+        unty (x@Ann{}) = return (Left x)    -- keep type signatures intact
+        unty (x@Lam{pat}) = do
+            foreach (patNames pat) untySy
+            return (Left x.{typ=Nothing})
+        unty (x@Case{alts}) = do
+            foreach [ q | alt <- alts, q <- patNames (CAlt.pat alt) ] untySy
+            return (Left x.{typ=Nothing})
+        unty (x@Let{env}) = do
+            foreach env untySy
+            return (Left x.{typ=Nothing})
+        unty x = return (Left x.{typ=Nothing})
                                             
 {-- @ourGlobalFuns mtree ex@ returns the set of all global symbols mentioned in /ex/
  *
