@@ -116,7 +116,7 @@ frege.mk: Makefile mkmk.pl
 dist: fregec.jar
 	perl mkdist.pl
 
-fregec.jar: tools $(DIR)/check1
+fregec.jar: tools $(DIR)/check1 $(DATA)/Set.class
 	$(FREGECC)  -make frege/StandardLibrary.fr
 	jar  -cf    fregec.jar -C build frege
 	jar  -uvfe  fregec.jar frege.compiler.Main
@@ -147,6 +147,8 @@ $(LIBF)/Random.class: $(DIR)/Prelude.class frege/lib/Random.fr
 	$(FREGEC2)  frege/lib/Random.fr
 $(DATA)/Maybe.class: $(DIR)/Prelude.class  frege/data/Maybe.fr
 	$(FREGEC2)  frege/data/Maybe.fr
+$(DATA)/Set.class: $(DIR)/Prelude.class  frege/contrib/dgronau/Set.fr
+	$(FREGEC2)  frege/contrib/dgronau/Set.fr	
 $(DATA)/List.class: $(DIR)/Prelude.class  frege/data/List.fr
 	$(FREGEC2)  frege/data/List.fr
 $(LIBF)/QuickCheck.class: $(LIBF)/Random.class $(DATA)/List.class frege/lib/QuickCheck.fr

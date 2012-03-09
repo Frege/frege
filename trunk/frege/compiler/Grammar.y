@@ -443,9 +443,9 @@ packageclause:
     | packageclause words '(' qvarids ')'   { \p\vs\v\qs\_ -> do {
                                                      g <- getST;
                                                      let {clause = unwords vs};
-                                                     let {expected = "inline candidates"};
-                                                     when (clause != expected) do {
-                                                        yyerror (yyline v) (show expected ++ " expected instead of " ++ show clause)
+                                                     let {expected = ["inline" , "inline candidates"]};
+                                                     when (clause `notElem` expected) do {
+                                                        yyerror (yyline v) (show (head expected) ++ " expected instead of " ++ show clause)
                                                      };
                                                      changeST Global.{sub <- SubSt.{
                                                             toExport = qs}};
