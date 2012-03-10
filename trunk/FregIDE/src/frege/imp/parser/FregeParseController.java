@@ -11,11 +11,14 @@ import java.util.regex.Pattern;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.IProgressMonitor;
+import org.eclipse.core.runtime.Path;
 import org.eclipse.core.runtime.Platform;
 import org.eclipse.core.runtime.preferences.IEclipsePreferences;
+import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IMarker;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IProjectNatureDescriptor;
+import org.eclipse.core.resources.IResource;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.resources.IWorkspace;
 import org.eclipse.jdt.core.IClasspathEntry;
@@ -156,7 +159,9 @@ public class FregeParseController extends ParseControllerBase implements
 		private String sp = ".";
 		private String fp = ".";
 		private String bp = ".";
-		public FregeData(ISourceProject project) {
+		private ISourceProject project = null;
+		public FregeData(ISourceProject sourceProject) {
+			project = sourceProject;
 			if (project != null) {
 				IProject rp = project.getRawProject();
 				// System.out.println("The raw project has type: " + jp.getClass());
@@ -172,9 +177,7 @@ public class FregeParseController extends ParseControllerBase implements
 						// e.printStackTrace();
 						// System.out.println("The " + nd.getNatureId() + " is not supported, or so it seems.");
 				}
-//				System.err.println("Our project "
-//						+ (isJava ? " has the " : " does not have ")
-//						+ " java nature.");
+
 				if (isJava) {
 					IJavaProject jp = JavaCore.create(rp);
 					try {
@@ -221,7 +224,23 @@ public class FregeParseController extends ParseControllerBase implements
 		public String getBp() {
 			return bp;
 		}
-		
+		/**
+		 * look for a path that contains the source code for pack
+		 */
+		public IPath getSource(final String pack) {
+			final String fr = pack.replaceAll("\\.", "/") + ".fr";
+			final String[] srcs = getSp().split(System.getProperty("path.separator"));
+			for (String sf: srcs) {
+				final IPath p = new Path(sf + "/" + fr);
+				final IResource toRes = project.getRawProject().findMember(p);  
+				
+				if (toRes != null && toRes instanceof IFile) {
+					final IFile to = (IFile) toRes;
+					return to.getFullPath();
+				}
+			}
+			return null;
+		}
 	}
 	
 	public FregeParseController() {
@@ -237,6 +256,13 @@ public class FregeParseController extends ParseControllerBase implements
     private final SimpleAnnotationTypeInfo fSimpleAnnotationTypeInfo
     				= new SimpleAnnotationTypeInfo();
 	private IMessageHandler msgHandler = null;
+	private FregeData fregeData = null;
+	
+	/**
+	 * @author ingo
+	 * @return the frege data structure
+	 */
+	public FregeData getFD() { return fregeData; }
 	/**
 	 * tell if we have errors
 	 */
@@ -288,6 +314,7 @@ public class FregeParseController extends ParseControllerBase implements
 		global =  (TGlobal) 
 				frege.prelude.PreludeBase.TST.performUnsafe(
 						(Lambda) frege.compiler.Main.standardOptions._e())._e();
+		fregeData = new FregeData(project);
 		createLexerAndParser(fullFilePath, project);
 
 		msgHandler = handler;
@@ -312,7 +339,7 @@ public class FregeParseController extends ParseControllerBase implements
 				TGlobal.options(global), 
 				filePath.toPortableString()));
 
-		final FregeData data = new FregeData(project);
+		final FregeData data = fregeData;
 		final String fp = data.getFp();   
 		final String bp = data.getBp(); 
 		final String sp = data.getSp();

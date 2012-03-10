@@ -7,12 +7,14 @@ import org.eclipse.imp.editor.ModelTreeNode;
 import org.eclipse.imp.parser.ISourcePositionLocator;
 
 import frege.compiler.BaseTypes.IShow_Token;
+import frege.compiler.Data;
 import frege.compiler.Data.TGlobal;
 import frege.compiler.Data.TPack;
 import frege.compiler.BaseTypes.TPosition;
 import frege.compiler.Data.TSubSt;
 import frege.compiler.BaseTypes.TToken;
 import frege.compiler.BaseTypes.TTokenID;
+import frege.imp.referenceResolvers.FregeReferenceResolver;
 import frege.imp.tree.ITreeItem;
 import frege.prelude.PreludeBase.TEither;
 import frege.prelude.PreludeBase.TEither.DRight;
@@ -94,16 +96,6 @@ public class FregeSourcePositionLocator implements ISourcePositionLocator {
 				System.err.println(" no such token");
 			else {
 				System.err.println(IShow_Token.show(res));
-				/*
-				final int tid = TToken.tokid(res).j;
-				if (tid != TTokenID.VARID.j && tid != TTokenID.CONID.j
-						&& (tid < TTokenID.LOP0.j ||  tid > TTokenID.SOMEOP.j)) return null;
-				final TMaybe mb = (TMaybe) TGlobal.resolved(g, tok)._e();
-				final DJust just = mb._Just();
-				if (just == null) return null;
-				final TEither lr = (TEither) just.mem1._e();
-				final DRight right = lr._Right();
-				*/
 			}
 			return res;
 		}
@@ -123,6 +115,13 @@ public class FregeSourcePositionLocator implements ISourcePositionLocator {
 		if (node != null && node instanceof ITreeItem)
 			return TPosition.start( ((ITreeItem)node).getPosition() );
 		
+		if (node != null && node instanceof FregeReferenceResolver.Namespace) {
+			final FregeReferenceResolver.Namespace nmsp = (FregeReferenceResolver.Namespace) node;
+			if (nmsp.pack.equals(TGlobal.thisPack(nmsp.g).j))
+				return TToken.offset(TPosition.first((TPosition)Data.packageStart(nmsp.g)._e()));
+			return -1;	// different package
+		}
+		
 		if (node != null && node instanceof ModelTreeNode) return 0;
 		System.err.println("getStartOffSet( " + node + " ) called");
 		return 0; 
@@ -141,12 +140,22 @@ public class FregeSourcePositionLocator implements ISourcePositionLocator {
 		if (node != null && node instanceof ITreeItem)
 			return getLength(((ITreeItem)node).getPosition());
 		
+		if (node != null && node instanceof FregeReferenceResolver.Namespace) {
+			final FregeReferenceResolver.Namespace nmsp = (FregeReferenceResolver.Namespace) node;
+			return nmsp.pack.length();
+		}
+		
 		if (node != null && node instanceof ModelTreeNode) return 0;
 		System.err.println("getLength( " + node + " ) called");
 		return 1; 
 	}	
 
 	public IPath getPath(Object node) {
+		if (node != null && node instanceof FregeReferenceResolver.Namespace) {
+			final FregeReferenceResolver.Namespace nmsp = (FregeReferenceResolver.Namespace) node;
+			final IPath p = parser.getFD().getSource(nmsp.pack);
+			return p;
+		}
 		System.err.println("getPath( " + node + " )  called");
 		// TODO Determine path of compilation unit containing this node
 		return new Path("");
