@@ -194,7 +194,7 @@ public class MD {
 
     @Retention(RetentionPolicy.RUNTIME)
     public @interface SymA {
-        // int     pos()     default 0;
+        int     offset()       default 0;
         QName   name();
         int[]   vars()    default {};               // tau indexes
         int     typ();                              // sigma index
@@ -208,7 +208,7 @@ public class MD {
 
     @Retention(RetentionPolicy.RUNTIME)
     public @interface SymV {
-        // int     pos()     default 0;
+    	int     offset()       default 0;
         QName   name();
         int     sig();                              // sigma index
         String  nativ()         default "";
@@ -236,7 +236,7 @@ public class MD {
 
     @Retention(RetentionPolicy.RUNTIME)
     public @interface SymL {
-        // int     pos()     default 0;
+    	int     offset()       default 0;
         QName   name();
         QName   alias();
         String  doc()           default "";
@@ -249,6 +249,7 @@ public class MD {
 
     @Retention(RetentionPolicy.RUNTIME)
     public @interface SymD {
+    	int     offset()       default 0;
         QName    name();
         int      cid();                       // constructor id
         int      typ();                       // sigma index
@@ -266,7 +267,7 @@ public class MD {
 
     @Retention(RetentionPolicy.RUNTIME)
     public @interface SymC {
-        // int     pos()     default 0;
+    	int     offset()       default 0;
         QName    name();
         int      tau();                       // tau index
         int      vkind()        default 0;    // how many type arguments are applied to class variable 
@@ -285,7 +286,7 @@ public class MD {
 
     @Retention(RetentionPolicy.RUNTIME)
     public @interface SymI {
-        // int     pos()     default 0;
+    	int     offset()       default 0;
         QName    name();
         QName    clas();
         int      typ();                       // sigma index
@@ -301,7 +302,7 @@ public class MD {
     // doc::Maybe String, name::QName, typ::Sigma, env::Symtab, nativ::Maybe String}
     @Retention(RetentionPolicy.RUNTIME)
     public @interface SymT {
-        // int     pos()     default 0;
+    	int     offset()       default 0;
         QName    name();
         int      typ();                       // sigma index
         SymD[]   cons();                      // constructors

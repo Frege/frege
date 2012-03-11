@@ -10,10 +10,12 @@ import frege.compiler.BaseTypes.IShow_Token;
 import frege.compiler.Data;
 import frege.compiler.Data.TGlobal;
 import frege.compiler.Data.TPack;
+import frege.compiler.Data.TQName;
 import frege.compiler.BaseTypes.TPosition;
 import frege.compiler.Data.TSubSt;
 import frege.compiler.BaseTypes.TToken;
 import frege.compiler.BaseTypes.TTokenID;
+import frege.compiler.Data.TSymbol;
 import frege.imp.referenceResolvers.FregeReferenceResolver;
 import frege.imp.tree.ITreeItem;
 import frege.prelude.PreludeBase.TEither;
@@ -122,6 +124,18 @@ public class FregeSourcePositionLocator implements ISourcePositionLocator {
 			return -1;	// different package
 		}
 		
+		if (node != null && node instanceof FregeReferenceResolver.Symbol) {
+			final FregeReferenceResolver.Symbol sym = (FregeReferenceResolver.Symbol) node;
+			final TQName  qname = TSymbol.M.name(sym.sym);
+			final boolean our = TQName.M.our(qname, sym.g);
+			final int off = getStartOffset(TSymbol.M.pos(sym.sym)); 
+			System.err.println("getStartOffSet( " + Data.IShow_QName.show(qname) 
+					+ " ), our=" + our
+					+ " ), off=" + off);
+			return off; 
+			// return -1;	// different package
+		}
+		
 		if (node != null && node instanceof ModelTreeNode) return 0;
 		System.err.println("getStartOffSet( " + node + " ) called");
 		return 0; 
@@ -145,6 +159,14 @@ public class FregeSourcePositionLocator implements ISourcePositionLocator {
 			return nmsp.pack.length();
 		}
 		
+		if (node != null && node instanceof FregeReferenceResolver.Symbol) {
+			final FregeReferenceResolver.Symbol sym = (FregeReferenceResolver.Symbol) node;
+			final TQName  qname = TSymbol.M.name(sym.sym);
+			// final boolean our = TQName.M.our(qname, sym.g);
+			return getLength(TSymbol.M.pos(sym.sym));
+			// return -1;	// different package
+		}
+		
 		if (node != null && node instanceof ModelTreeNode) return 0;
 		System.err.println("getLength( " + node + " ) called");
 		return 1; 
@@ -154,6 +176,16 @@ public class FregeSourcePositionLocator implements ISourcePositionLocator {
 		if (node != null && node instanceof FregeReferenceResolver.Namespace) {
 			final FregeReferenceResolver.Namespace nmsp = (FregeReferenceResolver.Namespace) node;
 			final IPath p = parser.getFD().getSource(nmsp.pack);
+			return p;
+		}
+		if (node != null && node instanceof FregeReferenceResolver.Symbol) {
+			final FregeReferenceResolver.Symbol sym = (FregeReferenceResolver.Symbol) node;
+			final TQName  qname = TSymbol.M.name(sym.sym);
+			final boolean our = TQName.M.our(qname, sym.g);
+			final String  pack  = our ? TGlobal.thisPack(sym.g).j : TQName.M.getpack(qname).j;
+			IPath p = parser.getFD().getSource(pack);
+			System.err.println("getPath( " + Data.IShow_QName.show(qname) 
+					+ " ), our=" + our + ", pack=" + pack + ", path=" + p);
 			return p;
 		}
 		System.err.println("getPath( " + node + " )  called");

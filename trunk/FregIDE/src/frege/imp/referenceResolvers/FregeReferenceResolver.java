@@ -1,6 +1,7 @@
 package frege.imp.referenceResolvers;
 
 
+import org.eclipse.core.runtime.IPath;
 import org.eclipse.imp.parser.IParseController;
 import org.eclipse.imp.parser.SimpleLPGParseController;
 import org.eclipse.imp.parser.SymbolTable;
@@ -94,6 +95,7 @@ public class FregeReferenceResolver implements IReferenceResolver {
 				final DJust  jsym  = mbsym._Just();
 				if (jsym == null)	return null; 	// not found?
 				final TSymbol sym = (TSymbol) jsym.mem1._e();
+				System.err.println("getLinkTarget: " + Data.IShow_QName.show(q));
 				return new Symbol(g, sym);
 			}
 			final DLeft  left = lr._Left();

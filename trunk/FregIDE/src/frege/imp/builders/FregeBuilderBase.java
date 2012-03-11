@@ -53,13 +53,13 @@ public abstract class FregeBuilderBase extends BuilderBase {
 			.findLanguage(LANGUAGE_NAME);
 
     
-    protected final IResourceVisitor fResourceVisitor= new SourceCollectorVisitor();
+    public final IResourceVisitor fResourceVisitor= new SourceCollectorVisitor();
 
     protected final IResourceDeltaVisitor fDeltaVisitor= new SourceDeltaVisitor();
 
     protected IPreferencesService fPrefService;
 
-    protected final Set<IFile> fChangedSources= new HashSet<IFile>();
+    public final Set<IFile> fChangedSources= new HashSet<IFile>();
 
     // protected final Set<IFile> fSourcesToCompile= new HashSet<IFile>();
     // protected final Set<IFile> fSourcesForDeps= new HashSet<IFile>();

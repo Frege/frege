@@ -54,8 +54,8 @@ package frege.rt;
  * Note that a variable or argument of type Lazy&lt;{@link Value}&gt; is assignment
  * compatible with every frege value.
  * </p>
- * <p> Actual lazy values are introduced when a unary function (see {@link Fun1})
- * is applied to a value (see {@link Fun1#a}).
+ * <p> Actual lazy values are introduced when a unary function (see {@link Lambda})
+ * is applied to a value (see {@link Lambda#apply}).
  * (Because application of a n-ary function to a value results in a (n-1)-ary
  * function for n&gt;1, this will happen everytime a
  * n-ary function is applied to n arguments.)

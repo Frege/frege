@@ -66,6 +66,8 @@ import frege.compiler.BaseTypes.TTokenID;
 import frege.compiler.Data;
 import frege.compiler.EclipseUtil;
 import frege.compiler.Main;
+import frege.imp.builders.FregeBuilder;
+import frege.imp.builders.FregeBuilderBase;
 import frege.imp.preferences.FregePreferencesConstants;
 
 /**
@@ -229,9 +231,22 @@ public class FregeParseController extends ParseControllerBase implements
 		 */
 		public IPath getSource(final String pack) {
 			final String fr = pack.replaceAll("\\.", "/") + ".fr";
-			final String[] srcs = getSp().split(System.getProperty("path.separator"));
+			// final String[] srcs = getSp().split(System.getProperty("path.separator"));
+			final FregeBuilder builder = new FregeBuilder();
+			try {
+				project.getRawProject().getWorkspace().getRoot().accept(builder.fResourceVisitor);
+			} catch (CoreException e) {
+				// problems getting the file names
+				return null;
+			}
+			for (IFile file : builder.fChangedSources) {
+				IPath it = file.getFullPath();
+				if (it.toString().endsWith(fr)) return it;
+			}
+			/*
 			for (String sf: srcs) {
 				final IPath p = new Path(sf + "/" + fr);
+				
 				final IResource toRes = project.getRawProject().findMember(p);  
 				
 				if (toRes != null && toRes instanceof IFile) {
@@ -239,6 +254,7 @@ public class FregeParseController extends ParseControllerBase implements
 					return to.getFullPath();
 				}
 			}
+			*/
 			return null;
 		}
 	}
