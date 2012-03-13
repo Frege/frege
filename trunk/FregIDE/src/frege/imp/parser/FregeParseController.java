@@ -194,7 +194,7 @@ public class FregeParseController extends ParseControllerBase implements
 							}
 							else {
 								if (fp.length() > 0) fp += System.getProperty("path.separator");
-								fp += cpe.getPath().toPortableString();
+								fp += cpe.getPath().toString();
 							}
 						}
 					} catch (JavaModelException e) {
