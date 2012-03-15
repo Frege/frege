@@ -52,8 +52,8 @@ public class EnableFregeNature implements IWorkbenchWindowActionDelegate {
 				for (i=0; i<old.length; i++) {
 					cpe[i] = old[i];
 				}
-				IPreferencesService service = FregePlugin.getInstance().getPreferencesService();
-				String flib = service.getStringPreference(FregePreferencesConstants.P_FREGELIB);
+				// IPreferencesService service = FregePlugin.getInstance().getPreferencesService();
+				String flib = FregePlugin.getInstance().getFregeLib(); // service.getStringPreference(FregePreferencesConstants.P_FREGELIB);
 				IPath path = new Path(flib);				
 				cpe[i] = JavaCore.newLibraryEntry(path, null, null);
 				jp.setRawClasspath(cpe, null);

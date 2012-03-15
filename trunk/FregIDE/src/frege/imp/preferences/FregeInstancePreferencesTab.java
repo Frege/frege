@@ -3,6 +3,7 @@
 /******************************************/
 package frege.imp.preferences;
 
+import java.awt.Point;
 import java.util.List;
 import java.util.ArrayList;
 import org.eclipse.core.runtime.preferences.IEclipsePreferences;
@@ -10,6 +11,7 @@ import org.eclipse.swt.SWT;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Composite;
+import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Link;
 import org.eclipse.swt.widgets.Group;
 import org.eclipse.imp.preferences.*;
@@ -48,10 +50,14 @@ public class FregeInstancePreferencesTab extends InstancePreferencesTab {
 			false);
 		fields.add(sourceFont);
 
-		Link sourceFontDetailsLink = fPrefUtils.createDetailsLink(parent, sourceFont, sourceFont.getChangeControl().getParent(), "Details ...");
+		// Link sourceFontDetailsLink = fPrefUtils.createDetailsLink(parent, sourceFont, sourceFont.getChangeControl().getParent(), "Details ...");
 
-		sourceFontDetailsLink.setEnabled(true);
-		fDetailsLinks.add(sourceFontDetailsLink);
+		// sourceFontDetailsLink.setEnabled(true);
+		// fDetailsLinks.add(sourceFontDetailsLink);
+		
+		GridData data = new GridData();
+        data.horizontalAlignment = SWT.END;
+        data.widthHint = 128;
 
 
 //		IntegerFieldEditor tabWidth = fPrefUtils.makeNewIntegerField(
@@ -70,35 +76,35 @@ public class FregeInstancePreferencesTab extends InstancePreferencesTab {
 //		fDetailsLinks.add(tabWidthDetailsLink);
 //
 //
-//		BooleanFieldEditor spacesForTabs = fPrefUtils.makeNewBooleanField(
-//			page, this, fPrefService,
-//			"instance", "spacesForTabs", "Tab inserts spaces",
-//			"Is it strongly suggested to not have tabulator characters in Frege source code.",
-//			parent,
-//			true, true,
-//			true, false,
-//			false);
-//		fields.add(spacesForTabs);
+		BooleanFieldEditor spacesForTabs = fPrefUtils.makeNewBooleanField(
+			page, this, fPrefService,
+			"instance", "spacesForTabs", "Tab inserts spaces",
+			"Is it strongly suggested to not have tabulator characters in Frege source code.",
+			parent,
+			true, false,
+			true, false,
+			false);
+		fields.add(spacesForTabs);
 //
 //		Link spacesForTabsDetailsLink = fPrefUtils.createDetailsLink(parent, spacesForTabs, spacesForTabs.getChangeControl().getParent(), "Details ...");
 //
 //		spacesForTabsDetailsLink.setEnabled(true);
 //		fDetailsLinks.add(spacesForTabsDetailsLink);
 
-		FileFieldEditor fregeLib = fPrefUtils.makeNewFileField(
-				page, this, fPrefService,
-				"instance", "fregeLib", "Frege library",
-				"The location of the Frege Standard Library, the default is to use the one that comes with fregIDE.",
-				parent,
-				true, true,
-				false, "",
-				false);
-			fields.add(fregeLib);
-
-			Link fregeLibDetailsLink = fPrefUtils.createDetailsLink(parent, fregeLib, fregeLib.getTextControl().getParent(), "Details ...");
-
-			fregeLibDetailsLink.setEnabled(false);
-			fDetailsLinks.add(fregeLibDetailsLink);
+//		FileFieldEditor fregeLib = fPrefUtils.makeNewFileField(
+//				page, this, fPrefService,
+//				"instance", "fregeLib", "Frege library",
+//				"The location of the Frege Standard Library, the default is to use the one that comes with fregIDE.",
+//				parent,
+//				true, true,
+//				false, "",
+//				false);
+//			fields.add(fregeLib);
+//
+//			Link fregeLibDetailsLink = fPrefUtils.createDetailsLink(parent, fregeLib, fregeLib.getTextControl().getParent(), "Details ...");
+//
+//			fregeLibDetailsLink.setEnabled(false);
+//			fDetailsLinks.add(fregeLibDetailsLink);
 		
 		ColorFieldEditor docuColor = fPrefUtils.makeNewColorField(
 			page, this, fPrefService,
@@ -107,6 +113,7 @@ public class FregeInstancePreferencesTab extends InstancePreferencesTab {
 			parent,
 			true, true,
 			false);
+		docuColor.getLabelControl(docuColor.getParent()).setLayoutData(data);
 		fields.add(docuColor);
 
 		ColorFieldEditor commColor = fPrefUtils.makeNewColorField(
@@ -116,6 +123,7 @@ public class FregeInstancePreferencesTab extends InstancePreferencesTab {
 			parent,
 			true, true,
 			false);
+		commColor.getLabelControl(commColor.getParent()).setLayoutData(data);
 		fields.add(commColor);
 
 		ColorFieldEditor tconColor = fPrefUtils.makeNewColorField(
@@ -125,6 +133,7 @@ public class FregeInstancePreferencesTab extends InstancePreferencesTab {
 			parent,
 			true, true,
 			false);
+		tconColor.getLabelControl(tconColor.getParent()).setLayoutData(data);
 		fields.add(tconColor);
 
 		ColorFieldEditor dconColor = fPrefUtils.makeNewColorField(
@@ -134,6 +143,7 @@ public class FregeInstancePreferencesTab extends InstancePreferencesTab {
 			parent,
 			true, true,
 			false);
+		dconColor.getLabelControl(dconColor.getParent()).setLayoutData(data);
 		fields.add(dconColor);
 
 
@@ -144,6 +154,7 @@ public class FregeInstancePreferencesTab extends InstancePreferencesTab {
 			parent,
 			true, true,
 			false);
+		varidColor.getLabelControl(varidColor.getParent()).setLayoutData(data);
 		fields.add(varidColor);
 		
 		ColorFieldEditor importColor = fPrefUtils.makeNewColorField(
@@ -153,6 +164,7 @@ public class FregeInstancePreferencesTab extends InstancePreferencesTab {
 			parent,
 			true, true,
 			false);
+		importColor.getLabelControl(importColor.getParent()).setLayoutData(data);
 		fields.add(importColor);
 		
 		ColorFieldEditor keywordColor = fPrefUtils.makeNewColorField(
@@ -162,6 +174,7 @@ public class FregeInstancePreferencesTab extends InstancePreferencesTab {
 			parent,
 			true, true,
 			false);
+		keywordColor.getLabelControl(keywordColor.getParent()).setLayoutData(data);
 		fields.add(keywordColor);
 
 		ColorFieldEditor specialColor = fPrefUtils.makeNewColorField(
@@ -171,6 +184,7 @@ public class FregeInstancePreferencesTab extends InstancePreferencesTab {
 			parent,
 			true, true,
 			false);
+		specialColor.getLabelControl(specialColor.getParent()).setLayoutData(data);
 		fields.add(specialColor);
 
 		ColorFieldEditor literalColor = fPrefUtils.makeNewColorField(
@@ -180,6 +194,7 @@ public class FregeInstancePreferencesTab extends InstancePreferencesTab {
 			parent,
 			true, true,
 			false);
+		literalColor.getLabelControl(literalColor.getParent()).setLayoutData(data);
 		fields.add(literalColor);
 
 		ColorFieldEditor errorColor = fPrefUtils.makeNewColorField(
@@ -189,6 +204,8 @@ public class FregeInstancePreferencesTab extends InstancePreferencesTab {
 			parent,
 			true, true,
 			false);
+		
+        errorColor.getLabelControl(errorColor.getParent()).setLayoutData(data);
 		fields.add(errorColor);
 
 		BooleanFieldEditor italicImports = fPrefUtils.makeNewBooleanField(
@@ -210,6 +227,16 @@ public class FregeInstancePreferencesTab extends InstancePreferencesTab {
 			true, false,
 			false);
 		fields.add(boldNS);
+		
+		BooleanFieldEditor decoS = fPrefUtils.makeNewBooleanField(
+				page, this, fPrefService,
+				"instance", "decorateStrict", "Decorate strict local names",
+				"Gives a visual clue about whether a local name (such as a function argument) is strict. (not yet implemented)",
+				parent,
+				true, true,
+				true, false,
+				false);
+		fields.add(decoS);
 		
 		IntegerFieldEditor parseTimeout = fPrefUtils.makeNewIntegerField(
 		page, this, fPrefService,
