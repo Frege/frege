@@ -250,7 +250,8 @@ public class FregeBuilder extends FregeBuilderBase {
 			if (FregeParseController.errors(result) == 0) {
 				// run the eclipse java compiler
 				final String target = Box.<String>box(
-						FregeParseController.funStG(Main.targetPath(".java"),
+						FregeParseController.funStG(Main.targetPath(
+									Box.mk(".java")),
 								result)).j;
 				getPlugin().writeInfoMsg("built: " + target);
 				// get the frege path and build path
