@@ -113,7 +113,7 @@ public class FregeBuilder extends FregeBuilderBase {
 				= new FregeParseController.FregeData(sourceProject);
 			final String[] srcs = fd.getSp().split(System.getProperty("path.separator"));
 			final String contents = BuilderUtils.getFileContents(file);
-			TList packs = (TList) frege.compiler.Scanner.dependencies(Box.mk(contents))._e();
+			TList packs = (TList) frege.compiler.Scanner.dependencies(contents)._e();
 			getPlugin().writeInfoMsg(
 					"Collecting dependencies from frege file: " + fromPath);
 			while (true) {

@@ -53,7 +53,7 @@ FREGECJ  = $(FREGE)  -jar fregec.jar  -d build -fp build -nocp -hints
 FREGECC  = $(FREGE) frege.compiler.Main  -d build -hints
 FREGEC0  = $(FREGECJ) -prefix a
 FREGEC1  = $(FREGE) afrege.compiler.Main -d build -hints -inline -prefix b 
-FREGEC2  = $(FREGE) -inline bfrege.compiler.Main -d build -hints
+FREGEC2  = $(FREGE) bfrege.compiler.Main -d build -hints -inline 
 FREGEC3  = $(FREGECJ) -prefix c
 GENDOC   = $(FREGE)  frege.tools.Doc -d doc
 
@@ -109,7 +109,7 @@ frege.mk: Makefile mkmk.pl
 dist: fregec.jar
 	perl mkdist.pl
 
-fregec.jar: tools $(DIR)/check1 $(DATA)/Set.class
+fregec.jar: tools $(DIR)/check1 # $(DATA)/Set.class
 	$(FREGECC)  -make frege/StandardLibrary.fr
 	jar  -cf    fregec.jar -C build frege
 	jar  -uvfe  fregec.jar frege.compiler.Main
