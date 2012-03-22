@@ -52,6 +52,7 @@ import frege.prelude.PreludeBase.TList.DCons;
 import frege.prelude.PreludeBase.TTuple2;
 import frege.prelude.PreludeBase.TList;
 import frege.prelude.PreludeBase.TTuple3;
+import frege.prelude.PreludeBase.TState;
 import frege.prelude.PreludeList.IListLike__lbrack_rbrack;
 import frege.compiler.BaseTypes.TFlag;
 import frege.compiler.Data.TGlobal;
@@ -59,7 +60,6 @@ import frege.compiler.Data.TMessage;
 import frege.compiler.Data.TOptions;
 import frege.compiler.BaseTypes.TPosition;
 import frege.compiler.Data.TSeverity;
-import frege.compiler.Data.TStIO;
 import frege.compiler.Data.TSubSt;
 import frege.compiler.BaseTypes.TToken;
 import frege.compiler.BaseTypes.TTokenID;
@@ -294,23 +294,23 @@ public class FregeParseController extends ParseControllerBase implements
 	}
 	
 	/**
-	 * run a {@link frege.compiler.data.TStIO} action and return the new TGlobal state
+	 * run a {@link frege.prelude.PreludeBase.TState} action and return the new TGlobal state
 	 * @return the new state
 	 */
 	public static TGlobal runStG(Lazy<FV> action, TGlobal g) {
-		Lambda stg = (Lambda) action._e();				// StIO (g -> IO (a, g) 
-		TTuple2 r = (TTuple2)TStIO.performUnsafe(stg, g)._e();
+		Lambda stg = (Lambda) action._e();				// State (g -> (a, g)) 
+		TTuple2 r = (TTuple2)TState.run(stg, g)._e();
 		return (TGlobal) r.mem2._e();
 	}
 	
 	/**
-	 * Run a {@link frege.compiler.data.TStIO} action and return the result.
+	 * Run a {@link frege.prelude.PreludeBase.TState} action and return the result.
 	 * The state must not be changed by the action. 
 	 * @return the result
 	 */
 	public static FV funStG(Lazy<FV> action, TGlobal g) {
-		Lambda stg = (Lambda) action._e();				// StIO (g -> IO (a, g) 
-		TTuple2 r = (TTuple2)TStIO.performUnsafe(stg, g)._e();
+		Lambda stg = (Lambda) action._e();				// State (g -> (a, g)) 
+		TTuple2 r = (TTuple2)TState.run(stg, g)._e();
 		return r.mem1._e();
 	}
 

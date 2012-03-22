@@ -53,7 +53,7 @@ FREGECJ  = $(FREGE)  -jar fregec.jar  -d build -fp build -nocp -hints
 FREGECC  = $(FREGE) frege.compiler.Main  -d build -hints
 FREGEC0  = $(FREGECJ) -prefix a
 FREGEC1  = $(FREGE) afrege.compiler.Main -d build -hints -inline -prefix b 
-FREGEC2  = $(FREGE) -server bfrege.compiler.Main -d build -hints
+FREGEC2  = $(FREGE) -inline bfrege.compiler.Main -d build -hints
 FREGEC3  = $(FREGECJ) -prefix c
 GENDOC   = $(FREGE)  frege.tools.Doc -d doc
 
@@ -186,7 +186,7 @@ $(COMPF)/Grammar.class: frege/compiler/Grammar.fr $(COMPF)/Scanner.class $(COMPF
 frege/compiler/Grammar.fr: frege/compiler/Grammar.y
 	@echo 1 shift/reduce conflict is ok
 	$(YACC) -v frege/compiler/Grammar.y
-	$(FREGE) -cp fregec.jar frege.tools.YYgen -m StIO frege/compiler/Grammar.fr
+	$(FREGE) -cp fregec.jar frege.tools.YYgen -m State  frege/compiler/Grammar.fr
 	$(FREGE) -cp fregec.jar frege.tools.LexConvt frege/compiler/Grammar.fr
 	rm -f frege/compiler/Grammar.fr.bak
 $(COMPF)/Scanner.class: $(DIR)/Prelude.class frege/compiler/Scanner.fr
