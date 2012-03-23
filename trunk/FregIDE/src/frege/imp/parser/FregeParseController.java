@@ -64,6 +64,7 @@ import frege.compiler.Data.TSubSt;
 import frege.compiler.BaseTypes.TToken;
 import frege.compiler.BaseTypes.TTokenID;
 import frege.compiler.Data;
+import frege.compiler.Utilities;
 import frege.compiler.EclipseUtil;
 import frege.compiler.Main;
 import frege.imp.builders.FregeBuilder;
@@ -329,7 +330,7 @@ public class FregeParseController extends ParseControllerBase implements
 
 		global =  (TGlobal) 
 				frege.prelude.PreludeBase.TST.performUnsafe(
-						(Lambda) frege.compiler.Main.standardOptions._e())._e();
+						(Lambda) frege.compiler.Main.eclipseOptions._e())._e();
 		fregeData = new FregeData(project);
 		createLexerAndParser(fullFilePath, project);
 
@@ -382,6 +383,14 @@ public class FregeParseController extends ParseControllerBase implements
 		IPreferencesService service = FregePlugin.getInstance().getPreferencesService();
 		if (service != null) {
 			timeout = service.getIntPreference(FregePreferencesConstants.P_PARSETIMEOUT);
+			if (service.getBooleanPreference(FregePreferencesConstants.P_INLINE)) {
+				global = TGlobal.upd$options(global, TOptions.upd$flags(
+							TGlobal.options(global),
+							Utilities.setFlag(
+									TOptions.flags(TGlobal.options(global)), 
+								    TFlag.INLINE.j)
+						));
+			}
 		}
 		else timeout = 250;
 	}

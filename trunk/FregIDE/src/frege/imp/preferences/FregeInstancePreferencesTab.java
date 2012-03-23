@@ -76,15 +76,26 @@ public class FregeInstancePreferencesTab extends InstancePreferencesTab {
 //		fDetailsLinks.add(tabWidthDetailsLink);
 //
 //
-		BooleanFieldEditor spacesForTabs = fPrefUtils.makeNewBooleanField(
-			page, this, fPrefService,
-			"instance", "spacesForTabs", "Tab inserts spaces",
-			"Is it strongly suggested to not have tabulator characters in Frege source code.",
-			parent,
-			true, false,
-			true, false,
-			false);
-		fields.add(spacesForTabs);
+//		BooleanFieldEditor spacesForTabs = fPrefUtils.makeNewBooleanField(
+//			page, this, fPrefService,
+//			"instance", "spacesForTabs", "Tab inserts spaces",
+//			"Is it strongly suggested to not have tabulator characters in Frege source code.",
+//			parent,
+//			true, false,
+//			true, false,
+//			false);
+//		fields.add(spacesForTabs);
+		
+		BooleanFieldEditor enableInline = fPrefUtils.makeNewBooleanField(
+				page, this, fPrefService,
+				"instance", "enableInline", "Enable Inline",
+				"Passes the -inline option to the compiler. (experimental)",
+				parent,
+				true, true,
+				true, false,
+				false);
+			fields.add(enableInline);
+
 //
 //		Link spacesForTabsDetailsLink = fPrefUtils.createDetailsLink(parent, spacesForTabs, spacesForTabs.getChangeControl().getParent(), "Details ...");
 //
