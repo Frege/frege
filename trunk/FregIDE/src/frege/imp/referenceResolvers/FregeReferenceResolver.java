@@ -15,6 +15,7 @@ import frege.compiler.Data;
 import frege.compiler.Data.TGlobal;
 import frege.compiler.Data.TQName;
 import frege.compiler.Data.TSymbol;
+import frege.compiler.EclipseUtil;
 import frege.imp.parser.FregeParseController;
 import frege.prelude.PreludeBase.TEither;
 import frege.prelude.PreludeBase.TEither.DLeft;
@@ -31,7 +32,8 @@ public class FregeReferenceResolver implements IReferenceResolver {
 		public final TSymbol sym;
 		public Symbol(TGlobal g, TSymbol sym) { this.g = g; this.sym = sym; }
 		public String toString() {
-			return Data.INice_QName.nicer(TSymbol.M.name(sym), g);
+			String s = Box.<String>box(FregeParseController.funStG(EclipseUtil.symbolDocumentation(sym), g)).j;
+			return s; // Data.INice_QName.nicer(TSymbol.M.name(sym), g);
 		}
 	}
 	
@@ -45,7 +47,9 @@ public class FregeReferenceResolver implements IReferenceResolver {
 			this.pack = p;
 		}
 		public String toString() {
-			return "package " + pack;
+			String s = Box.<String>box(FregeParseController.funStG(
+						EclipseUtil.packDocumentation(Box.mk(pack)), g)).j;
+			return s;
 		}
 	}
 	

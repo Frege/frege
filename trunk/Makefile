@@ -225,7 +225,7 @@ SOURCES  =      $(COMPS)/Scanner.fr   $(COMPS)/Classtools.fr \
 		$(COMPS)/TAlias.fr    $(COMPS)/Transdef.fr  $(COMPS)/Classes.fr \
 		$(COMPS)/Transform.fr $(COMPS)/Typecheck.fr $(COMPS)/TCUtil.fr \
 		$(COMPS)/GenMeta.fr   $(COMPS)/GenJava7.fr  $(COMPS)/GenUtil.fr \
-		$(COMPS)/EclipseUtil.fr
+		$(COMPS)/DocUtils.fr $(COMPS)/EclipseUtil.fr
 
 
 CLASSES  =       $(COMPF1)/Scanner.class   $(COMPF1)/Classtools.class \
@@ -238,7 +238,7 @@ CLASSES  =       $(COMPF1)/Scanner.class   $(COMPF1)/Classtools.class \
 		$(COMPF1)/Typecheck.class $(COMPF1)/Transform.class \
 		$(COMPF1)/GenUtil.class \
 		$(COMPF1)/GenMeta.class   $(COMPF1)/GenJava7.class \
-		$(COMPF1)/EclipseUtil.class
+		$(COMPF1)/DocUtils.class $(COMPF1)/EclipseUtil.class
 
 #
 # GNU make apparently does not understand our meta rules
@@ -292,6 +292,8 @@ $(COMPF1)/GenMeta.class: $(COMPS)/GenMeta.fr
 $(COMPF1)/GenJava7.class: $(COMPS)/GenJava7.fr
 	$(FREGEC0) $?
 $(COMPF1)/GenUtil.class: $(COMPS)/GenUtil.fr
+	$(FREGEC0) $?
+$(COMPF1)/DocUtils.class: $(COMPS)/DocUtils.fr
 	$(FREGEC0) $?
 $(COMPF1)/EclipseUtil.class: $(COMPS)/EclipseUtil.fr
 	$(FREGEC0) $?
