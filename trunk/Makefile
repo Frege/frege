@@ -293,15 +293,15 @@ $(COMPF1)/GenJava7.class: $(COMPS)/GenJava7.fr
 	$(FREGEC0) $?
 $(COMPF1)/GenUtil.class: $(COMPS)/GenUtil.fr
 	$(FREGEC0) $?
-$(COMPF1)/DocUtils.class: $(COMPS)/DocUtils.fr
-	$(FREGEC0) $?
+$(COMPF1)/DocUtils.class: $(LIBF1)/QuickCheck.class $(COMPS)/DocUtils.fr
+	$(FREGEC0) frege/compiler/DocUtils.fr
 $(COMPF1)/EclipseUtil.class: $(COMPS)/EclipseUtil.fr
 	$(FREGEC0) $?
 $(LIBF1)/Random.class: frege/lib/Random.fr
 	$(FREGEC0) $?
 $(LIBF1)/PP.class: frege/lib/PP.fr
 	$(FREGEC0) $?
-$(LIBF1)/QuickCheck.class: $(DATA1)/List.class frege/lib/QuickCheck.fr
+$(LIBF1)/QuickCheck.class: $(LIBF1)/Random.class $(DATA1)/List.class frege/lib/QuickCheck.fr
 	$(FREGEC0) frege/lib/QuickCheck.fr
 $(DATA1)/List.class: frege/data/List.fr
 	$(FREGEC0) frege/data/List.fr
