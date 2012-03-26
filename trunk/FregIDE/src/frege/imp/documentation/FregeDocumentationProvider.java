@@ -38,8 +38,11 @@ public class FregeDocumentationProvider implements IDocumentationProvider {
 			return null;
 
 		if (entity instanceof FregeReferenceResolver.Symbol
-				|| entity instanceof FregeReferenceResolver.Namespace)
-				return entity.toString();
+				|| entity instanceof FregeReferenceResolver.Namespace) {
+			final String s = entity.toString();
+			// System.err.println("MARKUP: " + s);
+			return s;
+		}
 		return null;
 	}
 
