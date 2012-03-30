@@ -57,7 +57,7 @@ protected version = v "$Revision$" where
     v _ = 0
 
 
-import frege.List (Tree, lookup, insert, update, keys, values, each,
+import frege.List (Tree, lookup, insert, insertkv, update, keys, values, each,
                     fromKeys, including, contains, union, isEmpty)
 import Data.List as DL(uniq, sort, partitioned, elemBy)
                     
@@ -113,9 +113,15 @@ pass10 = do
         U.logmsg TRACES Position.null (text ("groups: " ++ display (map (map (flip QName.nice g)) groups)))
 
         foreach groups checkgroup
+        
+        -- bring default class methods in good shape
+        g <- getST
+        let classmethods = [ sym | SymC{env} <- values g.thisTab, sym@SymV{expr = Just _} <- values env ]
+        foreach classmethods easyClassMethodSym 
 
         stio ("functions", length names)
     where
+        -- checkgroup :: [QName] -> StG ()
         checkgroup nms = do
             foreach nms (strictName [])         -- compute strictness
             returnNames [] nms                  -- compute return type of java methods
@@ -164,6 +170,7 @@ pass9 = do
     -- make all expressions easy
     collectedvars <- allourvars
     foreach collectedvars easySym
+    
     stio ("expressions", length collectedvars)
 
 easySym (vsym@SymV {pos})
@@ -174,6 +181,82 @@ easySym (vsym@SymV {pos})
 easySym sym = do
     g <- getST
     U.fatal sym.pos (text ("easySym no SymV : " ++ sym.nice g))
+
+{--
+    All default class methods must be exported, so instances can derive their own version.
+    Not all expressions can be exported.
+    In particular they can't if at least one
+    of the following applies:
+    - a lambda contains a pattern that is refutable
+    - a case contains a set of patterns that is refutable
+    - it references a private item because this would not resolve when the code is imported
+    - it contains a let or where, because the metadata does not know lets (often, lets in
+      the source code are transformed to a case, or it's dropped).
+    
+    To nevertheless being able to export such a class method, the complicated code is moved
+    to a new top level function, and the class will only contain an application of this new
+    function to the arguments.
+    > method a b = let c = b+1 in a c
+    transforms to:
+    > anon a b = let c = b+1 in a c
+    > method a' b' = anon a' b'   
+    -}
+easyClassMethodSym :: Symbol -> StG ()
+easyClassMethodSym (sym@SymV{expr = Just x, typ}) = do
+        easy <- goodClassMethod x
+        unless ( easy && sym.rkind `band` rkSafeTC != 0 && sym.rkind `band` rkTail == 0 ) do
+            g <- getST
+            U.warn sym.pos (text (nice sym g
+                ++ (if easy then "" else " is not easy enough ") 
+                ++ (if sym.rkind `band` rkSafeTC != 0 then "" else " recurses deeply ")
+                ++ (if sym.rkind `band` rkTail == 0   then "" else " is tail recursive ")))
+            let name = U.unusedName (VName (Global.thisPack g) (sym.name.base)) g
+            
+            nx <- replName sym.sid name x
+            
+            let anon = sym.{sid=0, name, vis = Protected, expr = Just nx}
+                vbl = Vbl{name, pos=anon.pos.change VARID name.base, typ=Just (ForAll [] sym.typ.rho)}
+                rk = (sym.rkind `bor` rkSafeTC)  `band` bcmpl rkTail
+            U.enter anon  
+            x <- etaExpand vbl
+            U.changeSym sym.{expr = Just x, rkind = rk}
+    where
+        -- goodClassMethod :: Expr -> StG Bool
+        goodClassMethod x = do
+            g <- getST
+            -- l <- return sym.depth
+            case x of
+                Ann{} -> goodClassMethod x.ex
+                App{} -> liftM2 (&&) (goodClassMethod x.fun) (goodClassMethod x.arg)
+                Vbl{name=Local{}} -> return true
+                Vbl{name} -> do
+                    vsym <- U.findV name
+                    return (vsym.vis != Private)
+                Con{name} -> return true        -- constructors always exported
+                Case{} -> do
+                    g <- getST
+                    let pok = if x.ckind == CWhen
+                            then isNothing (openCaseWhen g x) 
+                            else isNothing (patsComplete g (map CAlt.pat x.alts))
+                    if pok then do
+                        eok <- mapM goodClassMethod (map CAlt.ex x.alts)
+                        return (and eok)
+                    else return false                    
+                Lam{pat,ex}   -> do
+                    g <- getST
+                    case patsComplete g [pat] of
+                        Just _  -> return false      -- incomplete pattern
+                        nothing -> goodClassMethod ex
+                Ifte{}  -> do
+                    c <- goodClassMethod x.cnd
+                    if c then 
+                        liftM2 (&&) (goodClassMethod x.thn) (goodClassMethod x.els)
+                    else return false                        
+                Lit{}   -> return true
+                Let{}   -> return false     -- not allowed
+                ConFS{} -> return false     -- may not happen
+                Mem{}   -> return false     -- may not happen 
+easyClassMethodSym sym = return ()
 
 
 depthSym (vsym@SymV {pos})
@@ -1063,7 +1146,7 @@ innerSids ex = U.foldEx true collect Nil ex
         collect t x = stio (Left t)
         altSids (CAlt {pat}) = fromKeys (patSids pat)
 
---- @replSid sid r ex@ - replace variables referncing sid with r in ex
+--- @replSid sid r ex@ - replace local variables referncing sid with r in ex
 replSid sid r ex = U.mapEx true action ex
     where
         action (v@Vbl {name=Local {}}) = do
@@ -1074,9 +1157,13 @@ replSid sid r ex = U.mapEx true action ex
 --- @replName sid nm ex@ - rename variables that references sid in ex
 replName sid nm ex = U.mapEx true action ex
     where
-        action (v@Vbl {name}) = do
+        action (v@Vbl {name,pos}) = do
             sym <- U.findV name
-            if sym.sid == sid then stio (Right v.{name=nm}) else stio (Right v)
+            if sym.sid == sid then do
+                changeST Global.{sub <- SubSt.{
+                           idKind <- insertkv (KeyTk pos.first) (Right nm)}}
+                stio (Right v.{name=nm}) 
+            else stio (Right v)
         action x = stio (Left x)
 
 -- rename all variables that are element of sids
@@ -1191,6 +1278,8 @@ unLet (x@Let {env,ex}) | length env > 1 = do
             g <- getST
             U.logmsg TRACE7 pos (text ("global: " ++ gsym.name.nice g ++ " = " ++ nice ex g))
             let typ = ForAll (U.freeTVars [] sym.typ.rho) sym.typ.rho
+            changeST Global.{sub <- SubSt.{
+                                idKind <- insertkv (KeyTk pos.first) (Right gsym.name)}}
             stio gsym.{expr = Just ex, typ}
 
         unLetName nm = do
