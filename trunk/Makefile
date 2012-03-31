@@ -7,9 +7,9 @@
 
 .SUFFIXES: .class .fr
 
-JAVAC = c:/Progra~1/Java/jdk1.7.0_03/bin/javac -encoding UTF-8
-YACC = c:/Tools/GnuWin32/bin/bison
-JAVA = c:/Progra~1/Java/jdk1.7.0_03/bin/java "-Dfrege.javac=javac -J-Xmx512m"
+JAVAC = javac -encoding UTF-8
+YACC = pbyacc
+JAVA = java7 "-Dfrege.javac=javac -J-Xmx512m"
 JAVAP = $(JAVA)
 
 
