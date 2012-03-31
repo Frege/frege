@@ -7,9 +7,9 @@
 
 .SUFFIXES: .class .fr
 
-JAVAC = javac -encoding UTF-8
-YACC = pbyacc
-JAVA = java7 "-Dfrege.javac=javac -J-Xmx512m"
+JAVAC = c:/Progra~1/Java/jdk1.7.0_03/bin/javac -encoding UTF-8
+YACC = c:/Tools/GnuWin32/bin/bison
+JAVA = c:/Progra~1/Java/jdk1.7.0_03/bin/java "-Dfrege.javac=javac -J-Xmx512m"
 JAVAP = $(JAVA)
 
 
@@ -255,8 +255,8 @@ $(DIR1)/IO.class: frege/IO.fr
 	$(FREGEC0) $?
 $(DIR1)/List.class: frege/List.fr
 	$(FREGEC0) $?
-$(DIR1)/Tuples.class: frege/Tuples.fr
-	$(FREGEC0) $?
+#$(DIR1)/Tuples.class: frege/Tuples.fr
+#	$(FREGEC0) $?
 $(COMPF1)/Classtools.class: frege/compiler/Classtools.fr
 	$(FREGEC0) $?
 $(COMPF1)/BaseTypes.class: frege/compiler/BaseTypes.fr
@@ -310,7 +310,7 @@ $(DATA1)/Maybe.class: frege/data/Maybe.fr
 $(LIBF1)/ForkJoin.class: frege/lib/ForkJoin.fr
 	$(FREGEC0) $?
 
-PRE1 = $(DIR1)/Prelude.class $(DIR1)/IO.class $(DIR1)/List.class $(DIR1)/Tuples.class
+PRE1 = $(DIR1)/Prelude.class $(DIR1)/IO.class $(DIR1)/List.class 
 
 compiler1: $(RUNTIME)  $(DIR1)/check1  $(LIBF1)/PP.class $(COMPF1)/Grammar.class $(COMPF1)/Main.class
 	@echo stage 1 compiler ready
@@ -333,7 +333,7 @@ $(DIR1)/check1: $(PRE1) $(LIBF1)/Random.class $(LIBF1)/QuickCheck.class $(DIR1)/
 
 
 
-PRE0 = $(DIR0)/IO.class $(DIR0)/List.class $(DIR0)/Tuples.class
+PRE0 = $(DIR0)/IO.class $(DIR0)/List.class 
 
 
 compiler0: $(DIR0)/check1 $(COMPF0)/Main.class
@@ -353,8 +353,6 @@ $(DIR0)/IO.class: frege/IO.fr
 	$(FREGEC3)  frege/IO.fr
 $(DIR0)/List.class: frege/List.fr
 	$(FREGEC3)  frege/List.fr
-$(DIR0)/Tuples.class: frege/Tuples.fr
-	$(FREGEC3)  frege/Tuples.fr
 $(TOOLSF0)/LexConvt.class: frege/tools/LexConvt.fr
 	$(FREGEC3)  -make frege/tools/LexConvt.fr
 $(TOOLSF0)/YYgen.class: frege/tools/YYgen.fr
@@ -582,8 +580,6 @@ doc/frege/prelude/Maybe.html: build/frege/prelude/Maybe.class
 	java -Xss1m -cp build frege.tools.Doc -d doc frege.prelude.Maybe
 doc/frege/Prelude.html: build/frege/Prelude.class
 	java -Xss1m -cp build frege.tools.Doc -d doc frege.Prelude
-doc/frege/Tuples.html: build/frege/Tuples.class
-	java -Xss1m -cp build frege.tools.Doc -d doc frege.Tuples
 doc/frege/data/List.html: build/frege/data/List.class
 	java -Xss1m -cp build frege.tools.Doc -d doc frege.data.List
 doc/frege/data/Maybe.html: build/frege/data/Maybe.class
@@ -612,5 +608,5 @@ doc/frege/j/Lang.html: build/frege/j/Lang.class
 	java -Xss1m -cp build frege.tools.Doc -d doc frege.j.Lang
 doc/frege/j/Util.html: build/frege/j/Util.class
 	java -Xss1m -cp build frege.tools.Doc -d doc frege.j.Util
-docu: build/frege/tools/Doc.class doc/frege/List.html doc/frege/tools/YYgen.html doc/frege/tools/Doc.html doc/frege/tools/LexConvt.html doc/frege/prelude/PreludeList.html doc/frege/prelude/Arrays.html doc/frege/prelude/Math.html doc/frege/prelude/PreludeMonad.html doc/frege/prelude/Floating.html doc/frege/prelude/PreludeText.html doc/frege/prelude/PreludeBase.html doc/frege/prelude/PreludeNative.html doc/frege/prelude/Maybe.html doc/frege/Prelude.html doc/frege/Tuples.html doc/frege/data/List.html doc/frege/data/Maybe.html doc/frege/lib/QuickCheck.html doc/frege/lib/ForkJoin.html doc/frege/lib/Random.html doc/frege/lib/PP.html doc/frege/control/NonEmpty.html doc/frege/control/Monoid.html doc/frege/control/Foldable.html doc/frege/IO.html doc/frege/j/Swing.html doc/frege/j/Awt.html doc/frege/j/Lang.html doc/frege/j/Util.html
+docu: build/frege/tools/Doc.class doc/frege/List.html doc/frege/tools/YYgen.html doc/frege/tools/Doc.html doc/frege/tools/LexConvt.html doc/frege/prelude/PreludeList.html doc/frege/prelude/Arrays.html doc/frege/prelude/Math.html doc/frege/prelude/PreludeMonad.html doc/frege/prelude/Floating.html doc/frege/prelude/PreludeText.html doc/frege/prelude/PreludeBase.html doc/frege/prelude/PreludeNative.html doc/frege/prelude/Maybe.html doc/frege/Prelude.html doc/frege/data/List.html doc/frege/data/Maybe.html doc/frege/lib/QuickCheck.html doc/frege/lib/ForkJoin.html doc/frege/lib/Random.html doc/frege/lib/PP.html doc/frege/control/NonEmpty.html doc/frege/control/Monoid.html doc/frege/control/Foldable.html doc/frege/IO.html doc/frege/j/Swing.html doc/frege/j/Awt.html doc/frege/j/Lang.html doc/frege/j/Util.html
 	echo Documentation up to date
