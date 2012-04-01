@@ -3,6 +3,8 @@
 /******************************************/
 package frege.imp.preferences;
 
+import org.eclipse.imp.preferences.PreferenceConstants;
+
 /**
  * Constant definitions for preferences.
  *
@@ -12,7 +14,8 @@ package frege.imp.preferences;
  */
 public class FregePreferencesConstants {
 	public static final String P_SOURCEFONT = "sourceFont";
-	public static final String P_SPACESFORTABS = "spacesForTabs";
+	public static final String P_SPACESFORTABS = PreferenceConstants.P_SPACES_FOR_TABS;
+	public static final String P_TABWITH       = PreferenceConstants.P_TAB_WIDTH;
 	public static final String P_INLINE = "enableInline";
 	public static final String P_PARSETIMEOUT = "parseTimeout";
 	public static final String P_DECORATESTRICT = "decorateStrict";

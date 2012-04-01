@@ -60,31 +60,25 @@ public class FregeInstancePreferencesTab extends InstancePreferencesTab {
         data.widthHint = 128;
 
 
-//		IntegerFieldEditor tabWidth = fPrefUtils.makeNewIntegerField(
-//			page, this, fPrefService,
-//			"instance", "tabWidth", "Tabulator Width",
-//			"",
-//			parent,
-//			true, true,
-//			true, "0",
-//			false);
-//		fields.add(tabWidth);
-//
-//		Link tabWidthDetailsLink = fPrefUtils.createDetailsLink(parent, tabWidth, tabWidth.getTextControl().getParent(), "Details ...");
-//
-//		tabWidthDetailsLink.setEnabled(true);
-//		fDetailsLinks.add(tabWidthDetailsLink);
-//
-//
-//		BooleanFieldEditor spacesForTabs = fPrefUtils.makeNewBooleanField(
-//			page, this, fPrefService,
-//			"instance", "spacesForTabs", "Tab inserts spaces",
-//			"Is it strongly suggested to not have tabulator characters in Frege source code.",
-//			parent,
-//			true, false,
-//			true, false,
-//			false);
-//		fields.add(spacesForTabs);
+		IntegerFieldEditor tabWidth = fPrefUtils.makeNewIntegerField(
+			page, this, fPrefService,
+			"instance", "tabWidth", "Tabulator Width",
+			"Tells how many spaces the tab key will insert.",
+			parent,
+			true, true,
+			true, "4",
+			false);
+		fields.add(tabWidth);
+
+		BooleanFieldEditor spacesForTabs = fPrefUtils.makeNewBooleanField(
+			page, this, fPrefService,
+			"instance", "spacesForTabs", "Tab inserts spaces",
+			"Is it strongly suggested to not have tabulator characters in Frege source code.",
+			parent,
+			true, true,
+			true, true,
+			false);
+		fields.add(spacesForTabs);
 		
 		BooleanFieldEditor enableInline = fPrefUtils.makeNewBooleanField(
 				page, this, fPrefService,
@@ -94,7 +88,7 @@ public class FregeInstancePreferencesTab extends InstancePreferencesTab {
 				true, true,
 				true, false,
 				false);
-			fields.add(enableInline);
+		fields.add(enableInline);
 
 //
 //		Link spacesForTabsDetailsLink = fPrefUtils.createDetailsLink(parent, spacesForTabs, spacesForTabs.getChangeControl().getParent(), "Details ...");

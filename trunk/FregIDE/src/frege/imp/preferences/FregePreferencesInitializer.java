@@ -33,6 +33,7 @@ public class FregePreferencesInitializer extends PreferencesInitializer {
 		String darkCyan   = StringConverter.asString(display.getSystemColor(SWT.COLOR_DARK_CYAN).getRGB());
 
 		service.setStringPreference(IPreferencesService.DEFAULT_LEVEL, FregePreferencesConstants.P_SOURCEFONT, "Consolas");
+		service.setIntPreference(IPreferencesService.DEFAULT_LEVEL, FregePreferencesConstants.P_TABWITH, 4);
 		service.setIntPreference(IPreferencesService.DEFAULT_LEVEL, FregePreferencesConstants.P_PARSETIMEOUT, 250);
 		service.setBooleanPreference(IPreferencesService.DEFAULT_LEVEL, FregePreferencesConstants.P_SPACESFORTABS, true);
 		service.setBooleanPreference(IPreferencesService.DEFAULT_LEVEL, FregePreferencesConstants.P_INLINE, true);
