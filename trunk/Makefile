@@ -595,8 +595,8 @@ doc/frege/lib/Random.html: build/frege/lib/Random.class
 	java -Xss1m -cp build frege.tools.Doc -d doc frege.lib.Random
 doc/frege/lib/PP.html: build/frege/lib/PP.class
 	java -Xss1m -cp build frege.tools.Doc -d doc frege.lib.PP
-doc/frege/control/NonEmpty.html: build/frege/control/NonEmpty.class
-	java -Xss1m -cp build frege.tools.Doc -d doc frege.control.NonEmpty
+doc/frege/data/NonEmpty.html: build/frege/data/NonEmpty.class
+	java -Xss1m -cp build frege.tools.Doc -d doc frege.data.NonEmpty
 doc/frege/control/Monoid.html: build/frege/control/Monoid.class
 	java -Xss1m -cp build frege.tools.Doc -d doc frege.control.Monoid
 doc/frege/control/Foldable.html: build/frege/control/Foldable.class
@@ -611,5 +611,5 @@ doc/frege/j/Lang.html: build/frege/j/Lang.class
 	java -Xss1m -cp build frege.tools.Doc -d doc frege.j.Lang
 doc/frege/j/Util.html: build/frege/j/Util.class
 	java -Xss1m -cp build frege.tools.Doc -d doc frege.j.Util
-docu: build/frege/tools/Doc.class doc/frege/List.html doc/frege/tools/YYgen.html doc/frege/tools/Doc.html doc/frege/tools/LexConvt.html doc/frege/prelude/PreludeList.html doc/frege/prelude/Arrays.html doc/frege/prelude/Math.html doc/frege/prelude/PreludeMonad.html doc/frege/prelude/Floating.html doc/frege/prelude/PreludeText.html doc/frege/prelude/PreludeBase.html doc/frege/prelude/PreludeNative.html doc/frege/prelude/Maybe.html doc/frege/Prelude.html doc/frege/data/List.html doc/frege/data/Maybe.html doc/frege/lib/QuickCheck.html doc/frege/lib/ForkJoin.html doc/frege/lib/Random.html doc/frege/lib/PP.html doc/frege/control/NonEmpty.html doc/frege/control/Monoid.html doc/frege/control/Foldable.html doc/frege/IO.html doc/frege/j/Swing.html doc/frege/j/Awt.html doc/frege/j/Lang.html doc/frege/j/Util.html
+docu: build/frege/tools/Doc.class doc/frege/List.html doc/frege/tools/YYgen.html doc/frege/tools/Doc.html doc/frege/tools/LexConvt.html doc/frege/prelude/PreludeList.html doc/frege/prelude/Arrays.html doc/frege/prelude/Math.html doc/frege/prelude/PreludeMonad.html doc/frege/prelude/Floating.html doc/frege/prelude/PreludeText.html doc/frege/prelude/PreludeBase.html doc/frege/prelude/PreludeNative.html doc/frege/prelude/Maybe.html doc/frege/Prelude.html doc/frege/data/List.html doc/frege/data/Maybe.html doc/frege/lib/QuickCheck.html doc/frege/lib/ForkJoin.html doc/frege/lib/Random.html doc/frege/lib/PP.html doc/frege/data/NonEmpty.html doc/frege/control/Monoid.html doc/frege/control/Foldable.html doc/frege/IO.html doc/frege/j/Swing.html doc/frege/j/Awt.html doc/frege/j/Lang.html doc/frege/j/Util.html
 	echo Documentation up to date
