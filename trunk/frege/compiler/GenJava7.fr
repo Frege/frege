@@ -426,6 +426,9 @@ lazyMethod sym | sym.{flds?} || sym.{rkind?} = do
         stio result
 lazyMethod sym = error "lazyMeth: no SymV"
 
+--- tells how many lazy functions go into one Lambda class.
+--- *Important* This must be a power of 2!
+fpC = 256
 {--
     Prepare top level function for lazy usage.
     
@@ -474,7 +477,7 @@ lazyDecl sym jname
                         init  = Just (newfl n)}
             classTyp n = Ref {jname = JName (mainClass g) (lamid n), targs = []}
             args     = map JAtom (take (length constr) argNames)                         
-            newfl n  = JNew (classTyp n) (JAtom (show (n `rem` 64)):args) 
+            newfl n  = JNew (classTyp n) (JAtom (show (n `rem` fpC)):args) 
             method n = JMethod {
                         attr = attrTop, gargs = [],
                         jtype = mrtyp,
@@ -494,7 +497,7 @@ lazyDecl sym jname
 lambdaName n constr i = "Lambda" ++ show n ++ cid ++ packed (replicate (length constr) 'C')
                         ++ hash
     where
-        cid                = U.allAsciiBinders !! (i `quot` 64)
+        cid                = U.allAsciiBinders !! (i `quot` fpC)
         hash | null constr = ""
              | otherwise   = show conid
              where conid   = fold (\a \b -> a + a + unsigned (hashCode (QName.show b))) 0L constr
@@ -505,12 +508,12 @@ lambdaName n constr i = "Lambda" ++ show n ++ cid ++ packed (replicate (length c
 emitLazy :: ((Int, [QName]), [Symbol]) -> StG [JDecl]
 emitLazy ((n, constr), syms) = loop [] n constr (reverse syms) 0 where
     loop dcls n constr syms base
-        | length syms <= 64 = do
+        | length syms <= fpC = do
             dcl <- emitLazyN n constr syms base
             return (dcl:dcls)
         | otherwise = do
-            dcl <- emitLazyN n constr (take 64 syms) base
-            loop (dcl:dcls) n constr (drop 64 syms) (base+64) 
+            dcl <- emitLazyN n constr (take fpC syms) base
+            loop (dcl:dcls) n constr (drop fpC syms) (base+fpC) 
 --- emit a block of lazy definitions
 emitLazyN n constr syms base = do
     g <- getST
@@ -565,12 +568,14 @@ caseFor (sym, n) = do
     Construct a java name for a variable/method that
     holds or returns the lambda class for a given symbol.
     
-    The name must be unique within the package.
+    The names live in the _Consts_ subclass and are either
+    static members (for function without constraints) or
+    static methods that take the constraints for instantiation.
     
-    For local names we simply use the java name with an appended 
+    For top level names we simply use the java name with an appended 
     latin "ƒ".
     
-    For alien names we use the hashkey of the @show qname@ so hopefully
+    For member names we use the hashkey of the @show qname@ so hopefully
     this will never generate the same key for 2 members of different
     types/instances/classes and never the same key for 2 functions
     in different classes. The mangled base name is included in every
@@ -593,7 +598,7 @@ extFname g sym
           ustr  = show (fromInt hash `band` 0xffffffffL)
           mg = U.memberOf (JName "" (constClass g))
           mx qn = U.memberOf ((U.javaName g qn).{base = constClass g})
-extFname g sym = error ("reqLam: bad symbol " ++ nicer sym g)
+extFname g sym = error ("extFname: bad symbol " ++ nicer sym g)
 
 -- pure native hashCode :: String -> Int
 
@@ -628,39 +633,6 @@ genAnonLams = do
         mapSt (uncurry lazyDecl) (zip collectedvars jnames)
         
 
-{--
-    Look for @MD.LambdaClasses@ annotations
-    on the @Consts@ subclass of all available packages.
-    Record the information in the 'GenSt.mhs' tree.
--}
-initMHS = do
-        g <- getST
-        let loader = g.sub.loader
-        foreach (filter (g.thisPack !=) (keys g.packages)) (addMHS loader)
-    where
-        addMHS :: URLClassLoader -> Pack -> StG ()
-        addMHS loader pack = do
-                g <- getST
-                let clazz = show (pack.className g) ++ "$" ++ (constClass g)
-                doio (CT.getLambdas loader clazz) >>= either noClass (maybe (return ()) insertQJ)
-            where
-                noClass :: JException -> StG ()
-                noClass jex = do
-                    g <- getST
-                    U.error Position.null (msgdoc ("Can't load module " ++ pack.unpack g ++ ": "
-                        ++ JException.getMessage jex))
-                insertQJ :: CT.LambdaClasses -> StG ()
-                insertQJ lcs = do
-                    g <- getST
-                    let lcsqns = [ lcs.qnames.[n-1] | n <- 1 .. lcs.qnames.length ]
-                        qnames = map I.rebuildQN lcsqns
-                        jnames = [ JName "" p | p <- lcs.jnames.toList ]
-                        ins = [ (sym, (false, p)) |
-                                (qn, p) <- zip qnames jnames,
-                                sym <- (QName.findit qn g).toList ]
-                        nmhs = fold (\t\(k,v) -> insert t k v) g.gen.mhs ins
-                    changeST Global.{gen <- GenSt.{mhs = nmhs}}
-
 
 pass :: StG (String, Int)
 pass = do
@@ -680,9 +652,6 @@ pass = do
         cType = Ref (JName "" (constClass g)) []
     pp (anno cClass)
 
-    -- load static lambda information from other packages
-    initMHS
-
     mapSt (symCode Nil) (sortBy (comparing Symbol.name) [ s | s@SymT {sid} <- vals ])
         >>= ppSS
     mapSt (symCode Nil) (sortBy (comparing Symbol.name) [ s | s@SymC {sid} <- vals ])
@@ -694,13 +663,6 @@ pass = do
 
     -- anonymous lambdas
     -- now done within Consts: genAnonLams >>= mapM_ (pp • anno)
-
-    -- annotation of lambdas before Const class
-    g <- getST
-    let qnjns = [ (Symbol.name sym, b)  |  (sym, (true, b)) <- each g.gen.mhs ]
-    pp (annotation "LambdaClasses" [
-        ("qnames", anno (map fst qnjns)),
-        ("jnames", anno (map (((g.thisPack.unpack g++".")++) • show • snd) qnjns))])
 
     -- constants
     makeConstants
