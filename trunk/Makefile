@@ -28,6 +28,7 @@ PREL1  = $(DIR1)/prelude
 COMPF1  = $(DIR1)/compiler
 LIBF1   = $(DIR1)/lib
 DATA1   = $(DIR1)/data
+CONTROL1 = $(DIR1)/control
 LIBJ1   = $(DIR1)/j
 TOOLSF1 = $(DIR1)/tools
 DIR2 = build/bfrege
@@ -198,7 +199,7 @@ $(COMPF)/Main.class: $(DIR)/Prelude.class frege/compiler/Main.fr
 $(DIR)/Prelude.class: $(COMPF2)/Main.class $(PRELUDE)
 	rm -rf $(COMPF)
 	rm -rf $(DIR)/prelude
-	rm -f $(DIR)/Prelude.class $(DIR)/IO.class $(DIR)/List.class  $(DIR)/Tuples.class
+	rm -f $(DIR)/Prelude.class $(DIR)/IO.class $(DIR)/List.class  $(DATA)/Tuples.class
 	$(JAVAC) -d build -cp build frege/compiler/JavaUtils.java
 	$(FREGEC2)  $(PRELUDE)
 	$(FREGEC2)  -make  frege.Prelude
@@ -255,8 +256,8 @@ $(DIR1)/IO.class: frege/IO.fr
 	$(FREGEC0) $?
 $(DIR1)/List.class: frege/List.fr
 	$(FREGEC0) $?
-#$(DIR1)/Tuples.class: frege/Tuples.fr
-#	$(FREGEC0) $?
+$(CONTROL1)/Monoid.class: frege/control/Monoid.fr
+	$(FREGEC0) $?
 $(COMPF1)/Classtools.class: frege/compiler/Classtools.fr
 	$(FREGEC0) $?
 $(COMPF1)/BaseTypes.class: frege/compiler/BaseTypes.fr
@@ -271,8 +272,8 @@ $(COMPF1)/Nice.class: 	$(COMPS)/Nice.fr $(LIBF1)/PP.class $(COMPF1)/Data.class $
 	$(FREGEC0) $(COMPS)/Nice.fr
 $(COMPF1)/Fixdefs.class: $(COMPS)/Fixdefs.fr
 	$(FREGEC0) $?
-$(COMPF1)/Import.class: $(COMPS)/Import.fr
-	$(FREGEC0) $?
+$(COMPF1)/Import.class: $(DATA1)/Tuples.class $(COMPS)/Import.fr 
+	$(FREGEC0) $(COMPS)/Import.fr
 $(COMPF1)/Enter.class: $(COMPS)/Enter.fr
 	$(FREGEC0) $?
 $(COMPF1)/Transdef.class: $(COMPS)/Transdef.fr
@@ -305,6 +306,8 @@ $(LIBF1)/QuickCheck.class: $(LIBF1)/Random.class $(DATA1)/List.class frege/lib/Q
 	$(FREGEC0) frege/lib/QuickCheck.fr
 $(DATA1)/List.class: frege/data/List.fr
 	$(FREGEC0) frege/data/List.fr
+$(DATA1)/Tuples.class: $(CONTROL1)/Monoid.class frege/data/Tuples.fr
+	$(FREGEC0) frege/data/Tuples.fr	
 $(DATA1)/Maybe.class: frege/data/Maybe.fr
 	$(FREGEC0) frege/data/Maybe.fr
 $(LIBF1)/ForkJoin.class: frege/lib/ForkJoin.fr

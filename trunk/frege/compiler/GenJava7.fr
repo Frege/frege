@@ -368,57 +368,7 @@ ijLigatur = "ĳ"
 --- prefix for class methods is ƒ
 latinF    = "ƒ"
 
-{--
-    create a lazy class for the given symbol
--}
-{-
-lazyClass :: Symbol -> StG JDecl
-lazyClass sym | sym.{flds?} || sym.{rkind?} = do
-        g <- getST
-        case wrapperClass g sym of
-            Nothing -> anonymousLazyClass       -- static flname = new LamN () { ... }
-            Just cc -> namedLazyClass cc        -- static class Lambda123 extendes LamN { ... }
-    where
-        ari
-            | sym.{depth?} = sym.depth
-            | sym.{flds?}  = length sym.flds
-            | otherwise    = 0                  -- generate wrong code instead of aborting
-        lamtype            = Nativ ("Lam" ++ show ari) []
-        -- cltype             = Nativ ("L" ++ show sym.sid) []
 
-        anonymousLazyClass = do
-            g    <- getST
-            U.error sym.pos (text (nicer sym g ++ " must not ask for lazy class."))
-            eval <- lazyMethod sym
-            stio JMember { attr = attrTop, jtype = lamtype,
-                           name = (wrapperInstance g sym).base,
-                           init = Just (JNewClass lamtype [] [eval]) }
-
-
-        namedLazyClass cc = do
-            g    <- getST
-            eval <- lazyMethod sym
-            let cltype       = Nativ (JName.base cc) []
-                ctxNames     = drop (length (envCtxs g)) GenJava7.ctxNames
-                argNames     = drop (fold (+) 0 (map Symbol.depth g.genEnv)) GenJava7.argNames
-                constraints  = map  (uncurry (makeConstraintDef g)) (zip sym.typ.rho.context ctxNames)
-                constrargs   = map  (uncurry (makeConstraintArg g)) (zip sym.typ.rho.context argNames)
-
-                initctx      = take (length constraints)
-                                    (zipWith JAssign (map JAtom ctxNames) (map JAtom argNames))
-                init         = JConstr { attr = attrs [JPrivate], jtype = cltype,
-                                         args = constrargs, body = JBlock initctx }
-                arglist      = take (length constraints) (map JAtom argNames)
-                inst         = JMethod { attr = attrTop, gargs = [], jtype = cltype,
-                                         name = "inst", args = constrargs,
-                                         body = JBlock [JReturn (JNew cltype arglist)] }
-            stio JClass  { attr = attrTop, jtype = cltype,
-                           extend = Just lamtype, implement = [],
-                           defs = constraints ++ [init, inst, eval] }
-lazyClass sym = do
-        g <- getST
-        U.fatal sym.pos (text ("Cannot make a lazy class for " ++ nicer sym g))
--}
 {--
     create a lazy method for the given symbol
 -}
@@ -516,15 +466,15 @@ lazyDecl sym jname
         let constr = map Context.cname typ.rho.context
             mrtyp  = Nativ ("frege.rt.Lam" ++ show depth) []
             key    = (depth, constr)
-            lamid  = lambdaName depth constr 
+            lamid  n = lambdaName depth constr n 
             member n = JMember {
                         attr = attrTop, 
                         jtype = mrtyp, 
                         name  = JName.base jname, 
                         init  = Just (newfl n)}
-            classTyp = Ref {jname = JName (mainClass g) lamid, targs = []}
+            classTyp n = Ref {jname = JName (mainClass g) (lamid n), targs = []}
             args     = map JAtom (take (length constr) argNames)                         
-            newfl n  = JNew classTyp (JAtom (show n):args) 
+            newfl n  = JNew (classTyp n) (JAtom (show (n `rem` 64)):args) 
             method n = JMethod {
                         attr = attrTop, gargs = [],
                         jtype = mrtyp,
@@ -541,20 +491,31 @@ lazyDecl sym jname
                 return (result 0)                         
         
 
-lambdaName n constr = "Lambda" ++ show n ++ packed (replicate (length constr) 'C')
+lambdaName n constr i = "Lambda" ++ show n ++ cid ++ packed (replicate (length constr) 'C')
                         ++ hash
     where
+        cid                = U.allAsciiBinders !! (i `quot` 64)
         hash | null constr = ""
              | otherwise   = show conid
              where conid   = fold (\a \b -> a + a + unsigned (hashCode (QName.show b))) 0L constr
                    unsigned i = fromInt i `band` 0xffffffffL                          
 
 
-emitLazy :: ((Int, [QName]), [Symbol]) -> StG JDecl
-emitLazy ((n, constr), syms) = do
+--- emit all lazy definitions
+emitLazy :: ((Int, [QName]), [Symbol]) -> StG [JDecl]
+emitLazy ((n, constr), syms) = loop [] n constr (reverse syms) 0 where
+    loop dcls n constr syms base
+        | length syms <= 64 = do
+            dcl <- emitLazyN n constr syms base
+            return (dcl:dcls)
+        | otherwise = do
+            dcl <- emitLazyN n constr (take 64 syms) base
+            loop (dcl:dcls) n constr (drop 64 syms) (base+64) 
+--- emit a block of lazy definitions
+emitLazyN n constr syms base = do
     g <- getST
     argdefs <- argDef attrFinal Strictness.U (replicate n TY.sigInt) (take n argNames)
-    let cname        = lambdaName n constr
+    let cname        = lambdaName n constr base
         cltype       = Nativ cname []
         p0           = Position.null
         contexts     = [ Ctx p0 q TVar{pos=p0, var="a"} true | q <- constr ]
@@ -575,7 +536,7 @@ emitLazy ((n, constr), syms) = do
                                  jtype = cltype,
                                  args  = indexarg:constrargs, 
                                  body  = JBlock (initindex:initctx) }
-        numbered   = zip (reverse syms) (iterate (1+) 0)                                 
+        numbered   = zip syms (0 .. length syms)                                 
     
     stmts <- mapSt caseFor numbered
     
@@ -621,13 +582,17 @@ caseFor (sym, n) = do
 extFname :: Global -> Symbol -> JName
 extFname g sym
     | VName p base <- qname,
-      qname.our g             = mg ((workerMethod g sym).base ++ latinF)
-    | MName _ base <- qname   = mg ("m$" ++ ustr ++ mangled base)
-    | VName p base <- qname   = mg ("x$" ++ ustr ++ mangled base)
+      qname.our g               = mg (worker.base ++ latinF)
+    | MName _ base <- qname,
+      qname.our g               = mg ("m$" ++ ustr ++ mangled base)
+    | VName _ base <- qname     = mx qname (worker.base ++ latinF)
+    | MName tname base <- qname = mx tname ("m$" ++ ustr ++ mangled base)
     where qname = Symbol.name sym
+          worker = workerMethod g sym
           hash  = hashCode qname.show
           ustr  = show (fromInt hash `band` 0xffffffffL)
           mg = U.memberOf (JName "" (constClass g))
+          mx qn = U.memberOf ((U.javaName g qn).{base = constClass g})
 extFname g sym = error ("reqLam: bad symbol " ++ nicer sym g)
 
 -- pure native hashCode :: String -> Int
@@ -639,46 +604,29 @@ extFname g sym = error ("reqLam: bad symbol " ++ nicer sym g)
 reqLam :: Symbol -> StG Binding
 reqLam sym = do
         g <- getST
-        case lookup g.gen.mhs sym of
-            Just (_, jname) -> return (bind jname)
-            Nothing -> enternew  (extFname g sym)
-        -- return (bind (wrapperInstance g sym))
-    where
-        bind jname = Bind {mode=RBoxed, ftype=sym.typ, jtype=jtFun, jex=JX.static jname}
-        enternew jname = do
-            changeST Global.{gen <- GenSt.{mhs <- insertkv sym (true, jname)}}
-            return (bind jname)
-            
+        let jname = extFname g sym
+        return Bind{mode=RBoxed, ftype=sym.typ, jtype=jtFun, jex=JX.static jname}
 
 {--
-    Generate the anonymous Lambdas required in the cache
+    Generate the anonymous Lambdas for all symbols
 --}
 genAnonLams = do
         g <- getST
-
-        let syms = [ (sym,jname) | (sym, (true, jname)) <- each g.gen.mhs ]
-        mapSt (uncurry lazyDecl) syms
+        let collectedenvs = g.thisTab : [ Symbol.env sy | sy <- values g.thisTab, 
+                                            Symbol.{env?} sy,
+                                            -- do not search type classes
+                                            not (Symbol.{supers?} sy) ]
+            collectedvars = [ v | env <- collectedenvs, v <- values env, 
+                                            -- either SymV or SymD
+                                            Symbol.{depth?} v || Symbol.{flds?} v,
+                                            -- not a newtype constructor
+                                            not (T.newtypeCon v.name g),
+                                            -- only with arity > 0
+                                            U.arity v > 0 ]
+    
+        let jnames = map (extFname g) collectedvars
+        mapSt (uncurry lazyDecl) (zip collectedvars jnames)
         
-
-{--
-    Create a class derived from Lambda for the symbol
-    > class L123 extends Lam5 { public final T eval(...) { ... } }
---}
-anonLazyClass :: Symbol -> StG JDecl
-anonLazyClass sym = do
-        g <- getST
-        let ari
-                | sym.{depth?} = sym.depth
-                | sym.{flds?}  = length sym.flds
-                | otherwise    = 0                  -- generate wrong code instead of aborting
-            lamtype            = Nativ ("Lam" ++ show ari) []
-            cltype             = Nativ (extFname g sym).base []
-
-        eval <- lazyMethod sym
-        let inst = JMember {attr = attrTop, jtype = cltype,
-                            name = "inst", init = Just (JNew cltype [])}
-        stio JClass  { attr = attrTop, jtype = cltype, extend = Just lamtype,
-                       implement = [], defs = [inst, eval] }
 
 {--
     Look for @MD.LambdaClasses@ annotations
@@ -759,7 +707,7 @@ pass = do
 
     -- lazy lambda classes
     g <- getST
-    foreach (each g.gen.lambdas) (emitLazy >=> pp • anno) 
+    foreach (each g.gen.lambdas) (emitLazy >=> sequence • map (pp • anno)) 
 
     let toMaybe | g.thisPack == pPreludeBase = [mkMaybe false, mkMaybe true] ++ primMaybes
                 | otherwise = []
