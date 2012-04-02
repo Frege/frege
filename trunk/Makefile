@@ -554,62 +554,8 @@ $(RTDIR)/FregeCompiler.class: frege/rt/FregeCompiler.java
 doc/index.html: $(RUNTIME)
 	javadoc -private -sourcepath . -d doc -encoding UTF-8 frege frege.rt
 
-#### made by perl gendocmk.pl
-doc/frege/List.html: build/frege/List.class
-	java -Xss1m -cp build frege.tools.Doc -d doc frege.List
-doc/frege/tools/YYgen.html: build/frege/tools/YYgen.class
-	java -Xss1m -cp build frege.tools.Doc -d doc frege.tools.YYgen
-doc/frege/tools/Doc.html: build/frege/tools/Doc.class
-	java -Xss1m -cp build frege.tools.Doc -d doc frege.tools.Doc
-doc/frege/tools/LexConvt.html: build/frege/tools/LexConvt.class
-	java -Xss1m -cp build frege.tools.Doc -d doc frege.tools.LexConvt
-doc/frege/prelude/PreludeList.html: build/frege/prelude/PreludeList.class
-	java -Xss1m -cp build frege.tools.Doc -d doc frege.prelude.PreludeList
-doc/frege/prelude/Arrays.html: build/frege/prelude/Arrays.class
-	java -Xss1m -cp build frege.tools.Doc -d doc frege.prelude.Arrays
-doc/frege/prelude/Math.html: build/frege/prelude/Math.class
-	java -Xss1m -cp build frege.tools.Doc -d doc frege.prelude.Math
-doc/frege/prelude/PreludeMonad.html: build/frege/prelude/PreludeMonad.class
-	java -Xss1m -cp build frege.tools.Doc -d doc frege.prelude.PreludeMonad
-doc/frege/prelude/Floating.html: build/frege/prelude/Floating.class
-	java -Xss1m -cp build frege.tools.Doc -d doc frege.prelude.Floating
-doc/frege/prelude/PreludeText.html: build/frege/prelude/PreludeText.class
-	java -Xss1m -cp build frege.tools.Doc -d doc frege.prelude.PreludeText
-doc/frege/prelude/PreludeBase.html: build/frege/prelude/PreludeBase.class
-	java -Xss1m -cp build frege.tools.Doc -d doc frege.prelude.PreludeBase
-doc/frege/prelude/PreludeNative.html: build/frege/prelude/PreludeNative.class
-	java -Xss1m -cp build frege.tools.Doc -d doc frege.prelude.PreludeNative
-doc/frege/prelude/Maybe.html: build/frege/prelude/Maybe.class
-	java -Xss1m -cp build frege.tools.Doc -d doc frege.prelude.Maybe
-doc/frege/Prelude.html: build/frege/Prelude.class
-	java -Xss1m -cp build frege.tools.Doc -d doc frege.Prelude
-doc/frege/data/List.html: build/frege/data/List.class
-	java -Xss1m -cp build frege.tools.Doc -d doc frege.data.List
-doc/frege/data/Maybe.html: build/frege/data/Maybe.class
-	java -Xss1m -cp build frege.tools.Doc -d doc frege.data.Maybe
-doc/frege/lib/QuickCheck.html: build/frege/lib/QuickCheck.class
-	java -Xss1m -cp build frege.tools.Doc -d doc frege.lib.QuickCheck
-doc/frege/lib/ForkJoin.html: build/frege/lib/ForkJoin.class
-	java -Xss1m -cp build frege.tools.Doc -d doc frege.lib.ForkJoin
-doc/frege/lib/Random.html: build/frege/lib/Random.class
-	java -Xss1m -cp build frege.tools.Doc -d doc frege.lib.Random
-doc/frege/lib/PP.html: build/frege/lib/PP.class
-	java -Xss1m -cp build frege.tools.Doc -d doc frege.lib.PP
-doc/frege/data/NonEmpty.html: build/frege/data/NonEmpty.class
-	java -Xss1m -cp build frege.tools.Doc -d doc frege.data.NonEmpty
-doc/frege/control/Monoid.html: build/frege/control/Monoid.class
-	java -Xss1m -cp build frege.tools.Doc -d doc frege.control.Monoid
-doc/frege/control/Foldable.html: build/frege/control/Foldable.class
-	java -Xss1m -cp build frege.tools.Doc -d doc frege.control.Foldable
-doc/frege/IO.html: build/frege/IO.class
-	java -Xss1m -cp build frege.tools.Doc -d doc frege.IO
-doc/frege/j/Swing.html: build/frege/j/Swing.class
-	java -Xss1m -cp build frege.tools.Doc -d doc frege.j.Swing
-doc/frege/j/Awt.html: build/frege/j/Awt.class
-	java -Xss1m -cp build frege.tools.Doc -d doc frege.j.Awt
-doc/frege/j/Lang.html: build/frege/j/Lang.class
-	java -Xss1m -cp build frege.tools.Doc -d doc frege.j.Lang
-doc/frege/j/Util.html: build/frege/j/Util.class
-	java -Xss1m -cp build frege.tools.Doc -d doc frege.j.Util
-docu: build/frege/tools/Doc.class doc/frege/List.html doc/frege/tools/YYgen.html doc/frege/tools/Doc.html doc/frege/tools/LexConvt.html doc/frege/prelude/PreludeList.html doc/frege/prelude/Arrays.html doc/frege/prelude/Math.html doc/frege/prelude/PreludeMonad.html doc/frege/prelude/Floating.html doc/frege/prelude/PreludeText.html doc/frege/prelude/PreludeBase.html doc/frege/prelude/PreludeNative.html doc/frege/prelude/Maybe.html doc/frege/Prelude.html doc/frege/data/List.html doc/frege/data/Maybe.html doc/frege/lib/QuickCheck.html doc/frege/lib/ForkJoin.html doc/frege/lib/Random.html doc/frege/lib/PP.html doc/frege/data/NonEmpty.html doc/frege/control/Monoid.html doc/frege/control/Foldable.html doc/frege/IO.html doc/frege/j/Swing.html doc/frege/j/Awt.html doc/frege/j/Lang.html doc/frege/j/Util.html
-	echo Documentation up to date
+docu: build/frege/tools/Doc.class
+	perl gendocmk.pl >makedoc
+	$(MAKE) -f makedoc docu
+	rm makedoc
+
