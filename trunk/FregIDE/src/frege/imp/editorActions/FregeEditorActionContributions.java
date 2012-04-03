@@ -19,7 +19,6 @@ import org.eclipse.ui.PlatformUI;
 public class FregeEditorActionContributions implements
 		ILanguageActionsContributor {
 	
-	private boolean toolbardone = false;
 	
 	private Action fgAction(final UniversalEditor uditor) {
 		Action it = new Action("f • g") {
@@ -42,6 +41,7 @@ public class FregeEditorActionContributions implements
 			        		getDocument(editor.getEditorInput());
 			        if (document != null) {
 			        	document.replace(where.x, where.y, "•");
+			        	editor.selectAndReveal(where.x+1, 0);
 			        }
 				} 
 			    catch (BadLocationException e) {
@@ -79,11 +79,13 @@ public class FregeEditorActionContributions implements
 			        if (document != null) {
 			        	String w = document.get(where.x, where.y);
 			        	document.replace(where.x, where.y, "´" + w + "´");
+			        	if (w.length() == 0)
+			        		editor.selectAndReveal(where.x+1, 0);
 			        }
 				} 
 			    catch (BadLocationException e) {
 					// TODO Auto-generated catch block
-					e.printStackTrace();
+					// e.printStackTrace();
 				}
 			}
 		};
