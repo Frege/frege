@@ -125,7 +125,7 @@ SRCSREQ = $(PREL)/PreludeBase.class $(PREL)/PreludeNative.class $(PREL)/PreludeL
 
 sources: $(SRCSREQ)
 	$(FREGECC) -make frege.compiler.Main frege.PreludeProperties
-	$(JAVA) -cp build frege.PreludeProperties
+	$(JAVA) -Xss1m -cp build frege.PreludeProperties
 	find frege -type f -name "*.java" -print >rt-files
 	cd build && find frege -type f -name "*.java" -print >../fr-files
 	jar -cMf ../sources.jar @rt-files
@@ -135,7 +135,7 @@ sources: $(SRCSREQ)
 #	jar  -cf    ../sources/frege3.jar -C build frege
 
 $(DIR)/check1: $(DIR)/PreludeProperties.class
-	$(JAVA) -cp build frege.PreludeProperties && echo Prelude Properties checked >$(DIR)/check1
+	$(JAVA) -Xss1m -cp build frege.PreludeProperties && echo Prelude Properties checked >$(DIR)/check1
 
 $(LIBF)/Random.class: $(DIR)/Prelude.class frege/lib/Random.fr
 	$(FREGEC2)  frege/lib/Random.fr
@@ -332,7 +332,7 @@ $(DIR1)/Prelude.class: $(PRELUDE) frege/Prelude.fr
 $(DIR1)/PreludeProperties.class: $(LIBF1)/Random.class $(LIBF1)/QuickCheck.class
 	$(FREGEC0)  frege/PreludeProperties.fr
 $(DIR1)/check1: $(PRE1) $(LIBF1)/Random.class $(LIBF1)/QuickCheck.class $(DIR1)/PreludeProperties.class
-	$(JAVA) -cp build afrege.PreludeProperties && echo Prelude Properties checked >$(DIR1)/check1
+	$(JAVA) -Xss1m -cp build afrege.PreludeProperties && echo Prelude Properties checked >$(DIR1)/check1
 
 
 
@@ -361,7 +361,7 @@ $(TOOLSF0)/LexConvt.class: frege/tools/LexConvt.fr
 $(TOOLSF0)/YYgen.class: frege/tools/YYgen.fr
 	$(FREGEC3)  -make frege/tools/YYgen.fr
 $(DIR0)/check1: $(PRE0)  $(DIR0)/PreludeProperties.class
-	$(JAVA) -cp build cfrege.PreludeProperties && echo Prelude Properties checked >$(DIR0)/check1
+	$(JAVA) -Xss1m -cp build cfrege.PreludeProperties && echo Prelude Properties checked >$(DIR0)/check1
 
 
 #
