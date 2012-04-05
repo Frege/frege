@@ -554,7 +554,8 @@ $(RTDIR)/FregeCompiler.class: frege/rt/FregeCompiler.java
 doc/index.html: $(RUNTIME)
 	javadoc -private -sourcepath . -d doc -encoding UTF-8 frege frege.rt
 
-docu: build/frege/tools/Doc.class build/frege/StandardLibrary.class
+docu: build/frege/tools/Doc.class
+	$(FREGECC)  -make frege/StandardLibrary.fr
 	perl gendocmk.pl >makedoc
 	$(MAKE) -f makedoc docu
 	rm makedoc
