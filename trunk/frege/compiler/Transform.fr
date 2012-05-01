@@ -266,25 +266,33 @@ depthSym (vsym@SymV {pos})
         when (depth > length sigmas) do
                 g <- getST
                 U.error vsym.pos (msgdoc (nice vsym.name g
-                    ++ ": lambdaDepth for expression " ++ nice nx g
-                    ++ " (" ++ show depth ++ ") is greater than arity (" ++ show (length sigmas)
-                    ++ ") for type " ++ nicer vsym.typ g))
-        if (depth == length sigmas)
-            then U.changeSym vsym.{expr = Just nx, depth}       -- fine!
+                    ++ ": the expression " ++ nicer nx g
+                    ++ " has more nested lambdas (" ++ show depth 
+                    ++ ") than permitted by the arity (" ++ show (length sigmas)
+                    ++ ") of its type " ++ nicer typ g))
+                U.hint vsym.pos (msgdoc ("This is probably a compiler error."))
+        if (depth >= length sigmas)
+            then U.changeSym vsym.{expr = Just nx, typ, depth}       -- fine, unless error
             else do
                 g <- getST                                      -- depth < sigmas, eta expand it
                 newx <- etaExpand nx
                 let newd = U.lambdaDepth newx
                 U.logmsg TRACE9 (vsym.pos) (text ("eta expanded "
-                    ++ nice vsym.name g ++ "::" ++ nice vsym.typ g
+                    ++ nice vsym.name g ++ "::" ++ nice typ g
                     ++ " to lambda depth " ++ show newd))
                 U.logmsg TRACE9 vsym.pos (text ("old expr: " ++ nice nx   g ++ " :: "
                         ++ maybe "nix" (flip nice g) nx.typ))
-                U.logmsg TRACE9 vsym.pos (text ("new expr: " ++ nice newx g))
-                U.changeSym vsym.{expr = Just newx, depth = newd}
+                U.logmsg TRACE9 vsym.pos (text ("new expr: " ++ nice newx g
+                        ++ " :: " ++ maybe "nix" (flip nice g) nx.typ))
+                U.changeSym vsym.{expr = Just newx, typ, depth = newd}
+                when (newd != (length sigmas)) do
+                    U.fatal vsym.pos (text (nice vsym g ++ ": after eta expansion depth="
+                        ++ show newd ++ ", length sigmas=" ++ show (length sigmas)
+                        ++", turn on -x9")) 
     | otherwise = U.changeSym vsym.{depth = length sigmas}
     where
-        (_, sigmas) = U.returnType vsym.typ.rho
+        typ = vsym.typ.{rho <- U.unTau} -- a -> (b->c)  -->  a -> b -> c
+        (_, sigmas) = U.returnType typ.rho
         depthExpr = U.mapEx false depthX
         depthX  x
             | Let {env} <- x = do
@@ -328,17 +336,19 @@ etaExpand (x@Ann {}) = do                   -- eta (x :: y) = (eta x :: y)
 
 etaExpand x = case x.typ of                 -- all other expressions
     Just (ForAll [] (RhoTau ctx tau))
---        | TFun farg fret <- tau = do
---            uniq <- U.uniqid
---            let var = "$" ++ show uniq
---                pos  = getpos x
---                arg = ForAll [] (RhoTau [] farg)
---                res = RhoTau [] fret
---                app = App x (Vbl {pos, name=Local var, typ = Just arg}) (Just (ForAll [] res))
---                pat = PVar {pos,var}
---                env = insert Nil pat.var (U.patLocal pos pat.var).{sid=uniq}
---            body <- with env (etaExpand app)
---            stio  Lam {env, pat, ex=body, typ = Just (ForAll [] (RhoFun ctx arg res))}
+        | TFun farg fret <- tau = do
+            uniq <- U.uniqid
+            let var = "η" ++ show uniq
+                pos  = (getpos x).change VARID var
+                arg = ForAll [] (RhoTau [] farg)
+                res = RhoTau [] fret
+                sym = U.patLocal pos uniq var
+                app = App x (Vbl {pos, name=sym.name, typ = Just arg}) (Just (ForAll [] res))
+                pat = PVar {pos=pos, uid=uniq, var}
+                -- env = insert Nil pat.var (U.patLocal pos pat.var).{sid=uniq}
+            U.enter sym.{state=Typechecked, typ=arg}
+            body <- etaExpand app
+            stio  Lam {pat, ex=body, typ = Just (ForAll [] (RhoFun ctx arg res))}
         | otherwise = stio x
     Just (ForAll [] (RhoFun ctx arg res)) = do
             uniq <- U.uniqid
