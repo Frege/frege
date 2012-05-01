@@ -384,6 +384,7 @@ RUNTIME  = build/frege/MD.class    $(COMPF)/JavaUtils.class \
 		$(RTDIR)/Lam19.class        $(RTDIR)/Lam20.class      $(RTDIR)/Lam21.class \
 		$(RTDIR)/Lam22.class        $(RTDIR)/Lam23.class      $(RTDIR)/Lam24.class \
 		$(RTDIR)/Lam25.class        $(RTDIR)/Lam26.class \
+		$(RTDIR)/Prod0.class \
 		$(RTDIR)/Prod1.class    $(RTDIR)/Prod2.class      $(RTDIR)/Prod3.class \
 		$(RTDIR)/Prod4.class    $(RTDIR)/Prod5.class      $(RTDIR)/Prod6.class \
 		$(RTDIR)/Prod7.class    $(RTDIR)/Prod8.class      $(RTDIR)/Prod9.class \
@@ -488,6 +489,8 @@ $(RTDIR)/Array.class: frege/rt/Array.java
 $(RTDIR)/Unknown.class: frege/rt/Unknown.java
 	$(JAVAC) -d build -cp build $?
 $(RTDIR)/Fun.class: frege/rt/Fun.java
+	$(JAVAC) -d build -cp build $?
+$(RTDIR)/Prod0.class: frege/rt/Prod0.java
 	$(JAVAC) -d build -cp build $?
 $(RTDIR)/Prod1.class: frege/rt/Prod1.java
 	$(JAVAC) -d build -cp build $?
