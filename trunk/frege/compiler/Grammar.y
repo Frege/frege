@@ -932,10 +932,10 @@ conflds:
     ;
 
 confld:
-    varids DCOLON tau           { \vs\_\t -> [Field (snd v) (Just (fst v)) Nothing (ForAll [] (RhoTau [] t)) | v <- vs ]}
-    | docs varids DCOLON tau    { \(d::String)\vs\_\t ->
+    varids DCOLON sigma           { \vs\_\t -> [Field (snd v) (Just (fst v)) Nothing t | v <- vs ]}
+    | docs varids DCOLON sigma    { \(d::String)\vs\_\t ->
                                         map ConField.{doc=Just d}
-                                            [Field (snd v) (Just (fst v)) Nothing (ForAll [] (RhoTau [] t)) | v <- vs ]
+                                            [Field (snd v) (Just (fst v)) Nothing t    | v <- vs ]
                                 }
     ;
 

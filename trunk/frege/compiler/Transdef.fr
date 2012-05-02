@@ -45,6 +45,8 @@
 
 package frege.compiler.Transdef where
 
+import frege.data.List as DL(find)
+
 --- This is $Revision$
 protected version = v "$Revision$" where
     v (m ~ #(\d+)#) | Just g <- m.group 1 = g.atoi
@@ -238,37 +240,84 @@ transdef env fname (d@DatDcl {pos}) = do
             Just sym | SymT {pos} <- sym = do
                 foreach d.ctrs (transCon sym.typ (MName tname))
                 foreach d.defs (transdef [] (MName tname))
+                polymorphicFields tname
             other -> do U.fatal pos (text ("Cannot happen, data " ++ tname.nice g ++ " missing"))
     where
+        polymorphicFields tname = do
+            symt <- U.findT tname
+            let cons = [ c | c@SymD{}  <- values symt.env ]
+                fields = [ f | con <- cons,                                 -- from constructors 
+                               f@Field {name = Just n} <- Symbol.flds con,  -- take named fields
+                               not (null f.typ.bound)                       -- with polymorphic type
+                         ]
+                ufields = map (("upd$" ++) • unJust • ConField.name) fields                
+                cfields = map (("chg$" ++) • unJust • ConField.name) fields                         
+                umethods = [ m | m@SymV{} <- values symt.env,   -- methods that update a poly field
+                                m.name.base `elem` ufields ]                          
+                cmethods = [ m | m@SymV{} <- values symt.env,   -- methods that update a poly field
+                                m.name.base `elem` cfields ]
+            foreach umethods (updPolyAnn symt fields) 
+            foreach cmethods (chgPolyAnn symt fields)                                                                                          
+            return ()
+        updPolyAnn :: Symbol -> [ConField QName] -> Symbol -> StG ()
+        updPolyAnn dtyp flds meth = do
+            g <- getST
+            U.logmsg TRACE5 (Symbol.pos meth) (text ("polymorphic update " ++ nice meth g))
+            case find ((meth.name.base ==)•("upd$"++)•unJust•ConField.name) flds of
+                Just cf -> do
+                    let mtyp = ForAll dtyp.typ.bound rho1 where
+                                rho1 = RhoFun [] dtyp.typ.{bound=[]} rho2
+                                rho2 = RhoFun [] cf.typ dtyp.typ.rho
+                    U.changeSym meth.{typ = mtyp, anno = true}
+                    U.logmsg TRACE5 meth.pos (text (nice meth g ++ " :: " ++ nicer mtyp g))
+                    return ()
+                Nothing -> U.fatal dtyp.pos (text (nice meth.name g ++ ": field not found."))
+        -- determine type of chg$f method when field f is polymorphic
+        --   data Poly = P { listop :: forall e. [e] -> [e], name :: String } 
+        --   chg$listop (P a b) = P (f a) b
+        -- because field listop is polymorphic, f is higher ranked:
+        --   chg$listop :: Poly -> (forall a.(forall e.[e] -> [e]) -> [a] -> [a]) -> Poly  
+        chgPolyAnn :: Symbol -> [ConField QName] -> Symbol -> StG ()
+        chgPolyAnn dtyp flds meth = do
+            g <- getST
+            U.logmsg TRACE5 (Symbol.pos meth) (text ("polymorphic change " ++ nice meth g))
+            case find ((meth.name.base ==)•("chg$"++)•unJust•ConField.name) flds of
+                Just cf -> do
+                    -- use fresh vars for substitution of field type
+                    let binders = [ b | b <- U.allBinders, b `notElem` cf.typ.bound,
+                                                           b `notElem` dtyp.typ.bound ]
+                        nbound = take (length cf.typ.bound) binders
+                        tvars = map (TVar meth.pos) binders
+                        tree  = Tree.fromList (zip cf.typ.bound tvars)
+                    rho4 <- U.substRho tree cf.typ.rho                       -- [a] -> [a]
+                    let mtyp = ForAll dtyp.typ.bound rho1 where
+                                rho1 = RhoFun [] dtyp.typ.{bound=[]} rho2    --  Poly -> 
+                                rho2 = RhoFun [] funty dtyp.typ.rho          --  funty -> Poly
+                                funty = ForAll nbound rho3                   --  forall a.
+                                rho3  = RhoFun [] cf.typ rho4     --  (forall e.[e]->[e])->[a]->[a] 
+                    U.changeSym meth.{typ = mtyp, anno = true}
+                    U.logmsg TRACE5 meth.pos (text (nice meth g ++ " :: " ++ nicer mtyp g))
+                    return ()
+                Nothing -> U.fatal dtyp.pos (text (nice meth.name g ++ ": field not found."))
+                
         transCon (ForAll bndrs rho) mname (d@DCon {pos}) = do
             g <- getST
             let cname = mname d.name
             case QName.findit cname g of
                 Just (con@SymD {pos}) = do
-                    let transSigma1 s = do      -- field types cannot really be sigmas
-                            sig <- transSigma s
-                            stio sig.{bound=[]}
+                    let transSigma1 s = do      -- field types can be sigmas
+                            ForAll bound frho <- U.validSigma1 bndrs s
+                            frho <- U.transRho false frho
+                            stio (ForAll bound frho)
                     sigmas <- mapSt (transSigma1 • ConField.typ) d.flds
                     let nfs = zipWith ConField.{typ=}  con.flds sigmas
                         typ = ForAll bndrs (foldr (RhoFun []) rho sigmas)
                     U.logmsg TRACE5 con.pos (text (con.nice g ++ " :: " ++ typ.nice g))
                     sig <- validSigma typ
-                    when (con.strsig.isStrict) (foreach nfs (strictFieldsCheck cname))
+                    -- when (con.strsig.isStrict) (foreach nfs (strictFieldsCheck cname))
                     U.changeSym con.{typ=sig}.{flds=nfs}
                 _ -> U.fatal pos (text ("constructor `" ++ cname.nice g ++ "` vanished."))
-        strictFieldsCheck cname (Field {name=f, typ=sigma}) = do
-            g <- getST
-            case U.instTSym sigma g of
-                Just _ -> stio ()
-                _ -> stio ()
-                {-                           restriction abolished
-                _ -> case f of
-                    Just n -> U.error pos (msgdoc ("field `" ++ n ++ "` of strict constructors like `"
-                                ++ nice cname g ++ "` cannot have type  "
-                                ++ nice sigma g))
-                    Nothing -> U.error pos (msgdoc ("fields of strict constructors like `"
-                                ++ nice cname g ++ "` cannot have type  "
-                                ++ nice sigma g))  -}
+        
 
 transdef env fname (d@JavDcl {pos}) = do
         g <- getST
