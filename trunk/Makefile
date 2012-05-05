@@ -107,7 +107,7 @@ stage1: prel0 compiler0 $(TOOLSF0)/LexConvt.class $(TOOLSF0)/YYgen.class
 frege.mk: Makefile mkmk.pl
 	perl mkmk.pl <Makefile >frege.mk
 
-dist: fregec.jar
+dist: fregec.jar sources
 	perl mkdist.pl
 
 fregec.jar: tools $(DIR)/check1 # $(DATA)/Set.class
@@ -128,10 +128,10 @@ sources: $(SRCSREQ)
 	$(JAVA) -Xss1m -cp build frege.PreludeProperties
 	find frege -type f -name "*.java" -print >rt-files
 	cd build && find frege -type f -name "*.java" -print >../fr-files
-	jar -cMf ../sources.jar @rt-files
-	cd build && jar -uMf ../../sources.jar @../fr-files
-	cd FregIDE/src && jar -xf ../../../sources.jar
-	rm -f ../sources.jar rt-files fr-files
+	jar -cMf ../dist/sources.jar @rt-files
+	cd build && jar -uMf ../../dist/sources.jar @../fr-files
+	cd FregIDE/src && jar -xf ../../../dist/sources.jar
+	rm -f rt-files fr-files
 #	jar  -cf    ../sources/frege3.jar -C build frege
 
 $(DIR)/check1: $(DIR)/PreludeProperties.class

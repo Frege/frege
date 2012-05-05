@@ -776,7 +776,7 @@ rhotau:
 
 tau:
     tapp
-    | tapp ARROW tau    { \a\f\b ->  TFun a b }
+    | tapp ARROW tau    { \a\f\b ->  TApp (TApp (TCon (yyline f) (With1 baseToken f.{tokid=CONID, value="->"})) a) b }
     ;
 
 tauSC:
