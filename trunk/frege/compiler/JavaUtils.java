@@ -46,7 +46,7 @@ public class JavaUtils {
 			int cex = 0;
 			StringBuilder sb = new StringBuilder();
 			for (String s : cmd) { sb.append(s); sb.append(" "); }
-			System.err.println("running: " + sb.toString());
+			System.out.println("running: " + sb.toString());
 			Process jp = Runtime.getRuntime().exec(cmd);
 			// if (Common.verbose)
 				
