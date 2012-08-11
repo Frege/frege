@@ -56,7 +56,7 @@ public class FregeCompiler  implements Callable<MethodHandle> {
         if (prefix == null) prefix = "";
         if (fregePath == null) fregePath =  new String[] {};
         try {
-            Class runclass = Class.forName(compiler + "$runcompiler");
+            Class<?> runclass = Class.forName(compiler + "$runcompiler");
             MethodHandle runcompilerw = MethodHandles.lookup().findStatic(
                 runclass, "w",
                 MethodType.methodType( 
