@@ -35,7 +35,7 @@ vote for Enhancement issues you consider most important by "starring" them or cr
 Contact
 -------
 
-You can contact the project members through the [discussion group](http://groups.google.com/group/frege-programming-language) devoted to the Frege programming language. Specific programming problems are best solved on Stack Overflow, we check questions tagged "frege" on a regular basis. If you find a bug, please let us know by opening an issue in the issue tracker. (You'll need a google account to do this.)
+You can contact the project members through the [discussion group](http://groups.google.com/group/frege-programming-language) devoted to the Frege programming language. Specific programming problems are best solved on [Stack Overflow](http://stackoverflow.com/questions/tagged/frege), we check questions tagged "frege" on a regular basis. If you find a bug, please let us know by opening an issue in the issue tracker. (You'll need a google account to do this.)
 
 News
 ----
