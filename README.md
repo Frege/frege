@@ -19,7 +19,7 @@ The compiler, an Eclipse plugin and a provisional version of the documentation c
 
 The compiler and the documentation tool are quite stable, the documentation provisional and the library is evolving. It already supports important parts of the Haskell 2010 standard library.
 
-See the GettingStarted page for getting started at the command-line or read the Eclipse plugin page.
+See the [Getting Started](https://github.com/YoEight/frege/wiki/Getting-Started) page for getting started at the command-line or read the Eclipse plugin page.
 
 Contributions
 -------------
