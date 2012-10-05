@@ -59,3 +59,8 @@ Whenever a new release is available, there may be backward compatibilty issues, 
 * 2011-9-20 frege-jar with fork/join support uploaded
 * 2011-9-18 Some issues fixed.
 * 2011-9-15 Now downloadable: generated html documentation (javadocs of the runtime + frege module docs)
+
+[Author's Blog](http://fregepl.blogspot.com/)
+[Nightly Builds](http://jamestastic.com/jenkins/job/frege)
+[Online Docs (Runtime Javadoc)](http://jamestastic.com/frege-doc/)
+[Online Docs (Frege)](http://jamestastic.com/frege-doc/frege/)
