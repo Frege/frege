@@ -26,16 +26,24 @@ Contributions
 
 If you are interested in contributing, here are some hot topics:
 
-write frege code to support more of the Java API
-create a nicer logo
-port Haskell libraries or tools
-open issues on the Issues page if you find bugs, errors in documentation, etc.
-vote for Enhancement issues you consider most important by "starring" them or create new ones.
+* write frege code to support more of the Java API
+* create a nicer logo
+* port Haskell libraries or tools
+* open issues on the Issues page if you find bugs, errors in documentation, etc.
+* vote for Enhancement issues you consider most important by "starring" them or create new ones.
 
 Contact
 -------
 
-You can contact the project members through the [discussion group](http://groups.google.com/group/frege-programming-language) devoted to the Frege programming language. Specific programming problems are best solved on [Stack Overflow](http://stackoverflow.com/questions/tagged/frege), we check questions tagged "frege" on a regular basis. If you find a bug, please let us know by opening an issue in the issue tracker. (You'll need a google account to do this.)
+You can contact the project members through the
+[discussion group](http://groups.google.com/group/frege-programming-language)
+devoted to the Frege programming language.
+Specific programming problems are best solved on
+[Stack Overflow](http://stackoverflow.com/questions/tagged/frege),
+we check questions tagged "frege" on a regular basis.
+
+If you find a bug, please let us know by opening an issue in the issue tracker.
+(You'll need a GitHub account to do this.)
 
 News
 ----
@@ -46,7 +54,7 @@ Whenever a new release is available, there may be backward compatibilty issues, 
 * 2012-2-06 fregIDE with outline view, standard library enhancements
 * 2012-1-10 First version of fregIDE. Also a binary compatible frege3.18.120 jar.
 * 2012-1-06 Uploaded frege3.18.110 with small language changes and enhancements
-* 2011-12-18 Uploaded frege3.18.70.jar, which conntains fixes for  Issue 19  and  Issue 20 
+* 2011-12-18 Uploaded frege3.18.70.jar, which conntains fixes for  Issue 19  and  Issue 20
 * 2011-11-20 Release 3.18.0 uploaded, see backward compatibilty
 * 2011-11-11 The "Differences from Haskell" document is now a wiki page.
 * 2011-10-21 Prelude re-structured, Show is Haskell compatible, see Releases
