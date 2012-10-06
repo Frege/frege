@@ -15,11 +15,13 @@ There have been attempts to [port Haskell to the JVM](http://www.haskell.org/has
 Frege is thought as a substitute for this missing GHC port. While not derived from any existing Haskell implementation, it is more or less equivalent to Haskell 2010. Please see the wiki page that details the differences.
 
 Project State
+-------------
+
 The compiler, an Eclipse plugin and a provisional version of the documentation can be downloaded. Note that Frege requires JDK 7 to compile and run programs.
 
 The compiler and the documentation tool are quite stable, the documentation provisional and the library is evolving. It already supports important parts of the Haskell 2010 standard library.
 
-See the [Getting Started](https://github.com/YoEight/frege/wiki/Getting-Started) page for getting started at the command-line or read the Eclipse plugin page.
+See the [Getting Started](https://github.com/Frege/frege/wiki/Getting-Started) page for getting started at the command-line or read the Eclipse plugin page.
 
 Contributions
 -------------
