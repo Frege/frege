@@ -191,7 +191,7 @@ frege/compiler/Grammar.fr: frege/compiler/Grammar.y
 	$(FREGE) -cp fregec.jar frege.tools.YYgen -m State  frege/compiler/Grammar.fr
 	$(FREGE) -cp fregec.jar frege.tools.LexConvt frege/compiler/Grammar.fr
 	rm -f frege/compiler/Grammar.fr.bak
-frege/Version.fr: ../.git/HEAD
+frege/Version.fr: .git/HEAD
     perl mkversion.pl >frege/Version.fr
 $(COMPF)/Scanner.class: $(DIR)/Prelude.class frege/compiler/Scanner.fr
 	$(FREGEC2)  -make frege.compiler.Scanner
