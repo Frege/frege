@@ -72,7 +72,7 @@ Whenever a new release is available, there may be backward compatibilty issues, 
 
 [Author's Blog](http://fregepl.blogspot.com/)
 
-[Nightly Builds](http://jamestastic.com/jenkins/job/frege)
+[Nightly Builds](http://jenkins.jamestastic.com/job/frege/)
 
 [Online Docs (Runtime Javadoc)](http://jamestastic.com/frege-doc/)
 
