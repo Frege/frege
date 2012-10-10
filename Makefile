@@ -53,8 +53,8 @@ FREGEP   = $(JAVAP) -Xss30m -Xmx900m -cp build
 FREGECJ  = $(FREGE)  -jar fregec.jar  -d build -fp build -nocp -hints
 FREGECC  = $(FREGE) frege.compiler.Main  -d build -hints -inline
 FREGEC0  = $(FREGECJ) -prefix a
-FREGEC1  = $(FREGE) afrege.compiler.Main -d build -hints -inline -prefix b 
-FREGEC2  = $(FREGE) bfrege.compiler.Main -d build -hints -inline 
+FREGEC1  = $(FREGE) afrege.compiler.Main -d build -hints -inline -prefix b
+FREGEC2  = $(FREGE) bfrege.compiler.Main -d build -hints -inline
 FREGEC3  = $(FREGECJ) -prefix c
 GENDOC   = $(FREGE)  frege.tools.Doc -d doc
 
@@ -118,7 +118,7 @@ fregec.jar: tools $(DIR)/check1 # $(DATA)/Set.class
 rt-files: build/frege/compiler/Main.class
 	find frege -type f -name "*.java" -print >rt-files
 
-fr-files: build/bfrege/compiler/Main.class
+fr-files: build/frege/compiler/Main.class
 	cd build && find frege -type f -name "*.java" -print >../fr-files
 
 SRCSREQ = $(PREL)/PreludeBase.class $(PREL)/PreludeNative.class $(PREL)/PreludeList.class $(PREL)/PreludeMonad.class $(PREL)/PreludeText.class frege/compiler/Grammar.fr
@@ -143,7 +143,7 @@ $(LIBF)/Random.class: $(DIR)/Prelude.class frege/lib/Random.fr
 $(DATA)/Maybe.class: $(DIR)/Prelude.class  frege/data/Maybe.fr
 	$(FREGEC2)  frege/data/Maybe.fr
 $(DATA)/Set.class: $(DIR)/Prelude.class  frege/contrib/dgronau/Set.fr
-	$(FREGEC2)  frege/contrib/dgronau/Set.fr	
+	$(FREGEC2)  frege/contrib/dgronau/Set.fr
 $(DATA)/List.class: $(DIR)/Prelude.class  frege/data/List.fr
 	$(FREGEC2)  frege/data/List.fr
 $(LIBF)/QuickCheck.class: $(LIBF)/Random.class $(DATA)/List.class frege/lib/QuickCheck.fr
@@ -191,11 +191,13 @@ frege/compiler/Grammar.fr: frege/compiler/Grammar.y
 	$(FREGE) -cp fregec.jar frege.tools.YYgen -m State  frege/compiler/Grammar.fr
 	$(FREGE) -cp fregec.jar frege.tools.LexConvt frege/compiler/Grammar.fr
 	rm -f frege/compiler/Grammar.fr.bak
+frege/Version.fr: ../.git/HEAD
+    perl mkversion.pl >frege/Version.fr
 $(COMPF)/Scanner.class: $(DIR)/Prelude.class frege/compiler/Scanner.fr
 	$(FREGEC2)  -make frege.compiler.Scanner
 $(COMPF)/GUtil.class: $(COMPF)/Scanner.class frege/compiler/GUtil.fr
 	$(FREGEC2)  frege/compiler/GUtil.fr
-$(COMPF)/Main.class: $(DIR)/Prelude.class frege/compiler/Main.fr
+$(COMPF)/Main.class: $(DIR)/Prelude.class frege/compiler/Main.fr frege/Version.fr
 	$(FREGEC2)  -make frege.compiler.Main
 $(DIR)/Prelude.class: $(COMPF2)/Main.class $(PRELUDE)
 	rm -rf $(COMPF)
@@ -209,7 +211,7 @@ compiler2: $(COMPF2)/Main.class
 	@echo stage 2 compiler ready
 
 
-$(COMPF2)/Main.class: $(DIR2)/Prelude.class # frege/compiler/Main.fr
+$(COMPF2)/Main.class: $(DIR2)/Prelude.class frege/Version.fr
 	$(FREGEC1) -v -make frege.compiler.Main
 $(DIR2)/Prelude.class: $(COMPF1)/Main.class frege/Prelude.fr $(PRELUDE)
 	rm -rf $(COMPF2)
@@ -273,7 +275,7 @@ $(COMPF1)/Nice.class: 	$(COMPS)/Nice.fr $(LIBF1)/PP.class $(COMPF1)/Data.class $
 	$(FREGEC0) $(COMPS)/Nice.fr
 $(COMPF1)/Fixdefs.class: $(COMPS)/Fixdefs.fr
 	$(FREGEC0) $?
-$(COMPF1)/Import.class: $(DATA1)/Tuples.class $(COMPS)/Import.fr 
+$(COMPF1)/Import.class: $(DATA1)/Tuples.class $(COMPS)/Import.fr
 	$(FREGEC0) $(COMPS)/Import.fr
 $(COMPF1)/Enter.class: $(COMPS)/Enter.fr
 	$(FREGEC0) $?
@@ -308,13 +310,13 @@ $(LIBF1)/QuickCheck.class: $(LIBF1)/Random.class $(DATA1)/List.class frege/lib/Q
 $(DATA1)/List.class: frege/data/List.fr
 	$(FREGEC0) frege/data/List.fr
 $(DATA1)/Tuples.class: $(CONTROL1)/Monoid.class frege/data/Tuples.fr
-	$(FREGEC0) frege/data/Tuples.fr	
+	$(FREGEC0) frege/data/Tuples.fr
 $(DATA1)/Maybe.class: frege/data/Maybe.fr
 	$(FREGEC0) frege/data/Maybe.fr
 $(LIBF1)/ForkJoin.class: frege/lib/ForkJoin.fr
 	$(FREGEC0) $?
 
-PRE1 = $(DIR1)/Prelude.class $(DIR1)/IO.class $(DIR1)/List.class 
+PRE1 = $(DIR1)/Prelude.class $(DIR1)/IO.class $(DIR1)/List.class
 
 compiler1: $(RUNTIME)  $(DIR1)/check1  $(LIBF1)/PP.class $(COMPF1)/Grammar.class $(COMPF1)/Main.class
 	@echo stage 1 compiler ready
@@ -323,7 +325,7 @@ $(COMPF1)/Grammar.class: frege/compiler/Grammar.fr $(COMPF1)/GUtil.class $(COMPF
 	$(FREGEC0)  -make frege.compiler.Grammar
 $(COMPF1)/Scanner.class: $(PRE1) $(COMPF1)/Utilities.class frege/compiler/Scanner.fr
 	$(FREGEC0)  -make frege.compiler.Scanner
-$(COMPF1)/Main.class : $(PRE1) $(LIBF1)/PP.class $(CLASSES)
+$(COMPF1)/Main.class : $(PRE1) $(LIBF1)/PP.class $(CLASSES) frege/Version.fr
 	$(FREGEC0)  -make frege.compiler.Main
 $(DIR1)/Prelude.class: $(PRELUDE) frege/Prelude.fr
 	rm -rf $(COMPF1)
@@ -337,13 +339,13 @@ $(DIR1)/check1: $(PRE1) $(LIBF1)/Random.class $(LIBF1)/QuickCheck.class $(DIR1)/
 
 
 
-PRE0 = $(DIR0)/IO.class $(DIR0)/List.class 
+PRE0 = $(DIR0)/IO.class $(DIR0)/List.class
 
 
 compiler0: $(DIR0)/check1 $(COMPF0)/Main.class
 	@echo stage 0 compiler ready
 
-$(COMPF0)/Main.class : $(PRE0) frege/compiler/Grammar.fr # fregec.jar
+$(COMPF0)/Main.class : $(PRE0) frege/compiler/Grammar.fr  frege/Version.fr
 	$(FREGEC3)  -make frege.compiler.Main
 
 prel0:
