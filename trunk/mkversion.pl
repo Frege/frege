@@ -14,11 +14,12 @@ use warnings;
 my $exe = "";
 $exe = ".exe" unless defined $ENV{SHELL} and length $ENV{SHELL} > 0;
 
-my $version = qx{git log --oneline | wc -l};
+my $version = qx{git describe --long};
+chomp $version;
+$version =~ s/-(\d+)-.*$/.$1/;
 print <<XXX;
 -- automatically created with $0
--- based on the number of snapshots
--- in the current branch
+-- based on git describe
 package frege.Version where
-    version = $version
+    version = "$version"
 XXX
