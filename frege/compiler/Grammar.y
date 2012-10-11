@@ -58,7 +58,7 @@ import frege.compiler.Data      as D
 import frege.compiler.Nice      except (group, annotation, break)
 import frege.compiler.Utilities as U(
     posItem, posLine, unqualified, tuple)
-import frege.compiler.GUtil    
+import frege.compiler.GUtil
 
 
 version = v "$Revision$" where
@@ -83,6 +83,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type varop           Token
 //%type thenx           Token
 //%type elsex           Token
+//%type mbdot           Token
 //%type commata         Int
 //%type semicoli        Int
 //%type packagename     (Pos String)
@@ -199,6 +200,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type guard           Guard
 //%type guards          [Guard]
 //%type qualifiers      (Token -> SName)
+//%explain mbdot        '.' or '•'
 //%explain thenx        then branch
 //%explain elsex        else branch
 //%explain qualifiers   qualified type name
@@ -419,7 +421,7 @@ packagename1:
 
 packagename:
     packagename1                { \(nm, pos) -> (magicPack nm, pos) }
-    ;                                        
+    ;
 
 docs:
     DOCUMENTATION                       { Token.value }
@@ -450,15 +452,15 @@ packageclause:
                                                      changeST Global.{sub <- SubSt.{
                                                             toExport = qs}};
                                                      YYM.return p;}
-                                                 }                                                   
+                                                 }
     ;
 
-word: 
+word:
     VARID                           { Token.value }
     ;
-    
+
 words:
-    word                            { single }    
+    word                            { single }
     | word words                    { (:) }
     ;
 
@@ -616,8 +618,8 @@ alias:
 
 varid:   VARID              { vid }
     ;
-    
-varidkw: 
+
+varidkw:
     VARID
     | DATA                  { Token.{tokid = VARID} }
     | TYPE                  { Token.{tokid = VARID} }
@@ -625,8 +627,8 @@ varidkw:
     | PURE                  { Token.{tokid = VARID} }
     | PACKAGE               { Token.{tokid = VARID} }
     | IMPORT                { Token.{tokid = VARID} }
-    ;    
-    
+    ;
+
 varids:
     varid                   { single }
     | varid ',' varids      { liste  }
@@ -652,7 +654,7 @@ varop:
 qvarop:  QUALIFIER QUALIFIER varop  { \n\t\v     -> With2 n t v}
     |    QUALIFIER varop            { \t\v       -> With1 t v}
     |    varop                      { \v         -> Simple v }
-    ;     
+    ;
 
 operator:
       LOP1 | LOP2 | LOP3 | LOP4 | LOP5 | LOP6 | LOP7 | LOP8 | LOP9 | LOP10 | LOP11 | LOP12 | LOP13 | LOP14 | LOP15 | LOP16
@@ -752,7 +754,17 @@ sigma:
     ;
 
 forall:
-      FORALL boundvars                  '.' rho    { \_\bs\_\r      -> ForAll bs r }
+    FORALL boundvars mbdot rho      { \_\bs\_\r      -> ForAll bs r }
+    ;
+
+mbdot:
+    '.'
+    | ROP16                         { \dot -> do
+                                        when (Token.value dot != "•") do
+                                            yyerror (yyline dot)
+                                                ("'.' expected instead of " ++ show dot.value)
+                                        YYM.return dot
+                                    }
     ;
 
 rho:
@@ -1069,17 +1081,17 @@ expr:
     | topex
     ;
 
-thenx: 
+thenx:
     ';' THEN                           { flip const }
     | THEN
     ;
 
-elsex: 
+elsex:
     ';' ELSE                           { flip const }
     | ELSE
     ;
 
-    
+
 topex:
       IF expr thenx expr elsex topex   { \_\c\_\t\_\e  -> Ifte c t e Nothing}
     | CASE  expr OF '{' calts   '}'    { \_\e\_\_\as\_ -> Case CNormal e as Nothing}
