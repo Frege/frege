@@ -129,9 +129,9 @@ sources: $(SRCSREQ)
 	find frege -type f -name "*.java" -print >rt-files
 	cp frege/MD.java build/frege/MD.java
 	cd build && find frege -type f -name "*.java" -print >../fr-files
-	jar -cMf ../dist/sources.jar @rt-files
-	cd build && jar -uMf ../../dist/sources.jar @../fr-files
-	cd FregIDE/src && jar -xf ../../../dist/sources.jar
+	jar -cMf dist/sources.jar @rt-files
+	cd build && jar -uMf ../dist/sources.jar @../fr-files
+	cd ../eclipse-plugin/src && jar -xf ../../frege/dist/sources.jar
 	rm -f rt-files fr-files
 #	jar  -cf    ../sources/frege3.jar -C build frege
 
