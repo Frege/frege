@@ -50,7 +50,7 @@ If you find a bug, please let us know by opening an issue in the issue tracker.
 Links
 ----
 
-[Frege Wiki](https://github.com/Frege/frege/wiki)
+[Frege Wiki](https://github.com/Frege/frege/wiki/_pages)
 
 [Author's Blog](http://fregepl.blogspot.com/)
 
