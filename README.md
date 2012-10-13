@@ -47,28 +47,10 @@ we check questions tagged "frege" on a regular basis.
 If you find a bug, please let us know by opening an issue in the issue tracker.
 (You'll need a GitHub account to do this.)
 
-News
+Links
 ----
 
-Whenever a new release is available, there may be backward compatibilty issues, please check them out.
-
-* 2012-4-04 release 3.19.112 with enhancements/changes in compiler, language, libraries and fregIDE
-* 2012-2-06 fregIDE with outline view, standard library enhancements
-* 2012-1-10 First version of fregIDE. Also a binary compatible frege3.18.120 jar.
-* 2012-1-06 Uploaded frege3.18.110 with small language changes and enhancements
-* 2011-12-18 Uploaded frege3.18.70.jar, which conntains fixes for  Issue 19  and  Issue 20
-* 2011-11-20 Release 3.18.0 uploaded, see backward compatibilty
-* 2011-11-11 The "Differences from Haskell" document is now a wiki page.
-* 2011-10-21 Prelude re-structured, Show is Haskell compatible, see Releases
-* 2011-10-15 enhancements in import, documentation tool
-* 2011-10-01 Fixed  issue 14  with r185
-* 2011-9-29 Fixed  issue 8 ,  issue 10 ,  issue 12  and  issue 13  in frege3.17.184.jar
-* 2011-9-27 Fixed  issue 7  and  issue 9  in frege3.17.178.jar
-* 2011-9-26 small cosmetic changes, Language.pdf now in Portrait-1-column format
-* 2011-9-22 switch to Haskell style comment syntax
-* 2011-9-20 frege-jar with fork/join support uploaded
-* 2011-9-18 Some issues fixed.
-* 2011-9-15 Now downloadable: generated html documentation (javadocs of the runtime + frege module docs)
+[Frege Wiki](https://github.com/Frege/frege/wiki/_pages)
 
 [Author's Blog](http://fregepl.blogspot.com/)
 
