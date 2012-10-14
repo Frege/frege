@@ -192,7 +192,7 @@ frege/compiler/Grammar.fr: frege/compiler/Grammar.y
 	$(FREGE) -cp fregec.jar frege.tools.LexConvt frege/compiler/Grammar.fr
 	rm -f frege/compiler/Grammar.fr.bak
 frege/Version.fr: .git/HEAD
-    perl mkversion.pl >frege/Version.fr
+	perl mkversion.pl >frege/Version.fr
 $(COMPF)/Scanner.class: $(DIR)/Prelude.class frege/compiler/Scanner.fr
 	$(FREGEC2)  -make frege.compiler.Scanner
 $(COMPF)/GUtil.class: $(COMPF)/Scanner.class frege/compiler/GUtil.fr
