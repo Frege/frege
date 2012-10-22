@@ -315,7 +315,7 @@ public abstract class RT {
         // and x is not equal, ignoring case, to the string "true".
         final String  prop     = System.getProperty("frege.parallel");
         final boolean parallel = prop == null ? true : Boolean.valueOf( prop );
-        if ( !parallel ) {
+        if ( !parallel ) {							// comment out for java6
             // execution outside fork/join pool
             try {
                 action.call();
@@ -323,9 +323,9 @@ public abstract class RT {
                 throw new Error(ex);        // ex.printStackTrace();
             }
             return;
-        }
+        }											// comment out for java6
         // run in fork/join pool
-        try {
+        try {										// comment try/catch blocks out for java6
             new java.util.concurrent.ForkJoinPool(
                         2*Runtime.getRuntime().availableProcessors())
                 .submit(action)
