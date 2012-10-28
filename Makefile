@@ -283,6 +283,8 @@ $(COMPF1)/Enter.class: $(COMPS)/Enter.fr
 	$(FREGEC0) $?
 $(COMPF1)/Transdef.class: $(COMPS)/Transdef.fr
 	$(FREGEC0) $?
+$(COMPF1)/Javatypes.class: $(COMPS)/Javatypes.fr
+	$(FREGEC0) $?
 $(COMPF1)/TCUtil.class: $(COMPS)/TCUtil.fr
 	$(FREGEC0) $?
 $(COMPF1)/TAlias.class: $(COMPS)/TAlias.fr
