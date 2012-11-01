@@ -49,7 +49,7 @@ package frege.rt;
  *
  * <p> This is not a pure type. </p>
  */
-public final class Array<T extends Lazy<T>>  implements Cloneable {
+public final class Array<T>  implements Cloneable {
     final private T[] j;
     public final Array<T> clone()                       { return new Array<T>(j.clone()); }
     public            Array(final T[] arr)              { j = arr; }

@@ -117,7 +117,7 @@ public class Box<T>  extends Val {
      * @param size the size of the array
      */
     @SuppressWarnings("unchecked")
-    final public static<T extends Lazy<T>> T[] arrayNew(int size) {
+    final public static<T> T[] arrayNew(int size) {
         return  (T[]) (new Lazy[size]);
     }
 
