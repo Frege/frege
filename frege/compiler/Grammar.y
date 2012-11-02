@@ -788,7 +788,7 @@ rhotau:
 
 tau:
     tapp
-    | tapp ARROW tau    { \a\f\b ->  TApp (TApp (TCon (yyline f) (With1 baseToken f.{tokid=CONID, value="->"})) a) b }
+    | tapp ARROW tau    { \a\f\b ->  TApp (TApp (TCon (yyline f) (With1 baseToken f.{tokid=CONID, value="->"}) Kind.fun) a) b }
     ;
 
 tauSC:
@@ -802,7 +802,7 @@ tapp:
 
 simpletype:
     tyvar
-    | tyname            { \(tn::SName) -> TCon (yyline tn.id) tn}
+    | tyname            { \(tn::SName) -> TCon (yyline tn.id) tn KVar}
     | '(' tau ')'      { \_\t\_ -> t }
     | '(' tau ',' tauSC ')'
                         {\_\t\(c::Token)\ts\_ ->
@@ -810,17 +810,17 @@ simpletype:
                                 tus = t:ts;
                                 i = length tus;
                                 tname = With1 baseToken c.{tokid=CONID, value=tuple i}
-                            in  (TCon (yyline c) tname).mkapp tus
+                            in  (TCon (yyline c) tname (Kind.kind i)).mkapp tus
                         }
     | '[' tau ']'      {\a\t\_ -> TApp (TCon (yyline a)
-                                             (With1 baseToken a.{tokid=CONID, value="[]"}))
+                                             (With1 baseToken a.{tokid=CONID, value="[]"}) Kind.unary)
                                         t }
     ;
 
 
 
 tyvar:
-    VARID                   { \n -> TVar (yyline n) (Token.value n)  }
+    VARID                   { \n -> TVar (yyline n) KVar (Token.value n)  }
 ;
 
 
@@ -843,7 +843,7 @@ classdef:
             ctxs <- U.tauToCtx tau
             sups <- classContext (Token.value i) ctxs (posItem v)
             YYM.return (ClaDcl {pos = yyline i, vis = Public, name = Token.value i,
-                             clvar = TVar (posLine v) (posItem v),
+                             clvar = TVar (posLine v) KVar (posItem v),
                              supers = sups, defs = defs, doc = Nothing})
     }
     ;

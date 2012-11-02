@@ -556,7 +556,7 @@ nicectx xs g
     | [ctx] <- xs = single ctx ++ " => "
     | otherwise   = "(" ++ joined "," (map single xs) ++ ") => "
     where
-        single (Ctx pos name tau _) = nice (TApp (TCon {pos,name}) tau) g
+        single (Ctx pos name tau _) = nice (TApp (TCon {pos,name,kind=KVar}) tau) g
 
 
 nicerctx :: (Nice t, QNameMatcher t) => [ContextT t] -> Global -> String
@@ -565,7 +565,7 @@ nicerctx xs g
     | [ctx] <- xs = single ctx ++ " => "
     | otherwise   = "(" ++ joined "," (map single xs) ++ ") => "
     where
-        single (Ctx pos name tau _) = nicer (TApp (TCon {pos,name}) tau) g
+        single (Ctx pos name tau _) = nicer (TApp (TCon {pos,name,kind=KVar}) tau) g
 
 instance Nice (Nice t, QNameMatcher t) => TauT t where
     nicer t g = showt 2 (unAlias g t) -- if isOn g.options.flags IDE then showt 2 (unAlias g t) else nice t g
@@ -628,13 +628,13 @@ instance QNameMatcher QName where
 unAlias :: QNameMatcher a => Global -> TauT a -> Tau
 unAlias g tau = if isOn g.options.flags SPECIAL then fake tau else unAlias (fake tau)
     where
-        -- fake (TFun a b)      = TFun (fake a) (fake b)
-        fake (TApp a b)      = TApp (fake a) (fake b)
-        fake TVar{pos,var}   = TVar pos var
+        -- fake (TFun a b)        = TFun (fake a) (fake b)
+        fake (TApp a b)           = TApp (fake a) (fake b)
+        fake TVar{pos,var,kind}   = TVar pos kind var
         fake (Meta x)        = case x.bound.run g of
             (Just tau, _) -> fake tau
-            otherwise     -> TVar Position.null ("t" ++ show x.uid)
-        fake TCon{pos,name}  = TCon{pos, name = fakeQName name}
+            otherwise     -> TVar Position.null KVar ("t" ++ show x.uid)
+        fake TCon{pos,name,kind}  = TCon{pos, name = fakeQName name, kind}
 
         unAlias  tau = case tau of
                 -- TFun a b       -> TFun (unAlias a) (unAlias b)
@@ -653,7 +653,7 @@ unAlias g tau = if isOn g.options.flags SPECIAL then fake tau else unAlias (fake
                     where
                         rho = typ.rho
                         aApp :: Tau
-                        aApp = fold TApp (TCon pos name) (map (TVar pos) typ.bound)
+                        aApp = fold TApp (TCon pos name KVar) (map (TVar pos KVar) typ.bound)
 
                 aliased _ _ = Nothing
 
@@ -701,12 +701,12 @@ isTauFun fun g | [TCon {name}, _, _] <- Tau.flat fun, name.nice g ~ ´->$´ = tr
                | otherwise =  false
 
 instance Nice (Nice s, QNameMatcher s) => MetaTvT s where
-    nice (Rigid i s) g = "t" ++ show i ++ "#" ++ s
-    nice (flexi@Flexi i _ s) g
+    nice (Rigid i s _) g = "t" ++ show i ++ "#" ++ s
+    nice (flexi@Flexi i _ s _) g
         | (Just t, _) <- flexi.bound.run g = "<" ++ t.nice g ++ ">"
         | otherwise                                  = "<" ++ show i ++ " " ++ s ++ ">"
-    nicer (Rigid i s) g = "t" ++ show i ++ "#" ++ s     -- "t#" ++ show i
-    nicer (flexi@Flexi i _ _) g
+    nicer (Rigid i s _) g = "t" ++ show i ++ "#" ++ s     -- "t#" ++ show i
+    nicer (flexi@Flexi i _ _ _) g
         | (Just t, _) <- flexi.bound.run g = t.nicer g
         | otherwise                                  = "t" ++ show i
 {- ########### expression and pattern manipulation ############## -}
@@ -768,9 +768,9 @@ instTData _ = Prelude.error "no RhoFun as instance"
 
 {-- a provisional 'Sigma' shared by all 'Symbol's that have no type yet -}
 pSigma :: Sigma
-pSigma =  ForAll [] (RhoTau [] (Meta (Rigid (negate 1) "provisional")))
+pSigma =  ForAll [] (RhoTau [] (Meta (Rigid (negate 1) "provisional" KVar)))
 {-- check if this is the provisional 'Sigma' -}
-isPSigma (ForAll [] (RhoTau [] (Meta (Rigid n          "provisional")))) = n == negate 1
+isPSigma (ForAll [] (RhoTau [] (Meta (Rigid n          "provisional" KVar)))) = n == negate 1
 isPSigma _ = false
 
 {-- create a symbolic link to given qname -}
@@ -1126,7 +1126,7 @@ freeCtxTVars bnd coll cs = fold ctxTVars coll cs
 
 
 
-freeTauTVars bound collected (TVar _ s)
+freeTauTVars bound collected (TVar{var=s})
     | s `elem` bound = collected
     | otherwise = collected `including` s
 freeTauTVars bound collected (TApp a b)
@@ -1147,9 +1147,9 @@ substRho t (RhoFun ctx sig rho) = do
         stio (RhoFun ctx sig rho)
 substRho t (RhoTau ctx tau) = liftM2 RhoTau (mapSt (substCtx t) ctx) (substTau t tau)
 -- substTau t (TFun a b)       = liftM2 TFun (substTau t a) (substTau t b)
-substTau t (tau@TCon _ _)   = stio tau
+substTau t (tau@TCon{})     = stio tau
 substTau t (TApp a b)       = liftM2 TApp (substTau t a) (substTau t b)
-substTau t (typ@Meta (Flexi n r s)) = do
+substTau t (typ@Meta (Flexi{ref=r})) = do
         bound <- doio (r.get)
         case bound of
             Nothing  = stio typ
@@ -1171,7 +1171,7 @@ checkTApp :: Bool -> [Tau] -> StG Tau
 checkTApp partial (con:as) = do
         g <- getST
         let t = Tau.mkapp con as
-            units   = repeat (TCon {pos=Position.null, name=TName pPreludeBase "()"})  -- for err correction
+            units   = repeat (TCon {pos=Position.null, name=TName pPreludeBase "()", kind=KType})  -- for err correction
         case con of
             TCon {pos,name} -> case name.findit g of
                 -- Just (SymT {typ=ForAll bs _}) | null as, null bs = stio con
@@ -1410,10 +1410,7 @@ transRho partial (RhoTau ctx tau) = do
  * check a tau and translate it to 'QName' form
  -}
 transTau :: Bool -> TauT SName -> StG (TauT QName)
-transTau partial (TVar {pos,var}) = do
-        -- mbcs <- mapSt (resolveTName pos) classes
-        -- let classes = [ c | Just c <- mbcs ]
-        stio (TVar {pos,var})
+transTau partial (TVar{pos,var,kind}) = return (TVar {pos,var,kind})
 
 -- transTau partial (TFun a b) = do
 --     a <- transTau false a
@@ -1429,7 +1426,7 @@ transTau partial (t@TApp _ _) = transTApp partial t.flat
 
 transTApp partial (con:as) = do
      case con of
-        TCon {pos,name} -> do
+        TCon {pos,name,kind} -> do
             tname <- resolveTName pos name
             g <- getST
             case tname of
@@ -1437,7 +1434,7 @@ transTApp partial (con:as) = do
                 -- check if this is really a type constructor
                 Just tn -> case tn.findit g of
                     Just (SymT {name,typ=ForAll bs _}) -> do
-                            let ncon = TCon {pos, name}
+                            let ncon = TCon {pos, name, kind}
                             as <- mapSt (transTau false) as
                             checkTApp partial (ncon:as)
                     Just (alias@SymA {typ})
@@ -1466,7 +1463,7 @@ transTApp partial (con:as) = do
                     Nothing -> do
                         error pos (msgdoc("Can't find `" ++ tn.nice g ++ "`"))
                         unit
-          where unit = stio (TCon {pos, name=TName pPreludeBase "()"})
+          where unit = stio (TCon {pos, name=TName pPreludeBase "()", kind=KType})
         other -> do
             con <- transTau false con
             as  <- mapSt (transTau false) as
