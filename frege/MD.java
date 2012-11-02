@@ -100,6 +100,8 @@ public class MD {
         SymV[]      symvs()     default {};
         /** <p>Table of expressions.</p> */
         Expr[]      exprs()     default {};
+        /** <p>Table of kinds.</p> */
+        Kind[]      kinds()     default {};
     }
     
     /**
@@ -153,11 +155,23 @@ public class MD {
     public @interface Tau {
         int     kind()      default 3;      // TApp=0, TFun=1, TCon=2, TVar=3
         QName[] tcon()      default {};     // TCon
-        int     suba()      default 0;      // TApp a b or TFun a b
+        int     suba()      default 0;      // TApp a b or TFun a b, kind for TCon and TVar
         int     subb()      default 0;
         String  tvar()      default "";     // TVar
     }
-
+    
+    /**
+     * <p>The equivalent for a Kind.</p
+     * <p>References to other Kinds appear as indexes into the Tau table. </p>
+     * @author ingo
+     *
+     */
+    @Retention(RetentionPolicy.RUNTIME)
+    public @interface Kind {
+    	int		kind()		default 2;		// KType, KRef, KVar, KApp
+    	int		suba()		default 0;		// 1st arg of KApp
+    	int		subb()		default 0;		// 2nd arg of KApp
+    }
     /*
      * the equivalent to a Sigma
      */
