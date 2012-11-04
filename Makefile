@@ -204,7 +204,7 @@ $(DIR)/Prelude.class: $(COMPF2)/Main.class $(PRELUDE)
 	rm -rf $(DIR)
 	cd build && mkdir frege
 	mv build/bfrege/rt build/frege/rt
-	$(JAVAC) -d build -cp build frege/compiler/JavaUtils.java
+	$(JAVAC) -d build -cp build frege/MD.java frege/RT.java frege/compiler/JavaUtils.java
 	$(FREGEC2)  $(PRELUDE)
 	$(FREGEC2)  -make  frege.Prelude
 
@@ -416,7 +416,7 @@ runtime: $(RUNTIME)  doc/index.html
 
 
 
-build/frege/MD.class: frege/MD.java
+$(DIR)/MD.class: frege/MD.java
 	$(JAVAC) -d build frege/MD.java
 $(COMPF)/JavaUtils.class: build/frege/MD.class frege/compiler/JavaUtils.java
 	$(JAVAC) -d build -cp build frege/compiler/JavaUtils.java

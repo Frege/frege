@@ -209,12 +209,13 @@ public class MD {
 
     @Retention(RetentionPolicy.RUNTIME)
     public @interface SymA {
-        int     offset()       default 0;
-        QName   name();
-        int[]   vars()    default {};               // tau indexes
-        int     typ();                              // sigma index
-        String  doc()     default "";
-        boolean  publik()     default true;       // will it be imported by default
+        int      offset()       default 0;
+        QName    name();
+        int[]    vars()         default {};           // tau indexes
+        int      typ();                               // sigma index
+        String   doc()          default "";
+        boolean  publik()       default true;         // will it be imported by default?
+        int		 kind()		    default 0;			  // kind index
     }
 
     /*
@@ -284,8 +285,7 @@ public class MD {
     public @interface SymC {
     	int     offset()       default 0;
         QName    name();
-        int      tau();                       // tau index
-        int      vkind()        default 0;    // how many type arguments are applied to class variable 
+        int      tau();                       // tau index 
         QName[]  sups()         default {};   // super classes
         QName[]  ins1()         default {};   // instantiated types
         QName[]  ins2()         default {};   // instances for instantiated types
@@ -293,6 +293,7 @@ public class MD {
         SymV[]   funs();                      // functions in environment
         String   doc()          default "";
         boolean  publik()       default true;   // will it be imported by default
+        int		 vkind()        default 0;		// TO BE REMOVED AS SOON AS GenMeta no longer generates it
     }
 
     /*
@@ -324,13 +325,13 @@ public class MD {
         SymL[]   lnks();                      // aliases in environment
         SymV[]   funs();                      // functions in environment
         String   nativ()        default "";   // java type
-        // int[]    ntargs()       default {};   // type arguments for the native type (tau indexes)
         String   doc()          default "";
         boolean  prod()         default false;  // whether this is a product type
         boolean  isEnum()       default false;  // whether this is a enum type
         boolean  pur()          default false;  // whether this is a pure (immutable) native type
         boolean  newt()         default false;  // whether this is a new type (1-tuple)
         boolean  publik()       default true;   // will it be imported by default
+        int      kind()			default 0;		// index of kind
     }
     
     @Retention(RetentionPolicy.RUNTIME)
