@@ -178,6 +178,7 @@ public class MD {
     @Retention(RetentionPolicy.RUNTIME)
     public @interface Sigma {
         String[]    bound()     default {};
+        int[]       kinds()     default {};
         int         rho();
     }
 

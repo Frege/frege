@@ -533,10 +533,12 @@ instance Nice (Nice q, QNameMatcher q) => PatternT q where
             showp _  p = Prelude.error ("can't show pattern with constructor" ++ show (constructor p))
 
 instance Nice (Nice t, QNameMatcher t) => SigmaT t where
-    nice (ForAll bndrs rho) g | null bndrs = rho.nice g
-                              | otherwise  = "forall " ++ joined " " bndrs ++ "." ++ rho.nice g
-    nicer (ForAll bndrs rho) g | null bndrs = rho.nicer g
-                              | otherwise  = "forall " ++ joined " " bndrs ++ "." ++ rho.nicer g
+    nice (ForAll bndrs rho) g 
+        | null bndrs = rho.nice g
+        | otherwise  = "forall " ++ (joined " " . map fst) bndrs ++ "." ++ rho.nice g
+    nicer (ForAll bndrs rho) g 
+        | null bndrs = rho.nicer g
+        | otherwise  = "forall " ++ (joined " " . map fst) bndrs ++ "." ++ rho.nicer g
 
 instance Nice (Nice t, QNameMatcher t) => RhoT t where
     nice (RhoFun ctx sigma rho) g
@@ -652,8 +654,9 @@ unAlias g tau = if isOn g.options.flags SPECIAL then fake tau else unAlias (fake
                         _              -> Nothing
                     where
                         rho = typ.rho
+                        vs  = map fst typ.bound
                         aApp :: Tau
-                        aApp = fold TApp (TCon pos name KVar) (map (TVar pos KVar) typ.bound)
+                        aApp = fold TApp (TCon pos name KVar) (map (TVar pos KVar) vs)
 
                 aliased _ _ = Nothing
 
@@ -1108,12 +1111,17 @@ tsort odeps = result where
 isTName (TName _ _) = true
 isTName _           = false
 
---- return a list of strings that are unbound 'TVar's
---- the first argument is the list of 'TVar's bound outside this rho
-freeTVars bound rho = keys (freeRhoTVars bound Nil rho)
+--- return a list of 'TVar's that are unbound in the type
+--- the first argument is the list of 'TVar' names bound outside this rho
+freeTVars :: [String] -> RhoT a -> [TauT a]
+freeTVars bound rho = values (freeRhoTVars bound Nil rho)
+
+--- like freeTVars, but returns only 'TVar'  names
+freeTVnames :: [String] -> RhoT a -> [String]
+freeTVnames bound rho = keys (freeRhoTVars bound Nil rho)
 
 freeRhoTVars bound collected (RhoFun ctx (ForAll bndleft rho1) rho2) =
-    freeRhoTVars (bndleft ++ bound) (freeRhoTVars bound ctxcoll rho2) rho1
+    freeRhoTVars (map fst bndleft ++ bound) (freeRhoTVars bound ctxcoll rho2) rho1
         where ctxcoll = freeCtxTVars bound collected ctx
 freeRhoTVars bound collected (RhoTau ctx tau) = freeTauTVars bound ctxcoll tau
         where ctxcoll = freeCtxTVars bound collected ctx
@@ -1126,20 +1134,20 @@ freeCtxTVars bnd coll cs = fold ctxTVars coll cs
 
 
 
-freeTauTVars bound collected (TVar{var=s})
-    | s `elem` bound = collected
-    | otherwise = collected `including` s
+freeTauTVars bound collected (tv@TVar{var})
+    | var `elem` bound = collected
+    | otherwise = insert collected var tv
 freeTauTVars bound collected (TApp a b)
                 = freeTauTVars bound (freeTauTVars bound collected a) b
 -- freeTauTVars bound collected (TFun a b)
 --                 = freeTauTVars bound (freeTauTVars bound collected a) b
 freeTauTVars _ collected _ = collected
 
--- substSigma :: Tree String (TauT t) ->  SigmaT t -> StG (SigmaT t)
+substSigma :: Tree String (TauT t) ->  SigmaT t -> StG (SigmaT t)
 substSigma t (ForAll bndrs rho) = do
         rho <- substRho t' rho
         stio (ForAll bndrs rho)
-    where t' = fold Tree.delete t bndrs
+    where t' = fold Tree.delete t (map fst bndrs)
 substRho t (RhoFun ctx sig rho) = do
         ctx <- mapSt (substCtx t) ctx
         sig <- substSigma t sig
@@ -1300,18 +1308,19 @@ rhoTau tau        = RhoTau [] tau
  * 2) if there are variables in forall, make sure there are no free variables in the type
  * 3) make sure the variables in forall actually do appear in the type
  -}
+validSigma :: SigmaT a -> StG (SigmaT a)
 validSigma (ForAll [] rho) = do
     let vs = freeTVars [] rho
-    rho <- validRho vs rho
-    stio (ForAll vs rho)
+    rho <- validRho (map Tau.var vs) rho
+    stio (ForAll  (map Tau.varkind vs)  rho)
 validSigma sig = validSigma1 [] sig
 validSigma1 outer (ForAll bound rho) = do
     g <- getST
     -- logmsg TRACE5 (rhoPos rho) ("outer: " ++ display outer)
     -- logmsg TRACE5 (rhoPos rho) ((ForAll bound rho).nice g)
-    let vs = freeTVars (bound++outer) rho
-        fs = freeTVars outer rho
-        ov = [ v | v <- bound, v `notElem` fs ]
+    let vs = freeTVnames (map fst bound++outer) rho
+        fs = freeTVnames outer rho
+        ov = [ v | (v,_) <- bound, v `notElem` fs ]
     -- logmsg TRACE5 (rhoPos rho) ("vs: " ++ display vs)
     -- logmsg TRACE5 (rhoPos rho) ("fs: " ++ display fs)
     -- logmsg TRACE5 (rhoPos rho) ("ov: " ++ display ov)
@@ -1320,7 +1329,7 @@ validSigma1 outer (ForAll bound rho) = do
     unless (null ov)
         (error (rhoPos rho) (fill (break ("bound type variable(s) " ++ joined ", " ov
             ++ " not appearing in type"))))
-    rho <- validRho (vs ++ bound ++ outer) rho
+    rho <- validRho (vs ++ map fst bound ++ outer) rho
     stio (ForAll bound rho)
 
 {--
@@ -1395,6 +1404,7 @@ transCtx (Ctx pos name tau check) = do
 {--
  * check a rho and translate it to 'QName' form
  -}
+transRho :: Bool -> RhoS -> StG Rho
 transRho partial (RhoFun ctx (ForAll bnd rho1) rho2) = do
         rho1 <- transRho false rho1
         rho2 <- transRho false rho2
@@ -1441,7 +1451,7 @@ transTApp partial (con:as) = do
                         | ForAll bs (RhoTau _ tau) <- typ,
                           length as >= length bs = do
                                 as <- mapSt (transTau true) as  -- partial args allowed in alias
-                                let env = Tree.fromList (zip bs as)
+                                let env = Tree.fromList (zip (map fst bs) as)
                                     ras = drop (length bs) as
                                 nt <- substTau env tau
                                 case nt of
@@ -2266,7 +2276,7 @@ unifyTau g t _ _ = t
  * the bounded variables of @sigma1@ in @sigma2@
  * which must be a valid substitution of the former (up to contexts).
  -}
-sigmaInst g sigma1 sigma2 = [ s | Just s <-  map (Tree.lookupS tree) (Sigma.bound sigma1) ]
+sigmaInst g sigma1 sigma2 = [ s | Just s <-  map (Tree.lookupS tree) (Sigma.vars sigma1) ]
     where tree =  unifySigma g sigma1 sigma2
 
 

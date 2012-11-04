@@ -754,7 +754,7 @@ sigma:
     ;
 
 forall:
-    FORALL boundvars mbdot rho      { \_\bs\_\r      -> ForAll bs r }
+    FORALL boundvars mbdot rho      { \_\bs\_\r      -> ForAll  [ (b,KVar) | b <- bs ]  r }
     ;
 
 mbdot:
