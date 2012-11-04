@@ -200,9 +200,10 @@ $(COMPF)/GUtil.class: $(COMPF)/Scanner.class frege/compiler/GUtil.fr
 $(COMPF)/Main.class: $(DIR)/Prelude.class frege/compiler/Main.fr frege/Version.fr
 	$(FREGEC2)  -make frege.compiler.Main
 $(DIR)/Prelude.class: $(COMPF2)/Main.class $(PRELUDE)
-	rm -rf $(COMPF)
-	rm -rf $(DIR)/prelude
-	rm -f $(DIR)/Prelude.class $(DIR)/IO.class $(DIR)/List.class  $(DATA)/Tuples.class
+	mv build/frege/rt build/bfrege/rt
+	rm -rf $(DIR)
+	cd build && mkdir frege
+	mv build/bfrege/rt build/frege/rt
 	$(JAVAC) -d build -cp build frege/compiler/JavaUtils.java
 	$(FREGEC2)  $(PRELUDE)
 	$(FREGEC2)  -make  frege.Prelude
