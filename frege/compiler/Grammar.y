@@ -80,6 +80,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
  Note that types like "Maybe x" on the RHS must be given like so: (Maybe x)
  */
 //%type package         ParseResult
+//%type script          ParseResult
 //%type varop           Token
 //%type thenx           Token
 //%type elsex           Token
@@ -208,6 +209,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%explain packageclause a package clause
 //%explain packagename  a package name
 //%explain packagename1 a package name
+//%explain script      a frege script
 //%explain semicoli     the next definition
 //%explain varop        a variable or an operator
 //%explain operator     an operator
@@ -331,6 +333,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 %token ROP1 ROP2 ROP3 ROP4 ROP5 ROP6 ROP7 ROP8 ROP9 ROP10 ROP11 ROP12 ROP13 ROP14 ROP15 ROP16
 %token NOP1 NOP2 NOP3 NOP4 NOP5 NOP6 NOP7 NOP8 NOP9 NOP10 NOP11 NOP12 NOP13 NOP14 NOP15 NOP16
 %token NOP0 LOP0 ROP0       /*** pseudo tokens never seen by parser */
+%token INTERPRET
 
 %start package
 
@@ -393,11 +396,17 @@ package:
     packageclause ';' definitions               { \(a,d,p)\w\b     -> do {
                                                         changeST Global.{sub <- SubSt.{
                                                             thisPos = p}};
-                                                        YYM.return (a,b,d) }}
+                                                        YYM.return $ Program.Module (a,b,d) }}
     | packageclause WHERE '{' definitions '}'   { \(a,d,p)\w\_\b\_ -> do {
                                                         changeST Global.{sub <- SubSt.{
                                                             thisPos = p}};
-                                                        YYM.return (a,b,d) }}
+                                                        YYM.return $ Program.Module (a,b,d) }} 
+    | INTERPRET script {\_\d -> d}
+    ;
+
+script:
+    expr {\e -> do {
+                                YYM.return $ Program.Expression e}}
     ;
 
 nativename:
