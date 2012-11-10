@@ -41,14 +41,14 @@
 
 package frege.compiler.Classes where
 
-import frege.List (keys, values, Tree, insert, deletek)
+import frege.List (keys, values, Tree, insert, deletek, lookup)
 import Data.List as DL(uniq, sort, sortBy)
 
 import frege.compiler.Data
 import frege.compiler.Nice (msgdoc, text)
 import frege.compiler.Utilities     as U()
 import frege.compiler.TCUtil        as T()
--- import frege.compiler.Typecheck     as TC(checkRho)
+import frege.compiler.Kinds         as K()
 
 --- post condition is true
 post = stio true
@@ -116,59 +116,38 @@ passC = do
             g <- getST
             case QName.find qcls g of
                 Just (symc@SymC {pos}) -> do
-                        -- let kinds = map (sigmaKind symc.tau)   [ sym |
-                        --         (sym@SymV {typ,anno,nativ}) <- values symc.env,
-                        --         anno || isJust nativ,
-                        --         not (U.isPSigma typ),
-                        --       ]
-                        -- symc <- tvKinds symc kinds    -- check and apply kinds
+                        kind <- foldM (sigmaKind symc.tau.var) symc.tau.kind   [ sym |
+                                 (sym@SymV {typ,anno,nativ}) <- values symc.env,
+                                 anno || isJust nativ,
+                                 not (U.isPSigma typ),
+                               ]
+                        let newkind =  if kind == KVar then KType else kind                              
+                        U.changeSym symc.{tau <- Tau.{kind = newkind}}    -- update class var
+                        symc <- U.findC symc.name
                         foreach symc.supers (supercheck symc)
                         foreach (values symc.env) (methodcheck symc)
                 nothing -> U.fatal Position.null (text ("lost class " ++ QName.nice qcls g))
-        -- tvKinds (symc@SymC {tau}) kinds
-        --     | null kinds = do
-        --         g <- getST
-        --         let supvs = [ vkind | s <- superclasses symc g, Just (sym@SymC{vkind}) <- [QName.find s g]]
-        --         result (if null supvs
-        --                     then 0              -- class without methods and superclasses
-        --                     else head supvs)    -- class without new methods
-        --     | otherwise = do
-        --         let badkinds = [ k | k <- kinds, fst k != fst (head kinds) ]
-        --         if null badkinds || true           -- don't flag kind errors
-        --           then result (fst (head kinds))
-        --           else do
-        --             U.error symc.pos (msgdoc ("Class variable " ++ symc.tau.var
-        --                 ++ " is used with different kinds."))
-        --             g <- getST
-        --             foreach (head kinds:badkinds) (kinderror g)
-        --             U.hint symc.pos (msgdoc ("A class variable can represent a type (kind 0) or a "
-        --                 ++ "type constructor or type application that needs N type arguments "
-        --                 ++ "to give a type (kind N). The kind can not be different across class methods."))
-        --             result (fst (head kinds))
-        --     where
-        --         kinderror g (k, sym) = U.error (Symbol.pos sym) (msgdoc ("Kind of class variable " ++ symc.tau.var
-        --             ++ " is " ++ show k ++ " in " ++ sym.name.nice g))
-        --         result n = do
-        --             let nsymc = symc.{vkind=n}
-        --             U.changeSym nsymc
-        --             stio nsymc
-        -- tvKinds _ _ = error "tvkind: bad args, must be class method"
-        -- sigmaKind (TVar {var}) (sym@SymV {typ=ForAll _ rho}) = (rhoKind var rho, sym)
-        --     where
-        --         rhoKind var (RhoFun ctxs s r) = max ck (max sk rk)
-        --             where
-        --                 ck = ctxsKind var ctxs
-        --                 sk = rhoKind var s.rho
-        --                 rk = rhoKind var r
-        --         rhoKind var (RhoTau ctxs tau) = max (ctxsKind var ctxs) (tauKind var tau)
-        --         ctxsKind var ctxs = fold max 0 (map (tauKind var • Context.tau) ctxs)
-        --         -- tauKind v (TFun a b) = max (tauKind v a) (tauKind v b)
-        --         tauKind v (tau@TApp a b)
-        --             | TVar {var}:ts <- tau.flat, var == v = length ts
-        --             | otherwise = max (tauKind v a) (tauKind v b)
-        --         tauKind v _ = 0
-        -- sigmaKind _            sym              = (0, sym)
-
+        sigmaKind var kind (sym@SymV {}) = do
+            (sig, _) <- K.kiSigma [] [] sym.typ
+            U.changeSym sym.{typ = sig} 
+            let t  = Tree.fromList sig.bound
+                ok = lookup t var
+            case ok of
+                Just k -> case K.unifyKind k kind of
+                    Just u -> return u
+                    Nothing -> do
+                        g <- getST
+                        U.error sym.pos (text ("kind error: kind of `" ++ var
+                            ++ "` :: " ++ show k 
+                            ++ "  in type signature of " ++ sym.nicer g
+                            ++ "  does not match kind of class variable `" ++ var
+                            ++ "` :: " ++ show kind
+                            ++ "  as inferred from other class methods"))
+                        return kind
+                Nothing -> return kind -- no class var? will be flagged later
+        sigmaKind _ _ _ = error "sigmaKind: no SymV"  
+                       
+            
         methodcheck symc (msym@SymV {pos}) = do
             g <- getST
             let jprevs = [ (MName sup msym.name.base).findit g | sup <- Symbol.supers symc ]
@@ -322,7 +301,13 @@ instsForClass c = do
 instForClass alien c iname = do
         g <- getST
         csym <- U.findC c
-        isym <- U.findI iname
+        
+        when (not alien) do             -- check if class kind matches 
+            isym <- U.findI iname
+            (sig, ki) <- K.kiSigmaX isym.typ csym.tau.kind
+            U.changeSym isym.{typ=sig}
+        
+        isym <- U.findI iname    
         case U.instTSym (Symbol.typ isym) g of
             Just (tsym@SymT {pos}) -> do
                 U.logmsg TRACE6 (Symbol.pos isym) (text (isym.nice g ++ "   " ++ tsym.nice g))

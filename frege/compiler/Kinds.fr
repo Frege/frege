@@ -42,6 +42,7 @@ module frege.compiler.Kinds where
 import frege.compiler.Data
 import frege.compiler.Nice      except (group, break)
 import frege.compiler.Utilities as U()
+
 import frege.List (OrdSet, Tree, keys, values, each, emptySet, including, 
     lookup, insert, update, delete)
 
@@ -82,11 +83,37 @@ kiConSym names con = do
     (sigma,_) <- kiSigma names [] con.typ
     U.changeSym con.{typ=sigma}
 
+-- kind inference on a 'Sigma' type where something else than 'KType' is expected
+kiSigmaX :: Sigma -> Kind -> StG (Sigma, Kind)
+kiSigmaX sigma kind = do
+    g <- getST
+    U.logmsg TRACEX (getpos sigma) (text ("kind check " ++ nice sigma g ++ " for " ++ show kind))
+    let e = Tree.fromList sigma.bound
+    (rho, envs, kind) <- kiRhoX sigma.rho [e] kind 
+    return (sigma.{bound = (head envs).each, rho = substRhoKind (head envs) rho}, kind)
 
-
+kiRhoX :: Rho -> Envs -> Kind -> StG (Rho, Envs, Kind)
+kiRhoX (it@RhoTau{}) env kind = do
+    env <- foldM (kiCtx []) env it.context
+    (kind, env) <- unifyTauKind [] env it.tau kind
+    return (it, env, kind)
+kiRhoX it env kind = do            -- it is a RhoFun, and this a type
+    (rho, env) <- kiRho [] env it
+    case unifyKind KType kind of
+        Just k -> return (rho, env, KType)
+        Nothing -> do
+            g <- getST
+            U.error (getpos it) (text ("kind error: type "
+                ++ nicer it g
+                ++ "  used where kind " ++ show kind
+                ++ "  is expected."))
+            return (rho, env, kind)
+    
 --- kind inference on a 'Sigma' type
 kiSigma :: [QName] -> Envs -> Sigma -> StG (Sigma, Envs)
 kiSigma names env sigma = do
+    g <- getST
+    U.logmsg TRACEX (getpos sigma) (text ("kind check " ++ nice sigma g))
     let e = Tree.fromList sigma.bound
     -- the sub rho is checked with an extended env, i.e. one that is 1 longer than the
     -- one passed in.
@@ -96,7 +123,7 @@ kiSigma names env sigma = do
     -- this is indeed so. Hence we can use head and tail safely on envs,
     -- as it is 1 longer than env (which may be the empty list). 
     (rho, envs) <- kiRho names (e:env) sigma.rho
-    return (sigma.{bound = (head envs).each, rho = substRhoKind e rho}, tail envs)
+    return (sigma.{bound = (head envs).each, rho = substRhoKind (head envs) rho}, tail envs)
     
 substRhoKind env (it@RhoTau{}) = it.{
     context <- map (substCtxKind env),
@@ -120,7 +147,7 @@ substTauKind env tau         = tau
 --- kind inference on a 'Rho' type
 kiRho :: [QName] -> Envs -> Rho -> StG (Rho, Envs)
 kiRho names env (it@RhoTau{context,tau}) = do
-    -- foldM (kiCtx names) env context
+    env <- foldM (kiCtx names) env context
     (_, env) <- unifyTauKind names env tau KType
     return (it, env)
 kiRho names env (it@RhoFun{sigma,rho}) = do
@@ -128,10 +155,14 @@ kiRho names env (it@RhoFun{sigma,rho}) = do
     (rho, env) <- kiRho   names env rho  
     return (it.{sigma=sig, rho}, env)    
 
---- kind inference on a 'Ctx'
--- kiCtx names env Ctx{tau} = do
---     (_, env) <- unifyTauKind 
---     return env    
+--- kind inference on a 'Ctx', takes into account kind checked classes only
+kiCtx names env Ctx{cname, tau} = do
+    cls <- U.findC cname
+    case cls.tau.kind of
+        KVar -> return env          -- not yet kind checked
+        k    -> do
+            (_, env) <- unifyTauKind names env tau k
+            return env    
 
 type Envs = [Tree String Kind]
 
