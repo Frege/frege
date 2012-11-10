@@ -797,7 +797,7 @@ rhotau:
 
 tau:
     tapp
-    | tapp ARROW tau    { \a\f\b ->  TApp (TApp (TCon (yyline f) (With1 baseToken f.{tokid=CONID, value="->"}) Kind.fun) a) b }
+    | tapp ARROW tau    { \a\f\b ->  TApp (TApp (TCon (yyline f) (With1 baseToken f.{tokid=CONID, value="->"})) a) b }
     ;
 
 tauSC:
@@ -811,7 +811,7 @@ tapp:
 
 simpletype:
     tyvar
-    | tyname            { \(tn::SName) -> TCon (yyline tn.id) tn KVar}
+    | tyname            { \(tn::SName) -> TCon (yyline tn.id) tn}
     | '(' tau ')'      { \_\t\_ -> t }
     | '(' tau ',' tauSC ')'
                         {\_\t\(c::Token)\ts\_ ->
@@ -819,10 +819,10 @@ simpletype:
                                 tus = t:ts;
                                 i = length tus;
                                 tname = With1 baseToken c.{tokid=CONID, value=tuple i}
-                            in  (TCon (yyline c) tname (Kind.kind i)).mkapp tus
+                            in  (TCon (yyline c) tname).mkapp tus
                         }
     | '[' tau ']'      {\a\t\_ -> TApp (TCon (yyline a)
-                                             (With1 baseToken a.{tokid=CONID, value="[]"}) Kind.unary)
+                                             (With1 baseToken a.{tokid=CONID, value="[]"}))
                                         t }
     ;
 

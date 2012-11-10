@@ -293,7 +293,6 @@ public class MD {
         SymV[]   funs();                      // functions in environment
         String   doc()          default "";
         boolean  publik()       default true;   // will it be imported by default
-        int		 vkind()        default 0;		// TO BE REMOVED AS SOON AS GenMeta no longer generates it
     }
 
     /*
