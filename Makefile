@@ -228,7 +228,7 @@ SOURCES  =      $(COMPS)/Scanner.fr   $(COMPS)/Classtools.fr \
 		$(COMPS)/Main.fr      $(COMPS)/Grammar.y \
 		$(COMPS)/Fixdefs.fr   $(COMPS)/Import.fr    $(COMPS)/Enter.fr \
 		$(COMPS)/TAlias.fr    \
-		$(COMPS)/Javatypes.fr \
+		$(COMPS)/Javatypes.fr $(COMPS)/Kinds.fr \
 		$(COMPS)/Transdef.fr  $(COMPS)/Classes.fr \
 		$(COMPS)/Transform.fr $(COMPS)/Typecheck.fr \
 		$(COMPS)/TCUtil.fr \
@@ -241,7 +241,7 @@ CLASSES  =       $(COMPF1)/Scanner.class   $(COMPF1)/Classtools.class \
 		$(COMPF1)/Data.class      $(COMPF1)/Utilities.class \
 		$(COMPF1)/GUtil.class	$(COMPF1)/Grammar.class \
 		$(COMPF1)/Fixdefs.class   $(COMPF1)/Import.class    $(COMPF1)/Enter.class \
-		$(COMPF1)/Javatypes.class $(COMPF1)/Transdef.class \
+		$(COMPF1)/Javatypes.class $(COMPF)/Kinds.class $(COMPF1)/Transdef.class \
 		$(COMPF1)/TCUtil.class   \
 		$(COMPF1)/TAlias.class    $(COMPF1)/Classes.class \
 		$(COMPF1)/Typecheck.class $(COMPF1)/Transform.class \
@@ -283,6 +283,8 @@ $(COMPF1)/Fixdefs.class: $(COMPS)/Fixdefs.fr
 $(COMPF1)/Import.class: $(DATA1)/Tuples.class $(COMPS)/Import.fr
 	$(FREGEC0) $(COMPS)/Import.fr
 $(COMPF1)/Enter.class: $(COMPS)/Enter.fr
+	$(FREGEC0) $?
+$(COMPF1)/Kinds.class: $(COMPS)/Kinds.fr
 	$(FREGEC0) $?
 $(COMPF1)/Transdef.class: $(COMPS)/Transdef.fr
 	$(FREGEC0) $?
