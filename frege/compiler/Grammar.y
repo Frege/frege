@@ -201,6 +201,8 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type guard           Guard
 //%type guards          [Guard]
 //%type qualifiers      (Token -> SName)
+//%type kind            Kind
+//%type simplekind      Kind
 //%explain mbdot        '.' or '•'
 //%explain thenx        then branch
 //%explain elsex        else branch
@@ -321,6 +323,8 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%explain fields       field list
 //%explain getfield     field
 //%explain getfields    field list
+//%explain kind         a type kind
+//%explain simplekind   a type kind
 %}
 
 %token VARID CONID QVARID QCONID QUALIFIER DOCUMENTATION
@@ -829,7 +833,8 @@ simpletype:
 
 
 tyvar:
-    VARID                   { \n -> TVar (yyline n) KVar (Token.value n)  }
+    VARID                        { \n         -> TVar (yyline n) KVar (Token.value n)  }
+    | '('  VARID DCOLON kind ')' { \_\n\_\k\_ -> TVar (yyline n) k    (Token.value n)  }
 ;
 
 
@@ -841,6 +846,15 @@ tyname:
     | '(' ARROW ')'         { \_\(a::Token)\_ -> With1 baseToken a.{tokid=CONID, value="->"} }
     ;
 
+kind:
+    simplekind ARROW kind     { \a\_\c -> KApp a c }
+    | simplekind
+    ;
+    
+simplekind:
+    LOP3                    { const KType }
+    | word                  { \w -> if w `elem` ["ref", "reference", "generic"] then KRef else KVar }
+    ;
 
 classdef:
     CLASS CONID tyvar wheredef       {
