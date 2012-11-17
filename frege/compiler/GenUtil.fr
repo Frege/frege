@@ -37,13 +37,6 @@
 {--
     Utility functions, classes and data structures for code generation
  -}
-{-
- * $Author$
- * $Revision$
- * $Date$
- * $Id$
- *
- -}
 
 package frege.compiler.GenUtil where
 
@@ -52,10 +45,6 @@ import frege.compiler.Data
 import frege.compiler.Utilities as U(print, println)
 import frege.compiler.Nice as PP public
 
---- This is $Revision$
-protected version = v "$Revision$" where
-    v (m ~ #(\d+)#) | Just g <- m.group 1 = g.atoi
-    v _ = 0
 
 --- line width for code generation
 line = 96
@@ -89,7 +78,7 @@ instance Anno JName where
  -}
 data JType =
       !Ref   { jname :: JName,  targs :: [JType] }  --- generic java type @x.y.Class<A,B>@
-    -- !TArg  { var   :: String }                    --- type argument @A@
+    | !TArg  { var   :: String }                    --- type argument @A@
     -- !TVbl  { var   :: String }                    --- lazy type variable @A extends Lazy<A>@
     | !Nativ { typ   :: String, targs :: [JType] }  --- native type
     | !Arr   { etype :: JType }                     --- array type
@@ -99,7 +88,7 @@ derive Eq JType
 
 instance Anno JType where
     anno (Ref  {jname,targs}) = text (show jname) <> annoGenerics targs
-    -- anno (TArg var          ) = text var
+    anno (TArg var          ) = text var
     -- anno (TVbl var          ) = text var <+> text "extends" <+> anno (lazy (TArg var))
     anno (Nativ {typ,targs} ) = text typ  <> annoGenerics targs
     anno (Arr  {etype}      ) = anno etype <> text "[]"
@@ -114,7 +103,7 @@ jtValue  = Ref {jname = JName "" "FV", targs = []}
 --- the @Lazy<FV>@ type
 lazyVal = lazy jtValue
 
---- the @MH@ type, which is a boxed @MethodHandle@
+--- the most general type for anonymous fuctions
 jtFun    = Ref {jname = JName "" "Lambda", targs = []}
 
 --- the @Box.Int@ type
@@ -145,7 +134,7 @@ boxed x = x
 lazy (t@Lazy{}) = t
 lazy x = jtLazy (boxed x)
 
---- create the strict form of a java type
+--- create the strict form of a boxed java type
 strict x = case boxed x of
     Ref {jname = JName "" "Box", targs = [x]} -> x
     Ref {jname = JName "" "Box.Bool"}     -> Nativ "boolean"  []
@@ -225,8 +214,12 @@ instance Anno JExpr where
                             <+> jt.anno
                             <>  text "[" <> anno ex <> text "]"
     anno (JInvoke (JStMem (JName "" b) []) exs) = text b <> PP.nest 4 (annoArgList exs)
-    anno (JInvoke (JStMem (JName a b) gs) exs) = text a <~/> PP.nest 4 (
-                                    text "." <> annoGenerics gs <> text b <> annoArgList exs)
+    anno (JInvoke (JStMem jn gs) exs) = text a <~/> PP.nest 4 (
+                            text "." <> annoGenerics gs <> text b <> annoArgList exs)
+                        where
+                            jns = ´\.´.splitted (show jn)
+                            a = (joined "." • init) jns
+                            b = last jns
     anno (e@JInvoke (JExMem jex s) exs) = e.subex jex <~/> PP.nest 4 (
                                     text "." <> text s <> annoArgList exs)
     -- anno (e@JInvoke (JExMemG jex s gs) exs) = e.subex jex <~/> PP.nest 4 (
@@ -435,3 +428,54 @@ instance Anno JDecl where
                                         (maybe PP.nil (JExpr.anno • postOpt) m.init)
                                     ";"
 
+{--
+    Replace all generic type variables with "?" in the expr
+    
+    This is used for generation of the lazy codes in 
+    the @eval()@ method of the @LambdaNx@ classes, where we cannot
+    introduce the type variables. 
+-}
+replTVar (TArg _)               = TArg "?"
+replTVar (Ref name args)        = Ref name (map replTVar args)
+replTVar Nativ { typ, targs }   = Nativ   {typ, targs = map replTVar targs}
+replTVar Arr   { etype  }       = Arr     {etype = replTVar etype}
+replTVar Lazy  { etype  }       = Lazy    {etype = replTVar etype}
+
+{--
+    Replace all generic type variables with "?" in the expr
+    
+    This is used for generation of the lazy codes in 
+    the @eval()@ method of the @LambdaNx@ classes, where we cannot
+    introduce the type variables. 
+-}
+replTVarExpr (JNew typ exprs)          = JNew      (replTVar typ) (map replTVarExpr exprs)
+replTVarExpr (JNewArray typ expr)      = JNewArray (replTVar typ) (replTVarExpr expr)
+replTVarExpr (JCast typ expr)          = JCast     (replTVar typ) (replTVarExpr expr) 
+replTVarExpr (JInvoke expr exprs)      = JInvoke   (replTVarExpr expr) (map replTVarExpr exprs)
+replTVarExpr JStMem{jname, targs}      = JStMem{jname, targs = map replTVar targs}
+replTVarExpr JExMem{jex, name}         = JExMem{jex = replTVarExpr jex, name}
+-- replTVarExpr JExMemG{jex, name, targs} = JExMemG{jex = replTVarExpr jex, name,  targs = map replTVar targs}
+replTVarExpr JUnop{op, jex}            = JUnop{op, jex = replTVarExpr jex}
+replTVarExpr JBin {j1,op,j2}           = JBin{op, j1 = replTVarExpr j1, j2 = replTVarExpr j2}
+replTVarExpr JQC  {j1, j2, j3}         = JQC {j1 = replTVarExpr j1, j2 = replTVarExpr j2, j3 = replTVarExpr j3}
+replTVarExpr JNewClass{}          = error "Can't handle JNewClass in replTVarExpr"
+replTVarExpr expr                 = expr
+
+{--
+    Replace all generic type variables with "?" in the statement
+    
+    This is used for generation of the lazy codes in 
+    the @eval()@ method of the @LambdaNx@ classes, where we cannot
+    introduce the type variables. 
+-}
+replTVarStmt (JBlock stmts)        = JBlock    (map replTVarStmt stmts)
+replTVarStmt (JReturn  jex)        = JReturn   (replTVarExpr jex)
+replTVarStmt (JThrow   jex)        = JThrow    (replTVarExpr jex)
+replTVarStmt (JAssert  jex)        = JAssert   (replTVarExpr jex)
+replTVarStmt (JEx      jex)        = JEx       (replTVarExpr jex)
+replTVarStmt (JAssign  jex1 jex2)  = JAssign   (replTVarExpr jex1) (replTVarExpr jex1)
+replTVarStmt (JCond s  jex stmts)  = JCond s   (replTVarExpr jex) (map replTVarStmt stmts)
+replTVarStmt (JBlockX s    stmts)  = JBlockX s (map replTVarStmt stmts)
+replTVarStmt (JCase    jex  stmt)  = JCase     (replTVarExpr jex) (replTVarStmt stmt)
+replTVarStmt JLocal{}              = error "Can't replTVarStmt JLocal" 
+replTVarStmt stmt                  = stmt 
