@@ -52,7 +52,7 @@ package frege.rt;
  * <p> Boxed references. </p>
  * <p> This is not a pure type. </p>
  */
-public final class Ref<T> {
+public final class Ref<T extends Lazy<T>> {
     /**
      * <p>Mutable reference to a frege object.</p>
      *
