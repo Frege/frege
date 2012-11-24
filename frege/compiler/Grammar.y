@@ -853,7 +853,13 @@ kind:
     
 simplekind:
     LOP3                    { const KType }
-    | word                  { \w -> if w `elem` ["ref", "reference", "generic"] then KRef else KVar }
+    | VARID                 { \v -> do
+                                let w = Token.value v
+                                if w == "generic" then return KGen 
+                                else do
+                                    yyerror (yyline v) ("expected `generic` instead of `" ++ w ++ "`")
+                                    return KType
+                            }
     ;
 
 classdef:
