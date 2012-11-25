@@ -122,6 +122,7 @@ instance Nice Binding where
 --- tell how strict this java type can get
 maxStrict jt = case strict (boxed jt) of
     Nativ _ _  -> RNative
+    TArg  _    -> RNative
     _          -> RBoxed
 
 --- bring a java expression to boxed mode
@@ -346,9 +347,10 @@ memNames = xxxNames "mem"
 
 --- get the mode a java type is in
 jtRmode :: JType -> RMode
-jtRmode (Lazy _) = RLazy
+jtRmode (Lazy _)    = RLazy
 jtRmode (Nativ _ _) = RNative
-jtRmode _ = RBoxed
+jtRmode (TArg{})    = RNative
+jtRmode _           = RBoxed
 
 --- bring a java type to desired mode
 rmodeJt :: RMode -> JType -> JType
@@ -392,7 +394,11 @@ lazyMethod sym | sym.{flds?} || sym.{rkind?} = do
         let jname  = JX.static (workerMethod g sym)
             arity = if sym.{depth?} then sym.depth else length sym.flds
             isnative = sym.{nativ?} && isJust sym.nativ
-            (rty, sigmas) = U.returnTypeN arity sym.typ.rho
+        -- U.logmsg TRACEG sym.pos (text ("lazyMethod: " ++ nicer sym g ++ " :: " ++ nicer sym.typ g))
+        sym <- if isnative then objectifySigma sym.typ >>= return . sym.{typ=}
+                else return sym
+        -- U.logmsg TRACEG sym.pos (text ("lazyMethod: " ++ nicer sym g ++ " :: " ++ nicer sym.typ g))
+        let (rty, sigmas) = U.returnTypeN arity sym.typ.rho
             (rtau, _)     = U.returnType sym.typ.rho
         jrty    <- rhoJT rty
         argdefs <- argDef attrFinal Strictness.U sigmas (take arity argNames)
@@ -438,7 +444,35 @@ lazyMethod sym | sym.{flds?} || sym.{rkind?} = do
                             jtype, args = reverse args,
                             body = if isnative then rBody else body }
         stio result
+        
 lazyMethod sym = error "lazyMeth: no SymV"
+
+{-- 
+    Replace type variables with kind @KGen@
+    that are the type of some argument (and hence stand for unknown native values)
+    with the type for @java.lang.Object@, see 'PreludeBase.AnonymousObject'
+    -} 
+objectifySigma :: Sigma -> StG Sigma
+objectifySigma sig = do
+        -- g <- getST
+        -- U.logmsg TRACEG (getpos sig) (text ("objectifySigma: " ++ nicer sig g))
+        -- U.logmsg TRACEG (getpos sig) (text ("objectifySigma: vars = " ++ show (keys tree)))
+        nrho <- U.substRho tree sig.rho
+        let nsig = ForAll nbound nrho
+            nbound = filter (isNothing . lookup tree . fst) sig.bound
+        -- U.logmsg TRACEG (getpos sig) (text ("objectifySigma: " ++ nicer nsig g))
+        return nsig
+    where
+        tree = findAnonRho Nil [] sig.rho
+
+--- Find arguments whose type is a simple type variable of type KGen
+findAnonSigma acc except (ForAll bound rho) = findAnonRho acc (except ++ map fst bound) rho
+findAnonRho acc except RhoTau{tau=TVar{kind=KGen,var=n}} 
+    | n `elem` except = acc
+    | otherwise       = insert acc n  (TY.tc "AnonymousObject")
+findAnonRho acc except RhoFun{sigma, rho}
+    = findAnonRho (findAnonSigma acc except sigma) except rho 
+findAnonRho acc _ _ = acc
 
 --- tells how many lazy functions go into one Lambda class.
 --- *Important* This must be a power of 2!
