@@ -860,6 +860,7 @@ simplekind:
                                     yyerror (yyline v) ("expected `generic` instead of `" ++ w ++ "`")
                                     return KType
                             }
+    | '(' kind ')'          { \_\b\_ -> b }                            
     ;
 
 classdef:
