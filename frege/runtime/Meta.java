@@ -200,7 +200,7 @@ public class Meta {
 
     @Retention(RetentionPolicy.RUNTIME)
     public @interface SymV {
-    	int     offset()       default 0;
+    	int     offset()        default 0;
         QName   name();
         int     sig();                              // sigma index
         String  nativ()         default "";
@@ -209,16 +209,18 @@ public class Meta {
         boolean abst()          default false;      // whether abstract
         String  stri();                             // strictness encoded as string
         int     depth();                            // number of arguments, i.e. FuncN class used
-        int     rkind();                            // dstXwr - X00 no w-function, returns lazy
-                                                    //          X01 no w-function, returns value
-                                                    //          X10 worker function, returns lazy
-                                                    //          X11 worker function, returns value
+        int     rkind();                            // dstawr - -00 no w-function, may return lazy
+                                                    //          -01 no w-function, returns value
+                                                    //          -10 worker function, may return lazy
+                                                    //          -11 worker function, returns value
+        											//          1-1 return value is lazy in all  cases
+        											//          0-1 return value is lazy in some cases
                                                     //          
                                                     //         1--- tail recursive
                                                     //        1---- simple expression
                                                     //       1----- function can be called
                                                     //              without fear of stack overflow
-        int     expr()          default 0;          // index into expression table if >0
+        int      expr()         default 0;          // index into expression table if >0
         boolean  publik()       default true;       // will it be imported by default
     }
 
@@ -231,8 +233,8 @@ public class Meta {
     	int     offset()       default 0;
         QName   name();
         QName   alias();
-        String  doc()           default "";
-        boolean  publik()     default true;   // will it be imported by default
+        String  doc()          default "";
+        boolean  publik()      default true;   // will it be imported by default
     }
 
     /*
