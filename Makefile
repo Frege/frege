@@ -9,7 +9,7 @@
 
 JAVAC = javac -encoding UTF-8
 YACC = pbyacc
-JAVA = java7 "-Dfrege.javac=javac -J-Xmx512m"
+JAVA = java7 -XX:+TieredCompilation "-Dfrege.javac=javac -J-Xmx512m"
 JAVAP = $(JAVA)
 
 
