@@ -413,7 +413,9 @@ RUNTIME  = build/frege/MD.class    $(COMPF)/JavaUtils.class \
 
 
 
-runtime: $(RUNTIME)  doc/index.html
+runtime: $(RUNTIME)
+    $(JAVAC) -d build frege/runtime/*.java
+    javadoc -private -sourcepath . -d doc -encoding UTF-8 frege frege.rt frege.runtime
 	@echo Runtime is complete.
 
 
@@ -567,7 +569,7 @@ $(RTDIR)/FregeCompiler.class: frege/rt/FregeCompiler.java
 
 
 doc/index.html: $(RUNTIME)
-	javadoc -private -sourcepath . -d doc -encoding UTF-8 frege frege.rt
+	
 
 docu: build/frege/tools/Doc.class
 	$(FREGECC)  -make frege/StandardLibrary.fr
