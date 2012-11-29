@@ -415,7 +415,7 @@ RUNTIME  = build/frege/MD.class    $(COMPF)/JavaUtils.class \
 
 runtime: $(RUNTIME)
 	$(JAVAC) -d build frege/runtime/*.java
-    javadoc -private -sourcepath . -d doc -encoding UTF-8 frege frege.rt frege.runtime
+	javadoc -private -sourcepath . -d doc -encoding UTF-8 frege frege.rt frege.runtime
 	@echo Runtime is complete.
 
 
