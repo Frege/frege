@@ -44,9 +44,9 @@ package frege.rt;
  *
  * <p> This is not a pure type. </p>
  */
-public final class Array<T extends Lazy<T>>  implements Cloneable {
+public final class Array  implements Cloneable {
     final private FV[] j;
-    public final Array<FV> clone()                      { return new Array<FV>(j.clone()); }
+    public final Array clone()                          { return new Array(j.clone()); }
     public            Array(final FV[] arr)             { j = arr; }
     public            Array(final int size)             { j = new FV[size]; }
     final public int  length()                          { return j.length; }
