@@ -8,6 +8,7 @@ while (<>) {
     s/pbyacc/byaccj/;
     # s/\bMakefile\b/frege.mk/;
     s/\.;build/.:build/;
+    s/shadow;/shadow:/;
     print;
 }
     

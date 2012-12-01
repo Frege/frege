@@ -16,13 +16,6 @@ JAVAP = $(JAVA)
 
 DOC  = doc/frege
 DOCF = doc/frege/compiler
-DIR0 = build/cfrege
-PREL0  = $(DIR0)/prelude
-COMPF0  = $(DIR0)/compiler
-LIBF0   = $(DIR0)/lib
-DATA0   = $(DIR0)/data
-LIBJ0   = $(DIR0)/j
-TOOLSF0 = $(DIR0)/tools
 DIR1 = build/afrege
 PREL1  = $(DIR1)/prelude
 COMPF1  = $(DIR1)/compiler
@@ -52,18 +45,25 @@ FREGE    = $(JAVA) -Xss30m -Xmx900m -cp build
 FREGEP   = $(JAVAP) -Xss30m -Xmx900m -cp build
 FREGECJ  = $(FREGE)  -jar fregec.jar  -d build -fp build -nocp -hints
 FREGECC  = $(FREGE) frege.compiler.Main  -d build -hints -inline
-FREGEC0  = $(FREGECJ) -prefix a
+FREGEC0  = $(FREGECJ) -prefix a -sp shadow;.
 FREGEC1  = $(FREGE) afrege.compiler.Main -d build -hints -inline -prefix b
 FREGEC2  = $(FREGE) bfrege.compiler.Main -d build -hints -inline
 FREGEC3  = $(FREGECJ) -prefix c
 GENDOC   = $(FREGE)  frege.tools.Doc -d doc
 
 # Prelude files in the order they must be compiled
+SPRELUDE  =  shadow/frege/prelude/PreludeBase.fr shadow/frege/prelude/PreludeNative.fr \
+            shadow/frege/prelude/PreludeList.fr shadow/frege/prelude/PreludeMonad.fr \
+            shadow/frege/prelude/PreludeText.fr shadow/frege/prelude/Arrays.fr \
+            shadow/frege/prelude/Math.fr shadow/frege/prelude/Floating.fr
+# Prelude files in the order they must be compiled
 PRELUDE  =  frege/prelude/PreludeBase.fr frege/prelude/PreludeNative.fr \
             frege/prelude/PreludeList.fr frege/prelude/PreludeMonad.fr \
             frege/prelude/PreludeText.fr frege/prelude/Arrays.fr \
             frege/prelude/Math.fr frege/prelude/Floating.fr
 
+sprelude:
+	cp $(PRELUDE)       shadow/frege/prelude/
 
 {frege/prelude}.fr{$(PREL1)}.class::
 	$(FREGEC0) $<
@@ -96,12 +96,6 @@ all:  frege.mk runtime compiler library tools # fregec.jar
 
 sanitycheck:
 	$(JAVA) -version
-
-stage1: prel0 compiler0 $(TOOLSF0)/LexConvt.class $(TOOLSF0)/YYgen.class
-	cp frege/tools/yygenpar-fr frege/tools/YYgenparM-fr build/cfrege/tools
-	jar  -cf    fregec.jar -C build cfrege -C build frege
-	jar  -uvfe  fregec.jar cfrege.compiler.Main
-	@echo you can do now backwards incompatible changes
 
 
 frege.mk: Makefile mkmk.pl
@@ -336,44 +330,16 @@ $(COMPF1)/Scanner.class: $(PRE1) $(COMPF1)/Utilities.class frege/compiler/Scanne
 	$(FREGEC0)  -make frege.compiler.Scanner
 $(COMPF1)/Main.class : $(PRE1) $(LIBF1)/PP.class $(CLASSES) frege/Version.fr
 	$(FREGEC0)  -make frege.compiler.Main
-$(DIR1)/Prelude.class: $(PRELUDE) frege/Prelude.fr
+$(DIR1)/Prelude.class: $(SPRELUDE) frege/Prelude.fr
 	rm -rf $(COMPF1)
 	rm -rf $(DIR1)
-	$(FREGEC0) $(PRELUDE)
+	$(FREGEC0) $(SPRELUDE)
 	$(FREGEC0)  -make frege.Prelude
 $(DIR1)/PreludeProperties.class: $(LIBF1)/Random.class $(LIBF1)/QuickCheck.class
 	$(FREGEC0)  frege/PreludeProperties.fr
 $(DIR1)/check1: $(PRE1) $(LIBF1)/Random.class $(LIBF1)/QuickCheck.class $(DIR1)/PreludeProperties.class
 	$(JAVA) -Xss1m -cp build afrege.PreludeProperties && echo Prelude Properties checked >$(DIR1)/check1
 
-
-
-PRE0 = $(DIR0)/IO.class $(DIR0)/List.class
-
-
-compiler0: $(DIR0)/check1 $(COMPF0)/Main.class
-	@echo stage 0 compiler ready
-
-$(COMPF0)/Main.class : $(PRE0) frege/compiler/Grammar.fr  frege/Version.fr
-	$(FREGEC3)  -make frege.compiler.Main
-
-prel0:
-	rm -rf $(COMPF0)
-	rm -rf $(DIR0)
-	$(FREGEC3)  $(PRELUDE)
-	$(FREGEC3)  -make frege.Prelude
-$(DIR0)/PreludeProperties.class: $(PRE0) frege/PreludeProperties.fr
-	$(FREGEC3)  -make frege/PreludeProperties.fr
-$(DIR0)/IO.class: frege/IO.fr
-	$(FREGEC3)  frege/IO.fr
-$(DIR0)/List.class: frege/List.fr
-	$(FREGEC3)  frege/List.fr
-$(TOOLSF0)/LexConvt.class: frege/tools/LexConvt.fr
-	$(FREGEC3)  -make frege/tools/LexConvt.fr
-$(TOOLSF0)/YYgen.class: frege/tools/YYgen.fr
-	$(FREGEC3)  -make frege/tools/YYgen.fr
-$(DIR0)/check1: $(PRE0)  $(DIR0)/PreludeProperties.class
-	$(JAVA) -Xss1m -cp build cfrege.PreludeProperties && echo Prelude Properties checked >$(DIR0)/check1
 
 
 #
