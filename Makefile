@@ -1,16 +1,26 @@
 # Makefile for the frege compiler distribution
 
-# $Author$
-# $Revision$
-# $Id$
-# $Date$
+#
+# Make sure you have sensible values for JAVAC, YACC and JAVA
+# The standard distribution needs a Java 1.7 JDK.
+# Because people may need previous JDKs/JREs for different work,
+# there are 2 mechanisms to get the right java:
+# 
+#   - put the JDK7 in your PATH after other JDKs, and make java7 a symbolic link to
+#     the JDK7 java binary. (On Windows, just copy java.exe to java7.exe)
+#   - For UNIX users: make the follwoing alias:
+#         alias fmake='make JAVA="/path/to/jdk7/java -XX:+TieredCompilation" -f frege.mk '
+#
+# YACC should be a BSD compatible yacc. This can be obtained from the net at various places.
+# Windows users look for pbyacc.exe, Ubuntu users use
+#	sudo apt-get install byaccj  # byacc and pbyacc should also work
+#
 
 .SUFFIXES: .class .fr
 
 JAVAC = javac -encoding UTF-8
 YACC = pbyacc
 JAVA = java7 -XX:+TieredCompilation "-Dfrege.javac=javac -J-Xmx512m"
-JAVAP = $(JAVA)
 
 
 
@@ -41,29 +51,40 @@ TOOLSF  = $(DIR)/tools
 COMPS   = frege/compiler
 
 
-FREGE    = $(JAVA) -Xss30m -Xmx900m -cp build
-FREGEP   = $(JAVAP) -Xss30m -Xmx900m -cp build
-FREGECJ  = $(FREGE)  -jar fregec.jar  -d build -fp build -nocp -hints
-FREGECC  = $(FREGE) frege.compiler.Main  -d build -hints -inline
-FREGEC0  = $(FREGECJ) -prefix a -sp shadow;.
-FREGEC1  = $(FREGE) afrege.compiler.Main -d build -hints -inline -prefix b
-FREGEC2  = $(FREGE) bfrege.compiler.Main -d build -hints -inline
-FREGEC3  = $(FREGECJ) -prefix c
-GENDOC   = $(FREGE)  frege.tools.Doc -d doc
+FREGE    = $(JAVA) -Xss8m -Xmx900m -cp build
 
-# Prelude files in the order they must be compiled
+#	compile using the fregec.jar in the working directory
+FREGECJ  = $(FREGE)  -jar fregec.jar  -d build -fp build -nocp -hints
+
+#	compile compiler1 with fregec.jar, uses prelude sources from shadow/
+FREGEC0  = $(FREGECJ) -prefix a -sp shadow;.
+
+#	compile compiler2 with compiler1
+FREGEC1  = $(FREGE) afrege.compiler.Main -d build -hints -inline -prefix b
+
+#	compile final compiler with compiler2
+FREGEC2  = $(FREGE) bfrege.compiler.Main -d build -hints -inline
+
+#	final compiler
+FREGECC  = $(FREGE) frege.compiler.Main  -d build -hints -inline
+GENDOC   = $(FREGE) frege.tools.Doc -d doc
+
+#	shadow Prelude files in the order they must be compiled
 SPRELUDE  =  shadow/frege/prelude/PreludeBase.fr shadow/frege/prelude/PreludeNative.fr \
             shadow/frege/prelude/PreludeList.fr shadow/frege/prelude/PreludeMonad.fr \
             shadow/frege/prelude/PreludeText.fr shadow/frege/prelude/Arrays.fr \
             shadow/frege/prelude/Math.fr shadow/frege/prelude/Floating.fr
-# Prelude files in the order they must be compiled
+#	Prelude files in the order they must be compiled
 PRELUDE  =  frege/prelude/PreludeBase.fr frege/prelude/PreludeNative.fr \
             frege/prelude/PreludeList.fr frege/prelude/PreludeMonad.fr \
             frege/prelude/PreludeText.fr frege/prelude/Arrays.fr \
             frege/prelude/Math.fr frege/prelude/Floating.fr
 
-sprelude:
+shadow-prelude:
 	cp $(PRELUDE)       shadow/frege/prelude/
+
+clean:
+	rm -rf build/afrege build/bfrege build/frege
 
 {frege/prelude}.fr{$(PREL1)}.class::
 	$(FREGEC0) $<
@@ -73,18 +94,6 @@ sprelude:
 #	$(FREGEC0) $<
 {frege/tools}.fr{$(TOOLSF1)}.class::
 	$(FREGEC0) $<
-# {frege}.fr{$(DIR1)}.class::
-#	$(FREGEC0) $<
-{frege/prelude}.fr{$(PREL0)}.class::
-	$(FREGEC3) $<
-{frege/compiler}.fr{$(COMPF0)}.class::
-	$(FREGEC3) $<
-{frege/lib}.fr{$(LIBF0)}.class::
-	$(FREGEC3) $<
-{frege/tools}.fr{$(TOOLSF0)}.class::
-	$(FREGEC3) $<
-{frege}.fr{$(DIR0)}.class::
-	$(FREGEC3) $<
 # {frege/lib}.fr{$(LIBF)}.class::
 #	$(FREGECC) $<
 {frege/tools}.fr{$(TOOLSF)}.class::
@@ -92,7 +101,7 @@ sprelude:
 {frege/prelude}.fr{$(PREL)}.class::
 	$(FREGEC2) $<
 
-all:  frege.mk runtime compiler library tools # fregec.jar
+all:  frege.mk runtime compiler fregec.jar
 
 sanitycheck:
 	$(JAVA) -version
@@ -101,33 +110,14 @@ sanitycheck:
 frege.mk: Makefile mkmk.pl
 	perl mkmk.pl <Makefile >frege.mk
 
-dist: fregec.jar sources
+dist: fregec.jar
 	perl mkdist.pl
 
-fregec.jar: tools $(DIR)/check1 # $(DATA)/Set.class
+fregec.jar: compiler $(DIR)/check1 
 	$(FREGECC)  -make frege/StandardLibrary.fr
 	jar  -cf    fregec.jar -C build frege
 	jar  -uvfe  fregec.jar frege.compiler.Main
 
-rt-files: build/frege/compiler/Main.class
-	find frege -type f -name "*.java" -print >rt-files
-
-fr-files: build/frege/compiler/Main.class
-	cd build && find frege -type f -name "*.java" -print >../fr-files
-
-SRCSREQ = $(PREL)/PreludeBase.class $(PREL)/PreludeNative.class $(PREL)/PreludeList.class $(PREL)/PreludeMonad.class $(PREL)/PreludeText.class frege/compiler/Grammar.fr
-
-sources: $(SRCSREQ)
-	$(FREGECC) -make frege.compiler.Main frege.PreludeProperties
-	$(JAVA) -Xss1m -cp build frege.PreludeProperties
-	find frege -type f -name "*.java" -print >rt-files
-	cp frege/MD.java build/frege/MD.java
-	cd build && find frege -type f -name "*.java" -print >../fr-files
-	jar -cMf dist/sources.jar @rt-files
-	cd build && jar -uMf ../dist/sources.jar @../fr-files
-	cd ../eclipse-plugin/src && jar -xf ../../frege/dist/sources.jar
-	rm -f rt-files fr-files
-#	jar  -cf    ../sources/frege3.jar -C build frege
 
 $(DIR)/check1: $(DIR)/PreludeProperties.class
 	$(JAVA) -Xss1m -cp build frege.PreludeProperties && echo Prelude Properties checked >$(DIR)/check1
