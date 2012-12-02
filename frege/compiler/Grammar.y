@@ -44,13 +44,6 @@ package frege.compiler.Grammar where
      * !!! DO NOT CHANGE FILE Grammar.fr, IT HAS BEEN CREATED AUTOMATICALLY !!!
      */
 
-/*
- * $Author$
- * $Revision$
- * $Date$
- * $Id$
- */
-
 
 import frege.List(Tree, keyvalues, keys, insertkv)
 import Data.List as DL(elemBy)
@@ -59,11 +52,6 @@ import frege.compiler.Nice      except (group, annotation, break)
 import frege.compiler.Utilities as U(
     posItem, posLine, unqualified, tuple)
 import frege.compiler.GUtil
-
-
-version = v "$Revision$" where
-    v (m ~ #(\d+)#) | Just g <- m.group 1 = g.atoi
-    v _ = 0
 
 
 // this will speed up the parser by a factor of 70, cause yyprods comes out monotyped.
@@ -106,6 +94,10 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type words           [String]
 //%type varid           (Pos String)
 //%type varids          [Pos String]
+//%type fldid           (Position, String, Visibility, Bool)
+//%type strictfldid     (Position, String, Visibility, Bool)
+//%type plainfldid      (Position, String, Visibility, Bool)
+//%type fldids          [(Position, String, Visibility, Bool)]
 //%type qvarid          SName
 //%type qvarop          SName
 //%type qvarids         [SName]
@@ -325,6 +317,10 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%explain getfields    field list
 //%explain kind         a type kind
 //%explain simplekind   a type kind
+//%explain fldid        a field specification
+//%explain strictfldid  a field specification
+//%explain plainfldid   a field specification
+//%explain fldids       field specifications
 %}
 
 %token VARID CONID QVARID QCONID QUALIFIER DOCUMENTATION
@@ -642,10 +638,10 @@ varidkw:
     | IMPORT                { Token.{tokid = VARID} }
     ;
 
-varids:
-    varid                   { single }
-    | varid ',' varids      { liste  }
-    ;
+// varids:
+//    varid                   { single }
+//    | varid ',' varids      { liste  }
+//    ;
 
 qvarids:
     qvarop                  { single }
@@ -943,7 +939,8 @@ visdalt:
     ;
 
 strictdalt:
-    '!' simpledalt              { \_\dcon ->  DCon.{strict=true} dcon }
+      '!' simpledalt            { \_\dcon ->  DCon.{flds <-map ConField.{strict=true}}  dcon }
+    | '?' simpledalt            { \_\dcon ->  DCon.{flds <-map ConField.{strict=false}} dcon }
     | simpledalt
     ;
 
@@ -957,7 +954,13 @@ simpledalt:
     ;
 
 contypes:
-    simpletypes                 { map (Field Position.null Nothing Nothing • ForAll [] • RhoTau []) }
+    simpletypes                 { \taus -> do 
+                                    g <- getST
+                                    let strict = U.strictMode g
+                                        field  = Field Position.null Nothing Nothing Public strict 
+                                                    • ForAll [] • RhoTau []
+                                    return (map field taus) 
+                                }
     ;
 
 simpletypes:
@@ -974,12 +977,39 @@ conflds:
     ;
 
 confld:
-    varids DCOLON sigma           { \vs\_\t -> [Field (snd v) (Just (fst v)) Nothing t | v <- vs ]}
-    | docs varids DCOLON sigma    { \(d::String)\vs\_\t ->
+    fldids DCOLON sigma           { \vs\_\t -> [Field pos (Just name) Nothing vis strict t | 
+                                                (pos,name,vis,strict) <- vs ]
+                                  }
+    | docs fldids DCOLON sigma    { \(d::String)\vs\_\t ->
                                         map ConField.{doc=Just d}
-                                            [Field (snd v) (Just (fst v)) Nothing t    | v <- vs ]
-                                }
+                                            [Field pos (Just name) Nothing vis strict t | 
+                                                (pos,name,vis,strict) <- vs ]
+                                  }
     ;
+
+fldids:
+      fldid                     { single }
+    | fldid ',' fldids          { liste  }
+    ;
+
+fldid:
+    strictfldid
+    | PUBLIC  strictfldid        { \_ \(pos,name,vis,strict) -> (pos,name,Public, strict) }
+    | PRIVATE strictfldid        { \_ \(pos,name,vis,strict) -> (pos,name,Private,strict) }
+    ;
+
+strictfldid:
+    plainfldid
+    | '!' plainfldid            { \_ \(pos,name,vis,strict) -> (pos,name,vis, true) }
+    | '?' plainfldid            { \_ \(pos,name,vis,strict) -> (pos,name,vis, false) }
+    ;
+        
+plainfldid:
+    varid                       { \(name, pos) -> do
+                                    g <- getST
+                                    return (pos, name, Public, U.strictMode g)
+                                } 
+    ;    
 
 typedef:
     TYPE CONID '=' tau         { \t\i   \_\r -> TypDcl {pos=yyline i, vis=Public, name=Token.value i, vars=[], rho=RhoTau [] r, doc=Nothing}}

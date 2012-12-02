@@ -237,7 +237,19 @@ public class Meta {
         boolean  publik()      default true;   // will it be imported by default
     }
 
-    /*
+    /**
+     * encoding for a field
+     */
+    @Retention(RetentionPolicy.RUNTIME)
+    public @interface Field {
+    	int			offset()	default 0;
+    	String		name()		default "";
+    	String		doc()		default "";
+    	boolean		privat()	default false;	// private or public
+    	boolean		strict()	default true;	// strict or lazy
+    	int 		sigma();					// sigma index
+    }
+    /**
      * equivalent for a SymD
      */
 
@@ -247,10 +259,9 @@ public class Meta {
         QName    name();
         int      cid();                       // constructor id
         int      typ();                       // sigma index
-        String[] fnms()         default {};   // field names (null if no field names at all)
-        int[]    ftys()         default {};   // field types
+        Field[]  fields()		default {};	  // empty if no fields at all
         String   doc()          default "";
-        String   stri();                      // strictness encoded as string
+        // String   stri();                      // strictness encoded as string
         boolean  priv()         default false; // constructor is private
         boolean  publik()       default true;  // will it be imported by default
     }
