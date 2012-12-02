@@ -135,32 +135,18 @@ $(LIBF)/QuickCheck.class: $(LIBF)/Random.class $(DATA)/List.class frege/lib/Quic
 	$(FREGEC2)  -make frege/lib/QuickCheck.fr
 $(LIBF)/ForkJoin.class: $(DIR)/Prelude.class frege/lib/ForkJoin.fr
 	$(FREGEC2)  frege/lib/ForkJoin.fr
-#
-# The j library conatins native definitions from java and javax
-#
-$(LIBJ)/Lang.class: $(DIR)/Prelude.class frege/j/Lang.fr
-	$(FREGECC) frege/j/Lang.fr
-$(LIBJ)/Awt.class: $(LIBJ)/Util.class frege/j/Awt.fr
-	$(FREGECC) frege/j/Awt.fr
-$(LIBJ)/Swing.class: $(LIBJ)/Lang.class $(LIBJ)/Awt.class frege/j/Swing.fr
-	$(FREGECC) frege/j/Swing.fr
-$(LIBJ)/Util.class: $(LIBJ)/Lang.class frege/j/Util.fr
-	$(FREGECC) frege/j/Util.fr
 
 $(DIR)/PreludeProperties.class: $(LIBF)/QuickCheck.class frege/PreludeProperties.fr
 	$(FREGECC)   frege/PreludeProperties.fr
-$(TOOLSF)/Doc.class: frege/tools/Doc.fr $(COMPF)/Main.class
-	$(FREGECC)  -make frege.tools.Doc
-$(TOOLSF)/YYgen.class: frege/tools/YYgen.fr $(COMPF)/Main.class
-	$(FREGECC)  -make frege/tools/YYgen.fr
-$(TOOLSF)/LexConvt.class: frege/tools/LexConvt.fr  $(COMPF)/Main.class
-	$(FREGECC)  -make frege/tools/LexConvt.fr
-$(TOOLSF1)/YYgen.class: $(DIR1)/Prelude.class frege/tools/YYgen.fr
-	$(FREGEC0)  -make frege.tools.YYgen
 
-library: $(LIBF)/Random.class $(LIBF)/QuickCheck.class $(LIBJ)/Swing.class \
-    $(LIBJ)/Util.class $(LIBF)/ForkJoin.class
-tools: $(TOOLSF)/Doc.class $(TOOLSF)/YYgen.class $(TOOLSF)/LexConvt.class
+# library: $(LIBF)/Random.class $(LIBF)/QuickCheck.class $(LIBJ)/Swing.class \
+#     $(LIBJ)/Util.class $(LIBF)/ForkJoin.class
+library: $(COMPF)/Main.class
+	$(FREGECC) -make frege/java/*.fr frege/lib/QuickCheck.fr frege/lib/ForkJoin.fr
+
+# 	$(TOOLSF)/Doc.class $(TOOLSF)/YYgen.class $(TOOLSF)/LexConvt.class
+tools: $(COMPF)/Main.class
+	$(FREGECC) -make frege/tools/*.fr
 #
 # final compiler
 #
