@@ -939,8 +939,10 @@ visdalt:
     ;
 
 strictdalt:
-      '!' simpledalt            { \_\dcon ->  DCon.{flds <-map ConField.{strict=true}}  dcon }
-    | '?' simpledalt            { \_\dcon ->  DCon.{flds <-map ConField.{strict=false}} dcon }
+      '!' simpledalt            { \_\dcon ->  DCon.{strict=true,
+                                                    flds <-map ConField.{strict=true}}  dcon }
+    | '?' simpledalt            { \_\dcon ->  DCon.{strict=false, 
+                                                    flds <-map ConField.{strict=false}} dcon }
     | simpledalt
     ;
 
@@ -1320,8 +1322,8 @@ term:
                                                        (Con (yyline z)  (With1 baseToken z.{tokid=CONID, value="[]"}) Nothing)
                                                        es}
     | '[' expr '|' lcquals ']'      { \(a::Token)\e\b\qs\(z::Token) -> do {
-				let {nil = z.{tokid=CONID, value="[]"}};
-				listComprehension (yyline b) e qs
+                let {nil = z.{tokid=CONID, value="[]"}};
+                listComprehension (yyline b) e qs
                                             (Con {name = With1 baseToken nil, pos = nil.position, typ = Nothing})
                                     }}
     ;
