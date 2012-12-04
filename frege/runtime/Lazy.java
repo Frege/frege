@@ -215,4 +215,35 @@ public abstract class Lazy implements Applicable, Callable<Object> {
 	 *         or another lazy value that is somewhat closer to the result (e.g. a tail call)  
 	 */
 	abstract public Object eval();
+	
+	/**
+	 * <p>Tell if an object is an instance of {@link Lazy}.</p>
+	 * 
+	 * <p>This is used in generated code to avoid the <code>x instanceof Lazy</code> syntax.</p>
+	 * 
+	 * @return <b>true</b>, if and only if, the argument is an instance of {@link Lazy}
+	 * @author ingo 
+	 */
+	final static boolean isSuperOf(Object o) { return o instanceof Lazy; }
+	
+	/**
+	 * <p>Evaluate an object if it is a lazy value.</p>
+	 * <p>
+	 * This method is intended for use in generated code, as the compiler
+	 * hopefully never errs about the expected type.
+	 * </p>
+	 * @throws ClassCastException if the argument is not an instance of {@link Lazy} 
+	 *         and cannot be casted to <code>R</code>
+	 * @throws ClassCastException if the argument is an instance of {@link Lazy} and the
+	 *         delivered value cannot be casted to <code>R</code>         
+	 * @param o the object in question
+	 * @return the evaluated value if the argument is a {@link Lazy} instance, 
+	 *         otherwise the argument itself.  
+	 *         The result is conveniently casted to the expected return type <code>R</code>.
+	 * @author ingo
+	 */
+	@SuppressWarnings("unchecked")
+	final static<R> R evaluated(Object o) {
+		return (R) (o instanceof Lazy ? ((Lazy) o).call() : o);
+	}
 }
