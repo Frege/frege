@@ -220,7 +220,7 @@ public abstract class RT {
      * <p> Utility method used by String.show to quote a string. </p>
      */
     final public static java.lang.String quoteStr(java.lang.String a) {
-		java.lang.StringBuilder sr = new java.lang.StringBuilder();
+		java.lang.StringBuilder sr = new java.lang.StringBuilder(2+((5*a.length()) >> 2));
 		sr.append('"');
 		int i = 0;
 		char c;
@@ -244,7 +244,7 @@ public abstract class RT {
      * <p> Utility method used by Char.show to quote a character. </p>
      */
 	final public static java.lang.String quoteChr(char c) {
-        java.lang.StringBuilder sr = new java.lang.StringBuilder();
+        java.lang.StringBuilder sr = new java.lang.StringBuilder(8);
         sr.append("'");
         if (c<' ' || c == '\177') {
             sr.append('\\');
