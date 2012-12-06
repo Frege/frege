@@ -118,6 +118,16 @@ fregec.jar: compiler $(DIR)/check1
 	$(FREGECC)  -make frege/StandardLibrary.fr
 	jar  -cf    fregec.jar -C build frege
 	jar  -uvfe  fregec.jar frege.compiler.Main
+	cp fregec.jar fallback.jar
+
+#
+#	Avoid recompilation of everything, just remake the compiler with itself and jar it.
+#	One should have a fallback.jar, just in case ....
+#
+test-jar: fallback.jar
+	$(FREGECC) -make frege.compiler.Main
+	jar  -cf    fregec.jar -C build frege
+	jar  -uvfe  fregec.jar frege.compiler.Main
 
 
 $(DIR)/check1: $(DIR)/PreludeProperties.class

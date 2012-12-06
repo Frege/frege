@@ -38,6 +38,13 @@ data Proposal = Proposal {
                                     this proposal is selected. -}
     }
 
+instance Show Proposal where
+    show p = "Proposal{proposal="   ++ show p.proposal
+                ++ ", newText="     ++ show p.newText
+                ++ ", prefix="      ++ show p.prefix
+                ++ ", offset="      ++ show p.off
+                ++ ", length="      ++ show p.len
+                ++ ", cursor="      ++ show p.cursor ++ "}"
 {-- 
     Called by Eclipse Content Proposer to make proposals.
     
@@ -62,23 +69,61 @@ proposeContent !global !offset !tokens !index = propose
             off    = if inside then token.offset else offset, 
             len    = if inside then offset-token.offset else 0, 
             cursor = 0, additional=""}
+        directProposal = Proposal {proposal = "", newText = "", 
+            prefix = if direct then token.value else "", 
+            off    = if direct then token.offset else offset, 
+            len    = if direct then token.length else 0, 
+            cursor = 0, additional=""}
         propose 
             | null snekot = [nullProposal.{
                 proposal = "module template",
                 newText  = "--- This is an undocumented module\nmodule Proposed where\n\nimport Data.List\n",
                 cursor   = -33}]
-            | otherwise   = envProposal (thisTab global)
-        envProposal :: Symtab -> [Proposal]
-        envProposal symtab = sortBy (comparing Proposal.proposal) [ nullProposal.{
-                                    proposal = sym.name.base,
-                                    newText  = sym.name.base,
+            | direct, token.tokid == CONID
+                            = nsProposal directProposal 
+                                ++ envProposal (thisTab global) directProposal
+            | direct, token.tokid == VARID
+                            = envProposal (thisTab global) directProposal
+            | otherwise     = nsProposal nullProposal 
+                                ++ envProposal (thisTab global) nullProposal
+        nsProposal  :: Proposal -> [Proposal]
+        nsProposal  model = sortBy (comparing Proposal.newText) [
+                model.{
+                    prefix = "", 
+                    proposal = ns ++ "   (" ++ Pack.unpack pack global ++ ")", 
+                    newText = ns} |
+                (NSX ns, pack) <- each global.namespaces,
+                ns.startsWith model.prefix 
+            ] 
+        envProposal :: Symtab -> Proposal -> [Proposal]
+        envProposal symtab model = sortBy (comparing Proposal.newText) [ model.{
+                                    prefix = "",        -- bug??
+                                    proposal,
+                                    newText,
                                     additional = (fst . (symbolDocumentation sym).run) global} |
                 sym::Symbol <- values symtab,
                 sym.name.base !~ ´^\(´,
-                if length nullProposal.prefix > 0 
-                    then sym.name.base.startsWith nullProposal.prefix
-                    else true  
+                fmap (flip Symbol.category global) (sym.follow global) != Just "instance",
+                if length model.prefix > 0 
+                    then sym.name.base.startsWith model.prefix
+                    else true,
+                let (proposal, newText) = symProp sym.name.base sym  
             ]
+        symProp base (sym@SymL{}) = case sym.follow global of
+            Just target -> symProp base target
+            Nothing     -> (base, base)
+        symProp base (sym@SymD{name,flds})
+            | null flds = (verbose, base)
+            | any (isNothing . ConField.name) flds = (verbose, constr)
+            | otherwise = (verbose, fields)
+            where
+                verbose = base ++ "   (" ++ nicer sym.name.tynm global ++ "." ++ base ++ ")"
+                constr = base ++ joined "" (map (const " _") flds)
+                fields = base ++ "{" ++ joined ", " (mapMaybe ConField.name flds) ++ "}" 
+        symProp base sym = (imported, base)
+            where
+                imported | sym.name.our global  = base
+                         | otherwise            = base ++ "   (" ++ nice sym.name global ++ ")"
         
 {--
     Create a list of triples with  position, namespace and package
