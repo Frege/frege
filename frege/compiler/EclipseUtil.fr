@@ -58,13 +58,13 @@ instance Show Proposal where
 proposeContent :: Global -> Int -> Array Token -> Int -> [Proposal]
 proposeContent !global !offset !tokens !index = propose 
     where
-        snekot = backwards tokens index
+        snekot = backwards tokens index     -- reverse order, last token before cursor on top
         token  = if null snekot then Token{tokid=LEXERROR, value="", line=1, col=0, offset}
                     else tokens.frozenElemAt index
         inside = token.offset + token.length > offset
         direct = token.offset + token.length == offset                    
         -- pref = if inside then token.value.substring 0 (token.offset-offset) else ""
-        nullProposal = Proposal {proposal = "", newText = "", 
+        insideProposal = Proposal {proposal = "", newText = "", 
             prefix = if inside then substr token.value 0 (offset-token.offset) else "", 
             off    = if inside then token.offset else offset, 
             len    = if inside then offset-token.offset else 0, 
@@ -74,27 +74,83 @@ proposeContent !global !offset !tokens !index = propose
             off    = if direct then token.offset else offset, 
             len    = if direct then token.length else 0, 
             cursor = 0, additional=""}
+        theProposal = if direct then directProposal else insideProposal 
         propose 
-            | null snekot = [nullProposal.{
+            | null snekot = [theProposal.{
                 proposal = "module template",
                 newText  = "--- This is an undocumented module\nmodule Proposed where\n\nimport Data.List\n",
                 cursor   = -33}]
-            | direct, token.tokid == CONID
-                            = nsProposal directProposal 
-                                ++ envProposal (thisTab global) directProposal
+            | (Token{tokid=someid}:Token{tokid=QUALIFIER, value=base}:Token{tokid=QUALIFIER, value}:_) <- snekot,
+              someid == VARID || someid == CONID
+                            = fromMaybe [] do
+                                pack <- global.namespaces.lookup (NSX value)
+                                env  <- Symbol.env `fmap` TName{pack, base}.findit global
+                                return (envProposal env theProposal)
+            | (Token{tokid=QUALIFIER, value=base}:Token{tokid=QUALIFIER, value}:_) <- snekot
+                            = fromMaybe [] do
+                                pack <- global.namespaces.lookup (NSX value)
+                                env  <- Symbol.env `fmap` TName{pack, base}.findit global
+                                return (envProposal env theProposal)
+            | (Token{tokid=someid}:Token{tokid=QUALIFIER, value}:_) <- snekot,
+              someid == VARID || someid == CONID 
+                            = fromMaybe [] (nsEnvProposal value theProposal)
+                                ++ fromMaybe [] (tyEnvProposal value theProposal)        
+            | Token{tokid=QUALIFIER, value} <- token
+                            = fromMaybe [] (nsEnvProposal value theProposal)
+                                ++ fromMaybe [] (tyEnvProposal value theProposal)
+            -- | direct, token.tokid == CONID
+            --                 = nsProposal directProposal 
+            --                     ++ envProposal (thisTab global) directProposal
             | direct, token.tokid == VARID
                             = envProposal (thisTab global) directProposal
-            | otherwise     = nsProposal nullProposal 
-                                ++ envProposal (thisTab global) nullProposal
+            | otherwise     = nsProposal theProposal 
+                                ++ envProposal (thisTab global) theProposal
+        
+        -- Find the top level defintions that surround our offset
+        -- For example, this comment is between 'proposeContent' and 'imports'
+        -- Then, find the local symbols that are between them and make proposals for them
+        localProposal :: Proposal -> [Proposal]
+        localProposal model = [model.{prefix=""} 
+                    | sym <-  Global.locals.keys 
+                    ]
+            where
+                before = if null befores then 0         else maximum (map symoffset befores)
+                after  = if null afters  then 999999999 else minimum (map symoffset afters)  
+                symoffset = Token.offset . Position.first . Symbol.pos
+                (befores, afters) = DL.partitioned 
+                                    ((<token.offset) . symoffset)
+                                    (filter Symbol.our thisTab.values)
+                
+        -- get the environment for a namespace
+        nsEnv n = do
+            pack <- global.namespaces.lookup (NSX n)
+            global.packages.lookup pack
+        
+        -- get the environment of a type
+        tyEnv n = Symbol.env `fmap` (TName{pack=global.thisPack, base=n}.findit global)
+        
+        -- make proposals for symbols of type n, considering prefix if any
+        tyEnvProposal n model = do
+            env <- tyEnv n
+            return  (envProposal env model)
+        
+        -- make proposals for symbols in namespace n, considering prefix if any                                    
+        nsEnvProposal n model = do
+            env  <- nsEnv n
+            return (envProposal env model)
+        
+        -- propose namespaces, considering prefix if any
         nsProposal  :: Proposal -> [Proposal]
         nsProposal  model = sortBy (comparing Proposal.newText) [
                 model.{
                     prefix = "", 
-                    proposal = ns ++ "   (" ++ Pack.unpack pack global ++ ")", 
+                    proposal = ns ++ "   (package " ++ Pack.unpack pack global ++ ")", 
                     newText = ns} |
                 (NSX ns, pack) <- each global.namespaces,
                 ns.startsWith model.prefix 
-            ] 
+            ]
+            
+        -- make proposals for symbols in given symtab, considering prefix if any 
         envProposal :: Symtab -> Proposal -> [Proposal]
         envProposal symtab model = sortBy (comparing Proposal.newText) [ model.{
                                     prefix = "",        -- bug??
@@ -109,6 +165,8 @@ proposeContent !global !offset !tokens !index = propose
                     else true,
                 let (proposal, newText) = symProp sym.name.base sym  
             ]
+            
+        -- nice up a symbol
         symProp base (sym@SymL{}) = case sym.follow global of
             Just target -> symProp base target
             Nothing     -> (base, base)
