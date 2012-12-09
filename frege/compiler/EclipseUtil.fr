@@ -2,18 +2,13 @@
     Provide functions for use in the fregIDE
 -}
 
-{-
- * $Author$
- * $Revision$
- * $Date$
- * $Id$
--}
 
 package frege.compiler.EclipseUtil where
 
 import frege.compiler.Data
 import frege.compiler.Utilities as U(isPSigma)
 import frege.compiler.Import as I
+import frege.compiler.TCUtil as TC
 import frege.List (each, values)
 import Data.List as DL(sortBy)
 import frege.compiler.DocUtils as DU(docit, docSym, DL, Doc, emitHtml)
@@ -21,11 +16,261 @@ import frege.lib.PP()
 import frege.IO(PrintWriter, StringWriter)
 
 
---- This is $Revision$
-public version = v "$Revision$" where
-    v (m ~ #(\d+)#) | Just g <- m.group 1 = g.atoi
-    v _ = 0
+--- create a list from an 'Array' backwards
+backwards :: Array a  -> Int -> [a]
+backwards array index
+    | index > 0 = array.frozenElemAt index : backwards array (pred index)
+    | otherwise = []
 
+{--
+    This resembles the SourceProposal class.
+    The additional information must be lazy!
+-}
+data Proposal = Proposal {
+        proposal :: String      --- The text shown to the user in the popup view
+        newText    :: String    --- The new text being added/substituted if the user accepts this proposal
+        prefix     :: String    --- The prefix being completed.
+        off, len   :: Int       --- The range of text being replaced.
+        cursor     :: Int       {-- The offset at which the insertion point should be 
+                                    placed after completing using this proposal,
+                                    relative to the end of the inserted text. -}
+        ?additional:: String    {-- Additional information displayed in the pop-up view 
+                                    to the right of the main proposal list view when 
+                                    this proposal is selected. -}
+    }
+
+instance Show Proposal where
+    show p = "Proposal{proposal="   ++ show p.proposal
+                ++ ", newText="     ++ show p.newText
+                ++ ", prefix="      ++ show p.prefix
+                ++ ", offset="      ++ show p.off
+                ++ ", length="      ++ show p.len
+                ++ ", cursor="      ++ show p.cursor ++ "}"
+{-- 
+    Called by Eclipse Content Proposer to make proposals.
+    
+    Usage: @proposeContent global offset tokens index@
+    
+    [global] a symbol table, preferably with type information
+    [offset] position of the caret
+    [tokens] array of tokens
+    [index]  index into the array, points to the token that starts before  the caret
+    -}
+proposeContent :: Global -> Int -> Array Token -> Int -> [Proposal]
+proposeContent !global !offset !tokens !index = propose 
+    where
+        snekot = backwards tokens index     -- reverse order, last token before cursor on top
+        token  = if null snekot then Token{tokid=LEXERROR, value="", line=1, col=0, offset}
+                    else tokens.frozenElemAt index
+        inside = token.offset + token.length > offset
+        direct = token.offset + token.length == offset                    
+        -- pref = if inside then token.value.substring 0 (token.offset-offset) else ""
+        insideProposal = Proposal {proposal = "", newText = "", 
+            prefix = if inside then substr token.value 0 (offset-token.offset) else "", 
+            off    = if inside then token.offset else offset, 
+            len    = if inside then offset-token.offset else 0, 
+            cursor = 0, additional=""}
+        directProposal = Proposal {proposal = "", newText = "", 
+            prefix = if direct then token.value else "", 
+            off    = if direct then token.offset else offset, 
+            len    = if direct then token.length else 0, 
+            cursor = 0, additional=""}
+        theProposal = if direct then directProposal else insideProposal 
+        propose 
+            | null snekot = [theProposal.{
+                proposal = "module template",
+                newText  = "--- This is an undocumented module\nmodule Proposed where\n\nimport Data.List\n",
+                cursor   = -33}]
+            | (Token{tokid=VARID} :Token{tokid=CHAR, value="."}      : (qual@Token{tokid=VARID})   :_) <- snekot,
+              traceLn ("rule: " ++ qual.value ++ "." ++ theProposal.prefix) || true,
+              Just (Right qname) <- Global.resolved global qual,
+              traceLn ("resolved " ++ qual.value) || true,
+              Just sym <- qname.findit global, 
+              traceLn ("found " ++ sym.nice global) || true,
+                            = memProposal sym theProposal
+            | (Token{tokid=CHAR, value="."}      : (qual@Token{tokid=VARID})   :_) <- snekot,
+              traceLn ("rule: " ++ qual.value ++ "." ++ theProposal.prefix) || true,
+              Just (Right qname) <- Global.resolved global qual,
+              traceLn ("resolved " ++ qual.value) || true,
+              Just sym <- qname.findit global, 
+              traceLn ("found " ++ sym.nice global) || true,
+                            = memProposal sym insideProposal
+            | (Token{tokid=someid}:Token{tokid=QUALIFIER, value=base}:Token{tokid=QUALIFIER, value}:_) <- snekot,
+              someid == VARID || someid == CONID
+                            = fromMaybe [] do
+                                pack <- global.namespaces.lookup (NSX value)
+                                env  <- getEnv (TName{pack, base}.findit global)
+                                return (envProposal env theProposal)
+            | !inside, (Token{tokid=QUALIFIER, value=base}:Token{tokid=QUALIFIER, value}:_) <- snekot
+                            = fromMaybe [] do
+                                pack <- global.namespaces.lookup (NSX value)
+                                env  <- getEnv (TName{pack, base}.findit global)
+                                return (envProposal env theProposal)
+            | (Token{tokid=someid}:Token{tokid=QUALIFIER, value}:_) <- snekot,
+              someid == VARID || someid == CONID 
+                            = fromMaybe [] (nsEnvProposal value theProposal)
+                                ++ fromMaybe [] (tyEnvProposal value theProposal)        
+            | !inside, Token{tokid=QUALIFIER, value} <- token
+                            = fromMaybe [] (nsEnvProposal value theProposal)
+                                ++ fromMaybe [] (tyEnvProposal value theProposal)
+            | direct, token.tokid == VARID
+                            = localProposal directProposal
+                                ++ envProposal (thisTab global) directProposal
+            | direct, token.tokid == CONID
+                            = nsProposal directProposal
+                                ++ envProposal (thisTab global) directProposal
+            | otherwise     = nsProposal insideProposal
+                                ++ localProposal insideProposal 
+                                ++ envProposal (thisTab global) insideProposal
+        
+        --
+        -- Find a proposal for id.member
+        --
+        memProposal :: Symbol -> Proposal -> [Proposal]
+        memProposal sym prop
+            | RhoTau _ tau   <- sym.typ.rho,                  -- look in env of type tau
+              (true, result) <- tauProposal tau = result
+            | RhoFun{rho}    <- sym.typ.rho,                  -- look in return type of fn
+              RhoTau _ tau   <- rho,
+              (true, result) <- tauProposal tau = result                                      
+            | otherwise = filteredEnvProposal prop (classMember:standardFilter) (thisTab global)
+            where
+                tauProposal tau
+                  | (tau,_) <- StG.run (TC.reduced tau) global,
+                    Just SymT{env, nativ=mbs} <- U.instTauSym tau global
+                        = case mbs of
+                            Just s  | ss <- s:U.supersOfNativ s global,     -- the supertypes of s (including s)
+                                      -- traceLn("supertypes are " ++ show ss) || true,
+                                      envs <- [ Symbol.env sym | s <- ss, 
+                                                q <- U.typesOfNativ s global, 
+                                                sym <- QName.findit q global ]
+                                    = (true, concatMap (flip envProposal prop) envs)
+                            other   = (true, envProposal env prop)
+                  | otherwise       = (false, [])
+        
+        -- Find the top level defintions that surround our offset
+        -- For example, this comment is between 'proposeContent' and 'imports'
+        -- Then, find the local symbols that are between them and make proposals for them
+        localProposal :: Proposal -> [Proposal]
+        localProposal model 
+                = [ model.{proposal = label global sym,
+                               newText  = sym.name.base} |
+                        sym <- DL.uniqueBy (using (QName.base . Symbol.name)) [ sym |
+                          sym <-  values global.locals,
+                          offBefore = maybe         0 symoffset before,
+                          offAfter  = maybe 999999999 symoffset after,
+                          symoffset sym > offBefore, 
+                          symoffset sym < offAfter,
+                          sym.name.base != "_",
+                          sym.name.base.startsWith model.prefix ]
+                      ]
+            where
+                before  = if null befores
+                        then Nothing
+                        else Just (DL.maximumBy (comparing symoffset) befores)
+                after  = if null afters
+                        then Nothing
+                        else Just (DL.minimumBy (comparing symoffset) afters)  
+                symoffset = Token.offset . Position.first . Symbol.pos
+                (befores, afters) = DL.partitioned 
+                                 ((<token.offset) . symoffset)
+                                 (U.allourvars global)
+                 
+        -- get the environment for a namespace
+        nsEnv n = do
+            pack <- global.namespaces.lookup (NSX n)
+            global.packages.lookup pack
+        
+        -- get the environment of a type
+        tyEnv n = getEnv (TName{pack=global.thisPack, base=n}.findit global)
+        
+        -- get the environment of a symbol, follow type aliases
+        getEnv (Just sym) 
+            | Symbol.{env?} sym                 = Just sym.env
+            | SymA{typ}  <- sym, 
+              ForAll bs (RhoTau _ tau)  <- typ,
+              TCon{name}:_  <- tau.flat         = getEnv (name.findit global)
+        getEnv other                            = Nothing
+        
+        -- make proposals for symbols of type n, considering prefix if any
+        tyEnvProposal n model = do
+            env <- tyEnv n
+            return  (envProposal env model)
+        
+        -- make proposals for symbols in namespace n, considering prefix if any                                    
+        nsEnvProposal n model = do
+            env  <- nsEnv n
+            return (envProposal env model)
+        
+        -- propose namespaces, considering prefix if any
+        nsProposal  :: Proposal -> [Proposal]
+        nsProposal  model = sortBy (comparing Proposal.newText) [
+                model.{
+                    proposal = ns ++ "   (package " ++ Pack.unpack pack global ++ ")", 
+                    newText = ns } |
+                (NSX ns, pack) <- each global.namespaces,
+                ns.startsWith model.prefix 
+            ]
+        
+        -- make proposal for filtered symbols in a given symtab, considering prefix
+        filteredEnvProposal :: Proposal -> [(Symbol -> Bool)] -> Symtab -> [Proposal]
+        filteredEnvProposal model filters symtab 
+            = sortBy (comparing Proposal.newText) [ model.{
+                            proposal,
+                            newText,
+                            additional = (fst . (symbolDocumentation sym).run) global} 
+                    | sym::Symbol <- values symtab,
+                      all ($sym) filters,
+                      if length model.prefix > 0 
+                            then sym.name.base.startsWith model.prefix
+                            else true,
+                      let (proposal, newText) = symProp sym.name.base sym  
+                ]
+        -- standardFilter
+        standardFilter = [notPrivate, notTuple, notInstance]
+        notPrivate sym = Symbol.vis sym != Private || Symbol.{alias?} sym
+        notTuple = not . (flip String.startsWith "(") . QName.base . Symbol.name
+        notInstance = (Just "instance" !=) . fmap (flip Symbol.category global) 
+                                           . flip Symbol.follow global
+        classMember sym
+            | Just member <-  Symbol.follow sym global,
+              MName{tynm, base} <- Symbol.name member,
+              Just SymC{} <- tynm.findit global = true
+            | otherwise                         = false
+        -- make proposals for symbols in given symtab, considering prefix if any 
+        envProposal :: Symtab -> Proposal -> [Proposal]
+        envProposal symtab model = filteredEnvProposal model standardFilter symtab
+        {- sortBy (comparing Proposal.newText) [ model.{
+                                    proposal,
+                                    newText,
+                                    additional = (fst . (symbolDocumentation sym).run) global} |
+                sym::Symbol <- values symtab,
+                Symbol.vis sym != Private || Symbol.{alias?} sym,
+                sym.name.base !~ ´^\(´,
+                fmap (flip Symbol.category global) (sym.follow global) != Just "instance",
+                if length model.prefix > 0 
+                    then sym.name.base.startsWith model.prefix
+                    else true,
+                let (proposal, newText) = symProp sym.name.base sym  
+            ] -}
+            
+        -- nice up a symbol
+        symProp base (sym@SymL{}) = case sym.follow global of
+            Just target -> symProp base target
+            Nothing     -> (base, base)
+        symProp base (sym@SymD{name,flds})
+            | null flds = (verbose, base)
+            | any (isNothing . ConField.name) flds = (verbose, constr)
+            | otherwise = (verbose, fields)
+            where
+                verbose = base ++ "   (" ++ nicer sym.name.tynm global ++ "." ++ base ++ ")"
+                constr = base ++ joined "" (map (const " _") flds)
+                fields = base ++ "{" ++ joined ", " (mapMaybe ConField.name flds) ++ "}" 
+        symProp base sym = (imported, base)
+            where
+                imported | sym.name.our global  = base
+                         | otherwise            = base ++ "   (" ++ nice sym.name global ++ ")"
+        
 {--
     Create a list of triples with  position, namespace and package
     for every import except the automatic ones.
@@ -132,3 +377,20 @@ symbolDocumentation sym = do
     -- doio $ sw.flush
     result <- doio $ sw.toString
     return result
+
+{--
+    Correct the result of 'frege.compiler.Scanner.dependencies',
+    which returns a singleton list with one element @"frege.prelude.PreludeBase"@
+    for source files that don't have any import clauses. Yet, unless this is a
+    prelude package itself, @"frege.Prelude"@ will be imported.
+    
+    This discrepancy leads to files not compiling in the FregIDE builder 
+    because they are queued before @"frege/Prelude.fr"@
+-}    
+correctDependenciesFor ["frege.prelude.PreludeBase"] !source
+    | source !~ ´/frege/prelude/\w+\.fr$´,
+      source !~ ´/frege/Prelude.fr$´      = ["frege.Prelude"]    -- most likely not itself a prelude package
+correctDependenciesFor other source       = other
+
+
+    

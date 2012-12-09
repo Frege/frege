@@ -213,8 +213,8 @@ public class Meta {
                                                     //          -01 no w-function, returns value
                                                     //          -10 worker function, may return lazy
                                                     //          -11 worker function, returns value
-        											//          1-1 return value is lazy in all  cases
-        											//          0-1 return value is lazy in some cases
+                                                    //          1-1 return value is lazy in all  cases
+                                                    //          0-1 return value is lazy in some cases
                                                     //          
                                                     //         1--- tail recursive
                                                     //        1---- simple expression
@@ -224,7 +224,7 @@ public class Meta {
         boolean  publik()       default true;       // will it be imported by default
     }
 
-    /*
+    /**
      * equivalent for a SymL
      */
 

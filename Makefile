@@ -118,31 +118,25 @@ fregec.jar: compiler $(DIR)/check1
 	$(FREGECC)  -make frege/StandardLibrary.fr
 	jar  -cf    fregec.jar -C build frege
 	jar  -uvfe  fregec.jar frege.compiler.Main
+	cp fregec.jar fallback.jar
+
+#
+#	Avoid recompilation of everything, just remake the compiler with itself and jar it.
+#	One should have a fallback.jar, just in case ....
+#
+test-jar: fallback.jar
+	$(FREGECC) -make frege.compiler.Main
+	jar  -cf    fregec.jar -C build frege
+	jar  -uvfe  fregec.jar frege.compiler.Main
 
 
 $(DIR)/check1: $(DIR)/PreludeProperties.class
 	$(JAVA) -Xss1m -cp build frege.PreludeProperties && echo Prelude Properties checked >$(DIR)/check1
 
-$(LIBF)/Random.class: $(DIR)/Prelude.class frege/lib/Random.fr
-	$(FREGEC2)  frege/lib/Random.fr
-$(DATA)/Maybe.class: $(DIR)/Prelude.class  frege/data/Maybe.fr
-	$(FREGEC2)  frege/data/Maybe.fr
-$(DATA)/Set.class: $(DIR)/Prelude.class  frege/contrib/dgronau/Set.fr
-	$(FREGEC2)  frege/contrib/dgronau/Set.fr
-$(DATA)/List.class: $(DIR)/Prelude.class  frege/data/List.fr
-	$(FREGEC2)  frege/data/List.fr
-$(LIBF)/QuickCheck.class: $(LIBF)/Random.class $(DATA)/List.class frege/lib/QuickCheck.fr
-	$(FREGEC2)  -make frege/lib/QuickCheck.fr
-$(LIBF)/ForkJoin.class: $(DIR)/Prelude.class frege/lib/ForkJoin.fr
-	$(FREGEC2)  frege/lib/ForkJoin.fr
 
-$(DIR)/PreludeProperties.class: $(LIBF)/QuickCheck.class frege/PreludeProperties.fr
-	$(FREGECC)   frege/PreludeProperties.fr
 
-# library: $(LIBF)/Random.class $(LIBF)/QuickCheck.class $(LIBJ)/Swing.class \
-#     $(LIBJ)/Util.class $(LIBF)/ForkJoin.class
-library: $(COMPF)/Main.class
-	$(FREGECC) -make frege/java/*.fr frege/lib/QuickCheck.fr frege/lib/ForkJoin.fr
+$(DIR)/PreludeProperties.class:  frege/PreludeProperties.fr
+	$(FREGECC) -make  frege/PreludeProperties.fr
 
 # 	$(TOOLSF)/Doc.class $(TOOLSF)/YYgen.class $(TOOLSF)/LexConvt.class
 tools: $(COMPF)/Main.class
@@ -150,7 +144,7 @@ tools: $(COMPF)/Main.class
 #
 # final compiler
 #
-compiler: compiler2 $(COMPF)/Grammar.class $(COMPF)/Main.class library tools
+compiler: compiler2 $(COMPF)/Grammar.class $(COMPF)/Main.class tools
 	cp frege/tools/yygenpar-fr frege/tools/YYgenparM-fr build/frege/tools
 	@echo Compiler ready
 
@@ -312,9 +306,9 @@ $(DIR1)/Prelude.class: $(SPRELUDE) frege/Prelude.fr
 	rm -rf $(DIR1)
 	$(FREGEC0) $(SPRELUDE)
 	$(FREGEC0)  -make frege.Prelude
-$(DIR1)/PreludeProperties.class: $(LIBF1)/Random.class $(LIBF1)/QuickCheck.class
-	$(FREGEC0)  frege/PreludeProperties.fr
-$(DIR1)/check1: $(PRE1) $(LIBF1)/Random.class $(LIBF1)/QuickCheck.class $(DIR1)/PreludeProperties.class
+$(DIR1)/PreludeProperties.class: frege/PreludeProperties.fr
+	$(FREGEC0) -make frege/PreludeProperties.fr
+$(DIR1)/check1: $(PRE1) $(DIR1)/PreludeProperties.class
 	$(JAVA) -Xss1m -cp build afrege.PreludeProperties && echo Prelude Properties checked >$(DIR1)/check1
 
 
