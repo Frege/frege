@@ -7,8 +7,9 @@ package frege.compiler.EclipseUtil where
 
 import frege.compiler.Data
 import frege.compiler.Utilities as U(isPSigma)
-import frege.compiler.Import as I
+import frege.compiler.Import as I hiding(pass, post)
 import frege.compiler.TCUtil as TC
+import frege.compiler.Typecheck as TY hiding(pass, post)
 import frege.List (each, values)
 import Data.List as DL(sortBy)
 import frege.compiler.DocUtils as DU(docit, docSym, DL, Doc, emitHtml)
@@ -95,6 +96,30 @@ proposeContent !global !offset !tokens !index = propose
               Just sym <- qname.findit global, 
               traceLn ("found " ++ sym.nice global) || true,
                             = memProposal sym insideProposal
+            | (Token{tokid=CHAR, value="."}      : (qual@Token{tokid=STRCONST})   :_) <- snekot,
+              (true, proposals) <- tauProposal TY.tauString insideProposal 
+                            = proposals
+            | (Token{tokid=CHAR, value="."}      : (qual@Token{tokid=INTCONST})   :_) <- snekot,
+              (true, proposals) <- tauProposal (TY.tc "Int") insideProposal 
+                            = proposals
+            | (Token{tokid=CHAR, value="."}      : (qual@Token{tokid=LONGCONST})   :_) <- snekot,
+              (true, proposals) <- tauProposal (TY.tc "Long") insideProposal 
+                            = proposals
+            | (Token{tokid=CHAR, value="."}      : (qual@Token{tokid=BIGCONST})   :_) <- snekot,
+              (true, proposals) <- tauProposal (TY.tc "Integer") insideProposal 
+                            = proposals
+            | (Token{tokid=CHAR, value="."}      : (qual@Token{tokid=DBLCONST})   :_) <- snekot,
+              (true, proposals) <- tauProposal (TY.tc "Double") insideProposal 
+                            = proposals
+            | (Token{tokid=CHAR, value="."}      : (qual@Token{tokid=FLTCONST})   :_) <- snekot,
+              (true, proposals) <- tauProposal (TY.tc "Float") insideProposal 
+                            = proposals
+            | (Token{tokid=CHAR, value="."}      : (qual@Token{tokid=CHRCONST})   :_) <- snekot,
+              (true, proposals) <- tauProposal (TY.tc "Char") insideProposal 
+                            = proposals
+            | (Token{tokid=CHAR, value="."}      : (qual@Token{tokid=REGEXP})   :_) <- snekot,
+              (true, proposals) <- tauProposal (TY.tc "Regex") insideProposal 
+                            = proposals                            
             | (Token{tokid=someid}:Token{tokid=QUALIFIER, value=base}:Token{tokid=QUALIFIER, value}:_) <- snekot,
               someid == VARID || someid == CONID
                             = fromMaybe [] do
@@ -129,24 +154,25 @@ proposeContent !global !offset !tokens !index = propose
         memProposal :: Symbol -> Proposal -> [Proposal]
         memProposal sym prop
             | RhoTau _ tau   <- sym.typ.rho,                  -- look in env of type tau
-              (true, result) <- tauProposal tau = result
+              (true, result) <- tauProposal tau prop = result
             | RhoFun{rho}    <- sym.typ.rho,                  -- look in return type of fn
               RhoTau _ tau   <- rho,
-              (true, result) <- tauProposal tau = result                                      
+              (true, result) <- tauProposal tau prop = result                                      
             | otherwise = filteredEnvProposal prop (classMember:standardFilter) (thisTab global)
-            where
-                tauProposal tau
-                  | (tau,_) <- StG.run (TC.reduced tau) global,
-                    Just SymT{env, nativ=mbs} <- U.instTauSym tau global
-                        = case mbs of
-                            Just s  | ss <- s:U.supersOfNativ s global,     -- the supertypes of s (including s)
-                                      -- traceLn("supertypes are " ++ show ss) || true,
-                                      envs <- [ Symbol.env sym | s <- ss, 
-                                                q <- U.typesOfNativ s global, 
-                                                sym <- QName.findit q global ]
-                                    = (true, concatMap (flip envProposal prop) envs)
-                            other   = (true, envProposal env prop)
-                  | otherwise       = (false, [])
+        -- Find a proposal for a type 
+        tauProposal tau prop
+            | (tau,_) <- StG.run (TC.reduced tau) global,
+                Just SymT{env, nativ=mbs} <- U.instTauSym tau global
+                    = case mbs of
+                        Just s  
+                          | ss <- s:U.supersOfNativ s global,     -- the supertypes of s (including s)
+                            -- traceLn("supertypes are " ++ show ss) || true,
+                            envs <- [ Symbol.env sym | s <- ss, 
+                                        q <- U.typesOfNativ s global, 
+                                        sym <- QName.findit q global ]
+                              = (true, concatMap (flip envProposal prop) envs)
+                        other = (true, envProposal env prop)
+            | otherwise       = (false, [])
         
         -- Find the top level defintions that surround our offset
         -- For example, this comment is between 'proposeContent' and 'imports'
@@ -215,7 +241,7 @@ proposeContent !global !offset !tokens !index = propose
         -- make proposal for filtered symbols in a given symtab, considering prefix
         filteredEnvProposal :: Proposal -> [(Symbol -> Bool)] -> Symtab -> [Proposal]
         filteredEnvProposal model filters symtab 
-            = sortBy (comparing Proposal.newText) [ model.{
+            = sortBy (comparing Proposal.proposal) [ model.{
                             proposal,
                             newText,
                             additional = (fst . (symbolDocumentation sym).run) global} 
@@ -266,6 +292,12 @@ proposeContent !global !offset !tokens !index = propose
                 verbose = base ++ "   (" ++ nicer sym.name.tynm global ++ "." ++ base ++ ")"
                 constr = base ++ joined "" (map (const " _") flds)
                 fields = base ++ "{" ++ joined ", " (mapMaybe ConField.name flds) ++ "}" 
+        symProp base SymV{name=MName{base = it@m~´^(...)\$(.+)$´}}  
+            | Just field <- m.group 2 = case m.group 1 of
+                Just "chg" -> (field ++ "   (change/modify field)", "{" ++ field ++ "<-}")
+                Just "upd" -> (field ++ "   (update field)", "{" ++ field ++ "=}")
+                Just "has" -> (field ++ "   (check if field exists)", "{" ++ field ++ "?}")
+                other      -> (it, it)
         symProp base sym = (imported, base)
             where
                 imported | sym.name.our global  = base
