@@ -61,6 +61,8 @@ proposeContent :: Global -> Int -> Array Token -> Int -> [Proposal]
 proposeContent !global !offset !tokens !index = propose 
     where
         snekot = backwards tokens index     -- reverse order, last token before cursor on top
+        thisline = takeWhile onThisLine snekot
+        onThisLine tok = Token.line tok == token.line && tok.col > 0
         token  = if null snekot 
                     then Token{tokid=LEXERROR, value="", line=1, col=0, offset}
                     else tokens.frozenElemAt index
@@ -163,14 +165,32 @@ proposeContent !global !offset !tokens !index = propose
             | !inside, Token{tokid=QUALIFIER, value} <- token
                             = fromMaybe [] (nsEnvProposal value theProposal)
                                 ++ fromMaybe [] (tyEnvProposal value theProposal)
+            | !inside,
+              ((varid@Token{tokid=VARID, value}):Token{tokid=DCOLON}:_)  <- reverse thisline,
+              traceLn ("rule fundef " ++ value ++ "¦") || true,
+              Just (Right qname) <- Global.resolved global varid,
+              traceLn ("resolved " ++ nicer qname global) || true,
+              Just sym <- qname.findit global, 
+              traceLn ("found " ++ sym.nice global) || true,
+              sym.anno, traceLn (sym.nice global ++ " is annotated") || true,
+              isNothing sym.nativ, traceLn (sym.nice global ++ " is not nativ") || true,
+              isNothing sym.expr, traceLn (sym.nice global ++ " has no expression") || true,
+              (_, sigmas) <- U.returnType sym.typ.rho,
+                            = let
+                                conidProposals
+                                    | direct, token.tokid == CONID =
+                                        nsProposal directProposal
+                                            ++ envProposal (thisTab global) directProposal
+                                    | otherwise = []
+                            in fundefProposal varid sigmas ++ conidProposals
             | !inside, 
               Token{tokid=CONID, value}  <- token,
               traceLn ("rule case " ++ value ++ "¦") || true,
-              Just symtab <- tyEnv value,
-              traceLn (value ++ " is a type") || true,
-              cons <- [ con | con@SymD{} <- values symtab ], 
-              traceLn (value ++ " has " ++ show (length cons) ++ " constructors.") || true 
-                            = caseProposal true value cons
+              Just (symbol@SymT{}) <- TName{pack=global.thisPack, base=value}.findit global,
+              traceLn (value ++ " is a type") || true
+              -- cons <- [ con | con@SymD{} <- values symtab ], 
+              -- traceLn (value ++ " has " ++ show (length cons) ++ " constructors.") || true 
+                            = caseProposal true (Just symbol)
             | !inside, 
               Token{tokid=VARID, value}  <- token,
               traceLn ("rule case " ++ value ++ "¦") || true,
@@ -181,10 +201,8 @@ proposeContent !global !offset !tokens !index = propose
               RhoTau{tau} <- sym.typ.rho, 
               (tau,_) <- StG.run (TC.reduced tau) global,
               traceLn ("type is " ++ nicer tau global) || true,
-              Just SymT{env, name} <- U.instTauSym tau global,
-              cons <- [ con | con@SymD{} <- values env ], 
-              traceLn (nicer name global ++ " has " ++ show (length cons) ++ " constructors.") || true 
-                            = caseProposal false (nicer name global) cons
+              Just (symbol@SymT{}) <- U.instTauSym tau global 
+                            = caseProposal false (Just symbol)
             | !inside, 
               Token{tokid=VARID, value}  <- token,
               traceLn ("rule case " ++ value ++ "¦") || true,
@@ -195,10 +213,8 @@ proposeContent !global !offset !tokens !index = propose
               (tau,_) <- U.returnType sym.typ.rho, 
               (tau,_) <- StG.run (TC.reduced tau) global,
               traceLn ("return type is " ++ nicer tau global) || true,
-              Just SymT{env, name} <- U.instTauSym tau global,
-              cons <- [ con | con@SymD{} <- values env ], 
-              traceLn (nicer name global ++ " has " ++ show (length cons) ++ " constructors.") || true 
-                            = caseProposal false (nicer name global) cons
+              Just (symbol@SymT{}) <- U.instTauSym tau global 
+                            = caseProposal false (Just symbol)
             | direct, token.tokid == VARID
                             = localProposal directProposal
                                 ++ envProposal (thisTab global) directProposal
@@ -211,10 +227,49 @@ proposeContent !global !offset !tokens !index = propose
                                 ++ envProposal (thisTab global) insideProposal
         
         --
-        -- make a case statement
+        -- given a list of constructors, make function definitions, e.g. given
+        --      foo :: Just a -> Either b c -> r
+        -- generate
+        --      foo Nothing (Left _) = ...
+        --      foo Nothing (Right _) = ...
+        --      foo (Just _) (Left _) = ...
+        --      foo (Just _) (Right _) = ...
+        -- assumes
+        --      the name of the function is in token
+        
+        fundefProposal :: Token -> [Sigma] -> [Proposal]
+        fundefProposal token args = [proposal]
+            where 
+                tsyms = map instSigmaSym args
+                instSigmaSym ForAll{rho = RhoFun{}} = Nothing
+                instSigmaSym ForAll{rho = RhoTau{tau}} = U.instTauSym tau global
+                conss [] = [""]
+                conss (tsym:tsyms) = [ cons ++ " " ++ line
+                                         | cons <- (conts true tsym),
+                                           line <- conss tsyms ]
+                proposal = Proposal{
+                            proposal = "equations for  " ++ token.value, 
+                            newText  = stmt, 
+                            prefix   = "", 
+                            off      = offset, 
+                            len      = 0, 
+                            cursor   = (token.length-stmt.length), 
+                            additional = html  
+                        }
+                stmt    = joined "" bodies
+                bodies  = map (funhead ++) 
+                            (map (++ " = undefined    -- TODO: complete code\n") 
+                                (conss tsyms))
+                funhead = (packed . replicate (max 0 (token.col-1))) ' ' ++ token.value ++ " "
+                html    = (´\n´.           matcher blanks).  replaceFirst "\n<pre>\n" ++ "</pre>"
+                blanks  = (´  +´.        matcher stmt).  replaceAll   " "
+        
         --
-        caseProposal :: Bool -> String -> [Symbol] -> [Proposal]
-        caseProposal conid tyname cons  = 
+        -- make a case statement
+        -- given the symbol for a type, produce a proposal
+        --
+        caseProposal :: Bool -> Maybe Symbol -> [Proposal]
+        caseProposal conid tsym  = 
                 if !direct 
                 then [proposal]     -- sym ¦
                 else if conid
@@ -223,14 +278,16 @@ proposeContent !global !offset !tokens !index = propose
                     else proposal : localProposal directProposal
                                 ++ envProposal (thisTab global) directProposal
             where
-                thisline = takeWhile onThisLine snekot
-                onThisLine tok = Token.line tok == token.line && tok.col > 0
                 first    = last thisline    -- since it goes backwards
                 spaces   = (packed . replicate (max 0 (first.col+3))) ' '
-                forWhat  = if conid then "for type " else "for value of type "
+                forWhat  = case tsym of
+                    Nothing -> "for some type"
+                    Just t ->  if conid 
+                                    then "for type "  ++ t.name.base 
+                                    else "for value of type " ++ t.name.base
                 disp     = 5 + (if conid then 0 else token.length + 1)
                 proposal = Proposal{
-                            proposal = "case " ++ forWhat ++ tyname, 
+                            proposal = "case " ++ forWhat, 
                             newText  = stmt, 
                             prefix   = token.value, 
                             off      = token.offset, 
@@ -246,14 +303,29 @@ proposeContent !global !offset !tokens !index = propose
                 stmt = "case " ++ (if conid then "" else token.value ++ " ") ++ " of\n" 
                                ++ joined "" texts
                 texts = map (spaces ++) 
-                            (map (++ " -> undefined    -- TODO: complete code\n") conts) 
-                conts = case cons  of
-                            (_:_)  -> (map conText . sortBy (comparing Symbol.cid)) cons
-                            []     -> ["_"]
+                            (map (++ " -> undefined    -- TODO: complete code\n") 
+                                (conts false tsym)) 
+        conts parens tsym = case tsym of
+            Just sym -> case cons  of
+                    (_:_)  -> (map (conText parens) . sortBy (comparing Symbol.cid)) cons
+                    [] -- traceLn(show (Symbol.name sym) ++ " vs. " ++ show (TName pPreludeBase "Bool")) || true
+                       =  if Symbol.name sym == TName pPreludeBase "Bool"
+                            then ["true", "false"]
+                            else ["_"]
+                where cons = [ con | con@SymD{} <- values (Symbol.env sym)]
+            Nothing -> ["_"]
 
-                    -- null cons = ["_"]
-                    -- otherwise = map conText cons
-                conText sym = snd (symProp ((QName.base . Symbol.name) sym) sym)
+            -- null cons = ["_"]
+            -- otherwise = map conText cons
+        conText parens sym = enclosed (snd (symProp ((QName.base . Symbol.name) sym) sym))
+            where 
+                -- put complicated constructor in (), if required
+                enclosed it 
+                  | parens,
+                    (Symbol.name sym).base  != ":",        -- not list cons
+                    (Symbol.name sym).base  !~ ´^\(´,      -- not tuple 
+                    any (isNothing . ConField.name) (Symbol.flds sym) = "(" ++ it ++ ")"
+                  | otherwise = it
                                              
         -- Find a proposal for id.member
         --
