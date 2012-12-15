@@ -114,6 +114,8 @@ frege.mk: Makefile mkmk.pl
 dist: fregec.jar
 	perl mkdist.pl
 
+
+
 fregec.jar: compiler $(DIR)/check1 
 	$(FREGECC)  -make frege/StandardLibrary.fr
 	jar  -cf    fregec.jar -C build frege
@@ -128,6 +130,7 @@ test-jar: fallback.jar
 	$(FREGECC) -make frege.compiler.Main
 	jar  -cf    fregec.jar -C build frege
 	jar  -uvfe  fregec.jar frege.compiler.Main
+	cp fregec.jar  ../eclipse-plugin/lib/fregec.jar
 
 
 $(DIR)/check1: $(DIR)/PreludeProperties.class
@@ -285,12 +288,14 @@ $(DATA1)/List.class: frege/data/List.fr
 	$(FREGEC0) frege/data/List.fr
 $(DATA1)/Tuples.class: $(CONTROL1)/Monoid.class frege/data/Tuples.fr
 	$(FREGEC0) frege/data/Tuples.fr
+$(DATA1)/Bits.class: frege/data/Bits.fr
+	$(FREGEC0) frege/data/Bits.fr
 $(DATA1)/Maybe.class: frege/data/Maybe.fr
 	$(FREGEC0) frege/data/Maybe.fr
 $(LIBF1)/ForkJoin.class: frege/lib/ForkJoin.fr
 	$(FREGEC0) $?
 
-PRE1 = $(DIR1)/Prelude.class $(DIR1)/IO.class $(DIR1)/List.class
+PRE1 = $(DIR1)/Prelude.class $(DIR1)/IO.class $(DIR1)/List.class $(DATA1)/Bits.class
 
 compiler1: $(RUNTIME)  $(DIR1)/check1  $(LIBF1)/PP.class $(COMPF1)/Grammar.class $(COMPF1)/Main.class
 	@echo stage 1 compiler ready
