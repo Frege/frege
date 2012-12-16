@@ -56,11 +56,11 @@ Implementation.pdf: Implementation.dvi
 Implementation.dvi: Implementation.tex
 	latex -interaction batchmode -quiet Implementation.tex
 
-utfcode.eps: utfcode.pnm
-	pnmtops -nocenter -dpi 72  -noturn -rle utfcode.pnm > utfcode.eps
-
-utfcode.pnm: utfcode.TIF
-	tifftopnm utfcode.tif >utfcode.pnm
+# utfcode.eps: utfcode.pnm
+#	pnmtops -nocenter -dpi 72  -noturn -rle utfcode.pnm > utfcode.eps
+#
+#utfcode.pnm: utfcode.TIF
+#	tifftopnm utfcode.tif >utfcode.pnm
 
 Test.ps: Test.dvi
 	dvips Test
