@@ -16,7 +16,7 @@ $exe = ".exe" unless defined $ENV{SHELL} and length $ENV{SHELL} > 0;
 
 my $version = qx{git describe --long};
 chomp $version;
-$version =~ s/-(\d+)-.*$/.$1/;
+# $version =~ s/-(\d+)-.*$/.$1/;
 print <<XXX;
 -- automatically created with $0
 -- based on git describe
