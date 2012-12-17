@@ -289,7 +289,7 @@ $(DATA1)/List.class: frege/data/List.fr
 $(DATA1)/Tuples.class: $(CONTROL1)/Monoid.class frege/data/Tuples.fr
 	$(FREGEC0) frege/data/Tuples.fr
 $(DATA1)/Bits.class: frege/data/Bits.fr
-	$(FREGEC0) frege/data/Bits.fr
+	$(FREGEC0) -make frege/data/Bits.fr
 $(DATA1)/Maybe.class: frege/data/Maybe.fr
 	$(FREGEC0) frege/data/Maybe.fr
 $(LIBF1)/ForkJoin.class: frege/lib/ForkJoin.fr
