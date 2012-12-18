@@ -41,6 +41,8 @@ import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.io.Serializable;
 
+import frege.rt.Box;
+
 
 /**
  * Miscellanous functions and methods needed in frege.
@@ -149,6 +151,23 @@ public class Runtime {
         }
     }
 
+    /**
+     * <p> Cheat with phantom types. </p>
+     * <p> This method is announced with type String a -&gt; Int -&gt; a
+     * but it always returns a char.</p>
+     * <p> This is fine as long as nobody is able to actually create a
+     * value with type, say String Int. <br>
+     * This could be done only with another malicious native function, though.</p>
+     */
+    public final static Object itemAt(final String value, final int offset) {
+        return value.charAt(offset);
+    }
+    /**
+     * <p> The empty polymorphic value of type StringJ a </p>
+     * <p> Referenced in frege.prelude.List.ListLike_StringJ
+     */
+   final public static String emptyString = "";
+    
 	/**
 	 * @param args
 	 */
