@@ -36,8 +36,10 @@
 package frege.runtime;
 
 /**
- * This interface will be implemented by 
- * {@link Lazy} and {@link Lambda} 
+ * Something that can be applied to a value.
+ * 
+ * <p>This interface will be implemented by 
+ * {@link Delayed} and {@link Lambda} 
  * so that {@link Applicable#apply} always returns
  * another {@link Applicable}, and hence, for application of lambda bound functions,
  * the following code can be generated:
@@ -47,7 +49,7 @@ package frege.runtime;
  *  and this works no matter if f is actually an unary function
  *  that returns another function or a binary function.
  *  <p>
- *  In the latter case, the intermediate {@link Lazy} 
+ *  In the latter case, the intermediate {@link Delayed} 
  *  casts the evaluated value to {@link Lambda}
  * 
  * @author ingo
@@ -65,4 +67,15 @@ public interface Applicable {
 	 *                            value that does not evaluate to a {@link Lambda}
 	 */
 	public Applicable apply(Object arg);
+	
+	/**
+	 * <p>Get the {@link Lazy} result of applications.</p>
+	 * <p>When the last argument has been applied, 
+	 *  the result is a {@link Lazy} object, which can be obtained
+	 *  through this method.</p>
+	 *  
+	 *  @return the {@link Lazy} value
+	 *  @throws ClassCastException if invoked on an {@link Lambda} that is not yet fully applied.
+	 */
+	public Lazy result();
 }

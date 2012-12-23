@@ -37,11 +37,12 @@ package frege.runtime;
 
 /**
  * <p> This is the base class for all function values. </p>
+ * <p> Because all functions extend this, all functions are also {@link Lazy} values.</p>
  * <p> Subclasses must implement {@link Applicable#apply} </p>
  * @author ingo
  *
  */
-public abstract class Lambda implements Applicable, Value {
+public abstract class Lambda implements Lazy, Applicable, Value {
 
 	/**
 	 * @return 0 for functions
@@ -50,5 +51,20 @@ public abstract class Lambda implements Applicable, Value {
 	@Override
 	public int _constructor() {
 		return 0;
+	}
+	
+	/**
+	 * Trying to interpret a partially applied function as lazy value
+	 * should never happen from compiled code.
+	 */
+	public Lazy result() { return this; }
+	
+	@Override
+	public Lambda call() { return this; }
+	
+	@SuppressWarnings("unchecked")
+	@Override
+	public <R> R forced() {
+		return (R) this;
 	}
 }

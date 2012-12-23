@@ -62,18 +62,18 @@ public abstract class Func14 extends Lambda {
     /**
      * <p>Apply this function to all its arguments at once.</p>
      *
-     * <p> This method creates an instance of {@link Lazy} that,
+     * <p> This method creates an instance of {@link Delayed} that,
      * when evaluated, invokes the {@link Func14#eval} method of this
      * function.</p>
      *
-     * Use of this method is preferrable if all arguments are known compared
+     * Use of this method is preferrable compared
      * to repeated invokation of the single argument form since intermediate
      * closure creation is saved.
      *
-     * @return an instance of type <tt>Lazy</tt>
+     * @return an instance of type {@link Delayed} 
      */
-    final public Lazy apply(final Object arg1,final Object arg2,final Object arg3,final Object arg4,final Object arg5,final Object arg6,final Object arg7,final Object arg8,final Object arg9,final Object arg10,final Object arg11,final Object arg12,final Object arg13,final Object arg14) {
-        return new Lazy () {
+    final public Delayed apply(final Object arg1,final Object arg2,final Object arg3,final Object arg4,final Object arg5,final Object arg6,final Object arg7,final Object arg8,final Object arg9,final Object arg10,final Object arg11,final Object arg12,final Object arg13,final Object arg14) {
+        return new Delayed () {
             final public Object eval() { return Func14.this.eval(arg14,arg13,arg12,arg11,arg10,arg9,arg8,arg7,arg6,arg5,arg4,arg3,arg2,arg1); }
         };
     }
@@ -98,5 +98,5 @@ public abstract class Func14 extends Lambda {
      *
      * @return possibly lazy result
      */
-    abstract public Object eval(final Object arg14,final Object arg13,final Object arg12,final Object arg11,final Object arg10,final Object arg9,final Object arg8,final Object arg7,final Object arg6,final Object arg5,final Object arg4,final Object arg3,final Object arg2, Object arg1);
+    abstract public Object eval(final Object arg14,final Object arg13,final Object arg12,final Object arg11,final Object arg10,final Object arg9,final Object arg8,final Object arg7,final Object arg6,final Object arg5,final Object arg4,final Object arg3,final Object arg2, final Object arg1);
 }

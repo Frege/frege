@@ -49,15 +49,15 @@ public abstract class Func1 extends Lambda {
    /**
      * <p>Apply this function to an argument.</p>
      *
-     * <p> This method creates an instance of {@link Lazy} that 
+     * <p> This method creates an instance of {@link Delayed} that 
      * will pass the argument to the {@link Func1#eval} method of this function
      * when evaluated. </p>
      *
-     * @return an instance of type <tt>Lazy</tt> that that promises to produce a
+     * @return an instance of type <tt>Delayed</tt>  that promises to produce a
      * value of the return type of this function.
      */
-    final public Lazy apply(final Object arg1) {
-        return new Lazy () {
+    final public Delayed apply(final Object arg1) {
+        return new Delayed () {
             final public Object eval() {
                 return Func1.this.eval(arg1);
             }
@@ -68,7 +68,7 @@ public abstract class Func1 extends Lambda {
     /**
      * <p> Run the function. </p>
      *
-     * <p> This method will be called by the {@link Lazy#eval} method
+     * <p> This method will be called by the {@link Delayed#eval} method
      * of the object resulting from <tt>this.apply(...)</tt>.
      * It actually performs computation and
      * returns a result or another lazy value that will evaluate to the result.<br>

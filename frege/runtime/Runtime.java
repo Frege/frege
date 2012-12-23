@@ -41,9 +41,6 @@ import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.io.Serializable;
 
-import frege.rt.Box;
-
-
 /**
  * Miscellanous functions and methods needed in frege.
  * 
@@ -175,4 +172,10 @@ public class Runtime {
 		// TODO Auto-generated method stub
 	}
 
+	final public static boolean fork(Lambda it) {
+		Lazy a = it.apply(true).result();
+	    if (java.util.concurrent.ForkJoinTask.inForkJoinPool())
+	    	java.util.concurrent.ForkJoinTask.adapt(a).fork();
+	    return true;
+	}
 }
