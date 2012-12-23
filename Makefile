@@ -5,7 +5,7 @@
 # The standard distribution needs a Java 1.7 JDK.
 # Because people may need previous JDKs/JREs for different work,
 # there are 2 mechanisms to get the right java:
-# 
+#
 #   - put the JDK7 in your PATH after other JDKs, and make java7 a symbolic link to
 #     the JDK7 java binary. (On Windows, just copy java.exe to java7.exe)
 #   - For UNIX users: make the follwoing alias:
@@ -116,7 +116,7 @@ dist: fregec.jar
 
 
 
-fregec.jar: compiler $(DIR)/check1 
+fregec.jar: compiler $(DIR)/check1
 	$(FREGECC)  -make frege/StandardLibrary.fr
 	jar  -cf    fregec.jar -C build frege
 	jar  -uvfe  fregec.jar frege.compiler.Main
@@ -235,7 +235,7 @@ $(DIR1)/List.class: frege/List.fr
 $(CONTROL1)/Monoid.class: frege/control/Monoid.fr
 	$(FREGEC0) $?
 $(COMPF1)/Classtools.class: frege/compiler/Classtools.fr
-	$(FREGEC0) $?
+	$(FREGEC0) -make $?
 $(COMPF1)/BaseTypes.class: frege/compiler/BaseTypes.fr
 	$(FREGEC0) $?
 $(COMPF1)/Utilities.class: $(COMPF1)/BaseTypes.class $(COMPF1)/Classtools.class $(COMPF1)/Data.class $(COMPF1)/Nice.class $(COMPS)/Utilities.fr
@@ -511,7 +511,7 @@ $(RTDIR)/FregeCompiler.class: frege/rt/FregeCompiler.java
 
 
 doc/index.html: $(RUNTIME)
-	
+
 
 docu: build/frege/tools/Doc.class
 	$(FREGECC)  -make frege/StandardLibrary.fr
