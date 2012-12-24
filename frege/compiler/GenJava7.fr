@@ -119,21 +119,38 @@ invoke1 meth arg = JInvoke meth [arg]
 toMode :: RMode -> Binding -> Binding
 toMode RStrict  (bind@Bind{mode, ftype, jtype, jex})
     | mode == RStrict = bind
+    | Lazy{} <- jtype = Bind{mode = RStrict, ftype, jtype = boxd, 
+                            jex   = JInvoke JExMem{jex, name="forced", targs=[boxd]} []}
+    | boxd == jtype   = bind.{mode= RStrict}                             
     | otherwise       = Bind{mode = RStrict, ftype, 
                             jtype = boxd, 
                             jex   = invoke1 (methodForced boxd) jex}
     where boxd = boxed jtype
 toMode RLazy    (bind@Bind{mode, ftype, jtype, jex})
     | mode == RLazy  = bind
-    | otherwise      = Bind{mode  = RLazy, ftype, 
+    | otherwise      = case jtype  of
+        Ref{jname, targs}   -> bind.{mode=RStrict}
+        TArg{var}           -> delayed
+        Nativ{typ, targs}   -> delayed
+        Lazy{yields}        -> bind.{mode=RLazy}
+        Func{args, yields}  -> bind.{mode=RStrict}
+        Lambda              -> bind.{mode=RStrict}
+        Object              -> delayed
+        Algebraic           -> bind.{mode=RStrict}
+        Value               -> delayed
+    where
+        delayed = Bind{mode  = RLazy, ftype, 
                             jtype = lazy jtype, 
-                            jex   = invoke1 methodDelay jex}     
+                            jex   = invoke1 methodDelay jex}      
 
 toMode RUnknown (bind@Bind{mode, ftype, jtype, jex})  = error ("toMode RUnknown ")
 
 
 ---    make a binding strict
 strictBind bind = toMode RStrict bind
+
+---    make a binding lazy
+lazyBind bind = toMode RLazy bind
 
 -- --- generate necessary casts so that java type accords to sigma type
 -- coerce :: Binding -> StG Binding
@@ -648,70 +665,23 @@ pass = do
 --     g <- getST
 --     foreach (each g.gen.lambdas) (emitLazy >=> sequence • map (pp • anno)) 
 -- 
---     let toMaybe | g.thisPack == pPreludeBase = [mkMaybe false, mkMaybe true] ++ primMaybes
---                 | otherwise = []
---                 where
---                     primMaybes = map (uncurry primMaybe) (zip p1 p2)
---                         where
---                             p1 = map (flip Nativ []) primitiveTypes
---                             p2 = map (flip Ref [] • JName "java.lang")
---                                     ["Byte", "Short", "Boolean", "Character", "Integer", "Long", "Float", "Double"]
---         {-
---          * Code for the _toMaybe function(s)
---          -}
---         -- mbSigma  = ForAll ["a"] (RhoTau [] mbTau)
---         -- mbTau    = TApp (TCon {pos=Position.null, name = TName pPreludeBase "Maybe"}) tvara
---         tvara    = TVar {var = "a", pos=Position.null, kind = KVar}
--- 
---         mkMaybe boxd = toMaybeMethod
---             where
---                 obj      = Ref (JName "" "Object") []
---                 -- boxeda   = if boxd then Ref (JName "" "Box") [] else jtValue
---                 toMaybeMethod = JMethod {attr = attrs [JUnchecked, JFinal, JPublic],
---                                 gargs = [],
---                                 jtype = Nativ "static" [],
---                                 name = "TMaybe _toMaybe",
---                                 args = [(attrFinal,
---                                     ForAll [] (RhoTau [] tvara),
---                                     if boxd then obj else lazy jtValue,
---                                     "arg")],
---                                 body = JBlock [JReturn toMBex]}
---                 toMBex = JQC (JBin (JAtom "arg") "==" (JAtom "null"))
---                             (JInvoke (JStMem (JName "TMaybe.DNothing" "mk") []) [])
---                             (JInvoke (JStMem (JName "TMaybe.DJust"    "mk") []) [boxArg])
---                 boxArg = if boxd
---                     then JInvoke (JStMem (JName "Box" "mk") []) [JAtom "arg"]
---                     else JAtom "arg"
---         -- create java code for primitive _toMaybe functions
---         -- will be used whenever a native return type is Maybe x and x is a primitive type
---         primMaybe prim ref = toMaybeMethod
---             where
---                 primname = maybe "unsupported primitive type" id (isPrimitive prim)
---                 boxprim = boxed prim
---                 boxclass = case boxprim of
---                     Ref x _ -> x
---                     _ -> error "boxed prim must be Ref"
---                 toMaybeMethod = JMethod {
---                         attr = attrs [JFinal, JPublic, JStatic],
---                         gargs = [],
---                         jtype = Ref (JName "" "TMaybe") [],
---                         name = "_" ++ primname ++ "ToMaybe",
---                         args = [(attrFinal, ForAll [] (RhoTau [] tvara), ref, "arg")],
---                         body = JBlock [JReturn toMBex]}
---                 toMBex = JQC (JBin (JAtom "arg") "==" (JAtom "null"))
---                             (JInvoke (JStMem (JName "TMaybe.DNothing" "mk") []) [])
---                             (JInvoke (JStMem (JName "TMaybe.DJust" "mk")    []) [boxArg])
---                 boxArg = JInvoke (JStMem (U.memberOf boxclass "mk") []) [JAtom "arg"]
+
+    let toMaybe = [
+            "final public static TMaybe _toMaybe(Object it) {",
+            "   return it == null ? TMaybe.DNothing.it : TMaybe.DJust.mk(it);",
+            "}",
+            ]
+    when (g.thisPack == pPreludeBase) (foreach toMaybe U.println)
     let toList = [ 
              "final public static<T> TList _toList(T[] arr) {",
-             "   if (arr == null) return PreludeBase.TList.DList.mk();",
+             "   if (arr == null) return PreludeBase.TList.DList.it;",
              "   int i = arr.length - 1;",
-             "   TList it = TList.DList.mk();",
+             "   TList it = TList.DList.it;",
              "   while (i >= 0) {",
              "       final T elem = arr[i];",
              "       i = i-1;",
              "       if (elem == null) continue;",
-             "       it = TList.DCons.mk(Delayed.delayed(elem), it);",
+             "       it = TList.DCons.mk(elem, it);",
              "   }",
              "   return it;",
              "}",
@@ -724,7 +694,7 @@ pass = do
              "               if (iter.hasNext()) {",
              "                   final Object x = iter.next();",
              "                   if (x == null) continue;",
-             "                   return PreludeBase.TList.DCons.mk(Delayed.delayed(x),", 
+             "                   return PreludeBase.TList.DCons.mk(x,", 
              "                              this.apply(iter));",
              "               }",
              "               else return PreludeBase.TList.DList.it;",
@@ -970,9 +940,8 @@ conCode symt cons (sym@SymD {flds, cid}) = do
                              body = JBlock super}
         !super 
             | arity == 0 = []
-            | otherwise = take (length args) (zipWith JAssign
-                                                     (map JAtom memNames)
-                                                     (map JAtom argNames))
+            | otherwise = zipWith3 assign flds memNames constrargs
+                                                     
         getters = -- if symt.product then [] else
                      atomMethod (conGetter sym.name) jtype "this" :
                      [ atomMethod (conGetter (Symbol.name con))
@@ -987,6 +956,12 @@ mkMember g Field{pos, name, doc, vis, strict=s, typ} mem
                     jtype = if s then (strict . sigmaJT g) typ else (lazy . sigmaJT g) typ,
                     name = maybe mem ("mem$" ++) name, 
                     init = Nothing}
+
+assign :: ConField QName -> String -> FormalArg -> JStmt
+assign Field{pos, name, doc, vis, strict, typ} mem formalArg  = JAssign (JAtom toname) bind.jex
+    where
+        toname = maybe mem ("mem$" ++) name
+        bind   = adaptArg formalArg (if strict then S[] else U)
 
 {--
   * Code for data types
@@ -1062,7 +1037,7 @@ symCode binds (sym@SymT {product=true}) = do                    -- product
         constr      = JConstr {attr = attrs [JPrivate], jtype = jtype,
                              args = constrargs,
                              body = JBlock super}
-        super = take arity (zipWith JAssign (map JAtom memNames) args)
+        super = zipWith3 assign symd.flds memNames constrargs
         make  = JMethod {attr = attrs [JPublic, JFinal, JStatic],
                          gargs = jtype.targs, jtype, name = "mk",
                          args = constrargs,
@@ -1203,7 +1178,7 @@ symCode binds (sym@SymT {sid, nativ = Just _}) = do                             
 -- --        stio [JComment (nice sym g ++ " :: " ++ nice sym.typ g), wrapper]
 -- 
 symCode _ (sym@SymL{}) = getST >>= stio • (:[]) • JComment • nice sym
--- symCode binds (sym@SymV {nativ = Just item}) = methClass sym
+symCode binds (sym@SymV {nativ = Just item}) = methClass sym
 -- 
 -- 
 -- 
@@ -1361,6 +1336,7 @@ symCode binds sym = do
 workerMethod :: Global -> Symbol -> JName
 workerMethod g (sym@SymD {name, flds}) = case U.javaName g name of
          jname | Just (SymT {enum = true}) <- name.tynm.findit g = jname
+               | null flds = U.memberOf jname "it"
                | otherwise = U.memberOf jname "mk"
 workerMethod g (sym@SymV {name, depth = 0}) = U.javaName g name
 workerMethod g (sym@SymV {name = Local{}})  = (U.javaName g sym.name).{base=(workName g sym)}
@@ -1461,9 +1437,15 @@ argDef g attr stri sigmas argNms
      where
          argdef g (s, (sig, nm))
             | Strictness.isStrict s = (attr, sig, strict argjt, nm)
-            | otherwise             = (attr, sig, lazy argjt, nm)
+            | otherwise             = (attr, sig, Object, nm)
             where argjt = sigmaJT g sig
- 
+
+{--
+    generate formal argument list for a eval method
+    -}
+evalArgDef attr sigmas argNms = zipWith (argdef attr) sigmas argNms
+    where
+        argdef attr sigma name = (attr, sigma, Object, name)     
 {--
     convert an arg quadrupel to a 'Binding'
     -}
@@ -1479,12 +1461,13 @@ argBind(_, sig, jt, s) = Bind (jtRmode jt) sig jt (JAtom s)
 --     | otherwise = stio RLazy
 -- 
 {--
-     adapt a 'Binding' to the required strictness
+     Adapt a 'Binding' to the required strictness
+     It is guaranteed that the Binding is not 'RUnknown' afterwards.
     --}
 adaptBind :: Binding -> Strictness -> Binding
 adaptBind bind s
      | s.isStrict = strictBind bind
-     | otherwise  = bind
+     | otherwise  = lazyBind   bind
  
 --- adapt argument to wanted strictness
 adaptArg a s = adaptBind (argBind a) s
@@ -1772,9 +1755,9 @@ adaptArg a s = adaptBind (argBind a) s
 --         JComment (nicer sym.typ g),
 --         JComment (nicer x g)] ++ defs)
 -- topFun _ _ = error "topFun: no function"
--- 
--- 
--- returnTau sigma = (fst • U.returnType) (Sigma.rho sigma)
+
+
+returnTau sigma = (fst • U.returnType) (Sigma.rho sigma)
 sigmaTau f (ForAll [] (RhoTau [] ty)) = f ty
 sigmaTau f (ForAll [] rhofun) = sigmaTau f (ForAll [] (U.tauRho rhofun))
 sigmaTau f _ = Nothing
@@ -1804,164 +1787,165 @@ niSpecial ty
      | Just x <- U.isList ty      = true
      | otherwise = false
  
--- {--
---  * check native method
---  -}
--- methClass (sym@SymV {nativ = Just item, pur=true, typ})
---     | Just (_, tau) <- U.isIO (returnTau typ) = do
---         g <- getST
---         U.error sym.pos (msgdoc ("contradictory declaration, " ++ nice sym.name g
---             ++ " cannot be pure and have a return type of " ++ nicer (returnTau typ) g))
---         stio []
---     | Just _ <- U.isUnit (returnTau typ) = do
---         U.error sym.pos (msgdoc ("void " ++ item ++ "(...) cannot be a pure function"))
---         stio []
---     | (_, [sig]) <- U.returnType typ.rho,
---       Just _ <- sigmaTau U.isUnit sig = do
---         U.error sym.pos (msgdoc (item ++ "() cannot be a pure function"))
---         stio []
--- methClass (sym@SymV {nativ = Just item, pur=false, typ})
---     | Nothing <- U.isIO (returnTau typ) = do
---         g <- getST
---         U.error sym.pos (msgdoc (nice sym.name g
---             ++ " has an illegal return type for a method that is not pure,"
---             ++ " perhaps  " ++ nicer (sttyp (returnTau typ)) g
---             ++ "  would work"))
---         stio []
---     where
---         sttyp tau
---             | [s] <- keys (U.freeTauTVars [] Nil tau) = TApp (TApp st (tv s)) tau
---             | otherwise = TApp (TApp st (tv "s")) tau
---             where
---                 st   = TCon {pos=sym.pos, name = TName pPreludeBase "ST"}
---                 tv s = TVar {pos=sym.pos, var = s, kind = KType}
--- 
--- methClass (sym@SymV {nativ = Just item, pur, typ}) = do
---         let
---             nik = niKind item
---         ok1 <- argsOk nik atys
---         ok2 <- retOk  nik rty
---         if ok1 && ok2 then methCode sym else stio []
---     where
---         (rty, atys) = U.returnType typ.rho
---         isMBU tau | Just x <- U.isMaybe tau, Just _ <- U.isUnit x = true
---                   | Just x <- U.isException tau = isMBU x
---                   | Just (_, x) <- U.isIO tau = isMBU x
---                   -- Just _ <- U.isUnit tau = true
---                   | otherwise             = false
---         validIOtype tau | Just (_, x) <- U.isIO tau = case U.isUnit x of
---                                                         Just _ -> true
---                                                         _ -> validXtype x
---                         | otherwise = validXtype tau
---         validXtype tau  | Just x <- U.isException tau = case U.isUnit x of
---                                                         Just _ -> true
---                                                         _ -> validMBtype x
---                         | otherwise = validMBtype tau
---         validMBtype tau | Just x <- U.isMaybe tau = not (niSpecial x)
---                         | Just x <- U.isList  tau = not (niSpecial x)
---                         | otherwise = not (niSpecial tau)
---         validCaftype tau | Just (_, x) <- U.isIO tau = validMBtype x
---                          | otherwise = validMBtype tau
---         validNIArg sigma | maybe true (const false) (sigmaTau Just sigma) = do
---             g <- getST
---             U.error sym.pos (msgdoc (nice sigma g ++ " is not valid for native method arguments"))
---             stio false
---         validNIArg sigma = do
---             g <- getST
---             let tau = maybe undefined id (sigmaTau Just sigma)
---                 xio = isJust (U.isIO tau) || isJust (U.isException tau)
---             if isMBU tau || isJust (U.isUnit tau)
---                 then do
---                     U.error sym.pos (msgdoc ("type  " ++ nice tau g
---                         ++ "  is illegal for a native function argument,"
---                         ++ " () may only appear to indicate an empty argument list."))
---                     stio false
---                 else if xio
---                     then do
---                         U.warn sym.pos (msgdoc (nice sym g ++ "  has an argument of type  "
---                             ++ nice sigma g))
---                         U.hint sym.pos (msgdoc ("Exception, ST and IO types have a special meaning"
---                             ++ " in the native interface. "
---                             ++ "Using them in argument position is most likely wrong."))
---                         stio true
---                     else stio true
---         retOk _ tau | isMBU tau = do
---             U.error sym.pos (msgdoc "The construct  Maybe ()  makes no sense in a native return type.")
---             stio false
---         retOk _ tau | not (validIOtype tau) = do
---             U.error sym.pos (msgdoc "Illegal nesting of IO, ST, Exception, Maybe and () in the return type.")
---             stio false
---         retOk NIStatic tau | null atys, not (validCaftype tau) = do
---             U.error sym.pos (msgdoc "A static member may not be void and it certainly throws no exceptions.")
---             stio false
---         retOk NIMember tau | not (validCaftype tau) = do
---             U.error sym.pos (msgdoc "An instance member may not be void and it certainly throws no exceptions.")
---             stio false
---         retOk _ _ = stio true
---         argsOk NIOp [x]   = validNIArg x
---         argsOk NIOp [x,y] = liftM2 (&&) (validNIArg x) (validNIArg y)
---         argsOk NIOp _ = do
---             g <- getST
---             U.error sym.pos (msgdoc ("Java operator " ++ nice sym.name g ++ " demands 1 or 2 operands."))
---             stio false
---         argsOk kind [] | kind `elem` [NINew, NIMethod, NICast] = do
---             g <- getST
---             U.error sym.pos (msgdoc ("Illegal type for " ++ nice sym.name g ++ ", must be function type"))
---             stio false
---         argsOk NICast [x]
---             | Nothing <- sigmaTau U.isUnit x = stio true
---         argsOk NICast _ = do
---             U.error sym.pos (msgdoc "A java type cast must have exactly one argument which may not be ()")
---             stio false
---         argsOk NIMember (this:xs)
---           | length xs > 0 = do
---                 U.error sym.pos (msgdoc ("Getter for " ++ item ++ " cannot have more than 1 argument."))
---                 stio false
---           | otherwise = do
---             g <- getST
---             sjt <- sigmaJT this
---             javatype <- case sigmaTau Just this of
---                 Just tau -> U.isJavaType tau
---                 _ -> stio false
---             if javatype
---                 then if maybe true (const false) (isPrimitive sjt)
---                     then stio true
---                     else do
---                         U.error sym.pos (msgdoc ("Cannot get instance member " ++ item
---                             ++ " from primitive"))
---                         stio false
---                 else do
---                     U.error sym.pos (msgdoc ("Cannot get instance member " ++ item
---                             ++ " from non-native object"))
---                     stio false
---         argsOk NIMethod (this:xs) = do
---             g <- getST
---             sjt <- sigmaJT this
---             javatype <- case sigmaTau Just this of
---                 Just tau -> U.isJavaType tau
---                 _ -> stio false
---             if javatype
---                 then if maybe true (const false) (isPrimitive sjt)
---                     then do
---                         oks <- mapSt validNIArg xs
---                         stio (and oks)
---                     else do
---                         U.error sym.pos (msgdoc ("Cannot invoke instance method " ++ item
---                             ++ " on primitive type"))
---                         stio false
---                 else do
---                     U.error sym.pos (msgdoc ("Cannot invoke instance method " ++ item
---                             ++ " on non native type"))
---                     stio false
---         argsOk NINewArray xs | length xs > 1 = do
---             U.error sym.pos (text "Array must have only one argument.")
---             stio false
---         argsOk kind [x] | kind != NIMethod, Just _ <- sigmaTau U.isUnit x  = stio true
---         argsOk _ xs = do
---             oks <- mapSt validNIArg xs
---             stio (and oks)
--- methClass _  = undefined
---
+{--
+  * check native method
+  -}
+methClass (sym@SymV {nativ = Just item, pur=true, typ})
+     | Just (_, tau) <- U.isIO (returnTau typ) = do
+         g <- getST
+         U.error sym.pos (msgdoc ("contradictory declaration, " ++ nice sym.name g
+             ++ " cannot be pure and have a return type of " ++ nicer (returnTau typ) g))
+         stio []
+     | Just _ <- U.isUnit (returnTau typ) = do
+         U.error sym.pos (msgdoc ("void " ++ item ++ "(...) cannot be a pure function"))
+         stio []
+     | (_, [sig]) <- U.returnType typ.rho,
+       Just _ <- sigmaTau U.isUnit sig = do
+         U.error sym.pos (msgdoc (item ++ "() cannot be a pure function"))
+         stio []
+methClass (sym@SymV {nativ = Just item, pur=false, typ})
+     | Nothing <- U.isIO (returnTau typ) = do
+         g <- getST
+         U.error sym.pos (msgdoc (nice sym.name g
+             ++ " has an illegal return type for a method that is not pure,"
+             ++ " perhaps  " ++ nicer (sttyp (returnTau typ)) g
+             ++ "  would work"))
+         stio []
+     where
+         sttyp tau
+             | [s] <- keys (U.freeTauTVars [] Nil tau) = TApp (TApp st (tv s)) tau
+             | otherwise = TApp (TApp st (tv "s")) tau
+             where
+                 st   = TCon {pos=sym.pos, name = TName pPreludeBase "ST"}
+                 tv s = TVar {pos=sym.pos, var = s, kind = KType}
+ 
+methClass (sym@SymV {nativ = Just item, pur, typ}) = do
+         let
+             nik = niKind item
+         ok1 <- argsOk nik atys
+         ok2 <- retOk  nik rty
+         g <- getST
+         if ok1 && ok2 then return (methCode g sym) else stio []
+     where
+         (rty, atys) = U.returnType typ.rho
+         isMBU tau | Just x <- U.isMaybe tau, Just _ <- U.isUnit x = true
+                   | Just x <- U.isException tau = isMBU x
+                   | Just (_, x) <- U.isIO tau = isMBU x
+                   -- Just _ <- U.isUnit tau = true
+                   | otherwise             = false
+         validIOtype tau | Just (_, x) <- U.isIO tau = case U.isUnit x of
+                                                         Just _ -> true
+                                                         _ -> validXtype x
+                         | otherwise = validXtype tau
+         validXtype tau  | Just x <- U.isException tau = case U.isUnit x of
+                                                         Just _ -> true
+                                                         _ -> validMBtype x
+                         | otherwise = validMBtype tau
+         validMBtype tau | Just x <- U.isMaybe tau = not (niSpecial x)
+                         | Just x <- U.isList  tau = not (niSpecial x)
+                         | otherwise = not (niSpecial tau)
+         validCaftype tau | Just (_, x) <- U.isIO tau = validMBtype x
+                          | otherwise = validMBtype tau
+         validNIArg sigma | maybe true (const false) (sigmaTau Just sigma) = do
+             g <- getST
+             U.error sym.pos (msgdoc (nice sigma g ++ " is not valid for native method arguments"))
+             stio false
+         validNIArg sigma = do
+             g <- getST
+             let tau = maybe undefined id (sigmaTau Just sigma)
+                 xio = isJust (U.isIO tau) || isJust (U.isException tau)
+             if isMBU tau || isJust (U.isUnit tau)
+                 then do
+                     U.error sym.pos (msgdoc ("type  " ++ nice tau g
+                         ++ "  is illegal for a native function argument,"
+                         ++ " () may only appear to indicate an empty argument list."))
+                     stio false
+                 else if xio
+                     then do
+                         U.warn sym.pos (msgdoc (nice sym g ++ "  has an argument of type  "
+                             ++ nice sigma g))
+                         U.hint sym.pos (msgdoc ("Exception, ST and IO types have a special meaning"
+                             ++ " in the native interface. "
+                             ++ "Using them in argument position is most likely wrong."))
+                         stio true
+                     else stio true
+         retOk _ tau | isMBU tau = do
+             U.error sym.pos (msgdoc "The construct  Maybe ()  makes no sense in a native return type.")
+             stio false
+         retOk _ tau | not (validIOtype tau) = do
+             U.error sym.pos (msgdoc "Illegal nesting of IO, ST, Exception, Maybe and () in the return type.")
+             stio false
+         retOk NIStatic tau | null atys, not (validCaftype tau) = do
+             U.error sym.pos (msgdoc "A static member may not be void and it certainly throws no exceptions.")
+             stio false
+         retOk NIMember tau | not (validCaftype tau) = do
+             U.error sym.pos (msgdoc "An instance member may not be void and it certainly throws no exceptions.")
+             stio false
+         retOk _ _ = stio true
+         argsOk NIOp [x]   = validNIArg x
+         argsOk NIOp [x,y] = liftM2 (&&) (validNIArg x) (validNIArg y)
+         argsOk NIOp _ = do
+             g <- getST
+             U.error sym.pos (msgdoc ("Java operator " ++ nice sym.name g ++ " demands 1 or 2 operands."))
+             stio false
+         argsOk kind [] | kind `elem` [NINew, NIMethod, NICast] = do
+             g <- getST
+             U.error sym.pos (msgdoc ("Illegal type for " ++ nice sym.name g ++ ", must be function type"))
+             stio false
+         argsOk NICast [x]
+             | Nothing <- sigmaTau U.isUnit x = stio true
+         argsOk NICast _ = do
+             U.error sym.pos (msgdoc "A java type cast must have exactly one argument which may not be ()")
+             stio false
+         argsOk NIMember (this:xs)
+           | length xs > 0 = do
+                 U.error sym.pos (msgdoc ("Getter for " ++ item ++ " cannot have more than 1 argument."))
+                 stio false
+           | otherwise = do
+             g <- getST
+             let sjt = sigmaJT g this
+             let javatype = case sigmaTau Just this of
+                    Just tau | Nativ{} <- tauJT g tau = true
+                    _ -> false
+             if javatype
+                 then if maybe true (const false) (isPrimitive sjt)
+                     then stio true
+                     else do
+                         U.error sym.pos (msgdoc ("Cannot get instance member " ++ item
+                             ++ " from primitive"))
+                         stio false
+                 else do
+                     U.error sym.pos (msgdoc ("Cannot get instance member " ++ item
+                             ++ " from non-native object"))
+                     stio false
+         argsOk NIMethod (this:xs) = do
+             g <- getST
+             let sjt = sigmaJT g this
+             let javatype = case sigmaTau Just this of
+                    Just tau | Nativ{} <- tauJT g tau = true
+                    _ -> false
+             if javatype
+                 then if maybe true (const false) (isPrimitive sjt)
+                     then do
+                         oks <- mapSt validNIArg xs
+                         stio (and oks)
+                     else do
+                         U.error sym.pos (msgdoc ("Cannot invoke instance method " ++ item
+                             ++ " on primitive type"))
+                         stio false
+                 else do
+                     U.error sym.pos (msgdoc ("Cannot invoke instance method " ++ item
+                             ++ " on non native type"))
+                     stio false
+         argsOk NINewArray xs | length xs > 1 = do
+             U.error sym.pos (text "Array must have only one argument.")
+             stio false
+         argsOk kind [x] | kind != NIMethod, Just _ <- sigmaTau U.isUnit x  = stio true
+         argsOk _ xs = do
+             oks <- mapSt validNIArg xs
+             stio (and oks)
+methClass _  = undefined
+
 
 --- Tells if a native symbol is wrapped 
 wrapped (sym@SymV {nativ = Just item}) = niSpecial rty
@@ -2001,10 +1985,10 @@ nativeCall g (sym@SymV {nativ = Just item}) abinds = Bind retmode bsig jrty (cal
              where
                  sbind = toMode RStrict bind
                  checknothing = JBin con "==" (JAtom "0")
-                 con = JInvoke (JExMem sbind.jex "constructor") []
+                 con = JInvoke (JExMem sbind.jex "constructor" []) []
                  justm1 x jt = toMode RStrict (Bind RLazy (ForAll [] (RhoTau [] x)) jt m1ex)
-                 m1ex = JExMem just "mem1"
-                 just = JInvoke (JExMem sbind.jex "_Just") []
+                 m1ex = JExMem just "mem1" []
+                 just = JInvoke (JExMem sbind.jex "_Just" []) []
         baserty r
              | Just (_, x) <- U.isIO r   = baserty x
              | Just x <- U.isException r = baserty x
@@ -2022,11 +2006,11 @@ nativeCall g (sym@SymV {nativ = Just item}) abinds = Bind retmode bsig jrty (cal
                  _   -> JAtom "null"
              NIMethod -> case args of
                  (a:as) -> case item of
-                     "clone" -> JCast jrty (JInvoke (JExMem a item) as) -- due to java brain damage
-                     _ -> JInvoke (JExMem a item) as
+                     "clone" -> JCast jrty (JInvoke (JExMem a item []) as) -- due to java brain damage
+                     _ -> JInvoke (JExMem a item []) as
                  _ -> JAtom "null"
              NIMember -> case args of
-                 [a] -> (JExMem a (tail item))
+                 [a] -> (JExMem a (tail item) [])
                  _ -> JAtom "null"
              NINewArray -> JNewArray  (Ref (JName "" (niArr item)) []) (head args)
              NIStatic -> case sigmas of
@@ -2049,8 +2033,8 @@ wrapCode g jreturn rtau (sym@SymV {nativ = Just item}) abinds
             fun     = JNewClass lambda [] [rMethod]
             lambda  = Ref (JName "" "Func1") []
             rMethod = JMethod {attr = attrs [JFinal, JPublic], gargs=[],
-                                jtype = Lambda, name = "eval",
-                                args = [(attrFinal, ssig, lazy sjt, "_state")],
+                                jtype = boxed (tauJT g atau), name = "eval",
+                                args = [(attrFinal, ssig, Object, "_state")],
                                 body = JBlock rbody}
         in [ret]
     | Just mtau <- U.isException rtau = let
@@ -2070,10 +2054,10 @@ wrapCode g jreturn rtau (sym@SymV {nativ = Just item}) abinds
     | Just atau <- U.isMaybe rtau = let
             ajt    = tauJT g atau
             -- bind   = nativeCall g sym abinds
-            mkmb   = case isPrimitive ajt of
+            mkmb   = {- case isPrimitive ajt of
                  Just prim ->
                      JInvoke (JStMem (JName base ("_" ++ prim++ "ToMaybe")) []) [bind.jex]
-                 Nothing   ->
+                 Nothing   -> -}
                      JInvoke (JStMem (JName base "_toMaybe") []) [bind.jex]
          in [jreturn mkmb]
     | Just atau <- U.isList rtau = let
@@ -2092,72 +2076,61 @@ wrapCode g jreturn rtau (sym@SymV {nativ = Just item}) abinds
         bind   = nativeCall g sym abinds
         base = "PreludeBase"        
 wrapCode g jreturn rtau sym abinds = error "wrapCode: no SymV"
--- 
--- 
--- {--
---  * code for native functions and/or members
---  -}
--- methCode (sym@SymV {nativ = Just item})
---     {- | arity >= 0 -} = do
---         g              <- getST
---         rjt            <- tauJT rty
---         ajts           <- mapSt sigmaJT atys
---         extend         <- sigmaJT sym.typ
---         rArgs          <- argDef attrFinal U atys argNames
---         wArgs          <- argDef attrFinal (S allStrict) atys argNames
---         let bnds        = sym.typ.bound
---         let name        = U.javaName g sym.name                        -- X.foo
---             -- fname       = {-U.fName-} name                                 -- X.Ffoo
---             ftargs      = targs sym.typ                                -- <a,b,c>
---             -- ftype       = (Ref (fname) ftargs)                         -- Ffoo<a,b,c>
---             -- dftype      = defining ftype
---             args        = if haswrapper then wArgs else rArgs
---             haswrapper  = arity > 0 && wrapped sym || (not (null bnds))
---             -- callWrapper = (toBoxed bndWrapper).jex
---             -- bndWrapper  = bndWcode invWrapper
---             -- invWrapper  = JInvoke (JX.static name)
---             --                    (map (Binding.jex • strictBind • argBind) rArgs)
---             jreturn     = if arity > 0 then JReturn else JEx
---             bndWcode  x = Bind (maxStrict rjt)    -- (if wrapped sym then  jstrict rjt else maxStrict rjt)
---                             (ForAll [] (RhoTau [] rty)) (strict rjt) x
--- 
---         wcode          <- if wrapped sym
---                                 then wrapCode jreturn rty sym (map argBind args)
---                                 else do
---                                     bind <- nativeCall sym (map argBind args)
---                                     stio [jreturn bind.jex]
--- 
--- 
---         -- inst            <- if arity > 0 
---         --                     then prepareLazy sym
---         --                     else return (JComment "no wrapper")
--- 
---         let wrappers    = if haswrapper then [{- inst, -} wrapper] else [{-inst-}]
---             wrapper     = JMethod {attr = attrs [JPublic, JStatic, JFinal],
---                                 gargs = ftargs, jtype = strict rjt, name = name.base,
---                                 args = wArgs, body = JBlock wcode}
---             defs        = wrappers
---             unex  [(JEx x)] = (toBoxed (bndWcode x)).jex
---             unex  _ = error "unex: need list with 1 ex"
---             member = JMember {attr = attrs [JPublic, JStatic, JFinal],
---                                 jtype = rjt,
---                                 name = (U.javaName g sym.name).base,
---                                 init = Just (unex wcode)}
--- 
---         stio ([JComment ((nice sym g) ++ "  " ++ show sym.strsig ++ "  " ++ show sym.rkind),
---                JComment (nicer sym.typ g),
---                JComment item] ++
---                (if arity > 0 then defs else [member]))
---     where
---         (rty, atys) = U.returnType sym.typ.rho
---         arity       = length atys
--- 
--- methCode sym = do
---         g <- getST
---         U.error sym.pos (text ("can not compile " ++ nice sym g))
---         stio [JComment ((nice sym g) ++ "  " ++ show sym.strsig ++ "  " ++ show sym.rkind),
---               JComment (nicer sym.typ g)]
--- 
+ 
+ 
+{--
+    code for native functions and/or members
+  -}
+methCode g (sym@SymV {nativ = Just item}) = [
+        JComment ((nice sym g) ++ "  " ++ show sym.strsig ++ "  " ++ show sym.rkind),
+        JComment (nicer sym.typ g),
+        JComment item] ++
+                (if arity > 0 then defs else [member])
+    where
+        rjt         = tauJT g rty
+        -- ajts        = map (sigmaJT g) atys
+        -- extend      = sigmaJT g sym.typ
+        rArgs       = evalArgDef attrFinal atys argNames
+        wArgs       = argDef g attrFinal (S allStrict) atys argNames
+        bnds        = sym.typ.bound
+        name        = U.javaName g sym.name                        -- X.foo
+        -- fname       = {-U.fName-} name                                 -- X.Ffoo
+        ftargs      = targs sym.typ                                -- <a,b,c>
+        -- ftype       = (Ref (fname) ftargs)                         -- Ffoo<a,b,c>
+        -- dftype      = defining ftype
+        args        = if haswrapper then wArgs else rArgs
+        haswrapper  = arity > 0 && wrapped sym || (not (null bnds))
+        -- callWrapper = (toBoxed bndWrapper).jex
+        -- bndWrapper  = bndWcode invWrapper
+        -- invWrapper  = JInvoke (JX.static name)
+        jreturn     = if arity > 0 then JReturn else JEx
+        bndWcode  x = Bind (maxStrict rjt)    -- (if wrapped sym then  jstrict rjt else maxStrict rjt)
+                             (ForAll [] (RhoTau [] rty)) (strict rjt) x
+ 
+        wcode       = if wrapped sym
+                        then wrapCode g jreturn rty sym (map argBind args)
+                        else let
+                                bind = nativeCall g sym (map argBind args)
+                            in [jreturn bind.jex]
+        wrappers    = if haswrapper then [{- inst, -} wrapper] else [{-inst-}]
+        wrapper     = JMethod {attr = attrs [JPublic, JStatic, JFinal],
+                                 gargs = ftargs, jtype = strict rjt, name = name.base,
+                                 args = wArgs, body = JBlock wcode}
+        defs        = wrappers
+        unex  [(JEx x)] = (toMode RStrict (bndWcode x)).jex
+        unex  _ = error "unex: need list with 1 ex"
+        member = JMember {attr = attrs [JPublic, JStatic, JFinal],
+                          jtype = rjt,
+                          name = (U.javaName g sym.name).base,
+                          init = Just (unex wcode)}
+ 
+        (rty, atys) = U.returnType sym.typ.rho
+        arity       = length atys
+ 
+methCode g sym = Prelude.error ("line " ++ show sym.pos.first.line 
+                    ++ ": can not compile " ++ nice sym g)
+         
+ 
 -- {--
 --  * runs action with symbol in the current compiling environment
 --  -}
