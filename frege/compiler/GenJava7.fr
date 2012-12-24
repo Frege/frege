@@ -104,17 +104,12 @@ maxStrict jt = case strict (boxed jt) of
     _          -> RLazy
 
 
---- the 'JName' of the Lazy type
-jnLazy   = JName "" "Lazy"
-
---- the @Object@ type
-jtObject  = Ref {jname = JName "" "Object", targs = []}
 
 --- Java expression for the *delayed* method.
-methodDelay = JStMem (U.memberOf jnLazy "delayed") []
+methodDelay = JStMem (U.memberOf jnDelayed "delayed") []
 
 --- Java expression for the *forced* method. The argument is the expected type.
-methodForced to = JStMem (U.memberOf jnLazy "forced") [to]
+methodForced to = JStMem (U.memberOf jnDelayed "forced") [to]
 
 --- Invoke method with single argument
 invoke1 meth arg = JInvoke meth [arg]
@@ -210,12 +205,13 @@ sigmaJT g (ForAll _ rho)        = rhoJT g rho
 
 
 --- Compute the 'JType' for a given 'Rho' type
-rhoJT   g (fun@RhoFun _ _ _)    = jtFun 
+rhoJT   g (fun@RhoFun _ _ _)    = case U.returnType fun of
+                        (ret, args) -> Func{args = length args, yields = tauJT g ret} 
 rhoJT   g (RhoTau {tau})        = tauJT g tau
 
 --- Compute the 'JType' for a given 'Tau' type
 tauJT   g (app@TApp a b)
-     | Just _ <- app.getFun     = jtFun
+     | Just (a,b) <- app.getFun     = Func{args = 1, yields = tauJT g b}
      | otherwise = case app.flat of
          (TCon {pos,name}):rest -> taujtApp g name rest
          other                  -> jtObject     -- we know nothing about it
@@ -240,7 +236,7 @@ taujtApp g qname rest
               -- U.pri
               | Just s <- nativ = if s `elem` primitiveTypes
                                     then Nativ{typ=s, targs=[]}
-                                    else Ref {jname = JName "" s, 
+                                    else Nativ {typ=s, 
                                               targs = map (tauJT g) args}
               | enum            = jtInt
               | otherwise       = Ref {jname = U.javaName g qname, targs = []}
@@ -282,17 +278,22 @@ memNames = xxxNames "mem"
 --- get the mode a java type is in
 jtRmode :: JType -> RMode
 jtRmode Ref{jname, targs}   = RStrict
-jtRmode TArg{var}           = RStrict
+jtRmode TArg{var}           = RUnknown
 jtRmode Nativ{typ, targs}   = RStrict
-jtRmode Lazy{etype}         = RLazy
+jtRmode Lazy{yields}        = RLazy
+jtRmode Func{args, yields}  = RStrict
+jtRmode Lambda              = RStrict
+jtRmode Object              = RUnknown
+jtRmode Algebraic           = RStrict
+jtRmode Value               = RStrict
+
 
 
 {--
      Check if a given java type is a primitive one.
      Return 'Nothing' if this is no primitive type
-     or 'Just' /s/, where /s/ is a string like "int" that describes the type.
+     or 'Just' _s_, where _s_ is a string like "int" that describes the type.
 -}
-isPrimitive (ref@Ref _ _) | n@Nativ _ _ <- strict ref = isPrimitive n
 isPrimitive (Nativ s _)   | s `elem` primitiveTypes   = Just s
 isPrimitive _ = Nothing
 
@@ -314,9 +315,6 @@ ijLigatur = "ĳ"
 --- latin ƒ is prefix for class methods and postfix for Lambdas 
 latinF    = "ƒ"
  
---- pseudo function to convince it that Symbol.rkind is RState
--- pure native toRK frege.runtime.Runtime.our :: a -> RState
-toRK !a = a 
 {--
      create a lazy method for the given symbol
  -}
@@ -348,8 +346,8 @@ lazyMethod sym | sym.{flds?} || sym.{rkind?} = do
         let ctxs = map JAtom (take (length sym.typ.rho.context) ctxNames)
  
         let args        = argdefs
-            rm          = if sym.{flds?} then RStrict else wmode (toRK sym.rkind)
-            wm          = if sym.{flds?} then RStrict else wmode (toRK sym.rkind)
+            rm          = if sym.{flds?} then RStrict else wmode  sym.rkind
+            wm          = if sym.{flds?} then RStrict else wmode  sym.rkind
             jtype       = case wm of
                  RLazy      -> lazy jrty
                  RUnknown   -> jtObject
@@ -713,24 +711,26 @@ pass = do
              "       final T elem = arr[i];",
              "       i = i-1;",
              "       if (elem == null) continue;",
-             "       it = TList.DCons.mk(Box.mk(elem), it);",
+             "       it = TList.DCons.mk(Delayed.delayed(elem), it);",
              "   }",
              "   return it;",
              "}",
-             "final public static<T> TList _toList(Iterable<T> iter) {",
-             "   return (TList) (new Lam1() {",
-             "       @Override public Lazy<FV> eval(Lazy<FV> arg) {",
-             "           final Box<java.util.Iterator<T>> box = Box.<java.util.Iterator<T>>box(arg._e());",
+             "final public static TList _toList(Iterable<Object> iter) {",
+             "   return (new Func1() {",
+             "       @Override public TList eval(Object arg) {",
+             "           @SuppressWarnings(\"unchecked\")",
+             "           final java.util.Iterator<Object> iter = (java.util.Iterator<Object>)arg;",
              "           while (true) {",
-             "               if (box.j.hasNext()) {",
-             "                   final T x = box.j.next();",
+             "               if (iter.hasNext()) {",
+             "                   final Object x = iter.next();",
              "                   if (x == null) continue;",
-             "                   return PreludeBase.TList.DCons.mk(Box.mk(x), this.apply(box));",
+             "                   return PreludeBase.TList.DCons.mk(Delayed.delayed(x),", 
+             "                              this.apply(iter));",
              "               }",
-             "               else return PreludeBase.TList.DList.mk();",
+             "               else return PreludeBase.TList.DList.it;",
              "           }",
              "       }",
-             "   }).apply(Box.mk(iter.iterator()))._e();",
+             "   }).apply(iter.iterator()).<TList>forced();",
              "}" ]                
  
 --     invokeMain <- genMain
@@ -915,7 +915,8 @@ conGetter _ = error "conGetter: no member"
   * [return] the type of the variant, i.e. @tMaybe.dJust<a>@, if jtype is the jt of the type
   -}
 variantType :: Global -> JType -> Symbol -> JType
-variantType g jtype symd = jtype.{jname = U.javaName g (Symbol.name symd)}
+variantType g jtype symd    -- | traceLn("variantType for " ++ show jtype) || true 
+    = jtype.{jname = U.javaName g (Symbol.name symd)}
  
  
 {--
@@ -932,13 +933,13 @@ conCode symt cons (sym@SymD {flds, cid}) = do
     let symtjt  = sigmaJT g (Symbol.typ symt)
         jtype   = (variantType g symtjt sym).{jname <- JName.{qual = ""}}
         (_, argtys) = U.returnType sym.typ.rho
-        argjts  = map (sigmaJT g) argtys
-        funty   = sigmaJT g sym.typ
+        -- argjts  = map (sigmaJT g) argtys
+        -- funty   = sigmaJT g sym.typ
         arity   = length flds
         comment = JComment (nice sym g)
         result  = sumCon
         sumCon  = JClass {attr = attrTop,
-                             jtype = jtype, extend = Nothing, implement = imp, defs}
+                             jtype = jtype, extend = Just Algebraic, implement = imp, defs}
         imp = [symtjt]
  
         defs = [comment, constr, cMethod cid, make]
@@ -1006,7 +1007,7 @@ symCode binds (sym@SymT {enum=true}) = do
      subDefs <- mapSt (symCode binds) other
  
      let jtype = Ref {jname = U.javaName g sym.name, targs = []}     -- TName
-         result = JClass {attr = attrTop, jtype,
+         !result = JClass {attr = attrTop, jtype,
                          extend = Nothing,
                          implement = [],
                          defs = (constr : conDefs) ++ concat subDefs}
@@ -1029,7 +1030,7 @@ symCode binds (sym@SymT {product=true, newt=true}) = do
  
      let jtype  = Ref (U.javaName g sym.name) []
          defs   = concat subDefs
-         result = JClass {attr = attrs [JAbstract, JPublic, JStatic], jtype,
+         !result = JClass {attr = attrs [JAbstract, JPublic, JStatic], jtype,
                           extend = Nothing, implement = [], defs}
      stio [JComment (nice sym g), result]
  
@@ -1046,11 +1047,11 @@ symCode binds (sym@SymT {product=true}) = do                    -- product
         symd    = head [ con | con@SymD {sid} <- vals ]            -- constructor
         (_, argtys) = U.returnType symd.typ.rho
         -- struct      = symd.strsig.isStrict
-        funty   = sigmaJT g symd.typ
+        -- funty   = sigmaJT g symd.typ
         -- ftypes  = map (sigmaJT g) (map ConField.typ symd.flds)        -- field types
         argjts  = map (sigmaJT g) argtys
         arity   = length symd.flds
-        imp     = [jtValue]                              -- implements Value
+        imp     = []                              -- implements Value
         defs    = [comment, constr, cMethod symd.cid,
                          -- atomMethod "_v" jtype "this",
                          -- atomMethod "_e" jtype "this",
@@ -1067,10 +1068,15 @@ symCode binds (sym@SymT {product=true}) = do                    -- product
                          args = constrargs,
                          body = JBlock [JReturn (JNew jtype args)]}
         members = zipWith (mkMember g) symd.flds memNames
-        result = JClass {attr = attrTop, jtype,
-                          extend = Nothing, implement = imp, defs}
+        !result = JClass {attr = attrTop, jtype,
+                          extend = Just Algebraic, implement = imp, defs}
     stio [JComment (nice sym g), result]
- 
+
+symCode binds (sym@SymT{env = Nil, nativ = Nothing, product=false, enum=false, newt=false})
+        = do
+            g <- getST
+            stio [JComment (nice sym g)]                          -- empty type
+        
 symCode binds (sym@SymT {nativ=Nothing}) = do                   -- sum type
      g <- getST
      let vals = sortBy (comparing Symbol.name) (values sym.env)
@@ -1080,7 +1086,10 @@ symCode binds (sym@SymT {nativ=Nothing}) = do                   -- sum type
      -- cafDefs <- mapSt (symCode binds) cafs
      conDefs <- mapSt (conCode sym cons) cons
      let symjt = sigmaJT g sym.typ
-     let jtype = symjt.{jname = U.javaName g sym.name}
+     -- U.logmsg TRACEG sym.pos (text ("symCode: " ++ nicer sym g ++ " " ++ show symjt))
+     let jtype
+            | symjt.{jname?} = symjt.{jname = U.javaName g sym.name}
+            | otherwise = Ref (JName "" "Strange") [symjt]
          getCons = [JMethod {attr = attrs [JPublic], gargs=[],
                              jtype = variantType g jtype con,
                              name = conGetter (Symbol.name con),
@@ -1092,7 +1101,7 @@ symCode binds (sym@SymT {nativ=Nothing}) = do                   -- sum type
                                      extend = Nothing, implement = [],
                                      defs = concat funDefs}]
          result = JInterface {attr = attrs [JPublic], jtype,
-                             implement = [jtValue],
+                             implement = [Value, Lazy Object],
                              defs = getCons ++ concat conDefs ++ mClass}
      stio [JComment (nice sym g), result]
  
@@ -1101,7 +1110,7 @@ symCode binds (sym@SymT {sid, nativ = Just _}) = do                             
      let vals = sortBy (comparing Symbol.name) (values sym.env)
      subDefs <- mapSt (symCode binds) vals
      let jtype = Ref {jname = U.javaName g sym.name, targs=[]}
-         result = JClass {attr = attrTop,
+         !result = JClass {attr = attrTop,
                              jtype, extend = Nothing, implement = [],
                              defs = concat subDefs}
      stio [JComment (nice sym g), result]
@@ -2040,7 +2049,7 @@ wrapCode g jreturn rtau (sym@SymV {nativ = Just item}) abinds
             fun     = JNewClass lambda [] [rMethod]
             lambda  = Ref (JName "" "Func1") []
             rMethod = JMethod {attr = attrs [JFinal, JPublic], gargs=[],
-                                jtype = lazyVal, name = "eval",
+                                jtype = Lambda, name = "eval",
                                 args = [(attrFinal, ssig, lazy sjt, "_state")],
                                 body = JBlock rbody}
         in [ret]

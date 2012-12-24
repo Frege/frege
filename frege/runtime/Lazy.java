@@ -32,7 +32,6 @@ public interface Lazy extends Callable<Object> {
 	 * @author ingo
 	 */
 
-	@SuppressWarnings("unchecked")
 	public abstract <R> R forced();
 
 }

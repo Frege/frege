@@ -35,8 +35,6 @@
 
 package frege.runtime;
 
-import java.util.concurrent.Callable;
-
 /**
  * <p> Base class for lazy values.</p>
  *
