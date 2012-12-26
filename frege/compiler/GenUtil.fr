@@ -41,6 +41,7 @@
 package frege.compiler.GenUtil where
 
 import frege.Prelude except(print,println,break)
+import frege.List (values)
 import frege.compiler.Data
 import frege.compiler.Utilities as U(print, println)
 import frege.compiler.Nice as PP public
@@ -84,8 +85,9 @@ data JType =
     | !Func  { args :: Int, yields :: JType }       {-- function that can take so many
                                                         arguments before yielding a result -} 
     | Lambda                                        --- some function
-    | Object                                        --- something unknown
-    | Algebraic                                     --- some frege value
+    | Something                                     {-- something unknown that can be casted
+                                                        to the desired type -} 
+    | Algebraic                                     --- some algebraic value
     | Value                                         --- some value
     
     
@@ -96,25 +98,22 @@ instance Anno JType where
     anno (Ref  {jname,targs})   = text (show jname) <> annoGenerics targs
     anno (TArg var          )   = text var
     anno (Nativ {typ,targs} )   = text typ  <> annoGenerics targs
-    anno (Lazy {})              = text "Lazy"
+    anno (Lazy {yields})
+        | wasFrege yields       = (text "/*" <> anno yields <> text "*/") <+> text "Lazy"
+        | otherwise             = (text "/*" <> anno yields <> text "*/") <+> text "Object" 
     anno Func{args, yields}     = text ("Func" ++ show args)
     anno Lambda                 = text ("Lambda")
-    anno Object                 = text ("Object")
+    anno Something              = text ("Object")
     anno Algebraic              = text ("Algebraic")
     anno Value                  = text ("Value")
 
 instance Show JType where
-    show jt = PP.pretty 1000 jt.anno    
+    show Lazy{yields} = "Lazy<" ++ show yields ++ ">"
+    show jt = PP.pretty 1000 jt.anno
+
 
 -- the @Value@ type
 jtValue  = Value
-
---- the @Object@ type
---- *Note:* this is not the same as @Nativ "java.lang.Object"@
-jtObject  = Object
-
---- the @Lazy@ type
-lazyObject = Lazy Object
 
 --- the most general type for anonymous fuctions
 jtFun    = Lambda
@@ -163,7 +162,7 @@ strict x = case boxed x of
 -- -------------------------------------------------------------------------------------
 
 {--
- * A java expression
+    A java expression
  -}
 type JExpr = JX
 data JX =
@@ -214,6 +213,12 @@ data JX =
         xmem   = flip jexmem
         --- @static X.y@ ---> X.y
         static = flip JStMem []
+
+--- show a java expression
+showJex jex | cheap jex = PP.pretty 1000 (anno jex)
+            | otherwise = "complicated java expression"
+
+
 
 instance Anno JExpr where
     anno (JAtom {name}) = text name
@@ -414,6 +419,9 @@ data JDecl =
     | !JConstr {attr::Attributes, jtype::JType, args::[FormalArg], body:: JStmt}
     | !JMember {attr::Attributes, jtype::JType, name::String, init::Maybe JExpr}
 
+--- make a statement comment
+sComment = (JLocal • JComment)
+
 --- 'JDecl's are annotatable
 instance Anno JDecl where
     anno (JComment s)       = text "// " <> text s -- <> PP.line
@@ -460,7 +468,7 @@ replTVar Nativ { typ, targs }   = Nativ   {typ, targs = map replTVar targs}
 replTVar Lazy  { yields  }      = Lazy    {yields = replTVar yields}
 replTVar Func{args, yields}     = Func{args, yields = replTVar yields}
 replTVar Lambda                 = Lambda
-replTVar Object                 = Object
+replTVar Something              = Something
 replTVar Algebraic              = Algebraic
 replTVar Value                  = Value
 
@@ -500,4 +508,305 @@ replTVarStmt (JCond s  jex stmts)  = JCond s   (replTVarExpr jex) (map replTVarS
 replTVarStmt (JBlockX s    stmts)  = JBlockX s (map replTVarStmt stmts)
 replTVarStmt (JCase    jex  stmt)  = JCase     (replTVarExpr jex) (replTVarStmt stmt)
 replTVarStmt JLocal{}              = error "Can't replTVarStmt JLocal" 
-replTVarStmt stmt                  = stmt 
+replTVarStmt stmt                  = stmt
+
+{--
+    The mode of the java type assoicated with an expression
+ -}
+data RMode = RStrict | RUnknown | RLazy
+derive Eq   RMode
+derive Ord  RMode
+derive Show RMode
+
+{--
+    The mode of the return type of a function
+--}
+wmode n 
+    | RValue `member`  n = RStrict
+    | RAlways `member` n = RLazy
+    | otherwise          = RUnknown
+
+{--
+    - If the 'RAlways' flag is set, the return type will always be @Lazy@
+    - If the 'Strict' flag is on, the return type will be @int@, @String@ or @TList@
+    - Otherwise, lazy as well as non lazy results may be returned. For native types, 
+      this means the return type is @Object@. Frege types are returned as @Lazy@.
+-}
+workerType mode rjt = case wmode mode of
+                         RLazy    -> lazy rjt
+                         RStrict  -> strict rjt
+                         RUnknown -> lazy rjt
+                                  
+
+
+{--
+ * This data structure describes mode, java type and java expression associated with
+ * some frege item. The task of code generation is to create, combine and
+ * manipulate such bindings. Many code generating functions will take
+ * a ('Tree' 'Symbol' 'Binding') of current bindings as last parameter.
+ -}
+data Binding = !Bind {mode :: RMode, ftype :: Sigma, jtype :: JType, jex :: JExpr}
+instance Nice Binding where
+    nice (Bind {mode, ftype, jtype, jex}) g = "Bind {" ++ show mode ++ ", "
+                                            ++ ftype.nice g ++ ", "
+                                            ++ show jtype ++  ", "
+                                            ++ showJex jex ++ "}"
+
+--- tell how strict this java type can get
+maxStrict jt = case strict (boxed jt) of
+    Nativ _ _  -> RStrict
+    TArg  _    -> RStrict
+    _          -> RLazy
+
+
+
+--- Java expression for the *delayed* method.
+methodDelay = JStMem (U.memberOf jnDelayed "delayed") []
+
+--- Java expression for the *forced* method. The argument is the expected type.
+methodForced to = JStMem (U.memberOf jnDelayed "forced") [to]
+
+--- Invoke method with single argument
+invoke1 meth arg = JInvoke meth [arg]
+
+--- Bring a java expression to desired strictness mode 'RStrict' or 'RLazy'
+--- Note that @toMode RStrict@ does not undo @toMode RLazy@ and vice versa
+--- This actually casts Objects to the target type
+toMode :: Global -> RMode -> Binding -> Binding
+toMode ?g RStrict  (bind@Bind{mode, ftype, jtype, jex})
+    | mode == RStrict = bind
+    | Lazy{} <- jtype = Bind{mode = RStrict, ftype, jtype = boxd, 
+                            jex   = JInvoke JExMem{jex, name="forced", targs=[boxd]} []}
+    | boxd == jtype   = bind.{mode= RStrict}
+    | Something <- jtype 
+                      = Bind{mode = RStrict, ftype, 
+                             jtype = strict boxf, jex = JCast boxf jex}                             
+    | otherwise       = Bind{mode = RStrict, ftype, 
+                            jtype = strict boxf, 
+                            jex   = invoke1 (methodForced boxf) jex}
+    where 
+        boxd = boxed jtype
+        boxf = boxed (sigmaJT g ftype)
+         
+toMode ?g RLazy    (bind@Bind{mode, ftype, jtype, jex})
+    | mode == RLazy  = bind
+    | otherwise      = case jtype  of
+        Ref{jname, targs}   -> bind.{mode=RStrict}
+        TArg{var}           -> delayed
+        Nativ{typ, targs}   -> delayed
+        Lazy{yields}        -> bind.{mode=if wasFrege yields then RLazy else RUnknown}
+        Func{args, yields}  -> bind.{mode=RStrict}
+        Lambda              -> bind.{mode=RStrict}
+        Something           -> delayed
+        Algebraic           -> bind.{mode=RStrict}
+        Value               -> delayed
+    where
+        delayed = Bind{mode  = RLazy, ftype, 
+                            jtype = lazy jtype, 
+                            jex   = invoke1 methodDelay jex}      
+
+toMode ?g RUnknown (bind@Bind{mode, ftype, jtype, jex})  = error ("toMode RUnknown ")
+
+
+---    make a binding strict
+strictBind g bind = toMode g RStrict bind
+
+---    make a binding lazy
+lazyBind g bind = toMode g RLazy bind
+
+-- --- generate necessary casts so that java type accords to sigma type
+-- coerce :: Binding -> StG Binding
+-- coerce bind = do
+--     g   <- getST
+--     sigjt <- sigmaJT bind.ftype
+--     U.logmsg TRACEG Position.null (text ("coerce: " ++ nice bind g ++ " to " ++ showJty sigjt))
+--     U.logmsg TRACEG Position.null (anno bind.jex)
+--     -- if (bind.mode != RLazy && jtRmode bind.jtype == RLazy)
+--     -- then coerce (notLazy bind)
+--     -- else 
+--     if (bind.mode != jtRmode bind.jtype)
+--         then do 
+--             U.error Position.null (text  ("coerce: bind mode and mode of java type do not match: " ++ nice bind g))
+--             return bind
+--         else do
+--             let bjt = bind.jtype
+--                 sjt = rmodeJt bind.mode sigjt
+--                 fehler = do
+--                     U.error Position.null (text  ("Can't coerce " ++ showJty bjt ++ "  to  " ++ showJty sjt))
+--                     stio bind
+--             case  bind.mode of
+--                 RNative  | bjt == sjt = stio bind
+--                          | otherwise  = fehler
+--                 RLazy    | bjt == sjt = stio bind
+--                          | Lazy{etype=box1} <- bjt,
+--                            Lazy{etype=box2} <- sjt,
+--                            Ref{targs=[xjt]} <- box1, box1.jname == jtString.jname,  -- Box<X>
+--                            Ref{targs=[yjt]} <- box2, box2.jname == jtString.jname,  -- Box<Y>
+--                            Nativ{} <- xjt, Nativ{} <- yjt,
+--                            subTypeOf g xjt.typ yjt.typ
+--                                                = stio (asType sigjt bind)
+--                          | bjt == lazy jtValue = stio (asType sigjt bind)
+--                          | otherwise  = fehler
+--                 RBoxed -> case sjt of
+--                     Ref{} -> case bjt of
+--                         Ref{} | bjt.jname == sjt.jname,
+--                                 sjt.targs == bjt.targs          = stio bind
+--                               | bjt.jname == jtValue.jname,
+--                                 null sjt.targs                  = stio (cast sjt bind)
+--                               | bjt.jname == jtValue.jname,
+--                                 sjt.jname == jtString.jname,
+--                                 [boxed] <- sjt.targs            = stio (box sjt bind)
+--                         other -> fehler
+--                     other -> U.fatal Position.null (text  ("toBoxed " ++ nice bind.ftype g ++ " is " ++ showJty sjt ++ ", should be Ref"))
+--   where
+--     boxfun = JStMem (U.memberOf jtString.jname "box") []
+--     asType ta (bind@Bind{})   = bind.{jtype = lazy ta}
+--                                       -- jex = JInvoke asfun.{targs=[ta]} [bind.jex]}
+--     box  jt (bind@Bind{})     = (toBoxed bind).{
+--                                       jtype=jt,
+--                                       jex = JInvoke boxfun.{targs=jt.targs} [bind.jex]
+--                                  }
+--     cast jt (bind@Bind{mode}) = bind.{jtype=jtx, jex <- JCast jtc}
+--         where
+--             jtx = rmodeJt mode jt
+--             jtc | jtx.{targs?} = jtx.{targs=[]}
+--                 | otherwise    = jtx
+--
+
+--- Compute the 'JType' for a given 'Sigma' type 
+sigmaJT g (ForAll _ rho)        = rhoJT g rho
+
+
+--- Compute the 'JType' for a given 'Rho' type
+rhoJT   g (fun@RhoFun _ _ _)    = case U.returnType fun of
+                        (ret, args) -> Func{args = length args, yields = tauJT g ret} 
+rhoJT   g (RhoTau {tau})        = tauJT g tau
+
+--- Compute the 'JType' for a given 'Tau' type
+tauJT   g (app@TApp a b)
+     | Just (a,b) <- app.getFun     = Func{args = 1, yields = tauJT g b}
+     | otherwise = case app.flat of
+         (TCon {pos,name}):rest -> taujtApp g name rest
+         other                  -> Something     -- we know nothing about it
+ 
+tauJT   g (TCon {pos, name})    = taujtApp g name []
+ 
+tauJT   g (TVar {var,kind})
+     | kind == KGen             = targ var 
+     | otherwise                = Something
+tauJT   g (Meta meta)
+     | meta.kind == KGen        = TArg ("GT" ++ show meta.uid)
+     | otherwise                = Something
+ 
+taujtApp g qname rest
+    | Just (sym@SymT{}) <- QName.findit qname g = case sym of
+        SymT {product=true, newt=true} ->
+             let sigmas = [ ConField.typ f | sym@SymD {flds} <- values sym.env, f <- flds ]
+             in case sigmas of
+                 [] -> Prelude.error (nice sym g ++ " has no fields")                     
+                 (s:_) -> rhoJT g s.rho
+        SymT {product,nativ,enum,pur}
+              -- U.pri
+              | Just s <- nativ = if s `elem` primitiveTypes
+                                    then Nativ{typ=s, targs=[]}
+                                    else Nativ {typ=s, 
+                                              targs = map (tauJT g) args}
+              | enum            = jtInt
+              | otherwise       = Ref {jname = U.javaName g qname, targs = []}
+              where args = [ jt | (KGen, jt) <- zip sym.typ.kinds rest ]     
+        other -> undefined   -- can not happen because catched in U.findT
+    | otherwise = Prelude.error (nice qname g ++ " not a type")
+ 
+--- make a type argument from a name
+targ s = TArg {var = if s ~ ´^any(\d+)?$´ then "?" else "Τ" ++ s}
+                                                      -- ^ this is a greek uppercase Tau
+
+--- type arguments for sigma type
+targs :: Sigma -> [JType]
+targs = filter (("?" !=) . JType.var) 
+             . map (targ . fst) 
+             . filter ((KGen==) . snd) 
+             . Sigma.bound                                                      
+
+--greek (s@#^[a-z]$#) = ctos (alphabet.charAt (ord (s.charAt 0) - ord 'a'))
+--greek s = "Σ" ++ s
+--alphabet = "αβγδεζηθιßκλμνξοπρςστυφχψωﬁﬂƒ"
+--
+--
+numbers = (map show (iterate (1+) 1))
+xxxNames xxx = zipWith (++) (repeat xxx) numbers
+
+--- arg$1, arg$2, arg$3, ....
+argNames = xxxNames "arg$"
+
+--- ctx$1, ctx$2, ctx$3, ...
+ctxNames = xxxNames "ctx$"
+
+--- mem1, mem2, mem3 ...
+memNames = xxxNames "mem"
+-- --
+-- 
+-- 
+-- 
+--- get the mode a java type is in
+jtRmode :: JType -> RMode
+jtRmode Ref{jname, targs}   = RStrict
+jtRmode TArg{var}           = RStrict
+jtRmode Nativ{typ, targs}   = RStrict
+jtRmode Lazy{yields}        = if wasFrege yields then RLazy else RUnknown
+jtRmode Func{args, yields}  = RStrict
+jtRmode Lambda              = RStrict
+jtRmode Something           = RStrict
+jtRmode Algebraic           = RStrict
+jtRmode Value               = RStrict
+
+{--
+    Tell if a java type is a mapped Frege type
+    -}
+wasFrege Ref{}          = true
+wasFrege Lazy{yields}   = wasFrege yields
+wasFrege Func{}         = true
+wasFrege Lambda         = true
+wasFrege Algebraic      = true
+wasFrege Value          = true
+wasFrege _              = false
+
+{--
+     Check if a given java type is a primitive one.
+     Return 'Nothing' if this is no primitive type
+     or 'Just' _s_, where _s_ is a string like "int" that describes the type.
+-}
+isPrimitive (Nativ s _) | s `elem` primitiveTypes   = Just s
+isPrimitive _ = Nothing
+
+{--
+    [usage] @realize bind@
+
+    code to create a local variable and an updated bind
+    -}
+realize name bind
+    | cheap (Binding.jex bind) = stio (bind, [])
+    | otherwise = do
+        u <- U.uniqid
+        g <- getST
+        let vname = m name -- ++ underline ++ show u  -- must correspond to U.javaName
+            m "$" = "$" ++ show u
+            m s   = s
+            member = JMember {attr = attrFinal,
+                            jtype = Binding.jtype bind,
+                            name = vname,
+                            init = Just (Binding.jex bind)}
+            nbind = bind.{jex = JAtom vname}
+        stio (nbind, 
+                [sComment ("realize " ++ name ++ " bound to " ++ nice bind g), 
+                 JLocal member])
+
+{--
+    Substitue java member names in constructor fields.
+    The resulting list satisifes @all (isJust . Field.name)@
+    -}
+namedFields flds = zipWith nf flds memNames
+    where
+        nf :: ConField QName -> String -> ConField QName
+        nf field member = field.{name <- Just . maybe member ("mem$" ++)} 
+    
