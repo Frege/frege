@@ -200,7 +200,8 @@ SOURCES  =      $(COMPS)/Scanner.fr   $(COMPS)/Classtools.fr \
 		$(COMPS)/Transdef.fr  $(COMPS)/Classes.fr \
 		$(COMPS)/Transform.fr $(COMPS)/Typecheck.fr \
 		$(COMPS)/TCUtil.fr \
-		$(COMPS)/GenMeta.fr   $(COMPS)/GenJava7.fr  $(COMPS)/GenUtil.fr \
+		$(COMPS)/gen/Util.fr  $(COMPS)/gen/Const.fr $(COMPS)/gen/Match.fr \
+		$(COMPS)/GenMeta.fr   $(COMPS)/GenJava7.fr  \
 		$(COMPS)/DocUtils.fr $(COMPS)/EclipseUtil.fr
 
 
@@ -213,7 +214,7 @@ CLASSES  =       $(COMPF1)/Scanner.class   $(COMPF1)/Classtools.class \
 		$(COMPF1)/TCUtil.class   \
 		$(COMPF1)/TAlias.class    $(COMPF1)/Classes.class \
 		$(COMPF1)/Typecheck.class $(COMPF1)/Transform.class \
-		$(COMPF1)/GenUtil.class \
+		$(COMPF1)/gen/Util.class  $(COMPF1)/gen/Const.class $(COMPF1)/gen/Match.class \
 		$(COMPF1)/GenMeta.class   $(COMPF1)/GenJava7.class \
 		$(COMPF1)/DocUtils.class $(COMPF1)/EclipseUtil.class
 
@@ -272,7 +273,11 @@ $(COMPF1)/GenMeta.class: $(COMPS)/GenMeta.fr
 	$(FREGEC0) $?
 $(COMPF1)/GenJava7.class: $(COMPS)/GenJava7.fr
 	$(FREGEC0) $?
-$(COMPF1)/GenUtil.class: $(COMPS)/GenUtil.fr
+$(COMPF1)/gen/Util.class: $(COMPS)/gen/Util.fr
+	$(FREGEC0) $?
+$(COMPF1)/gen/Match.class: $(COMPS)/gen/Match.fr
+	$(FREGEC0) $?
+$(COMPF1)/gen/Const.class: $(COMPS)/gen/Const.fr
 	$(FREGEC0) $?
 $(COMPF1)/DocUtils.class: $(LIBF1)/QuickCheck.class $(COMPS)/DocUtils.fr
 	$(FREGEC0) frege/compiler/DocUtils.fr

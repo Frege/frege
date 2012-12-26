@@ -41,7 +41,7 @@
  -}
 
 
-package frege.compiler.GenMatch where
+package frege.compiler.gen.Match where
 
 
 import frege.Prelude hiding(apply)
@@ -51,9 +51,12 @@ import Data.List as DL(sortBy, partitioned)
 
 import frege.compiler.Data          as D
 import frege.compiler.Utilities     as U() 
-import frege.compiler.GenUtil       as GU except(group, break)
 import frege.lib.PP()  -- (`<>`, `<+>`, `</>`, `<+/>`, `<~/>`, text, bracket)
 import frege.compiler.Transform     as T(patternStrictness)
+import frege.compiler.Typecheck     as TY()
+
+import frege.compiler.gen.Util       as GU except(group, break)
+import frege.compiler.gen.Const      as GC
 
 infixr 6 `<>`
 
@@ -84,6 +87,12 @@ infixr 6 `<>`
   * if the control flow reaches the closing brace of the if this will be
   * an indication that the pattern match failed.
   -}
+match :: Bool 
+            -> Pattern 
+            -> Binding 
+            -> (Tree Symbol Binding -> StG [JStmt]) 
+            -> Tree Symbol Binding 
+            -> StG (Binding, [JStmt])
 match assert (PVar {uid,var}) bind cont binds = do
          vsym <- U.findV local
          if vsym.strsig.isStrict then strictVar vsym else lazyVar vsym
@@ -92,7 +101,7 @@ match assert (PVar {uid,var}) bind cont binds = do
          jname g = (U.javaName g local).base
          strictVar vsym = do
              g <- getST
-             (rbind, code) <- realize (jname g) (strictBind bind)
+             (rbind, code) <- realize (jname g) (strictBind g bind)
              let stmt = if null code
                      then [sComment ("bind strict var " ++ nice (Symbol.name vsym) g
                                          ++ "  to  " ++ nice rbind g)]
@@ -115,7 +124,7 @@ match assert (p@PAt {pat,uid,var}) bind cont binds = do
          vsym <- U.findV local
          let vrm = if vsym.strsig.isStrict then RStrict else RLazy
              rm = min prm vrm
-             ourBind = toMode rm bind
+             ourBind = toMode g rm bind
              comment = sComment ("match " ++ nice p g ++ " with " ++ nice ourBind g)
          (rbind, code1) <- realize jname ourBind
          let nbinds = insert binds vsym rbind
@@ -128,7 +137,7 @@ match assert (pat@PLit {kind=LBool, value}) bind cont binds = do
      body <- cont binds
      let comment = sComment ("match  " ++ nice pat g
                                  ++ "  with  " ++ showJex (Binding.jex bind))
-         sbnd = strictBind bind
+         sbnd = strictBind g bind
          jex = if value == "true" then sbnd.jex else JUnop "!" sbnd.jex
          ifc = if assert then JAssert jex : body else [JCond "if" jex body]
      stio (bind, comment:ifc)
@@ -151,7 +160,7 @@ match assert (pat@PCon {pos,qname,pats}) bind cont binds = do
          matchEnum :: Symbol -> Symbol -> StG (Binding, [JStmt])
          matchEnum symd symt = do
              g <- getST
-             let sbnd = strictBind bind
+             let sbnd = strictBind g bind
              -- (bind, code1) <- realize "$" sbnd
              body  <- cont binds
              let comp = (JBin sbnd.jex "==" (JAtom (show symd.cid)))
@@ -162,7 +171,7 @@ match assert (pat@PCon {pos,qname,pats}) bind cont binds = do
          matchVariant symd symt = do
             g <- getST
  
-            let box1 = strictBind bind                        -- List Int
+            let box1 = strictBind g bind                        -- List Int
                 tree = U.unifySigma g symt.typ bind.ftype     -- a -> Int
  
             rho <- U.substRho tree symd.typ.rho               -- Int -> List Int -> List Int
@@ -175,7 +184,7 @@ match assert (pat@PCon {pos,qname,pats}) bind cont binds = do
                  vbind = if symt.product then boxd else
                             Bind RStrict boxd.ftype
                                 (variantType g datajt symd).{targs = boxd.jtype.targs}
-                                (JInvoke (JExMem boxd.jex cname) [])
+                                (JInvoke (JX.jexmem boxd.jex cname) [])
  
             (varb, code2) <- if symt.product then return (boxd, [])
                              else realize "$" vbind             -- TList.DCons $2 = $1._DCons()
@@ -208,71 +217,81 @@ match assert (pat@PCon {pos,qname,pats}) bind cont binds = do
  
 match assert (pat@PLit {kind=LString, value}) bind cont binds = do
      g <- getST
-     (bind,code) <- realize "$" (strictBind bind)
+     (bind,code) <- realize "$" (strictBind g bind)
      body <- cont binds
      let comment = sComment ("match  " ++ nice pat g
                                  ++ "  with  " ++ showJex (Binding.jex bind))
-         sbnd = strictBind bind
-         jex = JInvoke (JExMem (JAtom value) "equals") [sbnd.jex]
+         sbnd = strictBind g bind
+         jex = JInvoke (JX.jexmem (JAtom value) "equals") [sbnd.jex]
          ifc = if assert then JAssert jex : body else [JCond "if" jex body]
      stio (bind, (comment:code) ++ ifc)
  
 match assert (pat@PLit {kind, value}) bind cont binds
      | kind `elem` [LChar, LInt, LLong, LDouble, LFloat] = do
          g <- getST
-         (bind,code) <- realize "$" (strictBind bind)
+         (bind,code) <- realize "$" (strictBind g bind)
          body <- cont binds
          let comment = sComment ("match  " ++ nice pat g
                                      ++ "  with  " ++ showJex (Binding.jex bind))
-             sbnd = strictBind bind
+             sbnd = strictBind g bind
              jex = JBin (JAtom value) "==" sbnd.jex
              ifc = if assert then JAssert jex : body else [JCond "if" jex body]
          stio (bind, (comment:code) ++ ifc)
      | kind == LBig = do
          g <- getST
-         (bind, code) <- realize "$" (strictBind bind)
+         (bind, code) <- realize "$" (strictBind g bind)
          body <- cont binds
          let comment = sComment ("match  " ++ nice pat g
                                      ++ "  with  " ++ showJex (Binding.jex bind))
-             sbnd = strictBind bind
-             -- lit = Lit {pos = pat.pos, kind = LBig, value, typ = Just (TY.sigInteger)}
-         xbnd <- genExpr false RNative lit binds
-         let jex = JInvoke (JExMem xbnd.jex "equals") [sbnd.jex]
+             sbnd = strictBind g bind
+             lit = Lit {pos = pat.pos, kind = LBig, value, typ = Just TY.sigInteger}
+         jname <- findConst lit
+         let xbnd =  Bind{mode=RStrict, 
+                        ftype = TY.sigInteger, 
+                        jtype = sigmaJT g TY.sigInteger, 
+                        jex = JStMem{jname, targs = []}}
+         let jex = JInvoke (JX.jexmem xbnd.jex "equals") [sbnd.jex]
              ifc = if assert then JAssert jex : body else [JCond "if" jex body]
          stio (bind, (comment:code) ++ ifc)
      | kind == LRegex = do
          g <- getST
-         (bind,code) <- realize "$" (notLazy bind)
+         (bind,code) <- realize "$" (strictBind g bind)
          body <- cont binds
  
          let comment = sComment ("match  " ++ nice pat g
                                  ++ "  with  " ++ showJex (Binding.jex bind))
-             sbnd = strictBind bind
+             sbnd = strictBind g bind
              lit = Lit {pos = pat.pos, kind = LRegex, value, typ = Just (TY.sigRegex)}
-         xbnd <- genExpr false RNative lit binds
+         jname <- findConst lit
+         let xbnd = Bind{mode=RStrict, 
+                        ftype = TY.sigRegex, 
+                        jtype = sigmaJT g TY.sigRegex, 
+                        jex = JStMem{jname, targs = []}}
  
-         let matcher = JInvoke (JExMem xbnd.jex "matcher") [sbnd.jex]
-             jex = JInvoke (JExMem matcher "find") []
+         let matcher = JInvoke (JX.jexmem xbnd.jex "matcher") [sbnd.jex]
+             jex = JInvoke (JX.jexmem matcher "find") []
              ifc = if assert then JAssert jex : body else [JCond "if" jex body]
          stio (bind, (comment:code) ++ ifc)
  
 match assert (pat@PMat {pos, uid, var, value}) bind cont binds = do
          g <- getST
          vsym <- U.findV (Local uid var)
-         (bind,code) <- realize "$" (notLazy bind)
-         mjt <- sigmaJT (TY.sigMatcher)
+         (bind,code) <- realize "$" (strictBind g bind)
+         let mjt = sigmaJT g TY.sigMatcher
          let comment = sComment ("match  " ++ nice pat g
                                  ++ "  with  " ++ showJex (Binding.jex bind))
-             sbnd = strictBind bind
+             sbnd = strictBind g bind
              lit = Lit {pos, kind = LRegex, value, typ = Just (TY.sigRegex)}
  
-         xbnd <- genExpr false RNative lit binds
-         let mbnd = Bind RNative (TY.sigMatcher) (strict mjt)
-                     (JInvoke (JExMem xbnd.jex "matcher") [sbnd.jex])
+         jname <- findConst lit
+         let xbnd = Bind{mode=RStrict, ftype = TY.sigMatcher, jtype = mjt, 
+                        jex = JStMem{jname, targs = []}}
+         let mbnd = Bind RStrict (TY.sigMatcher) (strict mjt)
+                     (JInvoke (JX.jexmem xbnd.jex "matcher") [sbnd.jex])
          (mbnd,code2) <- realize (U.javaName g (Local uid var)).base mbnd
          body <- cont (binds.insert vsym mbnd)
  
-         let  jex = JInvoke (JExMem mbnd.jex "find") []
+         let  jex = JInvoke (JX.jexmem mbnd.jex "find") []
               ifc = if assert then JAssert jex : body else [JCond "if" jex body]
          stio (bind, (comment:code) ++ code2 ++ ifc)
  
@@ -360,7 +379,7 @@ argDefs g attr stri sigmas argNms
      | S ss <- stri = zipWith3 (argdef g attr) ss sigmas argNms -- (zip ss      (zip sigmas argNms))
      | otherwise    = zipWith3 (argdef g attr) allLazy sigmas argNms
 
-argdef g attr s sig nm = (attr, sig, argType g s sig, nm)
+argdef g attr s sig nm = (attr, sig, argType g (Strictness.isStrict s) sig, nm)
 
 
 {--
@@ -369,12 +388,11 @@ argdef g attr s sig nm = (attr, sig, argType g s sig, nm)
     - lazy frege type: Lazy
     - otherwise: Object
     -}
-argType :: Global -> Strictness -> Sigma -> JType
+argType :: Global -> Bool -> Sigma -> JType
 argType g s t
-    | S _ <-  s      = strict argjt
-    | wasFrege argjt = lazy argjt
-    | otherwise      = Object
-    where argjt = sigmaJT g sig
+    | s         = strict argjt
+    | otherwise = lazy argjt
+    where argjt = sigmaJT g t
 
 
 {--
@@ -383,11 +401,11 @@ argType g s t
     -}
 evalArgDef attr sigmas argNms = zipWith (argdef attr) sigmas argNms
     where
-        argdef attr sigma name = (attr, sigma, Object, name)     
+        argdef attr sigma name = (attr, sigma, Lazy Something, name)     
 {--
     convert an arg quadrupel to a 'Binding'
     -}
-argBind(_, sig, jt, s) = quadBind JAtom
+argBind = quadBind JAtom
 
 quadBind f (_, sig, jt, s) = Bind (jtRmode jt) sig jt (f s)
 
@@ -400,10 +418,10 @@ quadBind f (_, sig, jt, s) = Bind (jtRmode jt) sig jt (f s)
      
     Returns a new binding with the java expression that accesses the field.  
     -}
-fldBind :: Global -> Binding -> ConField -> Sigma -> Binding
+fldBind :: Global -> Binding -> ConField QName -> Sigma -> Binding
 fldBind g value field at  = Bind{
         mode = jtRmode jty, 
         ftype = at, 
         jtype = jty , 
-        jex = JExMem{jex=(strictBind value).jex, name=unJust field.name, targs=[]}}
+        jex = JExMem{jex=(strictBind g value).jex, name=unJust field.name, targs=[]}}
     where jty = argType g field.strict field.typ
