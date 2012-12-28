@@ -393,19 +393,29 @@ returnKind syms (sym@SymV {expr = Just x, depth = 0}) = do
         self   <- references [sym.sid] x        -- is it self-referential?
         rec    <- references syms x             -- is it recursive
         (_, deps) <- U.fundep sym
-        sx     <- isSimple x
-        let fwrefs
-                | Local{} <- sym.name = rec > 0
-                | otherwise = not (null deps)        -- possible forward references?
+        -- depsyms   <- mapSt U.findV deps
+        sx        <- isSimple x
+        let local = sym.name.isLocal                            -- is this a local item?
+            fwrefs
+                | local                = rec > 0
+                | MName{}  <- sym.name = not (null deps)        -- possible forward references?
+                | null syms            = self > 0
+                | [mutual] <- syms     = mutual != sym.sid || self > 0
+                | otherwise            = true
             safe   = if rec > 0 then RState.empty else RState.singleton RSafeTC
             simple = if sx && not fwrefs && self == 0 
                     then RState.singleton RSimple 
                     else RState.empty
-            value  = if sym.strsig.isStrict 
-                        then RState.singleton RValue 
-                        else RState.singleton RAlways  
+            stricter = null sym.typ.bound           -- don't make 'undefined' strict!
+                        && not local
+                        && RSafeTC `member` safe
+                        && RSimple `member` simple 
+                    || Strictness.isStrict sym.strsig   -- if it is strict anyway        
+            value  = RState.singleton (if stricter then  RValue else RAlways)   
             rkind = (safe.union simple).union value
-        U.changeSym sym.{rkind, expr = Just x}
+            stri  = if stricter && not (Strictness.isStrict sym.strsig)
+                    then S[] else sym.strsig
+        U.changeSym sym.{rkind, expr = Just x, strsig = stri}
 
 returnKind syms (sym@SymV {expr = Just x}) = do
         (w, x) <- returnExprKind syms sym x
@@ -585,7 +595,8 @@ minRkind a b = (safetc.union tailbit).union wrbits where
  -}
 returnNames sids nms = do
     syms  <- mapSt U.findV nms
-    foreach syms (returnKind (sids ++ map Symbol.sid syms))
+    let !deps = sids ++ map Symbol.sid syms
+    foreach syms (returnKind deps)
     -- returnKind nms sym
     -- U.changeSym sym.{rkind}
 
