@@ -132,7 +132,7 @@ lazyMethod sym | sym.{flds?} || sym.{rkind?} = do
  
         let args        = argdefs
             rkind       = if sym.{rkind?} then sym.rkind else RState.singleton RValue
-            rm          = wmode  rkind
+            -- rm       = wmode  rkind
             jtype       = boxed (workerType rkind jrty)                 
             
             abinds
@@ -410,17 +410,17 @@ pass = do
 -- 
     mapSt (symCode Nil) (sortBy (comparing Symbol.name) [ s | s@SymT {sid} <- vals ])
         >>= ppSS
---     mapSt (symCode Nil) (sortBy (comparing Symbol.name) [ s | s@SymC {sid} <- vals ])
---         >>= ppSS
+    mapSt (symCode Nil) (sortBy (comparing Symbol.name) [ s | s@SymC {sid} <- vals ])
+        >>= ppSS
 --     mapSt (symCode Nil) (sortBy (comparing Symbol.name) [ s | s@SymI {sid} <- vals ])
 --         >>= ppSS
     -- do variables in dependency order, this is so that CAFs refer only to CAFs
     -- whose java initialization occurs earlier
-    let vars = [ s | s@SymV {sid} <- vals ]
-    names   <- mapSt U.fundep vars
-    varsyms <- mapSt U.findV (concat (U.tsort names)) 
-    mapSt (symCode Nil) varsyms
-         >>= ppSS
+    let vars = [ s | s@SymV {} <- vals ]
+    -- names   <- mapSt U.fundep vars
+    -- varsyms <- mapSt U.findV (concat (U.tsort names))
+    mapSt U.fundep vars >>= mapSt U.findV . concat . U.tsort >>= mapSt (symCode Nil) >>= ppSS 
+    -- mapSt (symCode Nil) varsyms >>= ppSS
 
     -- constants
     makeConstants
@@ -805,30 +805,30 @@ symCode binds (sym@SymT {sid, nativ = Just _}) = do                             
                              defs = concat subDefs}
      stio [JComment (nice sym g), result]
  
--- {--
---  * Code for type classes
---  *
---  * - interface @Cname@</a/> where /a/ is the class variable
---  * - for each class method, an abstract method that returns a function (i.e. @frege.rt.MH@)
---  * - name space @I@ for default function implementations
---  -}
--- symCode binds (sym@SymC {sid}) = do           -- type class
---     g <- getST
---     let vals = sortBy (comparing Symbol.name) (values sym.env)
---     abstrFuns <- mapSt (abstractFun sym) vals
---     let ivals = filter (isJust • Symbol.expr) vals         -- default implementations
---     implFuns <- mapSt (symCode binds) ivals
---     -- taujt    <- tauJT sym.tau
---     let jtype = Ref (U.javaName g sym.name) []
---         superclasses = [ Ref (U.javaName g nm) [] | nm <- sym.supers ]
---         implDef
---             | null implFuns = []
---             | otherwise = [JClass {attr = attrs [JPublic, JStatic],
---                             jtype = Ref (JName "" "I") [],
---                             extend = Nothing, implement = [], defs = concat implFuns}]
---         result = JInterface (attrs [JPublic]) jtype superclasses (concat abstrFuns ++ implDef)
---     stio [JComment (nice sym g), result]
--- 
+{--
+    Code for type classes
+  
+    - interface @Cname@</a/> where /a/ is the class variable
+    - for each class method, an abstract method that returns a function (i.e. @Lambda@)
+    - name space @I@ for default function implementations
+    -}
+symCode binds (sym@SymC {sid}) = do           -- type class
+     g <- getST
+     let vals = sortBy (comparing Symbol.name) (values sym.env)
+     abstrFuns <- mapSt (abstractFun sym) vals
+     let ivals = filter (isJust • Symbol.expr) vals         -- default implementations
+     implFuns <- mapSt (symCode binds) ivals
+     -- taujt    <- tauJT sym.tau
+     let jtype = Ref (U.javaName g sym.name) []
+         superclasses = [ Ref (U.javaName g nm) [] | nm <- sym.supers ]
+         implDef
+             | null implFuns = []
+             | otherwise = [JClass {attr = attrs [JPublic, JStatic],
+                             jtype = Ref (JName "" "I") [],
+                             extend = Nothing, implement = [], defs = concat implFuns}]
+         result = JInterface (attrs [JPublic]) jtype superclasses (concat abstrFuns ++ implDef)
+     stio [JComment (nice sym g), result]
+ 
 -- {--
 --     Code for instances
 -- 
@@ -915,26 +915,28 @@ symCode binds sym = do
      U.error sym.pos (text ("Can't generate code for " ++ nice sym g))
      stio [JComment (nice sym g)]
  
--- --- declare abstract class Member function
--- 
--- abstractFun symc (sym@SymV {sid}) = do
---     g <- getST
---     let classCtx = Ctx {pos=Position.null, cname = Symbol.name symc, tau = Symbol.tau symc, checked = false }
---         ctxs = [ ctx | ctx <- sym.typ.rho.context,
---                     not (TC.sameCtx ctx classCtx)]      -- filter out class context
--- 
---     let constrformal = map (uncurry (makeConstraintArg g)) (zip ctxs ctxNames)
---         cafMeth = {- null ctxs && -} sym.depth == 0
---     -- sjt          <- sigmaJT funtyp
---     let    result = JMethod {attr = attrs [JPublic],
---                             gargs = [],       -- map targ (filter (!=tauvar) bnds),
---                             jtype = if cafMeth then lazy jtValue else jtFun,    
---                             name = latinF ++ mangled sym.name.base,
---                             args = constrformal,
---                             body = JEmpty}
---     stio [JComment ((nice sym g) ++ " :: " ++ nice sym.typ g), result]
--- abstractFun _ _ = undefined
--- 
+--- declare abstract class Member function
+abstractFun symc (sym@SymV {sid}) = do
+     g <- getST
+     let classCtx = Ctx {pos=Position.null, 
+                        cname = Symbol.name symc, 
+                        tau = Symbol.tau symc, checked = false }
+         ctxs = [ ctx | ctx <- sym.typ.rho.context,
+                     not (TC.sameCtx ctx classCtx)]      -- filter out class context
+ 
+     let constrformal = map (uncurry (makeConstraintArg g)) (zip ctxs ctxNames)
+         cafMeth = sym.depth == 0
+     let    result = JMethod {attr = attrs [JPublic],
+                             gargs = [],       -- map targ (filter (!=tauvar) bnds),
+                             jtype = if cafMeth 
+                                        then (lazy . tauJT g . fst . U.returnType) sym.typ.rho 
+                                        else Lambda,    
+                             name = latinF ++ mangled sym.name.base,
+                             args = constrformal,
+                             body = JEmpty}
+     stio [JComment ((nice sym g) ++ " :: " ++ nice sym.typ g), result]
+abstractFun _ _ = undefined
+ 
 -- {--
 --   >  class @Eq eq@
 --   >  instance `Eq_(,,,)` :: forall u v w x.(Eq v,Eq w,Eq x,Eq u) => (w,x,u,v)
@@ -1153,7 +1155,8 @@ argMode g s sig = jtRmode (argType g (Strictness.isStrict s) sig)
  
 {--
      Adapt a 'Binding' to the required strictness
-     It is guaranteed that the Binding is not 'RUnknown' afterwards.
+     If it is non strict, nothing will be done, as everything 
+     can be passed as lazy.
     --}
 adaptBind :: Global -> Binding -> Strictness -> Binding
 adaptBind g bind s
@@ -2395,7 +2398,7 @@ genExpr _ rm (Vbl {pos, name, typ = Just sigma}) binds
         g <- getST
         sym <- U.findV name
         case lookup binds sym of
-             Just b = stio (toMode g rm b)
+             Just b = stio (notLazy g rm b)
              Nothing | Just _ <- sym.expr 
                  = instSym pos sym sigma
              Nothing -> do
@@ -2407,13 +2410,13 @@ genExpr _ rm (Vbl {pos, name, typ = Just sigma}) binds
         g <- getST
         sym <- U.findV name
         bind <- instSym pos sym sigma
-        stio (toMode g rm bind)
+        stio (notLazy g rm bind)
  
 genExpr _ rm (Con {pos, name, typ = Just sigma}) binds = do
     g    <- getST
     sym  <- U.findD name
     bind <- instSym pos sym sigma
-    stio (toMode g rm bind)
+    stio (notLazy g rm bind)
  
 genExpr _ rm (Lit {kind = LBool, value, typ = Just sigma}) binds
      | rm != RStrict  =  stio (Bind RStrict  sigma bool tf)
@@ -2457,7 +2460,7 @@ genExpr rflg rm (app@App a b (Just sigma)) binds = do
                     if symt.product && symt.newt
                         then genExpr rflg rm (head args) binds
                         else do
-                            let islazy = rm == RLazy && !rflg
+                            let islazy = rm == RLazy
                                 struct = true
                                 sjt    = sigmaJT g sigma
                                 aargs  = take a args
@@ -2474,12 +2477,12 @@ genExpr rflg rm (app@App a b (Just sigma)) binds = do
                                     | otherwise  = do
                                             r <- foldSt apply call rbinds
                                             let b = Bind RLazy sigma (lazy sjt) r.jex
-                                            stio (toMode g rm b)
+                                            stio (notLazy g rm b)
                             if struct && islazy
                                 then do
                                     dbind <- instSym pos sym csigma
                                     let jx = JX.xmem "apply" dbind.jex
-                                        call = Bind RStrict sigma sjt (JInvoke jx (map Binding.jex abinds))
+                                        call = Bind RLazy sigma (lazy sjt) (JInvoke jx (map Binding.jex abinds))
                                     result call
                                 else do
                                     dbind <- instSymDirect pos sym csigma
@@ -2635,7 +2638,7 @@ genExpr rflg rm (app@App a b (Just sigma)) binds = do
             abinds <-   mapSt (flip (genExpr false RUnknown) binds) args
             appl   <-   foldSt apply fbind abinds
             let raw    = appl.{ftype=sigma}
-            stio (toMode g rm raw)
+            stio (notLazy g rm raw)
 -- 
 -- 
 -- 
@@ -2660,7 +2663,7 @@ genExpr _ rm (ifte@Ifte c t e (Just sigma)) binds = do
      cbind <- genExpr false RStrict c binds
      tbind <- genExpr false rm      t binds
      ebind <- genExpr false rm      e binds
-     stio (toMode g rm (Bind (jtRmode tbind.jtype) sigma tbind.jtype 
+     stio (notLazy g rm (Bind (jtRmode tbind.jtype) sigma tbind.jtype 
                                 (JQC cbind.jex tbind.jex ebind.jex)))
  
 genExpr _ rm (lam@Lam{}) binds = lambdaEx lam binds
