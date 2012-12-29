@@ -87,8 +87,8 @@ data JType =
     | Lambda                                        --- some function
     | Something                                     {-- something unknown that can be casted
                                                         to the desired type -} 
-    | Algebraic                                     --- some algebraic value
-    | Value                                         --- some value
+    | Applicable                                    --- result of apply
+
     
     
 
@@ -104,16 +104,12 @@ instance Anno JType where
     anno Func{args, yields}     = text ("Func" ++ show args)
     anno Lambda                 = text ("Lambda")
     anno Something              = text ("Object")
-    anno Algebraic              = text ("Algebraic")
-    anno Value                  = text ("Value")
+    anno Applicable             = text ("Applicable")
+
 
 instance Show JType where
     show Lazy{yields} = "Lazy<" ++ show yields ++ ">"
     show jt = PP.pretty 1000 jt.anno
-
-
--- the @Value@ type
-jtValue  = Value
 
 --- the most general type for anonymous fuctions
 jtFun    = Lambda
@@ -122,8 +118,6 @@ jtFun    = Lambda
 jtInt    = Nativ "int" []
 jtString = Nativ { typ = "java.lang.String", targs = []}
 
---- create @Lazy<T>@ for @T@, see 'lazy'
-jtLazy   = Lazy
 
 --jnLazy   = JName "" "Lazy"
 --- used to construct static member functions of @Delayed@
@@ -141,9 +135,23 @@ boxed (Nativ "double" [])  = Nativ {typ = "java.lang.Double", targs = []}
 boxed (Nativ "float" [])   = Nativ {typ = "java.lang.Float", targs = []}
 boxed x = x
 
---- make the lazy form of a java type, does nothing if already lazy
-lazy (t@Lazy{}) = t
-lazy x = Lazy (boxed x)
+--- make the lazy form of a java type
+lazy :: JType -> JType
+lazy jt = case jt of
+    Lazy{yields}        -> jt
+    Nativ{typ, targs}   -> Lazy (boxed jt)
+    Applicable          -> jt
+    Something           -> Lazy jt
+    TArg{var}           -> Lazy jt
+    Func{args, yields}  -> Lazy jt
+    Lambda              -> Lazy jt
+    Ref{jname, targs}   -> Lazy jt
+    
+    
+
+autoboxed jt
+    | Nativ{} <- jt    = boxed jt
+    | otherwise        = jt
 
 --- create the strict form of a boxed java type
 strict x = case boxed x of
@@ -157,6 +165,7 @@ strict x = case boxed x of
     Nativ {typ = "java.lang.Float", targs = []}     -> Nativ "float" []
     other -> other
 
+isLazy jt = jt == lazy jt
 -- -------------------------------------------------------------------------------------
 -- ---------------------------------- Java Expressions ---------------------------------
 -- -------------------------------------------------------------------------------------
@@ -469,8 +478,8 @@ replTVar Lazy  { yields  }      = Lazy    {yields = replTVar yields}
 replTVar Func{args, yields}     = Func{args, yields = replTVar yields}
 replTVar Lambda                 = Lambda
 replTVar Something              = Something
-replTVar Algebraic              = Algebraic
-replTVar Value                  = Value
+replTVar Applicable             = Applicable
+
 
 {--
     Replace all generic type variables with "?" in the expr
@@ -507,7 +516,9 @@ replTVarStmt (JAssign  jex1 jex2)  = JAssign   (replTVarExpr jex1) (replTVarExpr
 replTVarStmt (JCond s  jex stmts)  = JCond s   (replTVarExpr jex) (map replTVarStmt stmts)
 replTVarStmt (JBlockX s    stmts)  = JBlockX s (map replTVarStmt stmts)
 replTVarStmt (JCase    jex  stmt)  = JCase     (replTVarExpr jex) (replTVarStmt stmt)
-replTVarStmt JLocal{}              = error "Can't replTVarStmt JLocal" 
+replTVarStmt JLocal{decl}
+    | JComment _ <- decl           = JLocal{decl}
+    | otherwise                    = error "Can't replTVarStmt JLocal" 
 replTVarStmt stmt                  = stmt
 
 {--
@@ -533,9 +544,8 @@ wmode n
       this means the return type is @Object@. Frege types are returned as @Lazy@.
 -}
 workerType mode rjt = case wmode mode of
-                         RLazy    -> lazy rjt
                          RStrict  -> strict rjt
-                         RUnknown -> lazy rjt
+                         others   -> lazy rjt
                                   
 
 
@@ -573,16 +583,23 @@ invoke1 meth arg = JInvoke meth [arg]
 --- Note that @toMode RStrict@ does not undo @toMode RLazy@ and vice versa
 --- This actually casts Objects to the target type
 toMode :: Global -> RMode -> Binding -> Binding
-toMode ?g RStrict  (bind@Bind{mode, ftype, jtype, jex})
+toMode  g  mode  Bind{ftype, jtype = Applicable, jex}
+                      = toMode g mode Bind{mode = RLazy, ftype,
+                            jtype = Lazy boxf, 
+                            jex   = (JX.invoke [] . JX.xmem "result") jex}
+        where boxf = boxed (sigmaJT g ftype)
+toMode ?g  RStrict  (bind@Bind{mode, ftype, jtype, jex})
     | mode == RStrict = bind
     | Lazy{yields} <- jtype,
-      wasFrege yields 
+      wasFrege yields  
                       = Bind{mode = RStrict, ftype, jtype = boxd, 
                             jex   = JInvoke JExMem{jex, name="forced", targs=[boxd]} []}                           
     | boxd == jtype   = bind.{mode= RStrict}
+    | boxf == jtype   = bind.{mode= RStrict}
     | Something <- jtype 
                       = Bind{mode = RStrict, ftype, 
-                             jtype = strict boxf, jex = JCast boxf jex}                             
+                            jtype = strict boxf, jex = JCast boxf jex}
+    -- Applicable handled above                                                           
     | otherwise       = Bind{mode = RStrict, ftype, 
                             jtype = strict boxf, 
                             jex   = invoke1 (methodForced boxf) jex}
@@ -590,21 +607,23 @@ toMode ?g RStrict  (bind@Bind{mode, ftype, jtype, jex})
         boxd = boxed jtype
         boxf = boxed (sigmaJT g ftype)
          
-toMode ?g RLazy    (bind@Bind{mode, ftype, jtype, jex})
+toMode ?g  RLazy    (bind@Bind{mode, ftype, jtype, jex})
     | mode == RLazy  = bind
     | otherwise      = case jtype  of
         Ref{jname, targs}   -> bind.{mode=RStrict}
-        TArg{var}           -> delayed
-        Nativ{typ, targs}   -> delayed
-        Lazy{yields}        -> bind.{mode=if wasFrege yields then RLazy else RUnknown}
+        Lazy{yields} 
+          | wasFrege yields -> bind.{mode=RLazy}
         Func{args, yields}  -> bind.{mode=RStrict}
         Lambda              -> bind.{mode=RStrict}
-        Something           -> delayed
-        Algebraic           -> bind.{mode=RStrict}
-        Value               -> delayed
+        -- Applicable       -> handled above
+        others              -> delayed
+        -- Something           -> delayed
+        -- TArg{var}           -> delayed
+        -- Nativ{typ, targs}   -> delayed
     where
+        boxf = boxed (sigmaJT g ftype)
         delayed = Bind{mode  = RLazy, ftype, 
-                            jtype = lazy jtype, 
+                            jtype = lazy boxf, 
                             jex   = invoke1 methodDelay jex}      
 
 toMode ?g RUnknown bind = bind  -- everything fits 'RUnknown'
@@ -764,8 +783,8 @@ jtRmode Lazy{yields}        = if wasFrege yields then RLazy else RUnknown
 jtRmode Func{args, yields}  = RStrict
 jtRmode Lambda              = RStrict
 jtRmode Something           = RStrict
-jtRmode Algebraic           = RStrict
-jtRmode Value               = RStrict
+jtRmode Applicable          = RLazy
+
 
 {--
     Tell if a java type is a mapped Frege type
@@ -774,8 +793,7 @@ wasFrege Ref{}          = true
 wasFrege Lazy{yields}   = wasFrege yields
 wasFrege Func{}         = true
 wasFrege Lambda         = true
-wasFrege Algebraic      = true
-wasFrege Value          = true
+-- wasFrege Applicable     = true
 wasFrege _              = false
 
 {--
