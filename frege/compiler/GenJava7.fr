@@ -1123,7 +1123,8 @@ workName g (sym@SymV {name, typ, strsig, depth, rkind})
          local (Local{}) = true
          local _         = false
          constrained sigma = not (null (Sigma.rho sigma).context)
-         onlyLazyArgs (S uuu) = all (U==) uuu
+         argmodes uuu = zipWith (argMode g) uuu (snd (U.returnType typ.rho))
+         onlyLazyArgs (S uuu) = all (U==) uuu && all (RUnknown==) (argmodes uuu)
          onlyLazyArgs _ = false
 workName g sym = "work"
 
@@ -1160,8 +1161,8 @@ adaptBind :: Global -> Binding -> Strictness -> Binding
 adaptBind g bind s
      = toMode g am bind
      where
-        at = argType g s.isStrict bind.ftype
-        am = jtRmode at
+        am = argMode g s bind.ftype
+        
  
 --- adapt argument to wanted strictness
 adaptArg g a s = adaptBind g (argBind a) s
@@ -1289,10 +1290,7 @@ cafCode _ binds = error "cafCode: no caf"
 funCode (sym@SymV {expr = Just x}) binds = do
      g <- getST
      if g.toplevel then topFun   sym binds
-                   else do
-                            U.error sym.pos (text ("Cannot compile inner function " ++ nicer sym g ++ " yet."))
-                            stio []
-                            -- innerFun sym binds
+                   else innerFun sym binds
 funCode nofun binds = error "funClass: no function"
  
 {--
@@ -1336,87 +1334,66 @@ lambdaEx ex binds = do
     g <- getST
     U.fatal (getpos ex) (text ("lambdaEx: bad lambda " ++ nice ex g))    
  
--- {--
---     Create @final Lambda123 name = new Lambda123() { ... }
---  -}
--- innerFun (sym@SymV {expr = Just x}) binds = do
---     g <- getST
---     U.logmsg TRACEG sym.pos (text ("innerFun: " ++ nice sym.name g ++ " :: "
---              ++ nice sym.typ.rho g ++ ", depth=" ++ show sym.depth))
---     rho <- TC.zonkRho sym.typ.rho
--- 
---     let argNames = drop (fold (+) 0 (map Symbol.depth g.genEnv)) GenJava7.argNames
---         -- envCtx   = envCtxs g
---         -- implies = impliesG g
---         -- ctxs = [ ctx | ctx <- rho.context,
---         --                hasVars (Context.tau ctx),
---         --                not (any (`implies` ctx) envCtx)]
---         -- sym = symc.{typ <- Sigma.{rho <- Rho.{context = []}}}
---         argAttr = -- if (sym.rkind `band` T.rkTail) == 0 then attrFinal else 0
---             if RTailRec `member` sym.rkind then 0 else attrFinal
---         (rty, atys) = U.returnTypeN sym.depth sym.typ.rho
---         -- hasVars (TVar{}) = true
---         -- hasVars (TCon{}) = false
---         -- -- hasVars (TFun a b) = hasVars a || hasVars b
---         -- hasVars (TApp a b) = hasVars a || hasVars b
---         -- hasVars (Meta{}) = true
--- 
---     -- U.changeSym sym
---     -- unless (null ctxs) do
---     --     U.error sym.pos (msgdoc (nice sym g ++ " has context " ++ U.nicerctx ctxs g))
--- 
---     rjt  <- rhoJT rty
---     ajts <- mapSt sigmaJT atys
---     workerArgs <- argDef argAttr sym.strsig atys argNames
--- 
--- 
---     let modew = wmode sym.rkind
--- 
---     let
---         workerType = case modew of
---                                 RLazy  -> lazy rjt
---                                 RBoxed -> rjt
---                                 RNative -> strict rjt
---         workerName = workName g sym
---         letName    = U.javaName g sym.name
---         lambdaTyp  = Nativ ("Lam"  ++ show sym.depth) []
---         classTyp   = Nativ ("L" ++ show sym.sid) []
---         thisName   = "this"  ++ show sym.sid
---         thisBind   = Bind RNative sym.typ classTyp (JAtom thisName)
---         innerbinds = insert binds sym thisBind
--- 
---     stmts        <- compiling  sym (genFunction sym modew workerArgs innerbinds)
---     lMethod      <- lazyMethod   sym
---     -- let flMethod = lMethod.{attr = attrs [JFinal, JPublic], name = "eval", args <- reverse}
---     -- handleMethod <- genLocalMH sym
--- 
---     let worker = JMethod {attr = attrs [JFinal, JPublic],
---                           gargs = [],
---                           jtype = workerType,
---                           name = workerName,
---                           args = workerArgs,
---                           body = JBlock (thisAssign:stmts)}
---         -- final Lambda123 this123 = this;
---         thisAssign = JLocal (JMember {attr = attrFinal, jtype=classTyp, name = thisName,
---                                         init = Just (JAtom "this")})
---         letVar = JMember { attr = attrFinal, jtype = classTyp, name = letName.base,
---                             init = Just (JNew classTyp []) }
---         defs
---             | workerName == "eval" =  [worker.{args <- reverse}]
---             | otherwise      =  [worker, lMethod]
---         theClass = JClass { attr = attrFinal, jtype = classTyp,
---                             extend = Just lambdaTyp,
---                             implement = [], defs}
--- 
--- 
--- 
--- 
---     stio ([JComment ((nice sym g) ++ "  " ++ show sym.strsig ++ "  " ++ show sym.rkind),
---         JComment (nicer sym.typ g),
---         JComment (nicer x g),
---         theClass, letVar
---         ])
--- innerFun sym binds = error "innerFun: no function"
+{--
+     Create @final Func123 name = new Func123() { ... }
+  -}
+innerFun (sym@SymV {expr = Just x}) binds = do
+     g <- getST
+     U.logmsg TRACEG sym.pos (text ("innerFun: " ++ nice sym.name g ++ " :: "
+              ++ nice sym.typ.rho g ++ ", depth=" ++ show sym.depth))
+     rho <- TC.zonkRho sym.typ.rho
+ 
+     let argNames = drop (fold (+) 0 (map Symbol.depth g.genEnv)) GenJava7.argNames
+         argAttr = if RTailRec `member` sym.rkind then Attributes.empty else attrFinal
+         (rty, atys) = U.returnTypeN sym.depth sym.typ.rho
+ 
+     let rjt        = rhoJT g rty
+         -- ajts    = map (sigmaJT g) atys
+         wrkArgs    = argDefs g argAttr sym.strsig atys argNames
+ 
+ 
+     let modew = wmode sym.rkind
+ 
+     let
+         wrkType    = workerType sym.rkind rjt
+         wrkName    = workName g sym
+         letName    = U.javaName g sym.name
+         lambdaTyp  = Func sym.depth wrkType
+         classTyp   = Ref letName.{base <- ("F" ++)}  []
+         thisName   = "this"  ++ show sym.sid
+         thisBind   = Bind RStrict sym.typ classTyp (JAtom thisName)
+         innerbinds = insert binds sym thisBind
+ 
+     stmts        <- compiling  sym (genFunction sym modew wrkArgs innerbinds)
+     lMethod      <- lazyMethod sym
+ 
+     let worker = JMethod {attr = attrs [JFinal, JPublic],
+                           gargs = [],
+                           jtype = wrkType,
+                           name = wrkName,
+                           args = wrkArgs,
+                           body = JBlock (thisAssign:stmts)}
+         -- final Lambda123 this123 = this;
+         thisAssign = JLocal (JMember {attr = attrFinal, jtype=classTyp, name = thisName,
+                                         init = Just (JAtom "this")})
+         letVar = JMember { attr = attrFinal, jtype = classTyp, name = letName.base,
+                             init = Just (JNew classTyp []) }
+         defs
+             | wrkName == "eval" =  [worker.{args <- reverse}]
+             | otherwise      =  [worker, lMethod]
+         theClass = JClass { attr = attrFinal, jtype = classTyp,
+                             extend = Just lambdaTyp,
+                             implement = [], defs}
+ 
+ 
+ 
+ 
+     stio ([JComment ((nice sym g) ++ "  " ++ show sym.strsig ++ "  " ++ show sym.rkind),
+         JComment (nicer sym.typ g),
+         JComment (nicer x g),
+         theClass, letVar
+         ])
+innerFun sym binds = error "innerFun: no function"
 
 
 --- Generate code for a top level function 
@@ -2419,23 +2396,32 @@ genExpr rflg rm (app@App a b (Just sigma)) binds = do
         let flat  = map fst (U.flatx app)
             fun   = head flat
             args  = tail flat
-        genApp rm binds fun args
+        genApp fun args
     where
         genEx arm aex = genExpr false arm aex binds
-        genApp rm binds (con@Con {pos, name, typ = Just csigma}) args = do
+        remaining call rargs 
+            | null rargs = stio call
+            | otherwise  = do
+                    g <- getST
+                    rbinds <- sequence [genExpr false RLazy arg binds | arg <- rargs]
+                    r <- foldSt apply call rbinds
+                    stio (coerce g rm r.{ftype=sigma})
+        coerce g RLazy bind = toMode g RLazy (toMode g RUnknown bind)
+        coerce g mode  bind = toMode g mode  bind                    
+        genApp (con@Con {pos, name, typ = Just csigma}) args = do
             g <- getST
             sym <- U.findD name
             let a = length sym.flds
                 (_, asigs) = U.returnTypeN a sym.typ.rho
             if length args < a
-                then genAnon rm binds con args          -- partial application
+                then genAnon con args          -- partial application
                 else do
                     symt <- U.findT name.tynm
                     if symt.product && symt.newt
                         then genExpr rflg rm (head args) binds
                         else do
                             let islazy = rm == RLazy
-                                struct = true
+                                struct = any (ConField.strict) sym.flds
                                 sjt    = sigmaJT g sigma
                                 aargs  = take a args
                                 rargs  = drop a args
@@ -2443,26 +2429,27 @@ genExpr rflg rm (app@App a b (Just sigma)) binds = do
                                            else case sym.strsig of
                                                S ss -> ss
                                                U    -> allLazy
-                                amodes = map (uncurry (argMode g)) (zip sss asigs)
-                            abinds <- mapSt (uncurry genEx) (zip amodes aargs) 
-                            rbinds <- mapSt (flip (genExpr false RLazy) binds) rargs
-                            let result call
-                                    | null rargs = stio call
-                                    | otherwise  = do
-                                            r <- foldSt apply call rbinds
-                                            let b = Bind RLazy sigma (lazy sjt) r.jex
-                                            stio (notLazy g rm b)
+                                amodes = zipWith (argMode g) sss asigs
+                            xbinds <- sequence (zipWith genEx amodes aargs)
+                            let abinds = zipWith (adaptBind g) xbinds sss
+                            -- if there are any strict fields in the constructed value
+                            -- and we need to be lazy, we must use the
+                            -- conf.apply(...) form to be able to pass the arguments
+                            -- lazily.
+                            -- If there are no strict fields, the arguments are demanded 
+                            -- all lazy anyways, hence we can use the direct form, no matter
+                            -- if it is required lazy or not. 
                             if struct && islazy
                                 then do
                                     dbind <- instSym pos sym csigma
                                     let jx = JX.xmem "apply" dbind.jex
                                         call = Bind RLazy sigma (lazy sjt) (JInvoke jx (map Binding.jex abinds))
-                                    result call
+                                    remaining call rargs
                                 else do
                                     dbind <- instSymDirect pos sym csigma
                                     let jx = dbind.jex
                                         call = Bind RStrict sigma sjt (JInvoke jx (map Binding.jex abinds))
-                                    result call
+                                    remaining call rargs
 -- 
 --         genApp rm binds (vbl@Vbl {pos, name, typ = Just vsigma}) args = do
 --                 g     <- getST
@@ -2604,16 +2591,14 @@ genExpr rflg rm (app@App a b (Just sigma)) binds = do
 --                     result
 -- 
 -- 
-        genApp rm binds fun args = genAnon rm binds fun args
+        genApp fun args = genAnon fun args
 -- 
-        genAnon rm binds fun args = do
+        genAnon fun args = do
             g      <-   getST
             fbind  <-   genExpr false RStrict fun binds
             abinds <-   mapSt (flip (genExpr false RUnknown) binds) args
             appl   <-   foldSt apply fbind abinds
             let raw    = appl.{ftype=sigma}
-                coerce g RLazy bind = toMode g RLazy (toMode g RUnknown bind)
-                coerce g mode  bind = toMode g mode  bind
             stio (coerce g rm raw)
 
 genExpr _ rm (Con {pos, name, typ = Just sigma}) binds = do
