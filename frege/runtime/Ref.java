@@ -47,17 +47,17 @@ package frege.runtime;
  * <p> Boxed references. </p>
  * <p> This is not a pure type. </p>
  */
-public final class Ref<A> {
+public final class Ref {
     /**
      * <p>Mutable reference to a frege object.</p>
      *
      * <p> This is used for the IORef type in the Prelude. </p>
      */
-    private A j;
+    private Object j;
     /** Construct a reference. Because this is a native function, the type is correct. */
-    public Ref(A a) { j = a; }
+    public Ref(Object a) { j = a; }
     /** getter */
-    public A get() { return j; }
+    public Object get() { return j; }
     /** setter */
-    public void put(A a) { j = a; }
+    public void put(Object a) { j = a; }
 }
