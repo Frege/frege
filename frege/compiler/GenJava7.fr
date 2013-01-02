@@ -63,7 +63,6 @@ package frege.compiler.GenJava7 where
 import frege.Prelude hiding(apply)
 import frege.List (Tree, values, keys, each, insert, lookup, insertkv, updatekv)
 import Data.List as DL(sortBy, partitioned)
--- import frege.IO   (URLClassLoader)
 
 import frege.compiler.Data          as D
 import frege.compiler.Utilities     as U() 
@@ -71,13 +70,12 @@ import frege.lib.PP()  -- (`<>`, `<+>`, `</>`, `<+/>`, `<~/>`, text, bracket)
 import frege.compiler.Transform     as T(patternStrictness)
 import frege.compiler.TCUtil        as TC(sameTau)
 import frege.compiler.Typecheck     as TY(mainSigma, tc, tauString)
--- import frege.compiler.Classtools    as CT(getLambdas)
--- import frege.compiler.Import        as I(rebuildQN)
 import frege.compiler.Javatypes     as JT(subTypeOf)
 
 import frege.compiler.gen.Match     as GM
 import frege.compiler.gen.Util      as GU except(group, break)
 import frege.compiler.gen.Const     as GC
+import frege.compiler.gen.Bindings  as GB
 
 infixr 6 `<>`
 
@@ -118,9 +116,9 @@ lazyMethod sym | sym.{flds?} || sym.{rkind?} = do
             jrty            = rhoJT g rty
         let argdefs = evalArgDef attrFinal sigmas (take arity argNames)
             wcode   = if wrapped sym
-                    then wrapCode g JReturn rtau sym (map argBind argdefs)
+                    then wrapCode g JReturn rtau sym (map (instArg g) argdefs)
                     else if isnative
-                         then let bind = nativeCall g sym (map argBind argdefs)
+                         then let bind = nativeCall g sym (map (instArg g) argdefs)
                               in [JReturn bind.jex]
                          else []
  
@@ -133,14 +131,14 @@ lazyMethod sym | sym.{flds?} || sym.{rkind?} = do
         let args        = argdefs
             rkind       = if sym.{rkind?} then sym.rkind else RState.singleton RValue
             -- rm       = wmode  rkind
-            jtype       = autoboxed (workerType rkind jrty)                 
+            jtype       = autoboxed (returnType rkind jrty)                 
             
             abinds
                  | S ss <- sym.strsig = zipWith (adaptArg g) argdefs (ss ++ allLazy)
                  | otherwise          = zipWith (adaptArg g) argdefs allLazy
  
             body = JBlock $
-                        [ sComment (nicer b g) | b <- abinds ] ++ 
+                        [ sComment (show b) | b <- abinds ] ++ 
                         [(JReturn  • JX.invoke (ctxs ++ map Binding.jex abinds)) jname]
             rBody = if haswrapper then body -- JBlock [JReturn callWrapper]
                      else JBlock wcode 
@@ -369,8 +367,7 @@ reqLam :: Symbol -> StG Binding
 reqLam sym = do
          g <- getST
          let jname = extFname g sym
-             jtype = sigmaJT g sym.typ
-         return Bind{mode=RStrict, ftype=sym.typ, jtype, jex=JX.static jname}
+         return (newBind g sym.typ (JX.static jname))
  
 {--
      Generate the anonymous Lambdas for all symbols
@@ -518,7 +515,7 @@ makeConstants = do
                  numv = (#_#.matcher value).replaceAll ""
                  bjt  = sigmaJT g lsigma
              let it = JMember { attr = attrs [JPublic, JFinal],
-                                jtype = bjt, name = jname.base, init = Just nb.jex }
+                                jtype = bjt, name = jname.base, init = Just ex }
                  ex = case kind of
                      LBig   -> JNew (Ref (JName "" "java.math.BigInteger") []) [JAtom (show numv)]
                      LRegex -> JInvoke
@@ -530,8 +527,7 @@ makeConstants = do
                      LFloat    -> JAtom numv
                      otherwise -> JAtom value
  
-                 nb = Bind RStrict lsigma (strict bjt) ex
-                 
+                 -- nb = newBind g lsigma ex
              stio it
  
  
@@ -1131,8 +1127,8 @@ workName g (sym@SymV {name, typ, strsig, depth, rkind})
          local (Local{}) = true
          local _         = false
          constrained sigma = not (null (Sigma.rho sigma).context)
-         argmodes uuu = zipWith (argMode g) uuu (snd (U.returnType typ.rho))
-         onlyLazyArgs (S uuu) = all (U==) uuu && all (RUnknown==) (argmodes uuu)
+         argjts uuu = zipWith (argType g) (map Strictness.isStrict uuu) (snd (U.returnType typ.rho))
+         onlyLazyArgs (S uuu) = all (U==) uuu && all (not . isKnownJT) (argjts uuu)
          onlyLazyArgs _ = false
 workName g sym = "work"
 
@@ -1159,7 +1155,7 @@ makeConstraintArg g ctx s = (def.attr, (ForAll [] (RhoTau [ctx] (Context.tau ctx
 {--
     the mode a certain argument is in, given strictness and sigma
     -}
-argMode g s sig = jtRmode (argType g (Strictness.isStrict s) sig)
+-- argMode g s sig = jtRmode (argType g (Strictness.isStrict s) sig)
 
  
 {--
@@ -1167,13 +1163,14 @@ argMode g s sig = jtRmode (argType g (Strictness.isStrict s) sig)
     --}
 adaptBind :: Global -> Binding -> Strictness -> Binding
 adaptBind g bind s
-     = toMode g am bind
-     where
-        am = argMode g s bind.ftype
+     = adaptSigmaWith (if Strictness.isStrict s then strict else lazy) g bind
         
  
 --- adapt argument to wanted strictness
-adaptArg g a s = adaptBind g (argBind a) s
+adaptArg g a s = adaptBind g (arg2Bind g a) s
+
+--- instantiate 'Binding' for an Argument
+instArg g a = adaptSigma g (arg2Bind g a)
 
 {--
   * code for non-functions
@@ -1188,7 +1185,7 @@ cafCode (sym@SymV {depth = 0, expr = Just x}) binds = do
  
     let (rtyp, _) = U.returnTypeN 0 sym.typ.rho
         symtyp = ForAll bnds rtyp
-        mode  = argMode g (if rlazy then U else S[]) symtyp
+        -- mode  = argMode g (if rlazy then U else S[]) symtyp
         rlazy = not g.toplevel && not sym.strsig.isStrict 
                  || not (RValue `member` sym.rkind)
         rsimple = RSimple `member` sym.rkind        
@@ -1196,17 +1193,18 @@ cafCode (sym@SymV {depth = 0, expr = Just x}) binds = do
         cargs = map  (uncurry (makeConstraintArg g)) (zip ctxs ctxNames)
          -- constraints = map  (uncurry (makeConstraintDef g)) (zip ctxs ctxNames)
         jtype = sigmaJT g symtyp
+        rtype = returnType sym.rkind jtype
     selfrec <- if rsimple || g.toplevel then return 0 else T.references [sym.sid] x
     escode  <- if null cargs && rsimple
          then do
-             ecode <- compiling sym (genExpr false mode x binds)
+             ecode <- compiling sym (genExpr false rtype x binds)
              stio (Left ecode)
          else do
              let badguard = T.openCaseWhen g x
                  jthrow = [JThrow (JNew (Ref (JName "frege.runtime" "GuardFailed") []) [
                                                      JAtom (show (nicer sym g)),
                                                      JAtom (show sym.pos)])]
-             code <- compiling sym (genStmts RStrict x binds)
+             code <- compiling sym (genStmts (boxed rtype) x binds)
              case badguard of
                  Just (Left x) -> do
                      U.warn (getpos x) (msgdoc ("guard (" ++ nice x g ++ ") may evaluate to false."))
@@ -1224,12 +1222,12 @@ cafCode (sym@SymV {depth = 0, expr = Just x}) binds = do
         right _ =  error "no scode"
         ecode  = left escode
         scode  = right escode
-        rtype = workerType sym.rkind jtype
+        
         comms = reverse [
-                 JComment (either (flip nice g) (const "no binding") escode),
+                 JComment (either show (const "no binding") escode),
                  JComment ((nice sym g) ++ "  " ++ show sym.strsig ++ "  " ++ show sym.rkind),
                  JComment (nicer sym.typ g), JComment (nicer x g)]
-        jexpr = (toMode g mode ecode).jex
+        jexpr = (adapt ecode rtype).jex
         static = if g.toplevel then JStatic else JFinal
         publik = if g.toplevel then JPublic else JFinal
         cafV  = JMember { attr = attrs [publik, JFinal, static], jtype = rtype,
@@ -1240,7 +1238,10 @@ cafCode (sym@SymV {depth = 0, expr = Just x}) binds = do
         newu  = JNewClass utype [] [vMeth]          -- new Unknown<R>() { ... }
         theU
              | rlazy = newu
-             | otherwise = (strictBind g (Bind RLazy symtyp (lazy jtype) newu)).jex
+             | otherwise = (strictBind (Bind{stype = nicer symtyp g,
+                                            ftype = symtyp,
+                                            jtype = lazy jtype,
+                                            jex   = newu})).jex
                                  
         theC = JX.jexmem 
             (JNewClass (Ref (JName "java.lang" "Object")[]) [] [cafU])
@@ -1257,7 +1258,7 @@ cafCode (sym@SymV {depth = 0, expr = Just x}) binds = do
          -- it is the lazy variant 'cafU' but enclosed in an extra class
          -- to avoid closure about a non-initialized value
         cafC  = cafU.{init = Just theC}                           
-        cafF  = JMethod { attr = cafV.attr, jtype = rtype,
+        cafF  = JMethod { attr = cafV.attr, jtype = boxed rtype,
                            gargs = [], name = cafV.name,
                            args = cargs, body = JBlock scode }
  
@@ -1318,15 +1319,15 @@ lambdaEx (lam@Lam{pat,ex,typ=Just (sig@ForAll _ rho)}) binds = do
         (rty, atys) = U.returnTypeN depth rho
         lambdaTyp  = Func{args=depth, yields=rjt}
         fake = (U.patLocal (getpos lam) 0 "\\lambda").{depth}
-        sjt  = sigmaJT g sig
+        -- sjt  = sigmaJT g sig
         rjt  = rhoJT g rty
         -- ajts = mapSt (sigmaJT g) atys
         workerArgs = evalArgDef attrFinal atys argNames
-        mode = jtRmode retjt
-        retjt = workerType rkind rjt
+        -- mode = jtRmode retjt
+        retjt = returnType rkind rjt
      
     
-    stmts <- compiling fake (genLambda mode lam workerArgs binds) 
+    stmts <- compiling fake (genLambda retjt lam workerArgs binds) 
 
     let worker = JMethod {attr = attrs [JFinal, JPublic],
                           gargs = [],
@@ -1335,9 +1336,9 @@ lambdaEx (lam@Lam{pat,ex,typ=Just (sig@ForAll _ rho)}) binds = do
                           args = reverse workerArgs,
                           body = JBlock stmts}
         theClass =  JNewClass lambdaTyp [] [
-            JComment  ("worker rkind=" ++ show rkind ++ ", mode=" ++ show mode),
+            JComment  ("worker rkind=" ++ show rkind),
             worker]
-    return Bind{mode=RStrict, ftype = sig, jtype = sjt, jex = theClass}
+    return (newBind g sig theClass)
  
 lambdaEx ex binds = do
     g <- getST
@@ -1362,17 +1363,20 @@ innerFun (sym@SymV {expr = Just x}) binds = do
  
  
      let
-         wrkType    = workerType sym.rkind rjt
-         modew      = jtRmode wrkType
+         wrkType    = returnType sym.rkind rjt
+         -- modew      = jtRmode wrkType
          wrkName    = workName g sym
          letName    = U.javaName g sym.name
          lambdaTyp  = Func sym.depth wrkType
          classTyp   = Ref letName.{base <- ("F" ++)}  []
          thisName   = "this"  ++ show sym.sid
-         thisBind   = Bind RStrict sym.typ classTyp (JAtom thisName)
+         thisBind   = Bind{stype = nicer sym.typ g,
+                            ftype = sym.typ,
+                            jtype = lambdaTyp,
+                            jex   = JAtom thisName}
          innerbinds = insert binds sym thisBind
  
-     stmts        <- compiling  sym (genFunction sym modew wrkArgs innerbinds)
+     stmts        <- compiling  sym (genFunction sym wrkType wrkArgs innerbinds)
      lMethod      <- lazyMethod sym
  
      let worker = JMethod {attr = attrs [JFinal, JPublic],
@@ -1418,12 +1422,12 @@ topFun (sym@SymV {expr = Just x}) binds = do
         -- staticWorker = null sym.typ.rho.context
         constrargs  = map  (uncurry (makeConstraintArg g)) (zip sym.typ.rho.context ctxNames)
         rjt         = rhoJT g rty
-        wrjt        = workerType sym.rkind rjt
+        wrjt        = returnType sym.rkind rjt
         workerArgs  = argDefs g argAttr sym.strsig atys argNames
-        modew       = jtRmode wrjt  -- wmode sym.rkind
+        -- modew       = jtRmode wrjt  -- wmode sym.rkind
         workerName  = (U.javaName g sym.name).base -- if staticWorker then (workerMethod g sym).base else workName g sym
  
-    stmts           <- compiling sym (genFunction sym modew (workerArgs) binds)
+    stmts           <- compiling sym (genFunction sym wrjt (workerArgs) binds)
      -- lClass <- prepareLazy sym  {- if staticWorker
      --             then return (JComment "has static worker")
      --             else lazyClass sym -}
@@ -1653,26 +1657,25 @@ wrapped _ = error "wrapped: no symv"
 -- 
 -- 
 --- returns a binding for a direct call of a native method
-nativeCall g (sym@SymV {nativ = Just item}) abinds = Bind retmode bsig jrty (call jrty args)
+nativeCall g (sym@SymV {nativ = Just item}) abinds = newBind g bsig (call jrty args)
     where
         taus = [ tau | Just tau <- map (sigmaTau Just) sigmas ]
         brty = baserty rty
         bsig = ForAll [] (RhoTau [] brty)
         args | [tau] <- taus, Just _ <- U.isUnit tau = []   -- no arguments
-             | otherwise = map (uncurry (argEx g)) (zip abinds taus)
+             | otherwise = zipWith (argEx g)  abinds taus
         bjt = tauJT g brty
         jrty = strict  bjt
-        retmode = maxStrict jrty         
+        -- retmode = maxStrict jrty         
         (rty, sigmas) = U.returnType sym.typ.rho
         argEx g bind tau
              | Just x <- U.isMaybe tau = JQC checknothing (JAtom "null") (justm1 x).jex
              | otherwise = sbind.jex
              where
-                 sbind = primitiveBind g bind
+                 sbind = primitiveBind  bind
                  checknothing = JBin con "==" (JAtom "0")
                  con = JInvoke (JExMem sbind.jex "_constructor" []) []
-                 justm1 x = toMode g RStrict -- (Bind RLazy (ForAll [] (RhoTau [] x)) jt m1ex)
-                            Bind{mode  = RUnknown, 
+                 justm1 x = adaptSigma g  Bind{stype = nicer x g, 
                                  ftype = ForAll [] (RhoTau [] x), 
                                  jtype = Lazy Something,            -- i.e. Object 
                                  jex   = m1ex}
@@ -1705,7 +1708,9 @@ nativeCall g (sym@SymV {nativ = Just item}) abinds = Bind retmode bsig jrty (cal
              NIStatic -> case sigmas of
                  (_:_) -> JInvoke (JAtom item) args
                  _ -> JAtom item
-nativeCall g sym abinds = error "nativeCall: no function"
+nativeCall g sym abinds = error ("nativeCall: no function " 
+    ++ show sym.pos.first.line
+    ++ ", " ++ nicer sym g)
 -- 
 wrapCode g jreturn rtau (sym@SymV {nativ = Just item}) abinds
     | Just (stau, atau) <- U.isIO rtau = let
@@ -1760,7 +1765,7 @@ wrapCode g jreturn rtau (sym@SymV {nativ = Just item}) abinds
             -- bind   = nativeCall g sym abinds
             unit   = JStMem (JName (base ++ ".TUnit") "Unit") []
          in [JEx bind.jex, jreturn unit]
-     | otherwise = [jreturn (toMode g RStrict bind).jex]
+     | otherwise = [jreturn (strictBind bind).jex]
      where
         bind   = nativeCall g sym abinds
         base = "PreludeBase"        
@@ -1793,20 +1798,19 @@ methCode g (sym@SymV {nativ = Just item}) = [
         -- bndWrapper  = bndWcode invWrapper
         -- invWrapper  = JInvoke (JX.static name)
         jreturn     = if arity > 0 then JReturn else JEx
-        bndWcode  x = Bind (maxStrict rjt)    -- (if wrapped sym then  jstrict rjt else maxStrict rjt)
-                             (ForAll [] (RhoTau [] rty)) (strict rjt) x
+        bndWcode  x = newBind g (ForAll [] (RhoTau [] rty))  x
  
         wcode       = if wrapped sym
-                        then wrapCode g jreturn rty sym (map argBind args)
+                        then wrapCode g jreturn rty sym (map (instArg g) args)
                         else let
-                                bind = nativeCall g sym (map argBind args)
+                                bind = nativeCall g sym (map (instArg g) args)
                             in [jreturn bind.jex]
         wrappers    = if haswrapper then [{- inst, -} wrapper] else [{-inst-}]
         wrapper     = JMethod {attr = attrs [JPublic, JStatic, JFinal],
                                  gargs = ftargs, jtype = strict rjt, name = name.base,
                                  args = wArgs, body = JBlock wcode}
         defs        = wrappers
-        unex  [(JEx x)] = (toMode g RStrict (bndWcode x)).jex
+        unex  [(JEx x)] = (strictBind (bndWcode x)).jex
         unex  _ = error "unex: need list with 1 ex"
         member = JMember {attr = attrs [JPublic, JStatic, JFinal],
                           jtype = rjt,
@@ -1862,6 +1866,7 @@ genFunction sym rmode args binds = error "genFunction: no function"
   -}
 genLambda rm (Lam {pat, ex}) ((arg@(_, _, _, s)) : args) binds = do
     g <- getST
+    ps <- T.patternStrictness pat
     let komplett = T.patsComplete g [pat]
         badguard = T.openCaseWhen g ex
         assert = isNothing komplett
@@ -1871,7 +1876,7 @@ genLambda rm (Lam {pat, ex}) ((arg@(_, _, _, s)) : args) binds = do
         -- construct new NoMatch("Module.foo", 42, arg$1)
         jthrow = [JThrow (JNew (Ref (JName "" "NoMatch") []) margs)]
  
-    (_, code) <- match assert pat (argBind arg)
+    (_, code) <- match assert pat (adaptArg g arg ps)
                             (genLambda rm ex args) binds
     case komplett of
          Just p -> do
@@ -1899,7 +1904,7 @@ genLambda _ x _ _ = do
     g <- getST
     U.fatal (getpos x) (text ("genLambda: bad expression: " ++ nice x g))
 
-genStmts, genCaseStmt :: RMode -> Expr -> Tree Symbol Binding -> StG [JStmt] 
+genStmts, genCaseStmt :: JType -> Expr -> Tree Symbol Binding -> StG [JStmt] 
 {--
   * The code for case statements can and will be optimized in various ways.
  
@@ -1944,8 +1949,8 @@ genCaseStmt rm (x@Case {ckind,ex=cex,alts=calts}) binds = do
          capp <- constrApp cex                      -- Just (Con, args) if this is Con a1 a2 ... an
          pats <- foldSt conUVarAlt true calts        -- true if all patterns are Con _ or _
          stri <- patternStrictness (head calts).pat -- strsig of 1st pattern
-         rmex <- patternRMode (head calts).pat
-         bcex <- genExpr false rmex cex binds              -- code for ordinary expression
+         -- rmex <- patternRMode (head calts).pat
+         bcex <- genExpression false (if stri.isStrict then strict else lazy) cex binds              -- code for ordinary expression
          let makeBexs                                -- binds for cex or constr args
                  | pats, Just (con, xs) <- capp = case stri of
                          S ss -> mapSt exStr (zip xs (ss ++ allLazy))
@@ -1979,8 +1984,8 @@ genCaseStmt rm (x@Case {ckind,ex=cex,alts=calts}) binds = do
              throw binds
                  | ckind == CWhen  = stio []                     -- guards always fall through
                  | Nothing <- con,
-                   [bex1] <- binds = throwEx (strictBind g bex1)
-                 | otherwise       = throwEx (strictBind g bcex)      -- construct case ex for throw
+                   [bex1] <- binds = throwEx (strictBind  bex1)
+                 | otherwise       = throwEx (strictBind  bcex)      -- construct case ex for throw
              throwEx arg
                  | isJust complete, Just (Left x) <- badguard = do
                      when (ckind != CNoWarn) do
@@ -2057,10 +2062,10 @@ genCaseStmt rm (x@Case {ckind,ex=cex,alts=calts}) binds = do
  
  
          exStr  (ex, stri)
-             | Strictness.isStrict stri = genExpr false RStrict  ex binds
-             | otherwise                = genExpr false RUnknown ex binds
+             | Strictness.isStrict stri = genExpression false strict  ex binds
+             | otherwise                = genExpression false lazy    ex binds
          bexStr g bind stri
-             | Strictness.isStrict stri = strictBind g bind
+             | Strictness.isStrict stri = strictBind bind
              | otherwise = bind
              -- check if an expression is a constructor application
          constrApp (ex@App _ _ _) = case map fst (U.flatx ex) of
@@ -2115,10 +2120,12 @@ genStmts rm (x@Let {env,ex}) binds = genLet rm x binds
  
 genStmts rm (x@(Ifte c t e _)) binds {-| not (T.isSimple x) -} = do
          g <- getST
-         cbnd <- genExpr false RStrict c binds
+         cbnd <- genExpression false strict c binds
          tstm <- genStmts rm t binds
          estm <- genStmts rm e binds
-         stio [sComment (nicer x g), JCond "if" (strictBind g cbnd).jex tstm, JBlockX "else" estm]
+         stio [sComment (nicer x g), 
+            JCond "if" (strictBind cbnd).jex tstm, 
+            JBlockX "else" estm]
  
  
 genStmts rm ex binds
@@ -2135,24 +2142,24 @@ genStmts rm ex binds
                                      _    -> allLazy
                              asigs = snd (U.returnTypeN sym.depth sym.typ.rho)
                              argNames = drop (fold (+) 0 (map Symbol.depth (tail g.genEnv))) GenJava7.argNames
-                             argmodes = map (uncurry (argMode g)) (zip ss asigs)
-                         abinds   <- mapSt (uncurry genEx)   (zip argmodes args)
+                             argjts = zipWith (argType g) (map Strictness.isStrict ss) asigs -- argNames
+                         abinds   <- sequence (zipWith genEx argjts args)
                          let assigns = zipWith JAssign (map JAtom argNames) (map Binding.jex abinds)
                              comment = sComment ("tailcall  " ++ nicer ex g)
                          stio (comment:assigns ++ [JEx (JAtom "continue tailrecursion")])
                  where
-                     genEx arm aex = genExpr false arm aex binds
+                     genEx tt aex = genExpr false tt aex binds
              _ = do
                  bnd <- genExpr true rm ex binds
                  stio [sComment ("return " ++ show rm ++ "  " ++ nicer ex g),
-                         sComment (nice bnd g),
+                         sComment (show bnd),
                          JReturn bnd.jex]
  
 -- {- genStmts rm ex binds = do
 --         g <- getST
 --         stio [JError ("code for " ++ nicer ex g)] -}
 --
-genLet :: RMode -> Expr -> Tree Symbol Binding -> StG [JStmt] 
+genLet :: JType -> Expr -> Tree Symbol Binding -> StG [JStmt] 
 genLet rm (x@Let {env,ex}) binds = do
          g <- getST
          syms <- mapSt U.findV env
@@ -2165,13 +2172,13 @@ genLet rm (x@Let {env,ex}) binds = do
              g <- getST
              let jt = sigmaJT g (Symbol.typ sym)
              let isClass = sym.depth > 0 -- && not (null sym.typ.bound)
-                 mode = if isClass       then RStrict
+                 mode = if isClass       then strict
                          else if RValue `member` Symbol.rkind sym  
-                                 then RStrict else RLazy
-                 fjt  = if isClass       then Nativ "Lambda42" [] else jt
-                 bjt  = if mode == RLazy then lazy fjt            else fjt
+                                 then strict else lazy
+                 fjt  = jt -- if isClass then Lambda else jt
+                 bjt  = mode fjt
                  name = (U.javaName g sym.name).base
-                 bind = Bind mode sym.typ bjt (JAtom name)
+                 bind = Bind (nicer sym.typ g) sym.typ bjt (JAtom name)
                  nbinds = insert binds sym bind
              code <- symCode nbinds sym
              stio (nbinds, code:codes)
@@ -2265,9 +2272,10 @@ instSymDirect pos sym sigma = do
     
     U.logmsg TRACEG pos (text ("instSym: gargs = " ++ show (map (flip nice g) inst)))
     
-    let jt    = sigmaJT g sigma
+    let -- jt    = sigmaJT g sigma
         str | Local {} <- sym.name, null sym.typ.bound = sym.typ.rho.{context = []}
             | otherwise = sym.typ.rho
+        model = newBind g sigma (JAtom "instSymDirect")
     strho    <- U.substRho (U.unifySigma g sym.typ sigma) str
     U.logmsg TRACEG pos (text ("instSym: strho = " ++ nice strho g))
     contexts <- mapSt  TC.reducedCtx  strho.context
@@ -2277,21 +2285,21 @@ instSymDirect pos sym sigma = do
         SymD {name=MName tynm _, flds} | null ctxs = do
             symt <- U.findT tynm
             if symt.enum
-                then stio (Bind RStrict sigma jtInt (JX.static (workerMethod g sym)))
+                then stio model.{jex = (JX.static (workerMethod g sym))}
                 else if symt.newt
                     then do
                         sym <- U.findV (VName pPreludeBase "id")
                         instSymDirect pos sym sigma
-                    else stio (Bind RStrict sigma jt (JX.static (workerMethod g sym)))
+                    else stio model.{jex = JX.static (workerMethod g sym)}
         SymV {name = Local {}, expr = Just _} = U.fatal sym.pos (text ("instSymDirect: " ++ nicer sym g))
         SymV {name, depth, rkind}
             | null ctxs = do
                 let wm   = workerMethod g sym
-                stio (Bind RStrict sigma jt (JX.static wm))
+                stio model.{jex = JX.static wm}
             | otherwise = do
                 let instx = (JX.invoke ctxs • JX.static)
                                   (workerMethod g sym)
-                stio (Bind RStrict sigma jt instx)
+                stio model.{jex = instx}
         other -> U.fatal pos (text ("Can't instSymDirect " ++ nice sym g))
 -- 
 {--
@@ -2310,7 +2318,8 @@ instSym pos sym sigma = do
     -- let gargs = map (tauJT g) inst
     U.logmsg TRACEG pos (text ("instSym: gargs = " ++ show (map (flip nice g) inst)))
     let rstate = if sym.{rkind?} then sym.rkind else RState.singleton RValue
-    let wjt    = workerType rstate (sigmaJT g sym.typ)
+    let wjt    = returnType rstate (sigmaJT g sym.typ)
+        model  = newBind g sigma (JAtom "instSym")
  
     let str | Local {} <- sym.name, null sym.typ.bound = sym.typ.rho.{context = []}
             | otherwise = sym.typ.rho
@@ -2326,7 +2335,7 @@ instSym pos sym sigma = do
              let mkOrEnum = JX.static (workerMethod g sym)
              symt <- U.findT tynm
              if symt.enum
-                 then stio (Bind RStrict sigma jtInt mkOrEnum)
+                 then stio model.{jtype = jtInt, jex = mkOrEnum}
                  else if symt.newt
                      then do
                          sym <- U.findV (VName pPreludeBase "id")
@@ -2334,7 +2343,7 @@ instSym pos sym sigma = do
                      else if length flds == 0
                              then do
                                  let jx = {- JX.invoke [] -} mkOrEnum
-                                     bind = Bind RStrict sigma wjt jx
+                                     bind = model.{jtype=wjt, jex = jx}
                                  stio bind
                              else reqLam sym 
          SymV {name = MName clas m, depth, rkind} | Just (SymC {tau}) <- clas.findit g = do
@@ -2344,18 +2353,18 @@ instSym pos sym sigma = do
                  let inst   = JInvoke get (tail ctxs)
                      get    = JX.jexmem  (head ctxs) (latinF ++ mangled m)
                      mode   = if depth > 0
-                                 then RStrict         -- function
-                                 else RLazy           -- by def in abstractFun
-                     bind   = Bind mode sigma wjt inst
-                 U.logmsg TRACEG pos (text ("instSym: " ++ nice bind g))                        
+                                 then strict         -- function
+                                 else lazy           -- by def in abstractFun
+                     bind   = model.{jtype = mode wjt, jex = inst}
+                 U.logmsg TRACEG pos (text ("instSym: " ++ show bind))                        
                  stio bind
          SymV {name, depth = 0, rkind} -> do
                  let
-                     mode = jtRmode wjt
+                     -- mode = jtRmode wjt
                      item = JX.static (workerMethod g sym)
                      func | null ctxs = item
                           | otherwise = JX.invoke ctxs item
-                     bind = Bind mode sigma wjt func
+                     bind = model.{jex = func}
                  stio bind
          SymV {name, depth, rkind} = do
              bind <- reqLam sym
@@ -2374,10 +2383,19 @@ apply :: Binding -> Binding -> StG Binding
 apply x b = do
     g <- getST
     U.logmsg TRACEG Position.null
-         (text("apply: " ++ nice x g ++ "  to:  " ++ nice b g))
-    stio x.{mode=RUnknown, jtype=Applicable, 
+         (text("apply: " ++ show x ++ "  to:  " ++ show b))
+    stio x.{jtype=Applicable, 
                 jex=JInvoke (JX.jexmem x.jex "apply") [b.jex]}
--- 
+
+--- genExpression returnexpression f expr binds
+--- Generate java code for expression.
+--- The target java type is determined by @expr@ and modified with @f@ 
+genExpression :: Bool -> (JType -> JType) -> Expr -> Tree Symbol Binding -> StG Binding
+genExpression ret stri x binds = do
+    g <- getST
+    let nt = sigmaJT g (unJust x.typ) 
+    genExpr ret (stri nt) x binds
+ 
 {--
   * [usage] @genExpr rflag rmode expression binds@
   * [return] a binding that computes the frege expression in the desired 'RMode'
@@ -2386,29 +2404,29 @@ apply x b = do
   * called function instead of all lazy. This is an optimization appropriate for
   * tail calls.
   -}
-genExpr :: Bool -> RMode -> Expr -> Tree Symbol Binding -> StG Binding
+genExpr :: Bool -> JType -> Expr -> Tree Symbol Binding -> StG Binding
 genExpr _ rm (Vbl {pos, name, typ = Just sigma}) binds
      | Local{} <- name = do
         g <- getST
         sym <- U.findV name
         case lookup binds sym of
-             Just b = stio (toMode g rm b)
+             Just b = stio (adapt b rm)
              Nothing | Just _ <- sym.expr 
                  = instSym pos sym sigma
              Nothing -> do
                  g <- getST
                  U.error pos (msgdoc ("genExpr: " ++ nice sym g ++ " not bound"))
-                 let sjt = sigmaJT g sigma
-                 stio (Bind rm sym.typ sjt (JAtom ("UNBOUND." ++ name.base)))
+                 -- let sjt = sigmaJT g sigma
+                 stio (newBind g sym.typ (JAtom ("UNBOUND." ++ name.base)))
      | otherwise = do
         g <- getST
         sym <- U.findV name
         bind <- instSym pos sym sigma
-        let mbind = toMode g rm bind
+        let mbind = adapt bind rm
         U.logmsg TRACEG pos (msgdoc ("genExpr: got=" 
-            ++ nice bind g
+            ++ show bind
             ++ ", mode=" ++ show rm
-            ++ ", return=" ++ nice mbind g)) 
+            ++ ", return=" ++ show mbind)) 
         stio mbind
  
 genExpr rflg rm (app@App a b (Just sigma)) binds = do
@@ -2422,14 +2440,14 @@ genExpr rflg rm (app@App a b (Just sigma)) binds = do
         remaining call rargs 
             | null rargs = do
                     g <- getST
-                    stio (toMode g rm call)
+                    stio (adapt call rm)
             | otherwise  = do
                     g <- getST
-                    rbinds <- sequence [genExpr false RLazy arg binds | arg <- rargs]
+                    rbinds <- sequence [genExpression false lazy arg binds | arg <- rargs]
                     r <- foldSt apply call rbinds
                     stio (coerce g rm r.{ftype=sigma})
-        -- coerce g RLazy bind = toMode g RLazy (toMode g RUnknown bind)
-        coerce g mode  bind = toMode g mode  bind                    
+        coerce :: Global -> JType -> Binding -> Binding
+        coerce g target  bind = adapt  bind.{stype = nicer bind.ftype g} target                    
         genApp (con@Con {pos, name, typ = Just csigma}) args = do
             g <- getST
             sym <- U.findD name
@@ -2445,7 +2463,7 @@ genExpr rflg rm (app@App a b (Just sigma)) binds = do
                             -- b <- genExpr rflg rm (head args) binds
                             -- stio (coerce g rm b.{ftype=sigma})
                         else do
-                            let islazy = rm == RLazy
+                            let islazy = !(isStrictJT rm)
                                 struct = any (ConField.strict) sym.flds
                                 sjt    = sigmaJT g sigma
                                 aargs  = take a args
@@ -2454,8 +2472,10 @@ genExpr rflg rm (app@App a b (Just sigma)) binds = do
                                            else case sym.strsig of
                                                S ss -> ss
                                                U    -> allLazy
-                                amodes = zipWith (argMode g) sss asigs
-                            xbinds <- sequence (zipWith genEx amodes aargs)
+                                ajts = zipWith (argType g) 
+                                                (map Strictness.isStrict sss) 
+                                                asigs
+                            xbinds <- sequence (zipWith genEx ajts aargs)
                             let abinds = xbinds -- zipWith (adaptBind g) xbinds sss
                             -- if there are any strict fields in the constructed value
                             -- and we need to be lazy, we must use the
@@ -2468,12 +2488,14 @@ genExpr rflg rm (app@App a b (Just sigma)) binds = do
                                 then do
                                     dbind <- instSym pos sym csigma
                                     let jx = JX.xmem "apply" dbind.jex
-                                        call = Bind RLazy sigma (lazy sjt) (JInvoke jx (map Binding.jex abinds))
+                                        call = (newBind g sigma 
+                                            (JInvoke jx (map Binding.jex abinds))).{jtype = lazy sjt}
                                     remaining call rargs
                                 else do
                                     dbind <- instSymDirect pos sym csigma
                                     let jx = dbind.jex
-                                        call = Bind RStrict sigma sjt (JInvoke jx (map Binding.jex abinds))
+                                        call = newBind g sigma 
+                                            (JInvoke jx (map Binding.jex abinds))
                                     remaining call rargs
 -- 
 --         genApp rm binds (vbl@Vbl {pos, name, typ = Just vsigma}) args = do
@@ -2620,8 +2642,8 @@ genExpr rflg rm (app@App a b (Just sigma)) binds = do
 -- 
         genAnon fun args = do
             g      <-   getST
-            fbind  <-   genExpr false RStrict fun binds
-            abinds <-   mapSt (flip (genExpr false RUnknown) binds) args
+            fbind  <-   genExpr false Lambda fun binds
+            abinds <-   mapSt (flip (genExpression false lazy) binds) args
             appl   <-   foldSt apply fbind abinds
             let raw    = appl.{ftype=sigma}
             stio (coerce g rm raw)
@@ -2630,31 +2652,32 @@ genExpr _ rm (Con {pos, name, typ = Just sigma}) binds = do
     g    <- getST
     sym  <- U.findD name
     bind <- instSym pos sym sigma
-    stio (toMode g rm bind)
+    stio (adapt bind rm)
  
 genExpr _ _ (Lit {kind, value, typ = Just sigma}) binds
     | kind != LRegex && kind != LBig = do
             g <- getST
-            let jt = sigmaJT g sigma
+            -- let jt = sigmaJT g sigma
             let v
                     | kind `elem` [LInt, LLong, LDouble, LFloat] = (#_#.matcher value).replaceAll ""
                     | otherwise = value
-            stio (Bind RStrict sigma (strict jt) (JAtom v))
+            stio (newBind g sigma  (JAtom v))
 
 genExpr _ rm (x@Lit {kind,value,typ=Just sigma}) binds = do
         jname <- findConst x
         g <- getST
-        let jt = sigmaJT g sigma
-        let bind = Bind RStrict sigma jt (JStMem jname [])  
+        -- let jt = sigmaJT g sigma
+        let bind = newBind g sigma (JStMem jname [])  
         stio bind
 
 
-genExpr rflg RLazy (ifte@Ifte c t e (Just sigma)) binds = do
+genExpr rflg target (ifte@Ifte c t e (Just sigma)) binds 
+    | not (isStrictJT target) = do
         g     <- getST
         -- let jt = sigmaJT g sigma
-        cbind <- genExpr false RLazy c binds
-        tbind <- genExpr false RLazy t binds
-        ebind <- genExpr false RLazy e binds
+        cbind <- genExpr false (lazy Nativ{typ="boolean", typeargs=[]}) c binds
+        tbind <- genExpr false target t binds
+        ebind <- genExpr false target e binds
         let lif = VName pPreludeBase "lazyif"
         isym  <- U.findV lif
         ibind <- instSym (getpos ifte) isym isym.typ
@@ -2663,23 +2686,23 @@ genExpr rflg RLazy (ifte@Ifte c t e (Just sigma)) binds = do
  
         let jex = JInvoke   (JX.jexmem ibind.jex "apply")
                             (map Binding.jex [cbind, tbind, ebind])
-        stio Bind{mode=jtRmode rjt, ftype=sigma, jtype=rjt, jex}
+        stio (adapt (newBind g sigma jex).{jtype=rjt} target)
  
-genExpr _ rm (ifte@Ifte c t e (Just sigma)) binds = do
+genExpr _ target (ifte@Ifte c t e (Just sigma)) binds = do
      g <- getST
-     cbind <- genExpr false RStrict c binds
-     tbind <- genExpr false rm      t binds
-     ebind <- genExpr false rm      e binds
-     stio (toMode g rm (Bind (jtRmode tbind.jtype) sigma tbind.jtype 
-                                (JQC cbind.jex tbind.jex ebind.jex)))
+     cbind <- genExpr false Nativ{typ="boolean", typeargs=[]} c binds
+     tbind <- genExpr false target      t binds
+     ebind <- genExpr false target      e binds
+     stio (adapt (newBind g sigma  
+                            (JQC cbind.jex tbind.jex ebind.jex)) target)
  
 genExpr _ rm (lam@Lam{}) binds = do
     g <- getST
     bind <- lambdaEx lam binds
-    stio (toMode g rm bind)
+    stio (adapt bind rm)
  
 genExpr rflg rm ex binds = do
     g <- getST
     let ft = unJust (Expr.typ ex)
     U.error (getpos ex) (text ("Cannot genExpr: " ++ nicer ex g ++ " :: " ++ nicer ft g))
-    return Bind{mode=RStrict, ftype=TY.sigBool, jtype=Nativ "bool" [], jex = JAtom "true"}
+    return (newBind g TY.sigBool (JAtom "cannotgenexpression"))

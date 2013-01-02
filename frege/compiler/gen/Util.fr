@@ -152,7 +152,7 @@ lazy jt = case jt of
     Ref{jname}          -> Lazy jt
     
     
-
+--- make sure a native type is not primitive
 autoboxed jt
     | Nativ{} <- jt    = boxed jt
     | otherwise        = jt
@@ -228,8 +228,8 @@ data JX =
         static = flip JStMem []
 
 --- show a java expression
-showJex jex | cheap jex = PP.pretty 1000 (anno jex)
-            | otherwise = "complicated java expression"
+showJex jex | showable jex = PP.pretty 1000 (anno jex)
+            | otherwise    = "complicated java expression"
 
 
 
@@ -285,6 +285,24 @@ cheap (JCast _ ex) = cheap ex
 cheap (JStMem _ _) = true
 cheap (JExMem ex _ _) = cheap ex
 cheap _ = false
+
+--- when showing java expressions in comments, we want also not so cheap ones
+showable jex = go 3 jex
+    where
+        go :: Int -> JX -> Bool
+        go 0 jex = cheap jex
+        go n JAtom{name}  = true
+        go n (JNew _ jxs)  = all (go (n-1)) jxs 
+        go n (JNewClass _ _ _)  = false
+        go n (JNewArray _ jx)  = go (n-1) jx
+        go n (JInvoke m args)  = all (go (n-1)) (m:args)
+        go n JStMem{jname, targs}  = true
+        go n JExMem{jex, name, targs}  = go (n-1) jex
+        go n (JCast _ ex)  = go (n-1) ex
+        go n JUnop{op, jex}  = go (n-1) jex
+        go n JBin{j1, op, j2}  = go (n-1) j1 && go (n-1) j2
+        go n JQC{j1, j2, j3}  = go (n-1) j1 && go (n-1) j2 && go (n-1) j3
+
 
 -- {--
 --     Optimize a java expression like
@@ -528,128 +546,7 @@ replTVarStmt JLocal{decl}
     | otherwise                    = error "Can't replTVarStmt JLocal" 
 replTVarStmt stmt                  = stmt
 
-{--
-    The mode of the java type assoicated with an expression
- -}
-data RMode = RStrict | RUnknown | RLazy
-derive Eq   RMode
-derive Ord  RMode
-derive Show RMode
 
-{--
-    The mode of the return type of a function
---}
-wmode n 
-    | RValue `member`  n = RStrict
-    | RAlways `member` n = RLazy
-    | otherwise          = RUnknown
-
-{--
-    - If the 'RAlways' flag is set, the return type will always be @Lazy@
-    - If the 'Strict' flag is on, the return type will be @int@, @String@ or @TList@
-    - Otherwise, lazy as well as non lazy results may be returned. For native types, 
-      this means the return type is @Object@. Frege types are returned as @Lazy@.
--}
-workerType mode rjt = case wmode mode of
-                         RStrict  -> strict rjt
-                         others   -> lazy rjt
-                                  
-
-
-{--
- * This data structure describes mode, java type and java expression associated with
- * some frege item. The task of code generation is to create, combine and
- * manipulate such bindings. Many code generating functions will take
- * a ('Tree' 'Symbol' 'Binding') of current bindings as last parameter.
- -}
-data Binding = !Bind {mode :: RMode, ftype :: Sigma, jtype :: JType, jex :: JExpr}
-instance Nice Binding where
-    nice (Bind {mode, ftype, jtype, jex}) g = "Bind {" ++ show mode ++ ", "
-                                            ++ ftype.nice g ++ ", "
-                                            ++ show jtype ++  ", "
-                                            ++ showJex jex ++ "}"
-
---- tell how strict this java type can get
-maxStrict jt = case strict (boxed jt) of
-    Nativ _ _  -> RStrict
-    TArg  _    -> RStrict
-    _          -> RLazy
-
-
-
---- Java expression for the *delayed* method.
-methodDelay = JStMem (U.memberOf jnDelayed "delayed") []
-
---- Java expression for the *forced* method. The argument is the expected type.
-methodForced to = JStMem (U.memberOf jnDelayed "forced") [to]
-
---- Invoke method with single argument
-invoke1 meth arg = JInvoke meth [arg]
-
---- Bring a java expression to desired strictness mode 'RStrict' or 'RLazy'
---- Note that @toMode RStrict@ does not undo @toMode RLazy@ and vice versa
---- This actually casts Objects to the target type
-toMode :: Global -> RMode -> Binding -> Binding
-toMode  g  mode  Bind{ftype, jtype = Applicable, jex}
-                      = toMode g mode Bind{mode = RLazy, ftype,
-                            jtype = Lazy boxf, 
-                            jex   = (JX.invoke [] . JX.xmem "result") jex}
-        where boxf = boxed (sigmaJT g ftype)
-toMode ?g  RStrict  (bind@Bind{mode, ftype, jtype, jex})
-    | mode == RStrict = bind
-    | Lazy{yields} <- jtype,
-      wasFrege yields  
-                      = Bind{mode = RStrict, ftype, jtype = boxd, 
-                            jex   = JInvoke JExMem{jex, name="forced", targs=[boxd]} []}
-    | Something <- jtype 
-                      = Bind{mode = RStrict, ftype, 
-                            jtype = boxf, jex = JCast boxf jex}                           
-    -- boxd == jtype   = bind.{mode= RStrict}
-    | boxf == jtype   = bind.{mode= RStrict}
-    -- Applicable handled above                                                           
-    | otherwise       = Bind{mode = RStrict, ftype, 
-                            jtype = boxf, 
-                            jex   = invoke1 (methodForced boxf) jex}
-    where 
-        boxd = boxed jtype
-        boxf = boxed (sigmaJT g ftype)
-         
-toMode ?g  RLazy    (bind@Bind{mode, ftype, jtype, jex})
-    | mode == RLazy  = bind
-    | otherwise      = case jtype  of
-        Ref{jname, typeargs}   -> bind.{mode=RStrict}
-        Lazy{yields} 
-          | wasFrege yields -> bind.{mode=RLazy}
-        Func{args, yields}  -> bind.{mode=RStrict}
-        Lambda              -> bind.{mode=RStrict}
-        -- Applicable       -> handled above
-        others              -> delayed
-        -- Something           -> delayed
-        -- TArg{var}           -> delayed
-        -- Nativ{typ, typeargs}   -> delayed
-    where
-        boxf = boxed (sigmaJT g ftype)
-        delayed = Bind{mode  = RLazy, ftype, 
-                            jtype = lazy boxf, 
-                            jex   = invoke1 methodDelay jex}      
-
-toMode ?g RUnknown bind = bind  -- everything fits 'RUnknown'
-    
---- make sure a strict binding actually is primitive if type allows
-primitiveBind g bind
-    | Nativ{} <- sbind.jtype,
-      prim != sbind.jtype       = sbind.{jtype = prim, jex <- JX.cast prim}
-    | otherwise                 = sbind
-    where
-        sbind = strictBind g bind
-        prim  = strict sbind.jtype
- 
-
----    make a binding strict
-strictBind g bind = toMode g RStrict bind
-
----    make a binding lazy
-lazyBind g bind = toMode g RLazy bind
 
 
 --- Compute the 'JType' for a given 'Sigma' type 
@@ -723,20 +620,6 @@ ctxNames = xxxNames "ctx$"
 
 --- mem1, mem2, mem3 ...
 memNames = xxxNames "mem"
--- --
--- 
--- 
--- 
---- get the mode a java type is in
-jtRmode :: JType -> RMode
-jtRmode Ref{jname, typeargs}   = RStrict
-jtRmode TArg{var}           = RStrict
-jtRmode Nativ{typ, typeargs}   = RStrict
-jtRmode Lazy{yields}        = if wasFrege yields then RLazy else RUnknown
-jtRmode Func{args, yields}  = RStrict
-jtRmode Lambda              = RStrict
-jtRmode Something           = RUnknown
-jtRmode Applicable          = RLazy
 
 
 {--
@@ -746,7 +629,6 @@ wasFrege Ref{}          = true
 wasFrege Lazy{yields}   = wasFrege yields
 wasFrege Func{}         = true
 wasFrege Lambda         = true
--- wasFrege Applicable     = true
 wasFrege _              = false
 
 {--
@@ -757,29 +639,6 @@ wasFrege _              = false
 isPrimitive (Nativ s _) | s `elem` primitiveTypes   = Just s
 isPrimitive _ = Nothing
 
-{--
-    [usage] @realize bind@
-
-    code to create a local variable and an updated bind
-    -}
-realize name bind
-    | cheap (Binding.jex bind) = do
-        g <- getST
-        stio (bind, [sComment ("too cheap to realize " ++ name ++ " bound to " ++ nice bind g)])
-    | otherwise = do
-        u <- U.uniqid
-        g <- getST
-        let vname = m name -- ++ underline ++ show u  -- must correspond to U.javaName
-            m "$" = "$" ++ show u
-            m s   = s
-            member = JMember {attr = attrFinal,
-                            jtype = Binding.jtype bind,
-                            name = vname,
-                            init = Just (Binding.jex bind)}
-            nbind = bind.{jex = JAtom vname}
-        stio (nbind, 
-                [sComment ("realize " ++ name ++ " bound to " ++ nice bind g), 
-                 JLocal member])
 
 {--
     Substitue java member names in constructor fields.

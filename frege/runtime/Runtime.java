@@ -57,8 +57,11 @@ public class Runtime {
 	final public static int constructor(Value v) {		// if it is statically known that v is a Value 
 		return v._constructor(); 
 	}
+	// final public static int constructor(Integer v) { return v; }
 	final public static int constructor(Object v) { 	// if v is completely unknown, it could still be a Value
-		return v instanceof Value ? ((Value)v)._constructor() : 0; 
+		if (v instanceof Value) return ((Value)v)._constructor();
+		if (v instanceof Integer) return ((Integer)v).intValue();
+		return 0;
 	}
 	
     /**

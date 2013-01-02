@@ -1,0 +1,279 @@
+{- «•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»
+
+    Copyright © 2011, Ingo Wechsung
+    All rights reserved.
+
+    Redistribution and use in source and binary forms, with or
+    without modification, are permitted provided that the following
+    conditions are met:
+
+        Redistributions of source code must retain the above copyright
+        notice, this list of conditions and the following disclaimer.
+
+        Redistributions in binary form must reproduce the above
+        copyright notice, this list of conditions and the following
+        disclaimer in the documentation and/or other materials provided
+        with the distribution. Neither the name of the copyright holder
+        nor the names of its contributors may be used to endorse or
+        promote products derived from this software without specific
+        prior written permission.
+
+    THIS SOFTWARE IS PROVIDED BY THE
+    COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR
+    IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+    WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+    PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER
+    OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+    SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+    LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
+    USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED
+    AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+    LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
+    IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
+    THE POSSIBILITY OF SUCH DAMAGE.
+
+    «•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•» -}
+
+{--
+    Heart of the code generation.
+    
+    Determination of appropriate java types and conversions between lazy, strict, known
+    and unknown values.
+    
+    -}
+
+module frege.compiler.gen.Bindings
+        inline (adaptSigma, adaptSigmaWith) 
+    where
+
+import frege.List (insertkv)
+
+import frege.compiler.Data as D
+import frege.compiler.Utilities as U()
+import frege.compiler.gen.Util as GU except(break)
+
+--          lazy                strict
+-- a        Lazy Something      Something
+-- String   Lazy (Nativ String) Nativ String
+-- [a]      Lazy (Ref TList)    Ref TList
+-- a->b     Lazy Lambda         Lambda
+
+{--
+ * This data structure describes java compile time types
+ * of some frege item (argument, return value, field, expression) 
+ * and java expression associated with it.
+ * 
+ * The task of code generation is to create, combine and
+ * manipulate such bindings. Many code generating functions will take
+ * a ('Tree' 'Symbol' 'Binding') of current bindings as last parameter.
+ -}
+data Binding = Bind {?stype :: String, !ftype::Sigma, !jtype :: JType, !jex :: JExpr}
+instance Show Binding where
+    show (Bind {stype, jtype, jex}) = "Bind {" 
+                                            ++ stype ++ ", "
+                                            ++ show jtype ++  ", "
+                                            ++ showJex jex ++ "}"
+
+newBind g sigma jex = Bind{stype=nicer sigma g, ftype=sigma, jtype=sigmaJT g sigma, jex}
+
+--- tell if the item we are working with is strict  
+isStrictJT :: JType -> Bool
+isStrictJT Lazy{yields}          = false
+isStrictJT _                     = true
+
+--- tell if the item we are working with is known
+isKnownJT :: JType -> Bool
+isKnownJT Something             = false
+isKnownJT Applicable            = false
+isKnownJT Lazy{yields}          = isKnownJT yields
+isKnownJT _                     = true
+
+{-
+    Something       strict, unknown
+    Ref             strict, known
+    Nativ           strict, known
+    Lambda          strict, known
+    Lazy{Something} non-strict, unknown
+    Lazy{}          non-strict, known
+-}
+
+{--
+    - If the 'RAlways' flag is set, the return type will always be @Lazy@
+    - If the 'RValue' flag is on, the return type will be @int@, @String@ or @TList@
+    - Otherwise, lazy as well as non lazy results may be returned. For native types, 
+      this means the return type is @Something@. Frege types are returned as @Lazy@.
+-}
+returnType mode rjt = if RValue `member` mode 
+    then strict rjt
+    else lazy rjt
+
+
+--- Java expression for the *delayed* method.
+methodDelay = JStMem (U.memberOf jnDelayed "delayed") []
+
+--- Java expression for the *forced* method. The argument is the expected type.
+methodForced to = JStMem (U.memberOf jnDelayed "forced") [to]
+
+--- Invoke method with single argument
+invokeSingle meth arg = JInvoke meth [arg]
+                                  
+
+--- force a lazy 'Binding'
+force :: Binding -> Binding
+force Bind{stype, ftype, jtype = Lazy{yields}, jex}
+    | wasFrege yields = Bind{stype, ftype, jtype = yields, 
+                                    jex = JInvoke JExMem{jex, name="forced", targs=[yields]} []}
+    | otherwise       = Bind{stype, ftype, jtype = boxd, 
+                                    jex = invokeSingle (methodForced boxd) jex}
+    where boxd = boxed yields
+force bind 
+    | traceLn("unneeded force: " ++ show bind) = bind
+    | otherwise                                = bind
+
+--- Force a lazy @bind@ and give it type @to@
+--- This is only possible for 'Bindings' having type @Lazy Something@
+forceTo :: Binding -> JType -> Binding
+forceTo bind to
+    | Lazy Something <- bind.jtype = bind.{jtype=boxd, jex <- invokeSingle (methodForced boxd)}
+    | otherwise = error("cannot forceTo: " ++ show bind ++ " to " ++ show to)
+    where boxd = boxed to
+     
+{-- 
+    Delay a 'Binding'
+    
+    This will actually only be necessary for eval arguments and lazy unknown fields 
+    where we have @Object@ and need something like @Lazy@ or @Lambda@
+    -}
+delayAs :: Binding -> JType ->  Binding
+delayAs bind as
+    | Lazy Something <- bind.jtype = bind.{jtype = lazy as, 
+                                        jex <- invokeSingle methodDelay}
+    | otherwise = error ("cannot delay " ++ show bind ++ "  as  " ++ show as) 
+
+{--
+    Cast a 'Binding'
+    
+    Allowed only if the type is @Something@ and the target type is strict,
+    or the type is boxed/primitive @Nativ{}@ and the target is the primitive/boxed
+    form of it. 
+    -}
+castAs :: Binding -> JType -> Binding
+castAs bind as
+    | Something <- bind.jtype, 
+      isStrictJT as                 = cast
+    | Nativ{} <- bind.jtype, 
+      Nativ{} <- as,
+      boxed bind.jtype == boxed as  = if bind.jtype == as then bind else cast
+    | otherwise = error("cannot cast " ++ show bind ++ "  as  " ++ show as)
+    where cast = bind.{jtype = as, jex <- JCast as}    
+
+infixl 5 adapt
+{--
+    Adapt a binding to a given target type
+    -}
+adapt :: Binding -> JType -> Binding
+adapt bind toType
+    | bind.jtype == toType = bind     -- nothing to do
+    | otherwise = case bind.jtype of
+        Applicable -> adapt bind.{jtype = lazy toType, 
+                                  jex <- JX.invoke [] • JX.xmem "result"} toType
+        Ref{} -> case toType of
+            Lazy{yields}
+                | yields == bind.jtype  = accept    -- every Ref is Lazy
+                | yields == Something   = accept    -- every Ref is Object
+            Something                   = accept    -- every Ref is Object
+            others                      = cannot
+        Nativ{}   -> case toType of
+            Nativ{}                     = casted
+            Lazy{yields}
+                | yields == bind.jtype  = accept    -- every Nativ is an Object
+                | yields == boxed bind.jtype = accept
+                | yields == Something   = accept    -- every Nativ is an Object
+            Something                   = accept    -- every Nativ is an Object
+            others                      = cannot
+        Lazy Something -> case toType of
+            Lazy{yields}                = delayAs bind yields
+            others                      = forcedto
+        Lazy{yields} -> case toType of
+            Lazy Something              = accept
+            Something                   = forced
+            others | toType == yields   = forced
+                   | otherwise          = forced `adapt` toType
+        Lambda -> case toType of
+            Lazy Lambda                 = accept
+            Lazy Something              = accept
+            Something                   = accept
+            others                      = cannot
+        Func{args} -> case toType of
+            Lambda                      = accept
+            Func{} | args==toType.args  = accept
+            Lazy{yields}
+                | yields == bind.jtype  = accept
+                | yields == Lambda      = accept
+                | yields == Something   = accept
+                | Func{} <- yields,
+                  args==yields.args     = accept
+            Something                   = accept
+            others                      = cannot
+        Something -> case toType of
+            Lazy Something              = accept
+            _ | isStrictJT toType       = casted
+            others                      = cannot   
+        TArg{var} -> case toType of
+            Something                   = accept
+            Lazy Something              = accept
+            Lazy x | x == bind.jtype    = accept
+            others                      = cannot  
+    where
+        accept   = bind.{jtype = toType}
+        casted   = castAs bind toType
+        forcedto = forceTo bind toType
+        forced   = force bind
+        cannot   = error ("Can't adapt " ++ show bind ++ " to " ++ show toType)
+        
+    
+--- make sure a strict binding actually is primitive if type allows
+primitiveBind bind
+    | Nativ{} <- sbind.jtype,
+      prim != sbind.jtype       = sbind.{jtype = prim, jex <- JX.cast prim}
+    | otherwise                 = sbind
+    where
+        sbind = strictBind bind
+        prim  = strict sbind.jtype
+ 
+
+---    make a binding strict
+strictBind :: Binding -> Binding
+strictBind bind = adapt bind (strict bind.jtype)
+
+---    make a binding lazy
+lazyBind :: Binding -> Binding
+lazyBind bind = adapt bind (lazy bind.jtype)
+
+adaptSigmaWith f g bind = adapt bind (f (sigmaJT g bind.ftype))
+adaptSigma g bind = adapt bind (sigmaJT g bind.ftype)
+
+{--
+    [usage] @realize bind@
+
+    code to create a local variable and an updated bind
+    -}
+realize :: String -> Binding -> StG (Binding, [JStmt])
+realize name bind
+    | cheap (Binding.jex bind) = do
+        g <- getST
+        stio (bind, [sComment ("too cheap to realize " ++ name ++ " bound to " ++ show bind)])
+    | otherwise = do
+        u <- U.uniqid
+        g <- getST
+        let vname = m name -- ++ underline ++ show u  -- must correspond to U.javaName
+            m "$" = "$" ++ show u
+            m s   = s
+            member = JMember {attr = attrFinal,
+                            jtype = Binding.jtype bind,
+                            name = vname,
+                            init = Just (Binding.jex bind)}
+            nbind = bind.{jex = JAtom vname}
+        stio (nbind, 
+                [sComment ("realize " ++ name ++ " bound to " ++ show bind), 
+                 JLocal member])
