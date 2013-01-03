@@ -168,7 +168,7 @@ $(COMPF)/GUtil.class: $(COMPF)/Scanner.class frege/compiler/GUtil.fr
 $(COMPF)/Main.class: $(DIR)/Prelude.class frege/compiler/Main.fr frege/Version.fr
 	$(FREGEC2)  -make frege.compiler.Main
 $(DIR)/Prelude.class: $(COMPF2)/Main.class $(PRELUDE)
-	# mv build/frege/rt build/bfrege/rt
+#	mv build/frege/rt build/bfrege/rt
 	rm -rf $(DIR)
 	cd build && mkdir frege
 	$(JAVAC) -d build frege/runtime/*.java
