@@ -248,7 +248,14 @@ lazyDecl sym jname
              Nothing -> do
                  changeST Global.{gen <- GenSt.{lambdas <- insertkv key [sym]}}
                  return (result 0)                         
-         
+
+lazyDeclarations :: [Symbol] -> StG [JDecl]
+lazyDeclarations syms = do
+    g <- getST
+    sequence [lazyDecl sym (extFname g sym) | sym::Symbol <- syms,
+            -- only functions and constructors with arity > 0 
+            sym.{depth?} && sym.depth > 0 
+                || sym.{flds?} && not (null sym.flds)]         
  
 lambdaName n constr i = "Lambda" ++ show n ++ cid ++ packed (replicate (length constr) 'C')
                          ++ hash
@@ -325,18 +332,15 @@ caseFor (sym, n) = do
      Construct a java name for a variable/method that
      holds or returns the lambda class for a given symbol.
      
-     The names live in the _Consts_ subclass and are either
+     The names for top level functions live in the _Consts_ subclass and are either
      static members (for function without constraints) or
      static methods that take the constraints for instantiation.
      
-     For top level names we simply use the java name with an appended 
+     The method/member name is the last part of the java name with an appended 
      latin "ƒ".
      
-     For member names we use the hashkey of the @show qname@ so hopefully
-     this will never generate the same key for 2 members of different
-     types/instances/classes and never the same key for 2 functions
-     in different classes. The mangled base name is included in every
-     case.
+     For members of instances and data types
+     the java name is the same as the original one with an appended latin "ƒ".
      
      This way the java name generated depends only on the qualified name
      and remains constant.
@@ -345,14 +349,12 @@ extFname :: Global -> Symbol -> JName
 extFname g sym
      | VName p base <- qname,
        qname.our g               = mg (worker.base ++ latinF)
-     | MName _ base <- qname,
-       qname.our g               = mg ("m$" ++ ustr ++ mangled base)
      | VName _ base <- qname     = mx qname (worker.base ++ latinF)
-     | MName tname base <- qname = mx tname ("m$" ++ ustr ++ mangled base)
+     | MName tname base <- qname = worker.{base <- (++ latinF)}
      where qname = Symbol.name sym
            worker = workerMethod g sym
-           hash  = hashCode qname.show
-           ustr  = show (fromInt hash `band` 0xffffffffL)
+           -- hash  = hashCode qname.show
+           -- ustr  = show (fromInt hash `band` 0xffffffffL)
            mg = U.memberOf (JName "" (constClass g))
            mx qn = U.memberOf ((U.javaName g qn).{base = constClass g})
 extFname g sym = error ("extFname: bad symbol " ++ nicer sym g)
@@ -370,20 +372,21 @@ reqLam sym = do
          return (newBind g sym.typ (JX.static jname))
  
 {--
-     Generate the anonymous Lambdas for all symbols
+     Generate the anonymous Lambdas for all top level function symbols
+     
+     (The anonymous lambdas for members are generated in the block where
+     the symbol itself is defined.)
  --}
 genAnonLams = do
          g <- getST
-         let collectedenvs = g.thisTab : [ Symbol.env sy | sy <- values g.thisTab, 
+         let {- collectedenvs = g.thisTab : [ Symbol.env sy | sy <- values g.thisTab, 
                                              Symbol.{env?} sy,
                                              -- do not search type classes
-                                             not (Symbol.{supers?} sy) ]
-             collectedvars = [ v | env <- collectedenvs, v <- values env, 
-                                             -- either SymV or SymD
-                                             Symbol.{depth?} v && Symbol.depth v > 0
-                                                 || Symbol.{flds?} v && U.arity v > 0,
-                                             -- not a newtype constructor
-                                             not (T.newtypeCon v.name g),
+                                             not (Symbol.{supers?} sy) ] -}
+             collectedvars = [ v | v <- values g.thisTab, 
+                                        -- only functions
+                                        Symbol.{depth?} v && Symbol.depth v > 0,
+                                        VName{} <- Just (Symbol.name v)
                                              ]
      
          let jnames = map (extFname g) collectedvars
@@ -625,6 +628,7 @@ atomMethod s jt atom = JMethod {attr = attrs [JFinal, JPublic], gargs=[], jtype 
 conCode symt cons (sym@SymD {flds, cid}) = do
     g <- getST
     si <- symInfo sym
+    lazyM <- lazyDeclarations [sym]
     let symtjt  = sigmaJT g (Symbol.typ symt)
         jtype   = (variantType g symtjt sym).{jname <- JName.{qual = ""}}
         -- argtys  = map ConField.typ flds
@@ -638,13 +642,13 @@ conCode symt cons (sym@SymD {flds, cid}) = do
         imp = [symtjt]
  
         defs = [comment, constr, cMethod cid, make]
-                   ++ single ++ getters ++ members
-        single 
+                   ++ singlelazy ++ getters ++ members
+        singlelazy 
             | arity == 0 = [JMember {attr = attrs [JFinal, JPublic, JStatic],
                                          jtype = jtype,
                                          name = "it",
                                          init = Just (JX.new [] jtype)}]
-            | otherwise = []
+            | otherwise = lazyM
         !make 
             | arity == 0 = JMethod {attr = attrs [JPublic, JFinal, JStatic],
                                      gargs = [], jtype = symtjt, name = "mk",
@@ -706,14 +710,15 @@ symCode binds (sym@SymT {enum=true}) = do
      let vals  = sortBy (comparing Symbol.name) (values sym.env)
          cons  = [ con | con@SymD {sid} <- vals ]                    -- constructors
          other = [ sym | sym <- vals, not (Symbol.{flds?} sym)]      -- non constructors
- 
+
+     lazyDefs <- lazyDeclarations vals 
      subDefs <- mapSt (symCode binds) other
  
      let jtype = Ref {jname = U.javaName g sym.name, typeargs = []}     -- TName
          !result = JClass {attr = attrTop, jtype,
                          extend = Nothing,
                          implement = [],
-                         defs = (constr : conDefs) ++ concat subDefs}
+                         defs = (constr : conDefs) ++ lazyDefs ++ concat subDefs}
          constr = JConstr { attr = attrs [JPrivate], jtype, args=[], body = JBlock []}
          conDefs = [ JMember {attr = attrTop,
                          jtype = jtInt,
@@ -729,10 +734,11 @@ symCode binds (sym@SymT {product=true, newt=true}) = do
      let vals = sortBy (comparing Symbol.name) (values sym.env)
          other = [ sym | sym <- vals, not (Symbol.{flds?} sym)]      -- sub definitions
  
+     lazyDefs <- lazyDeclarations other
      subDefs <- mapSt (symCode binds) other
  
      let jtype  = Ref (U.javaName g sym.name) []
-         defs   = concat subDefs
+         defs   = lazyDefs ++ concat subDefs
          !result = JClass {attr = attrs [JAbstract, JPublic, JStatic], jtype,
                           extend = Nothing, implement = [], defs}
      stio [JComment (nice sym g), result]
@@ -744,6 +750,7 @@ symCode binds (sym@SymT {product=true}) = do                    -- product
     let vals    = sortBy (comparing Symbol.name) (values sym.env)
         other   = [ sym | sym <- vals, not (Symbol.{flds?} sym)]
     subDefs     <- mapSt (symCode binds) other
+    lazyDefs    <- lazyDeclarations vals
     
     let symjt   = sigmaJT g sym.typ
         jtype   = symjt.{jname = U.javaName g sym.name}
@@ -759,7 +766,7 @@ symCode binds (sym@SymT {product=true}) = do                    -- product
         defs    = [comment, constr, cMethod symd.cid,
                          -- atomMethod "_v" jtype "this",
                          -- atomMethod "_e" jtype "this",
-                         make] ++ members ++ concat subDefs
+                         make] ++ members ++ lazyDefs ++ concat subDefs
         comment     = JComment (nice symd g)
         constrargs  = argDefs attrFinal si argNames
         args        = take arity (map JAtom argNames)
@@ -789,7 +796,7 @@ symCode binds (sym@SymT {nativ=Nothing}) = do                   -- sum type
          cons = [ con | con@SymD {sid} <- vals ]
          funs = [ sym | sym@SymV {sid} <- vals, not (Symbol.{flds?} sym)]
      funDefs <- mapSt (symCode binds) funs
-     -- cafDefs <- mapSt (symCode binds) cafs
+     lazyFuns <- lazyDeclarations funs
      conDefs <- mapSt (conCode sym cons) cons
      let symjt = sigmaJT g sym.typ
      -- U.logmsg TRACEG sym.pos (text ("symCode: " ++ nicer sym g ++ " " ++ show symjt))
@@ -805,7 +812,7 @@ symCode binds (sym@SymT {nativ=Nothing}) = do                   -- sum type
                 | otherwise    = [JClass {attr = attrs [JPublic, JStatic, JFinal],
                                      jtype = Ref (JName "" "M") [],
                                      extend = Nothing, implement = [],
-                                     defs = concat funDefs}]
+                                     defs = lazyFuns ++ concat funDefs}]
          result = JInterface {attr = attrs [JPublic], jtype,
                              implement = [Ref{jname=JName{qual="", base="Value"}, typeargs=[]}, Lazy Lambda],
                              defs = getCons ++ concat conDefs ++ mClass}
@@ -815,10 +822,11 @@ symCode binds (sym@SymT {sid, nativ = Just _}) = do                             
      g <- getST
      let vals = sortBy (comparing Symbol.name) (values sym.env)
      subDefs <- mapSt (symCode binds) vals
+     lazyDefs <- lazyDeclarations vals
      let jtype = Ref {jname = U.javaName g sym.name, typeargs=[]}
          !result = JClass {attr = attrTop,
                              jtype, extend = Nothing, implement = [],
-                             defs = concat subDefs}
+                             defs = lazyDefs ++ concat subDefs}
      stio [JComment (nice sym g), result]
  
 {--
@@ -879,6 +887,7 @@ symCode binds (sym@SymI {sid}) = do             -- instance definition
  
      instFuns  <- mapSt (instFun csym sym) methods
      instImpls <- mapSt (symCode binds) vals
+     lazyImpls <- lazyDeclarations vals
      -- let symjt    = sigmaJT g sym.typ
      let constraints = map  (uncurry (makeConstraintDef g)) (zip sym.typ.rho.context ctxNames)
          constrargs  = map  (uncurry (makeConstraintArg g)) (zip sym.typ.rho.context argNames)
@@ -900,6 +909,7 @@ symCode binds (sym@SymI {sid}) = do             -- instance definition
                           defs = (constructor : constraints)
                              -- singles
                              ++ concat instFuns
+                             ++ lazyImpls
                              ++ concat instImpls}
      stio [JComment (nice sym g ++ " :: " ++ nice sym.typ g), result]
  
