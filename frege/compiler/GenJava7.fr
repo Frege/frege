@@ -902,12 +902,16 @@ symCode binds (sym@SymI {sid}) = do             -- instance definition
                                                  (zipWith JAssign
                                                      (map JAtom ctxNames)
                                                      (map JAtom argNames)))}
- 
+
+         singleton
+            | null constrargs = [JMember{attr = attrTop, jtype, name="it", 
+                init = Just (JNew jtype [])}]
+            | otherwise = [] 
          result = JClass {attr = attrs [JPublic, JFinal, JStatic], jtype,
                           extend = Nothing,
                           implement = [etype],
                           defs = (constructor : constraints)
-                             -- singles
+                             ++ singleton
                              ++ concat instFuns
                              ++ lazyImpls
                              ++ concat instImpls}
@@ -1348,9 +1352,9 @@ lambdaEx (lam@Lam{pat,ex,typ=Just (sig@ForAll _ rho)}) binds = do
                           name = "eval",
                           args = reverse workerArgs,
                           body = JBlock stmts}
-        theClass =  JNewClass lambdaTyp [] [
+        theClass =  JNewClass lambdaTyp [] (unCommentG g [
             JComment  ("worker rkind=" ++ show rkind),
-            worker]
+            worker])
     return (newBind g sig theClass)
  
 lambdaEx ex binds = do
@@ -1413,7 +1417,7 @@ innerFun (sym@SymV {expr = Just x}) binds = do
  
  
  
-     stio ([JComment ((nice sym g) ++ "  " ++ show sym.strsig ++ "  " ++ show sym.rkind),
+     stio (unCommentG g [JComment ((nice sym g) ++ "  " ++ show sym.strsig ++ "  " ++ show sym.rkind),
          JComment (nicer sym.typ g),
          JComment (nicer x g),
          theClass, letVar
@@ -1665,10 +1669,10 @@ wrapped _ = error "wrapped: no symv"
 --  *
 --  * Plain types and Maybe types can be called directly
 --  -}
--- wrappedOnly (sym@SymV {nativ = Just item}) = niSpecial rty && isNothing (U.isMaybe rty)
---     where
---         (rty, _) = U.returnType sym.typ.rho
--- wrappedOnly sym = error "wrappedOnly - no native function"
+wrappedOnly (sym@SymV {nativ = Just item}) = niSpecial rty && isNothing (U.isMaybe rty)
+    where
+        (rty, _) = U.returnType sym.typ.rho
+wrappedOnly sym = error "wrappedOnly - no native function"
 -- 
 -- 
 --- returns a binding for a direct call of a native method
@@ -2258,9 +2262,9 @@ resolveConstraint pos (ctx@Ctx {cname, tau}) = do
                              --                 | v <- inst.typ.bound, t <- (tree.lookupS v).toList]
                          -- jitjts     <- mapSt rhoJT jitargs
                          let jit    = Ref jiname []              -- jitjts
-                             jex    = {- if null subctx
-                                 then JInvoke (JStMem (U.memberOf jiname "ƒNew") jitjts) []
-                                 else -} JNew jit args
+                             jex    = if null args
+                                 then JStMem (U.memberOf jiname "it") [] 
+                                 else JNew jit args
                          U.logmsg TRACEG pos (text ("makeCtx: " ++ showJex jex))
                          stio jex
                      [] -> do
@@ -2502,81 +2506,58 @@ genExpr rflg rm (app@App a b (Just sigma)) binds = do
                                         call = newBind g sigma 
                                             (JInvoke jx (map Binding.jex abinds))
                                     remaining call rargs
--- 
---         genApp rm binds (vbl@Vbl {pos, name, typ = Just vsigma}) args = do
---                 g     <- getST
---                 sym   <- U.findV name
---                 let d = ari sym
---                 if d < 1 || d > length args
---                     then genAnon rm binds vbl args
---                     else case sym.name of
---                         MName cname _
---                             | Just (SymC {sid}) <- cname.findit g = genAnon rm binds vbl args
---                         noclassmember -> case sym.nativ of
---                             Just _    -> do
---                                         cenum <- isConstructorEnum sym vsigma
---                                         if cenum && length args == 1
---                                             then genExpr rflg rm (head args) binds
---                                             else genNative sym --genAnon rm binds vbl args
---                             nonnative ->
+ 
+        genApp (vbl@Vbl {pos, name, typ = Just vsigma}) args = do
+            g     <- getST
+            sym   <- U.findV name
+            let d = ari sym
+            if d < 1 || d > length args
+                then genAnon vbl args
+                else case sym.name of
+                    MName cname _
+                        | Just (SymC {sid}) <- cname.findit g = genAnon vbl args
+                    noclassmember -> case sym.nativ of
+                        Just _    -> do
+                                cenum <- isConstructorEnum sym vsigma
+                                if cenum && length args == 1
+                                     then genExpr rflg rm (head args) binds
+                                     else genNative sym 
+                        nonnative -> genAnon vbl args
 --                                 if tailcall && (RSafeTC `member` sym.rkind)
 --                                     then genApp RBoxed binds vbl args
 --                                     else genDirect sym
---             where
---                 isConstructorEnum (SymV {name=VName pp1 "constructor"})
---                     (ForAll [] (RhoFun []
---                         (ForAll [] (RhoTau [] (TCon {name})))
---                         (RhoTau [] (TCon {name=TName pp2 "Int"}))
---                     ))
---                     | pp1 == pPreludeBase, pp2 == pPreludeBase = do
---                         symt <- U.findT name
---                         stio symt.enum
---                 isConstructorEnum _ _ = stio false
---                 ari (sym@SymV {nativ=Just _}) = U.arity sym
---                 ari sym                       = sym.depth
---                 tailcall = rflg && rm == RLazy
---                 -- safetailcall = tailcall
---                 -- genEx arm aex = genExpr false arm aex binds
--- 
--- 
---                 genNative sym = do
---                     -- vbind <- funBind sym
---                     let acall = rm == RLazy && not tailcall
---                         wcall = not acall && (wrappedOnly sym || not (null sym.typ.bound))
---                         (atau, asigs) = U.returnType (Symbol.typ sym).rho
---                         depth         = ari sym
---                         aargs         = take depth args
---                         rargs         = drop depth args
---                         sss           = case Symbol.strsig sym of
---                                 S ss -> ss ++ allLazy
---                                 U    -> allLazy
---                     if acall || wcall then genDirect sym
---                         else do
---                             sjt   <- sigmaJT sigma
---                             ajt   <- tauJT atau
---                             let rjt   = strict  ajt
---                                 cmode = maxStrict rjt
---                             amodes   <- mapSt (uncurry argMode) (zip sss asigs)
---                             abinds   <- mapSt (uncurry genEx)   (zip amodes aargs)
---                             rbinds   <- mapSt (flip (genExpr false RLazy) binds) rargs
---                             call     <- if wrapped sym
---                                 then do
---                                     code <- wrapCode JEx atau sym abinds
---                                     case head code of
---                                         JEx ex -> stio (Bind cmode sigma rjt ex)
---                                         _ -> error "unexpected wrapCode result"
---                                 else nativeCall sym abinds
--- 
---                             let result
---                                     | null rargs = do
---                                         raw <- coerce call
---                                         stio (toMode rm raw)
---                                     | otherwise  = do
---                                             r     <- foldSt apply call rbinds
---                                             let b = Bind RLazy sigma (lazy jtValue) r.jex
---                                             raw <- coerce b
---                                             stio (toMode rm b)
---                             result
+          where
+            isConstructorEnum (SymV {name=VName pp1 "constructor"})
+                (ForAll [] (RhoFun []
+                    (ForAll [] (RhoTau [] (TCon {name})))
+                    (RhoTau [] (TCon {name=TName pp2 "Int"}))
+                )) | pp1 == pPreludeBase, pp2 == pPreludeBase = do
+                    symt <- U.findT name
+                    stio symt.enum
+            isConstructorEnum _ _ = stio false
+            ari (sym@SymV {nativ=Just _}) = U.arity sym
+            ari sym                       = sym.depth
+            tailcall = rflg && isLazy
+            isLazy   = !(isStrictJT rm)
+
+            genNative sym = do
+                let acall = isLazy && not tailcall
+                    wcall = not acall && (wrappedOnly sym || not (null sym.typ.bound))
+                    atau  = fst (U.returnType (Symbol.typ sym).rho)
+                    depth         = ari sym
+                    aargs         = take depth args
+                    rargs         = drop depth args
+                if acall || wcall then genAnon vbl args -- genDirect sym
+                else do
+                    g <- getST
+                    si <- symInfo sym
+                    abinds <- sequence (zipWith genEx si.argJTs aargs)
+                    let call 
+                            | wrapped sym = case wrapCode g JEx atau sym abinds of
+                                    (JEx ex:_) -> Bind (nicer sigma g) sigma si.returnJT ex
+                                    _ -> error "unexpected wrapCode result"
+                            | otherwise = nativeCall g sym abinds
+                    remaining call rargs
 --                 genDirect :: Symbol -> StG Binding
 --                 genDirect sym = do
 --                     g <- getST
