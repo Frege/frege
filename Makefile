@@ -81,6 +81,8 @@ PRELUDE  =  frege/prelude/PreludeBase.fr frege/prelude/PreludeNative.fr \
             frege/prelude/PreludeText.fr frege/prelude/Arrays.fr \
             frege/prelude/Math.fr frege/prelude/Floating.fr
 
+all:  frege.mk runtime compiler fregec.jar
+
 shadow-prelude:
 	cp $(PRELUDE)       shadow/frege/prelude/
 
@@ -102,7 +104,6 @@ clean:
 {frege/prelude}.fr{$(PREL)}.class::
 	$(FREGEC2) $<
 
-all:  frege.mk runtime compiler fregec.jar
 
 sanitycheck:
 	$(JAVA) -version

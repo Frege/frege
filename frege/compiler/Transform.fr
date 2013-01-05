@@ -389,7 +389,7 @@ returnKind syms (sym@SymV {nativ = Just _}) = do
         U.changeSym sym.{rkind = RState.fromList [RSafeTC, RValue]}
 
 returnKind syms (sym@SymV {expr = Just x, depth = 0}) = do
-        (w, x) <- returnExprKind syms sym x
+        w      <- returnExprKind syms sym x
         self   <- references [sym.sid] x        -- is it self-referential?
         rec    <- references syms x             -- is it recursive
         (_, deps) <- U.fundep sym
@@ -397,7 +397,7 @@ returnKind syms (sym@SymV {expr = Just x, depth = 0}) = do
         sx        <- isSimple x
         let local = sym.name.isLocal                            -- is this a local item?
             fwrefs
-                | local                = rec > 0
+                | local                = self > 0
                 | MName{}  <- sym.name = not (null deps)        -- possible forward references?
                 | null syms            = self > 0
                 | [mutual] <- syms     = mutual != sym.sid || self > 0
@@ -411,17 +411,24 @@ returnKind syms (sym@SymV {expr = Just x, depth = 0}) = do
                         && RSafeTC `member` safe
                         && RSimple `member` simple 
                     || Strictness.isStrict sym.strsig   -- if it is strict anyway        
-            value  = RState.singleton (if stricter then  RValue else RAlways)   
+            value  = RState.singleton (if except then  RValue else RAlways)   
             rkind = (safe.union simple).union value
-            stri  = if stricter && not (Strictness.isStrict sym.strsig)
+            stri  = if except && not (Strictness.isStrict sym.strsig)
                     then S[] else sym.strsig
-        U.changeSym sym.{rkind, expr = Just x, strsig = stri}
+            except 
+                | stricter,
+                  not (RSimple `member` simple),
+                  RValue `member` w,
+                  not (RSafeTC `member` w) = false  -- don't return a lazy result
+                                                    -- and force it right away in the eval() fun
+                | otherwise                = stricter
+        U.changeSym sym.{rkind, strsig = stri}
 
 returnKind syms (sym@SymV {expr = Just x}) = do
-        (w, x) <- returnExprKind syms sym x
+        w      <- returnExprKind syms sym x
         sx     <- isSimple x
         let rkind = if sx then w.unionE RSimple else w
-        U.changeSym sym.{rkind, expr = Just x}
+        U.changeSym sym.{rkind}
 
 --- assume abstract class functions are tail call safe
 returnKind syms (sym@SymV {expr = Nothing, name = MName _ _}) 
@@ -481,11 +488,9 @@ references sids x = U.foldEx true refs 0 x
  *   it's lazy.
  * - Unsaturated applications are boxed (function types)
  -}
-returnExprKind syms sym (x@Lit {pos}) = stio (RState.fromList [RSafeTC, RValue],x)
-returnExprKind syms sym (x@Con {pos}) = stio (RState.fromList [RSafeTC, RValue],x)
-returnExprKind syms sym (x@Ann {ex})  = do
-        (n,ex) <- returnExprKind syms sym ex
-        stio (n, x.{ex})
+returnExprKind syms sym (x@Lit {pos}) = stio (RState.fromList [RSafeTC, RValue])
+returnExprKind syms sym (x@Con {pos}) = stio (RState.fromList [RSafeTC, RValue])
+returnExprKind syms sym (x@Ann {ex})  = returnExprKind syms sym ex
 
 returnExprKind syms sym (x@Vbl {name}) = do
     symv <- U.findV name
@@ -493,19 +498,20 @@ returnExprKind syms sym (x@Vbl {name}) = do
     case symv.expr of
         Nothing -> case symv.name of
             Local{} -> if symv.strsig.isStrict
-                        then stio (RState.fromList [RSafeTC, RValue],  x)
-                        else stio (RState.fromList [RSafeTC, RAlways], x)             -- lambda/case bound
+                        then stio (RState.fromList [RSafeTC, RValue])
+                        else stio (RState.fromList [RSafeTC, RAlways])             -- lambda/case bound
             _ -> case U.returnType symv.typ.rho of
-                (_,[]) -> stio (BitSet.union (RState.singleton RSafeTC) symv.rkind, x)
-                _      -> stio (RState.fromList [RSafeTC, RValue], x)      -- global function
-        Just (Lam {})  -> stio (RState.fromList [RSafeTC, RValue], x)      -- return a local function
+                (_,[]) -> stio (BitSet.union (RState.singleton RSafeTC) symv.rkind)
+                _      -> stio (RState.fromList [RSafeTC, RValue])      -- global function
+        Just (Lam {})  -> stio (RState.fromList [RSafeTC, RValue])      -- return a local function
         Just vx -> let !r = symv.rkind `intersection` RState.singleton RSafeTC in 
                     if symv.strsig.isStrict 
-                        then stio (r.unionE RValue, x)
-                        else stio (r.unionE RAlways,x)
+                        then stio (r.unionE RValue)
+                        else stio (r.unionE RAlways)
+
 returnExprKind syms sym (ex@App a b typ) = do
-    (_, a) <- returnExprKind syms sym a
-    (_, b) <- returnExprKind syms sym b
+    returnExprKind syms sym a
+    returnExprKind syms sym b
     let (f,_) = head flatx
         args  = tail flatx
         flatx = U.flatx ex
@@ -515,60 +521,56 @@ returnExprKind syms sym (ex@App a b typ) = do
             symf <- U.findV name
             let r  = symf.rkind `intersection` RState.singleton RSafeTC
                 rw = symf.rkind `intersection` (RState.fromList [RSafeTC, RAlways, RValue])
-            if isJust symf.nativ then stio (rw, app)
+            if isJust symf.nativ then stio (rw)
               else if (length args < symf.depth) 
-                    then stio ((rw.differenceE RAlways).unionE RValue, app)     -- unsaturated function is a value
+                    then stio ((rw.differenceE RAlways).unionE RValue)     -- unsaturated function is a value
               else case symf.expr of
                     Nothing -> case name of
-                        Local{} -> stio (RState.singleton RSafeTC, app)  -- application of lambda/case bound
-                        _       -> stio (rw,app)             -- global fun
+                        Local{} -> stio (RState.singleton RSafeTC)  -- application of lambda/case bound
+                        _       -> stio (rw)                        -- global fun
                     Just _ -> do
                         g <- getST
                         if symf.sid == Symbol.sid sym
-                            then stio (RState.fromList [RSafeTC, RTailRec, RValue], app)
+                            then stio (RState.fromList [RSafeTC, RTailRec, RValue])
                             else if null r || (symf.sid `elem` syms)
-                                then stio (RState.singleton RAlways, app)      -- lazy recursive application
-                                else stio (rw, app)                -- same as called
-        Con {name} -> stio (RState.fromList [RSafeTC, RValue], app)
+                                then stio (RState.singleton RAlways)    -- lazy recursive application
+                                else stio (rw)                          -- same as called
+        Con {name} -> stio (RState.fromList [RSafeTC, RValue])
         _ -> do
                 n <- references syms f
                 if n > 0
-                    then stio (RState.singleton RAlways, app)       -- better safe than sorry
-                    else stio (RState.singleton RSafeTC, app)
+                    then stio (RState.singleton RAlways)       -- better safe than sorry
+                    else stio (RState.singleton RSafeTC)
 
 
 returnExprKind syms sym (Ifte c t e typ) = do
     rec <- references syms c    --
-    (_,  c) <- returnExprKind syms sym c
-    (w1, t) <- returnExprKind syms sym t
-    (w2, e) <- returnExprKind syms sym e
+    returnExprKind syms sym c
+    w1 <- returnExprKind syms sym t
+    w2 <- returnExprKind syms sym e
     let -- always = not (RValue `member` w1) && not (RValue `member` w2)
         -- value  = (RValue `member` w1) && (RValue `member` w2)
         res = if rec > 0 
-            then minRkind w1 w2 `difference` RState.singleton RSafeTC 
+            then minRkind w1 w2 `difference` RState.fromList [RSafeTC, RValue] 
             else minRkind w1 w2
-    stio (res, Ifte c t e typ)
+    stio (res)
 
-returnExprKind syms sym (x@Lam {ex}) = do
-        (n, ex) <- returnExprKind syms sym ex
-        stio (n, x.{ex})
+returnExprKind syms sym (x@Lam {ex}) = returnExprKind syms sym ex
+        
 returnExprKind syms sym (x@Let {env,ex}) = do
-        -- let nms = map U.pVarLocal (U.patVars pat)
         returnNames syms env
-        (n, ex) <- returnExprKind syms sym ex
-        stio (n, x.{ex})
+        returnExprKind syms sym ex
+        
 returnExprKind syms sym (x@Case {ex, alts}) = do
-    (_, ex) <- returnExprKind syms sym ex
+    returnExprKind syms sym ex
     rec     <- references syms ex
     wsalts <- mapSt (altExprKind syms sym) alts
-    let m = foldl1 minRkind (map fst wsalts)
-        res = if rec > 0 then m.differenceE RSafeTC else m
-    stio (res, x.{ex, alts = map snd wsalts})
+    let m = foldl1 minRkind wsalts
+        res = if rec > 0 then m `difference` RState.fromList [RSafeTC, RValue] else m
+    stio (res)
 returnExprKind syms sym _ = error "returnExprKindbad epr."
 
-altExprKind syms sym (alt@CAlt {ex}) = do
-     (n, ex) <- returnExprKind syms sym ex
-     stio (n, alt.{ex})
+altExprKind syms sym (alt@CAlt {ex}) = returnExprKind syms sym ex
 
 {--
     combine two rkinds by taking the minimum of the lower 3 bits and the maximum of
@@ -579,7 +581,8 @@ minRkind a b = (safetc.union tailbit).union wrbits where
                 then RState.singleton RSafeTC else RState.empty
     tailbit = if (RTailRec `member` a) || (RTailRec `member` b)
                 then RState.singleton RTailRec else RState.empty
-    wrbits  = if (RValue `member` a) && (RValue `member` b)
+    wrbits  = if (RValue `member` a) && (RValue  `member` b) 
+                                     && (RSafeTC `member` safetc)
                 then RState.singleton RValue
                 else if (RAlways `member` a) && (RAlways `member` b)
                 then RState.singleton RAlways
