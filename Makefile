@@ -169,7 +169,6 @@ $(COMPF)/GUtil.class: $(COMPF)/Scanner.class frege/compiler/GUtil.fr
 $(COMPF)/Main.class: $(DIR)/Prelude.class frege/compiler/Main.fr frege/Version.fr
 	$(FREGEC2)  -make frege.compiler.Main
 $(DIR)/Prelude.class: $(COMPF2)/Main.class $(PRELUDE)
-#	mv build/frege/rt build/bfrege/rt
 	rm -rf $(DIR)
 	cd build && mkdir frege
 	$(JAVAC) -d build frege/runtime/*.java
@@ -327,192 +326,12 @@ $(DIR1)/check1: $(PRE1) $(DIR1)/PreludeProperties.class
 
 
 
-#
-#   Runtime
-#
 
-RTDIR    = build/frege/rt
-
-RUNTIME  = build/frege/MD.class    $(COMPF)/JavaUtils.class \
-		$(RTDIR)/Lazy.class        $(RTDIR)/Value.class       $(RTDIR)/FV.class \
-		$(RTDIR)/Unknown.class \
-		$(RTDIR)/Val.class         $(RTDIR)/Box.class \
-		$(RTDIR)/Lambda.class      $(RTDIR)/MH.class \
-		$(RTDIR)/Lam1.class        $(RTDIR)/Lam2.class      $(RTDIR)/Lam3.class \
-		$(RTDIR)/Lam4.class        $(RTDIR)/Lam5.class      $(RTDIR)/Lam6.class \
-		$(RTDIR)/Lam7.class        $(RTDIR)/Lam8.class      $(RTDIR)/Lam9.class \
-		$(RTDIR)/Lam10.class        $(RTDIR)/Lam11.class      $(RTDIR)/Lam12.class \
-		$(RTDIR)/Lam13.class        $(RTDIR)/Lam14.class      $(RTDIR)/Lam15.class \
-		$(RTDIR)/Lam16.class        $(RTDIR)/Lam17.class      $(RTDIR)/Lam18.class \
-		$(RTDIR)/Lam19.class        $(RTDIR)/Lam20.class      $(RTDIR)/Lam21.class \
-		$(RTDIR)/Lam22.class        $(RTDIR)/Lam23.class      $(RTDIR)/Lam24.class \
-		$(RTDIR)/Lam25.class        $(RTDIR)/Lam26.class \
-		$(RTDIR)/Prod0.class \
-		$(RTDIR)/Prod1.class    $(RTDIR)/Prod2.class      $(RTDIR)/Prod3.class \
-		$(RTDIR)/Prod4.class    $(RTDIR)/Prod5.class      $(RTDIR)/Prod6.class \
-		$(RTDIR)/Prod7.class    $(RTDIR)/Prod8.class      $(RTDIR)/Prod9.class \
-		$(RTDIR)/Prod10.class   $(RTDIR)/Prod11.class     $(RTDIR)/Prod12.class \
-		$(RTDIR)/Prod13.class   $(RTDIR)/Prod14.class     $(RTDIR)/Prod15.class \
-		$(RTDIR)/Prod16.class   $(RTDIR)/Prod17.class     $(RTDIR)/Prod18.class \
-		$(RTDIR)/Prod19.class   $(RTDIR)/Prod20.class     $(RTDIR)/Prod21.class \
-		$(RTDIR)/Prod22.class   $(RTDIR)/Prod23.class     $(RTDIR)/Prod24.class \
-		$(RTDIR)/Prod25.class   $(RTDIR)/Prod26.class \
-		$(RTDIR)/Ref.class \
-		$(RTDIR)/Array.class       $(RTDIR)/SwingSupport.class \
-		$(RTDIR)/FregeCompiler.class \
-		build/frege/RT.class
-
-
-
-runtime: $(RUNTIME)
+runtime: 
 	$(JAVAC) -d build frege/runtime/*.java
-	javadoc -private -sourcepath . -d doc -encoding UTF-8 frege frege.rt frege.runtime
 	@echo Runtime is complete.
 
 
-
-$(DIR)/MD.class: frege/MD.java
-	$(JAVAC) -d build frege/MD.java
-$(COMPF)/JavaUtils.class: build/frege/MD.class frege/compiler/JavaUtils.java
-	$(JAVAC) -d build -cp build frege/compiler/JavaUtils.java
-$(DIR)/RT.class: frege/RT.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Lambda.class: frege/rt/Lambda.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Val.class: frege/rt/Val.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Box.class: frege/rt/Box.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/MH.class: frege/rt/MH.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/FV.class: frege/rt/FV.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Lam1.class: frege/rt/Lam1.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Lam2.class: frege/rt/Lam2.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Lam3.class: frege/rt/Lam3.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Lam4.class: frege/rt/Lam4.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Lam5.class: frege/rt/Lam5.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Lam6.class: frege/rt/Lam6.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Lam7.class: frege/rt/Lam7.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Lam8.class: frege/rt/Lam8.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Lam9.class: frege/rt/Lam9.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Lam10.class: frege/rt/Lam10.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Lam11.class: frege/rt/Lam11.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Lam12.class: frege/rt/Lam12.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Lam13.class: frege/rt/Lam13.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Lam14.class: frege/rt/Lam14.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Lam15.class: frege/rt/Lam15.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Lam16.class: frege/rt/Lam16.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Lam17.class: frege/rt/Lam17.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Lam18.class: frege/rt/Lam18.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Lam19.class: frege/rt/Lam19.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Lam20.class: frege/rt/Lam20.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Lam21.class: frege/rt/Lam21.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Lam22.class: frege/rt/Lam22.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Lam23.class: frege/rt/Lam23.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Lam24.class: frege/rt/Lam24.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Lam25.class: frege/rt/Lam25.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Lam26.class: frege/rt/Lam26.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Boxed.class: frege/rt/Boxed.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Value.class: frege/rt/Value.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Constant.class: frege/rt/Constant.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Lazy.class: frege/rt/Lazy.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Ref.class: frege/rt/Ref.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Array.class: frege/rt/Array.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Unknown.class: frege/rt/Unknown.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Fun.class: frege/rt/Fun.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Prod0.class: frege/rt/Prod0.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Prod1.class: frege/rt/Prod1.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Prod2.class: frege/rt/Prod2.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Prod3.class: frege/rt/Prod3.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Prod4.class: frege/rt/Prod4.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Prod5.class: frege/rt/Prod5.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Prod6.class: frege/rt/Prod6.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Prod7.class: frege/rt/Prod7.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Prod8.class: frege/rt/Prod8.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Prod9.class: frege/rt/Prod9.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Prod10.class: frege/rt/Prod10.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Prod11.class: frege/rt/Prod11.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Prod12.class: frege/rt/Prod12.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Prod13.class: frege/rt/Prod13.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Prod14.class: frege/rt/Prod14.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Prod15.class: frege/rt/Prod15.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Prod16.class: frege/rt/Prod16.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Prod17.class: frege/rt/Prod17.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Prod18.class: frege/rt/Prod18.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Prod19.class: frege/rt/Prod19.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Prod20.class: frege/rt/Prod20.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Prod21.class: frege/rt/Prod21.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Prod22.class: frege/rt/Prod22.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Prod23.class: frege/rt/Prod23.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Prod24.class: frege/rt/Prod24.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Prod25.class: frege/rt/Prod25.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/Prod26.class: frege/rt/Prod26.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/SwingSupport.class: frege/rt/SwingSupport.java
-	$(JAVAC) -d build -cp build $?
-$(RTDIR)/FregeCompiler.class: frege/rt/FregeCompiler.java
-	$(JAVAC) -d build -cp build $?
 
 #
 #   Documentation
@@ -523,6 +342,7 @@ doc/index.html: $(RUNTIME)
 
 
 docu: build/frege/tools/Doc.class
+	javadoc -private -sourcepath . -d doc -encoding UTF-8 frege.runtime
 	$(FREGECC)  -make frege/StandardLibrary.fr
 	perl gendocmk.pl >makedoc
 	$(MAKE) -f makedoc docu
