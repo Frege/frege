@@ -46,11 +46,19 @@ package frege.compiler.Data
 
 
 import frege.List (Tree, each)
-import frege.IO   (PrintWriter,  `<<`,  getProperty, URLClassLoader)
+import Java.IO(PrintWriter)
+import Java.Lang(System)
+import Java.Net(URLClassLoader)
+
 
 import frege.compiler.Classtools    as CT()
 import frege.compiler.BaseTypes public
-import frege.compiler.BaseTypes public(BitSet.member member)
+import frege.compiler.BaseTypes public(BitSet.member member, 
+    BitSet.union bitunion, BitSet.intersection intersection, 
+    BitSet.difference difference)
+
+infixr 6 intersection difference
+infixr 5 bitunion
 
 
 --- compiler options
@@ -118,6 +126,8 @@ data GenSt = !Gen {
     kTree   :: Tree KindA Int          --- kind table
     consts  :: Tree (Literalkind, String) Int   --- constant table
     lambdas :: Tree (Int, [QName]) [Symbol] --- lambda table
+    syminfo :: Tree Symbol SymInfo      --- cached information about symbols return/arg types
+    jimport :: Tree String Pack         --- packages we have a java import statement for, by base name
 }
 
 --- compiler state, appears like it was global, but threaded through 'StIO' monad
@@ -230,7 +240,7 @@ magicPack (nm@´\.´)
 magicPack nm = nm
 
 --- a prominent package
-pPrelude = (Pack.new • fromMaybe "frege.Prelude" • IO.getProperty) "frege.prelude"
+pPrelude = (Pack.new • fromMaybe "frege.Prelude" • System.getProperty) "frege.prelude"
 pPreludeBase    = Pack.new "frege.prelude.PreludeBase"
 pPreludeNative  = Pack.new "frege.prelude.PreludeNative"
 pPreludeText    = Pack.new "frege.prelude.PreludeText"
@@ -366,7 +376,9 @@ data JName = !JName {qual :: String, base :: String} where
         show (JName p  x) = p ++ "." ++ x
 
 instance Show JName
-derive   Eq   JName
+instance Eq   JName where
+    ja == jb = show ja == show jb
+    hashCode ja = hashCode ja.show
 
 {--
     symbol state (for 'Symbol.SymV' symbols)
@@ -398,7 +410,7 @@ data Symbol =
         | !SymV  {sid::Int, pos::Position, vis::Visibility, doc::Maybe String, name ::QName,
                  typ::Sigma, expr::Maybe Expr, nativ::Maybe String,
                  pur::Bool, anno::Bool, exported::Bool, state::SymState,
-                 strsig :: Strictness, depth :: Int, rkind :: Int } --- variable or function
+                 strsig :: Strictness, depth :: Int, rkind :: RState } --- variable or function
         | !SymA  {sid::Int, pos::Position, vis::Visibility, doc::Maybe String, name ::QName,
                  kind::Kind, typ::Sigma, vars::[Tau]}                           --- type alias
     where
@@ -469,7 +481,7 @@ instance Show Strictness where
 decodeS :: String -> Strictness
 decodeS s = fst (decode s) where
     decode     (s @ #^u#)  = (U, strtail s 1)
-    decode     (s @ #^s#)  = (S list, rest) where (!list,!rest) = decodeList (strtail s 1)
+    decode     (s @ #^s#)  = (S list, rest) where (list,rest) = decodeList (strtail s 1)
     decode     s           = Prelude.error ("decodeS: bad string " ++ s.show)
     decodeList (s @ #^\(#) = listElems (strtail s 1)
     decodeList  s          = ([], s)
@@ -686,7 +698,28 @@ javakeywords = Tree.insertlist Tree.Nil [(kw, "_"++kw) | kw <- [
     "throw"
     ]]
 
+--- The names of the java primitive types 
 primitiveTypes = ["byte", "short", "boolean", "char", "int", "long", "float", "double" ]
+
+--- The names of certain classes in @java.lang@
+{-- If we have a package imported whose base name is one of this, we better do not
+    generate a java import statement for it and use it unqualified.
+    -}
+javaLangNames = [
+    "Appendable", "AutoCloseable", "CharSequence", "Cloneable", "Comparable",
+    "Iterable", "Runnable", 
+    "Boolean", "Byte", 
+    "Character", "Class", "ClassLoader", "ClassValue", "Compiler",
+    "Double", "Enum", "Float",
+    "InheritableThreadLocal", "Integer",
+    "Long", "Math", "Number", "Object",
+    "Package", "Process", "ProcessBuilder",
+    "Runtime", "RuntimePermission",
+    "SecurityManager", "Short", "StackTraceElement", "StrictMath", 
+    "String", "StringBuffer", "StringBuilder", "System",
+    "Thread", "ThreadGroup", "ThreadLocal", "Throwable",
+    "Void"]
+
 
 {--
  * definitions
@@ -751,9 +784,12 @@ linkAll  = Imports { publik = false, except = true,  items = [] }
 linkNone = Imports { publik = false, except = false, items = [] }
 
 {--
- * alternatives (constructors) in a data declaration
+    Alternatives (constructors) in a data declaration.
+    
+    Note: every field has its own strictness information, the overall strictness 
+    of the data constructor is derived from that.
  -}
-data DCon = DCon {pos::Position, vis::Visibility, name::String, strict::Bool,
+data DCon = DCon {pos::Position, vis::Visibility, name::String, -- strict::Bool,
                         flds::[ConField SName], doc::Maybe String}
 type DConS = DCon
 
@@ -1085,8 +1121,31 @@ tokens pos
             e = pos.end
             s = pos.start
 
+-- ##################### Code Gen Stuff #################################
+{--
+    Model of Java types
+ -}
+data JType =
+      !Ref   { jname :: JName,  typeargs :: [JType] }  --- frege type (extends Algebraic)
+    | !TArg  { var   :: String }                    --- type argument @A@
+    | !Nativ { typ   :: String, typeargs :: [JType] }  --- native type
+    | !Lazy  { yields :: JType }                    --- lazy type that yields etype
+    -- | !Func  { args :: Int, yields :: JType }       {-- function that can take so many
+    --                                                     arguments before yielding a result -} 
+    | Lambda                                        --- some function
+    | Something                                     {-- something unknown that can be casted
+                                                        to the desired type -} 
+    | Applicable                                    --- result of apply
 
-
+{--
+    Information needed for generating function calls, etc.
+    
+    -}
+data SymInfo = SI {
+        returnJT    :: JType     --- the type delivered by a call to this function
+        argJTs      :: [JType]   --- declared argument java types
+        argSigs     :: [Sigma]   --- argument sigma types
+    }
 
 
 --- avoid writing 'State' 'Global' all the time

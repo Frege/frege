@@ -400,7 +400,7 @@ package:
     | packageclause WHERE '{' definitions '}'   { \(a,d,p)\w\_\b\_ -> do {
                                                         changeST Global.{sub <- SubSt.{
                                                             thisPos = p}};
-                                                        YYM.return $ Program.Module (a,b,d) }} 
+                                                        YYM.return $ Program.Module (a,b,d) }}
     | INTERPRET script {\_\d -> d}
     ;
 
@@ -600,7 +600,7 @@ importitem:
     ;
 
 importspec:
-    importitem                      { \s      -> ImportItem.{alias = (U.enclosed • Token.value • SName.id • ImportItem.name) s} s}
+    importitem                      { \s      -> ImportItem.{alias = (U.enclosed . Token.value . SName.id . ImportItem.name) s} s}
     | importitem alias              { \s\a    -> ImportItem.{alias = U.enclosed (Token.value a)} s }
     | PUBLIC importspec             { \_\s    -> ImportItem.export s }
     ;
@@ -846,17 +846,17 @@ kind:
     simplekind ARROW kind     { \a\_\c -> KApp a c }
     | simplekind
     ;
-    
+
 simplekind:
     LOP3                    { const KType }
     | VARID                 { \v -> do
                                 let w = Token.value v
-                                if w == "generic" then return KGen 
+                                if w == "generic" then return KGen
                                 else do
                                     yyerror (yyline v) ("expected `generic` instead of `" ++ w ++ "`")
                                     return KType
                             }
-    | '(' kind ')'          { \_\b\_ -> b }                            
+    | '(' kind ')'          { \_\b\_ -> b }
     ;
 
 classdef:
@@ -939,29 +939,29 @@ visdalt:
     ;
 
 strictdalt:
-      '!' simpledalt            { \_\dcon ->  DCon.{strict=true,
+      '!' simpledalt            { \_\dcon ->  DCon.{ -- strict=true,
                                                     flds <-map ConField.{strict=true}}  dcon }
-    | '?' simpledalt            { \_\dcon ->  DCon.{strict=false, 
+    | '?' simpledalt            { \_\dcon ->  DCon.{ -- strict=false,
                                                     flds <-map ConField.{strict=false}} dcon }
     | simpledalt
     ;
 
 simpledalt:
-    CONID                       { \c        -> DCon {pos=yyline c, vis=Public, strict=false,
+    CONID                       { \c        -> DCon {pos=yyline c, vis=Public, -- strict=false,
                                                 name=Token.value c, flds=[], doc=Nothing } }
-    | CONID '{' conflds '}'     { \c\_\fs\_ -> DCon {pos=yyline c, vis=Public, strict=false,
+    | CONID '{' conflds '}'     { \c\_\fs\_ -> DCon {pos=yyline c, vis=Public, -- strict=false,
                                                 name=Token.value c, flds=fs, doc=Nothing } }
-    | CONID contypes            { \c\fs     -> DCon {pos=yyline c, vis=Public, strict=false,
+    | CONID contypes            { \c\fs     -> DCon {pos=yyline c, vis=Public, -- strict=false,
                                                 name=Token.value c, flds=fs, doc=Nothing } }
     ;
 
 contypes:
-    simpletypes                 { \taus -> do 
+    simpletypes                 { \taus -> do
                                     g <- getST
                                     let strict = U.strictMode g
-                                        field  = Field Position.null Nothing Nothing Public strict 
-                                                    • ForAll [] • RhoTau []
-                                    return (map field taus) 
+                                        field  = Field Position.null Nothing Nothing Public strict
+                                                    . ForAll [] . RhoTau []
+                                    return (map field taus)
                                 }
     ;
 
@@ -979,12 +979,12 @@ conflds:
     ;
 
 confld:
-    fldids DCOLON sigma           { \vs\_\t -> [Field pos (Just name) Nothing vis strict t | 
+    fldids DCOLON sigma           { \vs\_\t -> [Field pos (Just name) Nothing vis strict t |
                                                 (pos,name,vis,strict) <- vs ]
                                   }
     | docs fldids DCOLON sigma    { \(d::String)\vs\_\t ->
                                         map ConField.{doc=Just d}
-                                            [Field pos (Just name) Nothing vis strict t | 
+                                            [Field pos (Just name) Nothing vis strict t |
                                                 (pos,name,vis,strict) <- vs ]
                                   }
     ;
@@ -1005,13 +1005,13 @@ strictfldid:
     | '!' plainfldid            { \_ \(pos,name,vis,strict) -> (pos,name,vis, true) }
     | '?' plainfldid            { \_ \(pos,name,vis,strict) -> (pos,name,vis, false) }
     ;
-        
+
 plainfldid:
     varid                       { \(name, pos) -> do
                                     g <- getST
                                     return (pos, name, Public, U.strictMode g)
-                                } 
-    ;    
+                                }
+    ;
 
 typedef:
     TYPE CONID '=' tau         { \t\i   \_\r -> TypDcl {pos=yyline i, vis=Public, name=Token.value i, vars=[], rho=RhoTau [] r, doc=Nothing}}
@@ -1059,7 +1059,7 @@ literal:
                                                 let v = Token.value x
                                                 when (length v > 3 && strhead v 2 != "'\\")
                                                     (yyerror (yyline x) ("bad char literal: " ++ v))
-                                                YYM.return $ Lit (yyline x) LChar v Nothing 
+                                                YYM.return $ Lit (yyline x) LChar v Nothing
                                     }
     | STRCONST                      { \x ->  Lit (yyline x) LString (Token.value x) Nothing }
     | INTCONST                      { \x ->  Lit (yyline x) LInt    (Token.value x) Nothing }
@@ -1086,13 +1086,13 @@ lcqual:
 lcquals:
     lcqual                          { single }
     | lcqual ',' lcquals            { liste  }
-    | lcqual ','                    { (const @ single) }
+    | lcqual ','                    { (const . single) }
     ;
 
 
 dodefs:
     lcqual                          { single }
-    | lcqual semicoli               { (const @ single) }
+    | lcqual semicoli               { (const . single) }
     | lcqual semicoli dodefs        { liste }
     ;
 
@@ -1107,7 +1107,7 @@ gqual:
 gquals:
     gqual                          { single }
     | gqual ',' gquals             { liste  }
-    | gqual ','                    { (const @ single) }
+    | gqual ','                    { (const . single) }
     ;
 
 guard:
@@ -1330,7 +1330,7 @@ term:
 
 commata:
     ','                             { const 1 }
-    | ',' commata                   { ((+) • const 1) }
+    | ',' commata                   { ((+) . const 1) }
     ;
 
 fields:
@@ -1343,13 +1343,13 @@ fields:
                                             } else
                                                 YYM.return (a:ls)
                                     }
-    | field ','                     { (const @ single) }
+    | field ','                     { (const . single) }
     ;
 
 getfields:
     getfield                        { single }
     | getfield ',' getfields        { liste  }
-    | getfield ','                  { (const @ single) }
+    | getfield ','                  { (const . single) }
     ;
 
 getfield:
@@ -1366,12 +1366,12 @@ field:
 exprSC :
     expr                            { single }
     | expr ',' exprSC               { liste  }
-    | expr ','                      { (const @ single) }
+    | expr ','                      { (const . single) }
     ;
 exprSS:
     expr                            { single }
     | expr ';' exprSS               { liste }
-    | expr ';'                      { (const @ single) }
+    | expr ';'                      { (const . single) }
     ;
 
 %%

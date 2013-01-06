@@ -105,18 +105,18 @@ public abstract class Func$n extends Lambda {
     /**
      * <p>Apply this function to all its arguments at once.</p>
      *
-     * <p> This method creates an instance of {\@link Lazy} that,
+     * <p> This method creates an instance of {\@link Delayed} that,
      * when evaluated, invokes the {\@link Func$n#eval} method of this
      * function.</p>
      *
-     * Use of this method is preferrable if all arguments are known compared
+     * Use of this method is preferrable compared
      * to repeated invokation of the single argument form since intermediate
      * closure creation is saved.
      *
-     * \@return an instance of type <tt>Lazy</tt>
+     * \@return an instance of type {\@link Delayed} 
      */
-    final public Lazy apply($cnargs) {
-        return new Lazy () {
+    final public Delayed apply($cnargs) {
+        return new Delayed () {
             final public Object eval() { return Func$n.this.eval($crargs); }
         };
     }

@@ -41,7 +41,7 @@ package frege.compiler.Transdef where
 
 
 import frege.List (insert, lookup, values, keys, Tree, insertkv)
-import Data.List  as DL(find, unique)
+import Data.List  as DL(find, unique, sortBy, groupBy)
 
 import frege.compiler.Data
 import frege.compiler.Utilities     as U(resolveVName, resolveXName, transSigma,
@@ -354,93 +354,109 @@ pureTypes = primitiveTypes ++ ["java.lang.String", "java.math.BigInteger", "java
             "java.lang.Boolean", "java.lang.Byte", "java.lang.Character", "java.lang.Short",
             "java.lang.Integer", "java.lang.Long", "java.lang.Float", "java.lang.Double"]
 
---- transPat may assume that the correct environment is on top
+--- translate pattern to normal form and check for uniqueness of names
 --- every pattern must get assigned new unique numbers - they come with uid=0 from the parser
-transPat  :: (String -> QName) -> PatternS -> StG Pattern
-transPat fname pat = do
-    g <- getST
-    U.logmsg TRACE5 (getpos pat) (text ("transPat: " ++ nice pat g ))
-    case pat of
-        PVar {pos,uid,var}
-            | var ~ #\.# = do
-                U.error pos (msgdoc "Qualified variables must not occur in patterns.")
-                stio (PVar {pos, uid, var="_"})
-            | otherwise  = do
-                u <- U.uniqid 
-                let sym = U.patLocal pos u var 
-                U.enter sym
-                when (var != "_") do
-                    changeST Global.{sub <- SubSt.{
-                        idKind <- insertkv (KeyTk pos.first) (Right sym.name)}}
-                stio (PVar {pos,uid=u,var})
-        PCon {pos,qname,pats} -> do
-                            qname <- resolveVName fname pos qname
-                            pats <- mapSt (transPat fname) pats
-                            checkCon pos qname pats
-                            stio (PCon {pos,qname,pats})
-        PUser (PVar {pos,uid,var}) lazy -> do
-                            u <- U.uniqid
-                            let sym = (U.patLocal pos u var).{state=StrictChecked, 
-                                                              strsig=if lazy then U else S[]} 
-                            U.enter sym
-                            changeST Global.{sub <- SubSt.{
-			                    idKind <- insertkv (KeyTk pos.first) (Right sym.name)}}
-                            stio (PUser (PVar {pos,uid=u,var}) lazy)
-        PUser p lazy    -> do pat <- transPat fname p; return PUser{pat,lazy}
-        PLit p k v      -> stio (PLit p k v)
-        PAnn p s        -> liftM2 PAnn (transPat fname p) (transSigma s)
-        PAt {pos,var,uid,pat} -> do
-                            u <- U.uniqid
-                            let sym = U.patLocal pos u var
-                            U.enter sym
-                            changeST Global.{sub <- SubSt.{
-                                idKind <- insertkv (KeyTk pos.first) (Right sym.name)}}
-                            pat <- transPat fname pat
-                            stio (PAt {pos,var,uid=u,pat})
-        PMat {pos,var,uid,value} -> do
-                            u <- U.uniqid
-                            let sym = (U.patLocal pos u var).{
-                                typ = ForAll [] (RhoTau [] (TCon pos (TName pPreludeBase "Matcher")))}
-                            U.enter sym
-                            changeST Global.{sub <- SubSt.{
-                                idKind <- insertkv (KeyTk pos.first) (Right sym.name)}}
-                            stio (PMat {pos,var,uid=u,value})
-        PConFS {pos,qname,fields} -> do
-                            qname <- resolveVName fname pos qname
-                            pats <- mapSt (transPat fname • snd) fields
-                            let pfs = map fst fields
-                                ft = Tree.fromList (zip pfs pats)
-                                fpat (Just x)
-                                    | Just p <- ft.lookup x = stio p
-                                fpat other = do
-                                        -- u <- U.uniqid
-                                        transPat fname (PVar {pos = pos.change VARID "_", var="_", uid = 0})
-                            case qname.findit g of
-                                Just (SymD {flds}) -> do
-                                    let fs = [ f | Field {name = Just f} <- flds ]
-                                        badfs = filter (`notElem` fs) pfs
-                                    pats <- mapSt fpat (map ConField.name flds)
-                                    if null badfs then stio (PCon {pos,qname,pats})
-                                      else do
-                                        U.error pos (msgdoc ("Constructor " ++ qname.nice g ++ " has no "
-                                            ++ (if length badfs == 1 then "field " else "fields ")
-                                            ++ joined ", " badfs))
-                                        stio (PCon {pos,qname,pats})
-                                _ -> do
-                                    checkCon pos qname pats
-                                    stio (PCon {pos,qname,pats})
+transPatUnique  :: (String -> QName) -> PatternS -> StG Pattern
+transPatUnique fname pat = do
+        pat <- transPat fname pat
+        let !vars = sortBy  (comparing Pattern.var) (U.patVars pat)
+            !grps = groupBy (using Pattern.var) vars
+        foreach grps check
+        return pat    
   where
-        checkCon pos qcon ps = do
-                g <- getST
-                case QName.findit qcon g of
-                    Just (SymD {flds})
-                                | length flds == length ps = stio ()
-                                | otherwise = U.error pos (msgdoc ("constructor " ++ qcon.nice g
-                                                ++ " demands " ++ show (length flds)
-                                                ++ " arguments, but you gave "
-                                                ++ show (length ps)))
-                    nothing -> when (g.errors == 0) do
-                        U.error pos (msgdoc (qcon.nice g ++ " is not a data constructor"))
+    check ::  [Pattern] -> StG ()
+    check [_] = return ()   -- unique
+    check xs 
+        | (var:_) <- reverse xs, Pattern.var var != "_" = do
+            g <- getST
+            U.error (Pattern.pos var) (msgdoc ("Variable `" 
+                                ++ nicer var g 
+                                ++ "` must not occur more than once in pattern."))
+        | otherwise = return ()       
+    transPat fname pat = do
+        g <- getST
+        U.logmsg TRACE5 (getpos pat) (text ("transPat: " ++ nice pat g ))
+        case pat of
+            PVar {pos,uid,var}
+                | var ~ #\.# = do
+                    U.error pos (msgdoc "Qualified variables must not occur in patterns.")
+                    stio (PVar {pos, uid, var="_"})
+                | otherwise  = do
+                    u <- U.uniqid 
+                    let sym = U.patLocal pos u var 
+                    U.enter sym
+                    when (var != "_") do
+                        changeST Global.{sub <- SubSt.{
+                            idKind <- insertkv (KeyTk pos.first) (Right sym.name)}}
+                    stio (PVar {pos,uid=u,var})
+            PCon {pos,qname,pats} -> do
+                                qname <- resolveVName fname pos qname
+                                pats <- mapSt (transPat fname) pats
+                                checkCon pos qname pats
+                                stio (PCon {pos,qname,pats})
+            PUser (PVar {pos,uid,var}) lazy -> do
+                                u <- U.uniqid
+                                let sym = (U.patLocal pos u var).{state=StrictChecked, 
+                                                                  strsig=if lazy then U else S[]} 
+                                U.enter sym
+                                changeST Global.{sub <- SubSt.{
+    			                    idKind <- insertkv (KeyTk pos.first) (Right sym.name)}}
+                                stio (PUser (PVar {pos,uid=u,var}) lazy)
+            PUser p lazy    -> do pat <- transPat fname p; return PUser{pat,lazy}
+            PLit p k v      -> stio (PLit p k v)
+            PAnn p s        -> liftM2 PAnn (transPat fname p) (transSigma s)
+            PAt {pos,var,uid,pat} -> do
+                                u <- U.uniqid
+                                let sym = U.patLocal pos u var
+                                U.enter sym
+                                changeST Global.{sub <- SubSt.{
+                                    idKind <- insertkv (KeyTk pos.first) (Right sym.name)}}
+                                pat <- transPat fname pat
+                                stio (PAt {pos,var,uid=u,pat})
+            PMat {pos,var,uid,value} -> do
+                                u <- U.uniqid
+                                let sym = (U.patLocal pos u var).{
+                                    typ = ForAll [] (RhoTau [] (TCon pos (TName pPreludeBase "Matcher")))}
+                                U.enter sym
+                                changeST Global.{sub <- SubSt.{
+                                    idKind <- insertkv (KeyTk pos.first) (Right sym.name)}}
+                                stio (PMat {pos,var,uid=u,value})
+            PConFS {pos,qname,fields} -> do
+                                qname <- resolveVName fname pos qname
+                                pats <- mapSt (transPat fname • snd) fields
+                                let pfs = map fst fields
+                                    ft = Tree.fromList (zip pfs pats)
+                                    fpat (Just x)
+                                        | Just p <- ft.lookup x = stio p
+                                    fpat other = do
+                                            -- u <- U.uniqid
+                                            transPat fname (PVar {pos = pos.change VARID "_", var="_", uid = 0})
+                                case qname.findit g of
+                                    Just (SymD {flds}) -> do
+                                        let fs = [ f | Field {name = Just f} <- flds ]
+                                            badfs = filter (`notElem` fs) pfs
+                                        pats <- mapSt fpat (map ConField.name flds)
+                                        if null badfs then stio (PCon {pos,qname,pats})
+                                          else do
+                                            U.error pos (msgdoc ("Constructor " ++ qname.nice g ++ " has no "
+                                                ++ (if length badfs == 1 then "field " else "fields ")
+                                                ++ joined ", " badfs))
+                                            stio (PCon {pos,qname,pats})
+                                    _ -> do
+                                        checkCon pos qname pats
+                                        stio (PCon {pos,qname,pats})
+      where
+            checkCon pos qcon ps = do
+                    g <- getST
+                    case QName.findit qcon g of
+                        Just (SymD {flds})
+                                    | length flds == length ps = stio ()
+                                    | otherwise = U.error pos (msgdoc ("constructor " ++ qcon.nice g
+                                                    ++ " demands " ++ show (length flds)
+                                                    ++ " arguments, but you gave "
+                                                    ++ show (length ps)))
+                        nothing -> when (g.errors == 0) do
+                            U.error pos (msgdoc (qcon.nice g ++ " is not a data constructor"))
 
 transMbSigma (Just s) = liftM Just (transSigma s)
 transMbSigma Nothing  = stio Nothing
@@ -479,7 +495,7 @@ transExpr env fname ex = do
                     stio (Case {ckind, ex, alts, typ})
                 where
                         transAlt (CAlt {pat, ex}) = do
-                                pat <- transPat  fname pat
+                                pat <- transPatUnique  fname pat
                                 let nenv = U.patNames pat
                                 ex  <- transExpr (nenv++env) fname ex
                                 stio (CAlt {pat, ex})
@@ -513,7 +529,7 @@ transExpr env fname ex = do
                                 return env
                             _ = error "onlyLocal possible"
         Lam {pat,ex,typ} -> do
-                        pat <- transPat  fname pat
+                        pat <- transPatUnique  fname pat
                         let nenv = U.patNames pat
                         ex  <- transExpr (nenv++env) fname ex
                         typ <- transMbSigma typ
@@ -529,7 +545,7 @@ transExpr env fname ex = do
                         let vUndef = Vbl (pos.change VARID "undefined") (VName pPreludeBase "undefined") Nothing
                         g <- getST
                         case QName.findit name g of
-                            Just (symd@SymD {pos}) -> do
+                            Just (symd@SymD {}) -> do
                                 let xnms = map fst fields
                                     flds = [ f | Field {name = Just f} <- symd.flds ]
                                     badf = filter (`notElem` flds) xnms

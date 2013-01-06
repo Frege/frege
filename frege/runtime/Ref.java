@@ -1,4 +1,5 @@
-/*
+/* «•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»
+
     Copyright © 2011, Ingo Wechsung
     All rights reserved.
     
@@ -30,41 +31,33 @@
     LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
     IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
     THE POSSIBILITY OF SUCH DAMAGE.
- 
- */
 
+    «•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•» */
+    
 package frege.runtime;
 
+
 /**
- * <p> This is the base class for all function values. </p>
- * <p> Because all functions extend this, all functions are also {@link Lazy} values.</p>
- * <p> Subclasses must implement {@link Applicable#apply} </p>
- * @author ingo
+ * <p> Mutable references. </p>
+ *
+ * <p> Used to realize type Prelude.IORef a s. </p>
  *
  */
-public abstract class Lambda implements Lazy, Applicable, Value {
-
-	/**
-	 * @return 0 for functions
-	 * @see frege.runtime.Value#_constructor()
-	 */
-	@Override
-	public int _constructor() {
-		return 0;
-	}
-	
-	/**
-	 * Trying to interpret a partially applied function as lazy value
-	 * should never happen from compiled code.
-	 */
-	public Lazy result() { return this; }
-	
-	@Override
-	public Lambda call() { return this; }
-	
-	@SuppressWarnings("unchecked")
-	@Override
-	public <R> R forced() {
-		return (R) this;
-	}
+/**
+ * <p> Boxed references. </p>
+ * <p> This is not a pure type. </p>
+ */
+public final class Ref {
+    /**
+     * <p>Mutable reference to a frege object.</p>
+     *
+     * <p> This is used for the IORef type in the Prelude. </p>
+     */
+    private Object j;
+    /** Construct a reference. Because this is a native function, the type is correct. */
+    public Ref(Object a) { j = a; }
+    /** getter */
+    public Object get() { return j; }
+    /** setter */
+    public void put(Object a) { j = a; }
 }

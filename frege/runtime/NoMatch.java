@@ -1,6 +1,6 @@
 package frege.runtime;
 
-import frege.RT.Undefined;
+
 
 /**
  * <p> Exception thrown when all matches of a case or lambda fail. </p>

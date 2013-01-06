@@ -1,4 +1,5 @@
-/*
+/* «•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»
+
     Copyright © 2011, Ingo Wechsung
     All rights reserved.
     
@@ -30,41 +31,39 @@
     LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
     IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
     THE POSSIBILITY OF SUCH DAMAGE.
- 
+
+    «•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•» */
+
+/**
+ * Swing support for frege
  */
+
+/*
+ * $Author$
+ * $Revision$
+ * $Date$
+ * $Id$
+ */ 
 
 package frege.runtime;
 
-/**
- * <p> This is the base class for all function values. </p>
- * <p> Because all functions extend this, all functions are also {@link Lazy} values.</p>
- * <p> Subclasses must implement {@link Applicable#apply} </p>
- * @author ingo
- *
- */
-public abstract class Lambda implements Lazy, Applicable, Value {
-
-	/**
-	 * @return 0 for functions
-	 * @see frege.runtime.Value#_constructor()
-	 */
-	@Override
-	public int _constructor() {
-		return 0;
-	}
-	
-	/**
-	 * Trying to interpret a partially applied function as lazy value
-	 * should never happen from compiled code.
-	 */
-	public Lazy result() { return this; }
-	
-	@Override
-	public Lambda call() { return this; }
-	
-	@SuppressWarnings("unchecked")
-	@Override
-	public <R> R forced() {
-		return (R) this;
-	}
+public abstract class SwingSupport {
+    final static Integer guiWorld = 1;
+    /** <p> create a Runnable from a ST action </p> */
+    public static java.lang.Runnable runnable(final Lambda arg1) {
+        return new java.lang.Runnable() {
+            public void run() {
+                arg1.apply(guiWorld).result().call();
+            }
+        };
+    }
+    /** <p> create an ActionListener from a ActionEventT s -&gt; ST s () function </p> */
+    public static   
+        java.awt.event.ActionListener actionListener(final Lambda arg1) {
+            return new java.awt.event.ActionListener() {
+                public void actionPerformed(java.awt.event.ActionEvent e) {
+                    arg1.apply(e).apply(guiWorld).result().call();
+                }
+            };
+    }
 }

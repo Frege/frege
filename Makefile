@@ -5,7 +5,7 @@
 # The standard distribution needs a Java 1.7 JDK.
 # Because people may need previous JDKs/JREs for different work,
 # there are 2 mechanisms to get the right java:
-# 
+#
 #   - put the JDK7 in your PATH after other JDKs, and make java7 a symbolic link to
 #     the JDK7 java binary. (On Windows, just copy java.exe to java7.exe)
 #   - For UNIX users: make the follwoing alias:
@@ -81,6 +81,8 @@ PRELUDE  =  frege/prelude/PreludeBase.fr frege/prelude/PreludeNative.fr \
             frege/prelude/PreludeText.fr frege/prelude/Arrays.fr \
             frege/prelude/Math.fr frege/prelude/Floating.fr
 
+all:  frege.mk runtime compiler fregec.jar
+
 shadow-prelude:
 	cp $(PRELUDE)       shadow/frege/prelude/
 
@@ -102,7 +104,6 @@ clean:
 {frege/prelude}.fr{$(PREL)}.class::
 	$(FREGEC2) $<
 
-all:  frege.mk runtime compiler fregec.jar
 
 sanitycheck:
 	$(JAVA) -version
@@ -116,7 +117,7 @@ dist: fregec.jar
 
 
 
-fregec.jar: compiler $(DIR)/check1 
+fregec.jar: compiler $(DIR)/check1
 	$(FREGECC)  -make frege/StandardLibrary.fr
 	jar  -cf    fregec.jar -C build frege
 	jar  -uvfe  fregec.jar frege.compiler.Main
@@ -168,11 +169,10 @@ $(COMPF)/GUtil.class: $(COMPF)/Scanner.class frege/compiler/GUtil.fr
 $(COMPF)/Main.class: $(DIR)/Prelude.class frege/compiler/Main.fr frege/Version.fr
 	$(FREGEC2)  -make frege.compiler.Main
 $(DIR)/Prelude.class: $(COMPF2)/Main.class $(PRELUDE)
-	mv build/frege/rt build/bfrege/rt
+#	mv build/frege/rt build/bfrege/rt
 	rm -rf $(DIR)
 	cd build && mkdir frege
-	mv build/bfrege/rt build/frege/rt
-	$(JAVAC) -d build -cp build frege/MD.java frege/RT.java frege/compiler/JavaUtils.java
+	$(JAVAC) -d build frege/runtime/*.java
 	$(FREGEC2)  $(PRELUDE)
 	$(FREGEC2)  -make  frege.Prelude
 
@@ -182,7 +182,7 @@ compiler2: $(COMPF2)/Main.class
 
 $(COMPF2)/Main.class: $(DIR2)/Prelude.class frege/Version.fr
 	$(FREGEC1) -v -make frege.compiler.Main
-$(DIR2)/Prelude.class: $(COMPF1)/Main.class frege/Prelude.fr $(PRELUDE)
+$(DIR2)/Prelude.class: $(RUNTIME) $(COMPF1)/Main.class frege/Prelude.fr $(PRELUDE)
 	rm -rf $(COMPF2)
 	rm -rf $(DIR2)
 	$(FREGEC1)  $(PRELUDE)
@@ -200,7 +200,9 @@ SOURCES  =      $(COMPS)/Scanner.fr   $(COMPS)/Classtools.fr \
 		$(COMPS)/Transdef.fr  $(COMPS)/Classes.fr \
 		$(COMPS)/Transform.fr $(COMPS)/Typecheck.fr \
 		$(COMPS)/TCUtil.fr \
-		$(COMPS)/GenMeta.fr   $(COMPS)/GenJava7.fr  $(COMPS)/GenUtil.fr \
+		$(COMPS)/gen/Util.fr  $(COMPS)/gen/Const.fr \
+		$(COMPS)/gen/Bindings.fr $(COMPS)/gen/Match.fr \
+		$(COMPS)/GenMeta.fr   $(COMPS)/GenJava7.fr  \
 		$(COMPS)/DocUtils.fr $(COMPS)/EclipseUtil.fr
 
 
@@ -213,7 +215,8 @@ CLASSES  =       $(COMPF1)/Scanner.class   $(COMPF1)/Classtools.class \
 		$(COMPF1)/TCUtil.class   \
 		$(COMPF1)/TAlias.class    $(COMPF1)/Classes.class \
 		$(COMPF1)/Typecheck.class $(COMPF1)/Transform.class \
-		$(COMPF1)/GenUtil.class \
+		$(COMPF1)/gen/Util.class  $(COMPF1)/gen/Const.class \
+		$(COMPF1)/gen/Bindings.class $(COMPF1)/gen/Match.class \
 		$(COMPF1)/GenMeta.class   $(COMPF1)/GenJava7.class \
 		$(COMPF1)/DocUtils.class $(COMPF1)/EclipseUtil.class
 
@@ -235,7 +238,7 @@ $(DIR1)/List.class: frege/List.fr
 $(CONTROL1)/Monoid.class: frege/control/Monoid.fr
 	$(FREGEC0) $?
 $(COMPF1)/Classtools.class: frege/compiler/Classtools.fr
-	$(FREGEC0) $?
+	$(FREGEC0) -make $?
 $(COMPF1)/BaseTypes.class: frege/compiler/BaseTypes.fr
 	$(FREGEC0) $?
 $(COMPF1)/Utilities.class: $(COMPF1)/BaseTypes.class $(COMPF1)/Classtools.class $(COMPF1)/Data.class $(COMPF1)/Nice.class $(COMPS)/Utilities.fr
@@ -243,7 +246,7 @@ $(COMPF1)/Utilities.class: $(COMPF1)/BaseTypes.class $(COMPF1)/Classtools.class 
 $(COMPF1)/GUtil.class: $(COMPF1)/Scanner.class frege/compiler/GUtil.fr
 	$(FREGEC0)  frege/compiler/GUtil.fr
 $(COMPF1)/Data.class: 	$(COMPF1)/BaseTypes.class $(COMPS)/Data.fr
-	$(FREGEC0)  $(COMPS)/Data.fr
+	$(FREGEC0)  -make $(COMPS)/Data.fr
 $(COMPF1)/Nice.class: 	$(COMPS)/Nice.fr $(LIBF1)/PP.class $(COMPF1)/Data.class $(DATA1)/List.class
 	$(FREGEC0) $(COMPS)/Nice.fr
 $(COMPF1)/Fixdefs.class: $(COMPS)/Fixdefs.fr
@@ -271,13 +274,19 @@ $(COMPF1)/Typecheck.class: $(COMPS)/Typecheck.fr
 $(COMPF1)/GenMeta.class: $(COMPS)/GenMeta.fr
 	$(FREGEC0) $?
 $(COMPF1)/GenJava7.class: $(COMPS)/GenJava7.fr
+	$(FREGEC0) -make $?
+$(COMPF1)/gen/Util.class: $(COMPS)/gen/Util.fr
 	$(FREGEC0) $?
-$(COMPF1)/GenUtil.class: $(COMPS)/GenUtil.fr
+$(COMPF1)/gen/Match.class: $(COMPS)/gen/Match.fr
 	$(FREGEC0) $?
-$(COMPF1)/DocUtils.class: $(LIBF1)/QuickCheck.class $(COMPS)/DocUtils.fr
-	$(FREGEC0) frege/compiler/DocUtils.fr
+$(COMPF1)/gen/Const.class: $(COMPS)/gen/Const.fr
+	$(FREGEC0) $?
+$(COMPF1)/gen/Bindings.class: $(COMPS)/gen/Bindings.fr
+	$(FREGEC0) $?
+$(COMPF1)/DocUtils.class: $(COMPS)/DocUtils.fr
+	$(FREGEC0) -make $?
 $(COMPF1)/EclipseUtil.class: $(COMPS)/EclipseUtil.fr
-	$(FREGEC0) $?
+	$(FREGEC0) -make $?
 $(LIBF1)/Random.class: frege/lib/Random.fr
 	$(FREGEC0) $?
 $(LIBF1)/PP.class: frege/lib/PP.fr
@@ -286,8 +295,8 @@ $(LIBF1)/QuickCheck.class: $(LIBF1)/Random.class $(DATA1)/List.class frege/lib/Q
 	$(FREGEC0) frege/lib/QuickCheck.fr
 $(DATA1)/List.class: frege/data/List.fr
 	$(FREGEC0) frege/data/List.fr
-$(DATA1)/Tuples.class: $(CONTROL1)/Monoid.class frege/data/Tuples.fr
-	$(FREGEC0) frege/data/Tuples.fr
+$(DATA1)/Tuples.class: frege/data/Tuples.fr
+	$(FREGEC0) -make frege/data/Tuples.fr
 $(DATA1)/Bits.class: frege/data/Bits.fr
 	$(FREGEC0) -make frege/data/Bits.fr
 $(DATA1)/Maybe.class: frege/data/Maybe.fr
@@ -511,7 +520,7 @@ $(RTDIR)/FregeCompiler.class: frege/rt/FregeCompiler.java
 
 
 doc/index.html: $(RUNTIME)
-	
+
 
 docu: build/frege/tools/Doc.class
 	$(FREGECC)  -make frege/StandardLibrary.fr

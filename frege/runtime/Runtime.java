@@ -57,8 +57,11 @@ public class Runtime {
 	final public static int constructor(Value v) {		// if it is statically known that v is a Value 
 		return v._constructor(); 
 	}
+	// final public static int constructor(Integer v) { return v; }
 	final public static int constructor(Object v) { 	// if v is completely unknown, it could still be a Value
-		return v instanceof Value ? ((Value)v)._constructor() : 0; 
+		if (v instanceof Value) return ((Value)v)._constructor();
+		if (v instanceof Integer) return ((Integer)v).intValue();
+		return 0;
 	}
 	
     /**
@@ -149,11 +152,83 @@ public class Runtime {
         }
     }
 
-	/**
-	 * @param args
-	 */
-	public static void main(String[] args) {
-		// TODO Auto-generated method stub
+    /**
+     * <p> Cheat with phantom types. </p>
+     * <p> This method is announced with type String a -&gt; Int -&gt; a
+     * but it always returns a char.</p>
+     * <p> This is fine as long as nobody is able to actually create a
+     * value with type, say String Int. <br>
+     * This could be done only with another malicious native function, though.</p>
+     */
+    public final static Object itemAt(final String value, final int offset) {
+        return value.charAt(offset);
+    }
+    /**
+     * <p> The empty polymorphic value of type StringJ a </p>
+     * <p> Referenced in frege.prelude.List.ListLike_StringJ
+     */
+   final public static String emptyString = "";
+    
+   /**
+    *  <p> Start a program to run in a fork/join task </p>
+    *    *
+    *  <p> Called from the java <tt>main</tt> method of a frege program.
+    *  This converts the argument String array to a list and passes this to
+    *  the compiled frege main function. The result is an IO action of type
+    *  <tt>IO ()</tt> to which then <tt>IO.performUnsafe</tt> is applied.
+    *  The resulting {@link Lambda} then actually executes the frege code
+    *  when evaluated.</p>
+    *
+    *  <p>This method checks first if the system property <tt>frege.parallel</tt>
+    *  is set to a value that does not represent <tt>true</tt>.
+    *  If so, it just evaluates the argument.
+    *  Otherwise it submits its argument to a {@link java.util.concurrent.ForkJoinPool}
+    *  and waits for completion. This ensures that frege code sees itself executed
+    *  in a fork join pool and is able to fork further tasks.
+    *  </p>
+    *  <p>In frege code that is not executed in a fork join pool all library
+    *  functions for ad hoc parallelism shall perform semantically equivalent
+    *  sequential functions
+    *  with as little overhead as possible.
+    *  </p>
+    *
+    *  @param val a {@link Lambda} value to be evaluated in a fork/join context
+    */
+	public static void runMain(final Object arg) {
+		final Lazy val = Delayed.delayed(arg);
+		java.util.concurrent.Callable<Object> action = new java.util.concurrent.Callable<Object>() {
+			public Object call() {
+				return val.<Object> forced();
+			}
+		};
+		// Check if parallel execution is prohibited
+		// This is the case when the VM was started with -Dfrege.parallel=x
+		// and x is not equal, ignoring case, to the string "true".
+		final String prop = System.getProperty("frege.parallel");
+		final boolean parallel = prop == null ? true : Boolean.valueOf(prop);
+		if (!parallel) {                             // comment out for java6
+			// execution outside fork/join pool
+			try {
+				action.call();
+			} catch (Exception ex) {
+				throw new Error(ex); // ex.printStackTrace();
+			}
+			return;
+		} 
+		// comment following block for java6
+		// run in fork/join pool
+		try { // comment try/catch blocks out for java6
+			new java.util.concurrent.ForkJoinPool(2 * java.lang.Runtime
+					.getRuntime().availableProcessors()).submit(action).get();
+		} catch (Exception ex) {
+			throw new Error(ex);
+		}
+		return;
 	}
-
+	final public static boolean fork(Lambda it) {
+		Lazy a = it.apply(true).result();
+	    if (java.util.concurrent.ForkJoinTask.inForkJoinPool())
+	    	java.util.concurrent.ForkJoinTask.adapt(a).fork();
+	    return true;
+	}
 }
