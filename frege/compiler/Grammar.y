@@ -600,7 +600,7 @@ importitem:
     ;
 
 importspec:
-    importitem                      { \s      -> ImportItem.{alias = (U.enclosed • Token.value • SName.id • ImportItem.name) s} s}
+    importitem                      { \s      -> ImportItem.{alias = (U.enclosed . Token.value . SName.id . ImportItem.name) s} s}
     | importitem alias              { \s\a    -> ImportItem.{alias = U.enclosed (Token.value a)} s }
     | PUBLIC importspec             { \_\s    -> ImportItem.export s }
     ;
@@ -960,7 +960,7 @@ contypes:
                                     g <- getST
                                     let strict = U.strictMode g
                                         field  = Field Position.null Nothing Nothing Public strict
-                                                    • ForAll [] • RhoTau []
+                                                    . ForAll [] . RhoTau []
                                     return (map field taus)
                                 }
     ;
@@ -1086,13 +1086,13 @@ lcqual:
 lcquals:
     lcqual                          { single }
     | lcqual ',' lcquals            { liste  }
-    | lcqual ','                    { (const @ single) }
+    | lcqual ','                    { (const . single) }
     ;
 
 
 dodefs:
     lcqual                          { single }
-    | lcqual semicoli               { (const @ single) }
+    | lcqual semicoli               { (const . single) }
     | lcqual semicoli dodefs        { liste }
     ;
 
@@ -1107,7 +1107,7 @@ gqual:
 gquals:
     gqual                          { single }
     | gqual ',' gquals             { liste  }
-    | gqual ','                    { (const @ single) }
+    | gqual ','                    { (const . single) }
     ;
 
 guard:
@@ -1330,7 +1330,7 @@ term:
 
 commata:
     ','                             { const 1 }
-    | ',' commata                   { ((+) • const 1) }
+    | ',' commata                   { ((+) . const 1) }
     ;
 
 fields:
@@ -1343,13 +1343,13 @@ fields:
                                             } else
                                                 YYM.return (a:ls)
                                     }
-    | field ','                     { (const @ single) }
+    | field ','                     { (const . single) }
     ;
 
 getfields:
     getfield                        { single }
     | getfield ',' getfields        { liste  }
-    | getfield ','                  { (const @ single) }
+    | getfield ','                  { (const . single) }
     ;
 
 getfield:
@@ -1366,12 +1366,12 @@ field:
 exprSC :
     expr                            { single }
     | expr ',' exprSC               { liste  }
-    | expr ','                      { (const @ single) }
+    | expr ','                      { (const . single) }
     ;
 exprSS:
     expr                            { single }
     | expr ';' exprSS               { liste }
-    | expr ';'                      { (const @ single) }
+    | expr ';'                      { (const . single) }
     ;
 
 %%
