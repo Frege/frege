@@ -128,7 +128,7 @@ fregec.jar: compiler $(DIR)/check1
 #	One should have a fallback.jar, just in case ....
 #
 test-jar: fallback.jar
-	$(FREGECC) -make frege.compiler.Main
+	$(FREGEC2) -make frege.compiler.Main
 	jar  -cf    fregec.jar -C build frege
 	jar  -uvfe  fregec.jar frege.compiler.Main
 	cp fregec.jar  ../eclipse-plugin/lib/fregec.jar
