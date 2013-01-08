@@ -64,7 +64,7 @@ FREGEC0  = $(FREGECJ) -prefix a -sp shadow;.
 FREGEC1  = $(FREGE) afrege.compiler.Main -d build -hints -inline -prefix b
 
 #	compile final compiler with compiler2
-FREGEC2  = $(FREGE) bfrege.compiler.Main -d build -hints -inline
+FREGEC2  = $(FREGE) bfrege.compiler.Main -d build -hints
 
 #	final compiler
 FREGECC  = $(FREGE) frege.compiler.Main  -d build -hints -inline
@@ -327,7 +327,7 @@ $(DIR1)/check1: $(PRE1) $(DIR1)/PreludeProperties.class
 
 
 
-runtime: 
+runtime:
 	$(JAVAC) -d build frege/runtime/*.java
 	@echo Runtime is complete.
 
