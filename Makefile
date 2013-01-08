@@ -348,3 +348,14 @@ docu: build/frege/tools/Doc.class
 	$(MAKE) -f makedoc docu
 	rm makedoc
 
+
+#
+#   Difference between 2 compilers
+#   The output of the first must have been stored in "save" (see "savejava")
+#   Compares all java files in save/frege with those in build/frege
+#
+diffs:
+	diff -b -r -x "*.class" -I "This code was generated with the frege compiler version" -I "^ +source=" save  build
+
+savejava:
+	perl savejava.pl
