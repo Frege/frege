@@ -328,7 +328,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 %token INSTANCE ABSTRACT TYPE TRUE FALSE IF THEN ELSE CASE OF DERIVE
 %token LET IN WHILE DO FORALL PRIVATE PROTECTED PUBLIC PURE
 %token INTCONST STRCONST LONGCONST FLTCONST DBLCONST CHRCONST REGEXP BIGCONST
-%token ARROW DCOLON GETS EARROW TARROW
+%token ARROW DCOLON GETS EARROW TARROW DOTDOT
 %token LOP1 LOP2 LOP3 LOP4 LOP5 LOP6 LOP7 LOP8 LOP9 LOP10 LOP11 LOP12 LOP13 LOP14 LOP15 LOP16
 %token ROP1 ROP2 ROP3 ROP4 ROP5 ROP6 ROP7 ROP8 ROP9 ROP10 ROP11 ROP12 ROP13 ROP14 ROP15 ROP16
 %token NOP1 NOP2 NOP3 NOP4 NOP5 NOP6 NOP7 NOP8 NOP9 NOP10 NOP11 NOP12 NOP13 NOP14 NOP15 NOP16
@@ -1321,6 +1321,8 @@ term:
     | '[' exprSC ']'                { \b\es\z -> foldr (\a\as -> nApp (nApp (Con (yyline b) (With1 baseToken b.{tokid=CONID, value=":"}) Nothing) a) as)
                                                        (Con (yyline z)  (With1 baseToken z.{tokid=CONID, value="[]"}) Nothing)
                                                        es}
+    | '[' exprSC DOTDOT ']'         { \a\b\c\d   -> do mkEnumFrom   a b c d}
+    | '[' exprSC DOTDOT expr ']'    { \a\b\c\d\e -> do mkEnumFromTo a b c d e}
     | '[' expr '|' lcquals ']'      { \(a::Token)\e\b\qs\(z::Token) -> do {
                 let {nil = z.{tokid=CONID, value="[]"}};
                 listComprehension (yyline b) e qs
@@ -1373,6 +1375,7 @@ exprSS:
     | expr ';' exprSS               { liste }
     | expr ';'                      { (const . single) }
     ;
+    
 
 %%
 /**
