@@ -190,6 +190,11 @@ public abstract class Delayed implements Lazy, Applicable {
 		if (item != null) 
 			// value already computed
 			return item;
+		// Detect black holes
+		// When the same thread evaluates this while we are not yet done,
+		// it will return the black hole, and this will, in turn,
+		// give a Class Cast Exception later.
+		item = BlackHole.it;
 		Object o = eval();
 		while (o  instanceof Delayed) {
 			o = ((Delayed) o).eval();
@@ -217,7 +222,7 @@ public abstract class Delayed implements Lazy, Applicable {
 	public Delayed result() { return this; }
 
 	/**
-	 * Perform 1 step in evaluating the result.
+	 * Perform a single step in the evaluation of the result.
 	 */
 	abstract public Object eval();
 	
@@ -263,7 +268,7 @@ public abstract class Delayed implements Lazy, Applicable {
 	}
 	
 	/**
-	 * Make sure to have a {@link Lazy} value.
+	 * Make sure we have a {@link Lazy} value.
 	 * 
 	 * <p>This is, in a sense, the exact opposite of {@link Delayed.forced}. 
 	 * Whereas the latter evaluates a {@link Delayed}, unless already evaluated,
