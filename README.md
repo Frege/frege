@@ -1,7 +1,10 @@
 What is Frege?
 ==============
 
-Frege is a non-strict, pure functional programming language in the spirit of Haskell. It enjoys a strong static type system with type inference. Higher rank types are supported, though type annotations are required for that.
+Frege is a [non-strict](http://en.wikipedia.org/wiki/Non-strict_programming_language), 
+pure functional programming language in the spirit of Haskell. 
+It enjoys a strong static type system with type inference. 
+Higher rank types are supported, though type annotations are required for that.
 
 Frege programs are compiled to Java and run in a JVM. Existing Java Classes and Methods can be used seamlessly from Frege.
 
