@@ -47,8 +47,10 @@ Specific programming problems are best solved on
 [Stack Overflow](http://stackoverflow.com/questions/tagged/frege),
 we check questions tagged "frege" on a regular basis.
 
-If you find a bug, please let us know by opening an issue in the issue tracker.
+If you find a bug or have an idea for enhancements, please let us know by opening an issue in the issue tracker.
 (You'll need a GitHub account to do this.)
+
+Please understand that the issue tracker is neither a discussion forum nor a place to ask questions.
 
 Links
 ----
