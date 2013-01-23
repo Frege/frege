@@ -20,22 +20,28 @@ Frege is thought as a substitute for this missing GHC port. While not derived fr
 Project State
 -------------
 
-The compiler, an Eclipse plugin and a provisional version of the documentation can be [downloaded](http://code.google.com/p/frege/downloads/list). Note that Frege requires JDK 7 to compile and run programs.
+The compiler, an Eclipse plugin and a provisional version of the documentation can be [downloaded](http://code.google.com/p/frege/downloads/list). 
+Note that Frege requires JDK 7 to compile and run programs.
 
-The compiler and the documentation tool are quite stable, the documentation provisional and the library is evolving. It already supports important parts of the Haskell 2010 standard library.
+The compiler and the documentation tool are quite stable, the documentation provisional and the library is evolving. 
+It already supports important parts of the Haskell 2010 standard library.
 
-See the [Getting Started](https://github.com/Frege/frege/wiki/Getting-Started) page for getting started at the command-line or read the Eclipse plugin page.
+See the [Getting Started](https://github.com/Frege/frege/wiki/Getting-Started) page for 
+getting started at the command-line or read the [Eclipse plugin](https://github.com/Frege/eclipse-plugin) page.
+
+There is also an [interpreter (REPL)](https://github.com/Frege/frege-repl). 
+An online version of the REPL is running on [Google App Engine](http://tryfrege.appspot.com/).
 
 Contributions
 -------------
 
 If you are interested in contributing, here are some hot topics:
 
-* write frege code to support more of the Java API
+* write Frege code to support more of the Java API
 * create a nicer logo
 * port Haskell libraries or tools
 * open issues on the Issues page if you find bugs, errors in documentation, etc.
-* vote for Enhancement issues you consider most important by "starring" them or create new ones.
+* help make Frege popular by writing code for projects like Rosetta Stone or Computer Language Shootout.
 
 Contact
 -------
