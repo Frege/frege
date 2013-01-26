@@ -222,6 +222,7 @@ public class Meta {
                                                     //              without fear of stack overflow
         int      expr()         default 0;          // index into expression table if >0
         boolean  publik()       default true;       // will it be imported by default
+        int[]	throwing()		default {};			// index of taus this function throws
     }
 
     /**
