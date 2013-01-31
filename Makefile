@@ -242,8 +242,8 @@ $(COMPF1)/BaseTypes.class: frege/compiler/BaseTypes.fr
 	$(FREGEC0) $?
 $(COMPF1)/Utilities.class: $(COMPF1)/BaseTypes.class $(COMPF1)/Classtools.class $(COMPF1)/Data.class $(COMPF1)/Nice.class $(COMPS)/Utilities.fr
 	$(FREGEC0) $(COMPS)/Utilities.fr
-$(COMPF1)/GUtil.class: $(COMPF1)/Scanner.class frege/compiler/GUtil.fr
-	$(FREGEC0)  frege/compiler/GUtil.fr
+$(COMPF1)/GUtil.class: frege/compiler/GUtil.fr
+	$(FREGEC0)  -make $?
 $(COMPF1)/Data.class: 	$(COMPF1)/BaseTypes.class $(COMPS)/Data.fr
 	$(FREGEC0)  -make $(COMPS)/Data.fr
 $(COMPF1)/Nice.class: 	$(COMPS)/Nice.fr $(LIBF1)/PP.class $(COMPF1)/Data.class $(DATA1)/List.class
@@ -308,7 +308,7 @@ PRE1 = $(DIR1)/Prelude.class $(DIR1)/IO.class $(DIR1)/List.class $(DATA1)/Bits.c
 compiler1: $(RUNTIME)  $(DIR1)/check1  $(LIBF1)/PP.class $(COMPF1)/Grammar.class $(COMPF1)/Main.class
 	@echo stage 1 compiler ready
 
-$(COMPF1)/Grammar.class: frege/compiler/Grammar.fr $(COMPF1)/GUtil.class $(COMPF1)/Scanner.class
+$(COMPF1)/Grammar.class: frege/compiler/Grammar.fr
 	$(FREGEC0)  -make frege.compiler.Grammar
 $(COMPF1)/Scanner.class: $(PRE1) $(COMPF1)/Utilities.class frege/compiler/Scanner.fr
 	$(FREGEC0)  -make frege.compiler.Scanner
