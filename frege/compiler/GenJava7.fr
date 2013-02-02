@@ -1493,19 +1493,30 @@ niSpecial g ty
 {--
   * check native method
   -}
-methClass (sym@SymV {nativ = Just item, pur=true, typ})
-     | Just (_, tau) <- U.isIO (returnTau typ) = do
+methClass (sym@SymV {nativ = Just item, pur=true, typ, throwing})
+     | Just (_, tau) <- U.isIO rtau = do
          g <- getST
          U.error sym.pos (msgdoc ("contradictory declaration, " ++ nice sym.name g
              ++ " cannot be pure and have a return type of " ++ nicer (returnTau typ) g))
          stio []
-     | Just _ <- U.isUnit (returnTau typ) = do
+     | Just _ <- U.isUnit rtau = do
          U.error sym.pos (msgdoc ("void " ++ item ++ "(...) cannot be a pure function"))
          stio []
      | (_, [sig]) <- U.returnType typ.rho,
        Just _ <- sigmaTau U.isUnit sig = do
          U.error sym.pos (msgdoc (item ++ "() cannot be a pure function"))
          stio []
+     | not (null throwing) = do
+        g <- getST
+        U.error sym.pos (msgdoc ("pure native functions may not throw exceptions"))
+        U.hint  sym.pos (msgdoc ("To catch exceptions in native functions use a return type like")
+            <+> text (nicer eapp g))
+        return []
+     where
+        rtau = returnTau typ
+        eith = TCon{pos=sym.pos, name=TName{pack=pPreludeBase, base="Either"}}
+        mkE a b = TApp (TApp eith a) b
+        eapp = mkE (foldl1 mkE throwing) rtau
 methClass (sym@SymV {nativ = Just item, pur=false, typ})
      | Nothing <- U.isIO (returnTau typ) = do
          g <- getST
@@ -1565,9 +1576,9 @@ methClass (sym@SymV {nativ = Just item, pur, typ}) = do
                      stio false
                  else if xio
                      then do
-                         U.warn sym.pos (msgdoc (nice sym g ++ "  has an argument of type  "
+                         U.symWarning U.warn sym (msgdoc (nice sym g ++ "  has an argument of type  "
                              ++ nice sigma g))
-                         U.hint sym.pos (msgdoc ("Exception, ST and IO types have a special meaning"
+                         U.symWarning U.hint sym (msgdoc ("Exception, ST and IO types have a special meaning"
                              ++ " in the native interface. "
                              ++ "Using them in argument position is most likely wrong."))
                          stio true
@@ -1728,17 +1739,23 @@ nativeCall g sym abinds = error ("nativeCall: no function "
     ++ show sym.pos.first.line
     ++ ", " ++ nicer sym g)
 -- 
-wrapCode g jreturn rtau (sym@SymV {nativ = Just item}) abinds
+wrapCode g jreturn rtau (sym@SymV {nativ = Just item, throwing}) abinds
     | Just (stau, atau) <- U.isIO rtau = let
             -- sjt = tauJT g stau           -- type #1 for parameterization of ST s a
             ajt     = tauJT g atau          -- return type of the ST action
             ssig    = ForAll [] (RhoTau [] stau)
-            mktup x = JReturn x -- (JInvoke (JStMem (JName "Prelude.tTuple2" "mk") [ajt, sjt])
-            rbody   = wrapCode g mktup atau sym abinds
-            -- tuple   = atau  -- TApp (TApp (TCon {pos=sym.pos, name = TName pPrelude "(,)"}) atau) stau
-            -- frho    = RhoFun [] ssig (RhoTau [] atau)   -- s -> a
-            -- tjt     = tauJT g tuple
-            -- fjt     = rhoJT g frho
+            mktup x = JReturn x
+            code    = wrapCode g mktup atau sym abinds 
+            try     = JBlockX "try" code
+            rbody
+                | null throwing   = code
+                | otherwise = try : catches
+                where
+                    catches = map mkCatch throwing
+                    mkCatch t = JBlockX (catch t) [JThrow wrap]
+                    wrap = (JX.invoke [JAtom "ex"] . JX.static . U.memberOf jnWrapped)
+                            "wrapIfNeeded" 
+                
             ret     = jreturn fun -- (JNew jtFun [mkST])
             fun     = JNewClass lambda [] [rMethod]
             lambda  = jtFunc 1
@@ -1759,9 +1776,7 @@ wrapCode g jreturn rtau (sym@SymV {nativ = Just item}) abinds
                     Nothing -> [JBlockX (catch exs) [(jreturn . go) (JAtom "ex")]]
                 where
                     r = [(jreturn . go . right) (JAtom "ex")]
-                    catch rty = case tauJT g rty of
-                        Nativ{typ, typeargs} -> "catch (" ++ typ ++ " ex)"
-                        other -> error ("bad exception type " ++ show other)
+                    
             -- catch   = JBlockX "catch (Exception ex)" [left]
         in try : reverse ( mkCatch exs left )
     | Just atau <- U.isMaybe rtau = let
@@ -1789,7 +1804,10 @@ wrapCode g jreturn rtau (sym@SymV {nativ = Just item}) abinds
         bind    = nativeCall g sym abinds
         base    = "PreludeBase"
         right x = (JInvoke (JStMem (JName (base ++ ".TEither.DRight") "mk") []) [x])
-        left  x = (JInvoke (JStMem (JName (base ++ ".TEither.DLeft")  "mk") []) [x])        
+        left  x = (JInvoke (JStMem (JName (base ++ ".TEither.DLeft")  "mk") []) [x])
+        catch rty = case tauJT g rty of
+                        Nativ{typ, typeargs} -> "catch (" ++ typ ++ " ex)"
+                        other -> error ("bad exception type " ++ show other)        
 wrapCode g jreturn rtau sym abinds = error "wrapCode: no SymV"
  
  
