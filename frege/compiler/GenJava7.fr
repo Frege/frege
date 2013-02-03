@@ -103,20 +103,21 @@ latinF    = "ƒ"
      create a lazy method for the given symbol
  -}
 lazyMethod :: Symbol -> StG JDecl
-lazyMethod sym | sym.{flds?} || sym.{rkind?} = do
+lazyMethod symv | symv.{flds?} || symv.{rkind?} = do
         g <- getST
-        let jname  = JX.static (workerMethod g sym)
-            arity = if sym.{depth?} then sym.depth else length sym.flds
-            isnative = sym.{nativ?} && isJust sym.nativ
+        let jname  = JX.static (workerMethod g symv)
+            arity = if symv.{depth?} then symv.depth else length symv.flds
+            isnative = symv.{nativ?} && isJust symv.nativ
          -- U.logmsg TRACEG sym.pos (text ("lazyMethod: " ++ nicer sym g ++ " :: " ++ nicer sym.typ g))
-        sym <- if isnative then objectifySigma sym.typ >>= return . sym.{typ=}
-                 else return sym
+            sym = if isnative 
+                 then symv.{typ <- objectifySigma}
+                 else symv
          -- U.logmsg TRACEG sym.pos (text ("lazyMethod: " ++ nicer sym g ++ " :: " ++ nicer sym.typ g))
         let (rty, sigmas) = U.returnTypeN arity sym.typ.rho
             (rtau, _)     = U.returnType sym.typ.rho
             jrty            = rhoJT g rty
         let argdefs = evalArgDef attrFinal sigmas (take arity argNames)
-            wcode   = if wrapped sym
+            wcode   = if wrapped g sym
                     then wrapCode g JReturn rtau sym (map (instArg g) argdefs)
                     else if isnative
                          then let bind = nativeCall g sym (map (instArg g) argdefs)
@@ -124,7 +125,7 @@ lazyMethod sym | sym.{flds?} || sym.{rkind?} = do
                          else []
  
          -- special support for native functions, call directly into native code
-        let haswrapper  = arity > 0 && wrapped sym || (not (null sym.typ.bound))
+        let haswrapper  = arity > 0 && wrapped g sym || (not (null sym.typ.bound))
          
          -- be sure to pass ctx1, ctx2, ....
         let ctxs = map JAtom (take (length sym.typ.rho.context) ctxNames)
@@ -160,18 +161,12 @@ lazyMethod sym = error "lazyMeth: no SymV"
      that are the type of some argument (and hence stand for unknown native values)
      with the type for @java.lang.Object@, see 'PreludeBase.AnonymousObject'
      -} 
-objectifySigma :: Sigma -> StG Sigma
-objectifySigma sig = do
-         -- g <- getST
-         -- U.logmsg TRACEG (getpos sig) (text ("objectifySigma: " ++ nicer sig g))
-         -- U.logmsg TRACEG (getpos sig) (text ("objectifySigma: vars = " ++ show (keys tree)))
-         nrho <- U.substRho tree sig.rho
-         let nsig = ForAll nbound nrho
-             nbound = filter (isNothing . lookup tree . fst) sig.bound
-         -- U.logmsg TRACEG (getpos sig) (text ("objectifySigma: " ++ nicer nsig g))
-         return nsig
-     where
-         tree = findAnonRho Nil [] sig.rho
+objectifySigma :: Sigma -> Sigma
+objectifySigma sig = ForAll nbound nrho
+    where
+        tree = findAnonRho Nil [] sig.rho
+        nbound = filter (isNothing . lookup tree . fst) sig.bound
+        nrho = U.substRho tree sig.rho
  
 --- Find arguments whose type is a simple type variable of type KGen
 findAnonSigma acc except (ForAll bound rho) = findAnonRho acc (except ++ map fst bound) rho
@@ -981,12 +976,13 @@ fakeInstSigma (symc@SymC{supers}) (symi@SymI{sid}) (sym@SymV{typ}) = do
      let symjsb      = sym.typ.vars
          instjsb     = symi.typ.vars
  
-     let newvars = [ TVar {pos=sym.pos, var, kind=KVar} |
+     let 
+        newvars = [ TVar {pos=sym.pos, var, kind=KVar} |
                          var <- U.allBinders,
                          var `notElem` instjsb,
                          var `notElem` symjsb ]
-         tree1 = Tree.fromList (zip symjsb newvars)
-     rho1 <- U.substRho tree1 sym.typ.rho
+        tree1 = Tree.fromList (zip symjsb newvars)
+        rho1  = U.substRho tree1 sym.typ.rho
      U.logmsg TRACEG sym.pos (text ("renamed  " ++ nicer sym.typ g ++ "  to  " ++ nicer rho1 g))
  
      let classes = symc.name:symc.supers
@@ -1006,7 +1002,7 @@ fakeInstSigma (symc@SymC{supers}) (symi@SymI{sid}) (sym@SymV{typ}) = do
              ++ " corresponds to  " ++ nicer sigma2 g))
  
      let tree3 = U.unifySigma g sigma2 symi.typ
-     rho4   <- U.substRho tree3 rho1
+         rho4  = U.substRho tree3 rho1
  
      let sigma4 = validSigma rho4      -- provide type variables
          bvars  = filter (`elem` sigma4.vars) instjsb ++ filter (`notElem` instjsb) sigma4.vars
@@ -1274,7 +1270,7 @@ cafCode (sym@SymV {depth = 0, expr = Just x}) binds = do
          -- it is the lazy variant 'cafU' but enclosed in an extra class
          -- to avoid closure about a non-initialized value
         cafC  = cafU.{init = Just theC}                           
-        cafF  = JMethod { attr = cafV.attr, jtype = boxed rtype,
+        cafF  = JMethod { attr = cafV.attr, jtype = rtype,
                            gargs = [], name = cafV.name,
                            args = cargs, body = JBlock scode }
  
@@ -1486,30 +1482,41 @@ niKind _          = NIStatic
  
 niArr s = strhead s (length s - 2)
  
-niSpecial ty
-     | Just _ <- U.isUnit ty      = true
-     | Just _ <- U.isMaybe ty     = true
-     | Just _ <- U.isException ty = true
-     | Just _ <- U.isIO ty        = true
-     | Just x <- U.isList ty      = true
+niSpecial g ty
+     | Just _ <- U.isUnit ty        = true
+     | Just _ <- U.isMaybe ty       = true
+     | Just _ <- U.isException g ty = true
+     | Just _ <- U.isIO ty          = true
+     | Just x <- U.isList ty        = true
      | otherwise = false
  
 {--
   * check native method
   -}
-methClass (sym@SymV {nativ = Just item, pur=true, typ})
-     | Just (_, tau) <- U.isIO (returnTau typ) = do
+methClass (sym@SymV {nativ = Just item, pur=true, typ, throwing})
+     | Just (_, tau) <- U.isIO rtau = do
          g <- getST
          U.error sym.pos (msgdoc ("contradictory declaration, " ++ nice sym.name g
              ++ " cannot be pure and have a return type of " ++ nicer (returnTau typ) g))
          stio []
-     | Just _ <- U.isUnit (returnTau typ) = do
+     | Just _ <- U.isUnit rtau = do
          U.error sym.pos (msgdoc ("void " ++ item ++ "(...) cannot be a pure function"))
          stio []
      | (_, [sig]) <- U.returnType typ.rho,
        Just _ <- sigmaTau U.isUnit sig = do
          U.error sym.pos (msgdoc (item ++ "() cannot be a pure function"))
          stio []
+     | not (null throwing) = do
+        g <- getST
+        U.error sym.pos (msgdoc ("pure native functions may not throw exceptions"))
+        U.hint  sym.pos (msgdoc ("To catch exceptions in native functions use a return type like")
+            <+> text (nicer eapp g))
+        return []
+     where
+        rtau = returnTau typ
+        eith = TCon{pos=sym.pos, name=TName{pack=pPreludeBase, base="Either"}}
+        mkE a b = TApp (TApp eith a) b
+        eapp = mkE (foldl1 mkE throwing) rtau
 methClass (sym@SymV {nativ = Just item, pur=false, typ})
      | Nothing <- U.isIO (returnTau typ) = do
          g <- getST
@@ -1536,60 +1543,61 @@ methClass (sym@SymV {nativ = Just item, pur, typ}) = do
          if ok1 && ok2 then return (methCode g sym si) else stio []
      where
          (rty, atys) = U.returnType typ.rho
-         isMBU tau | Just x <- U.isMaybe tau, Just _ <- U.isUnit x = true
-                   | Just x <- U.isException tau = isMBU x
-                   | Just (_, x) <- U.isIO tau = isMBU x
-                   -- Just _ <- U.isUnit tau = true
-                   | otherwise             = false
-         validIOtype tau | Just (_, x) <- U.isIO tau = case U.isUnit x of
+         isMBU g tau | Just x <- U.isMaybe tau, Just _ <- U.isUnit x = true
+                     | Just (_, x) <- U.isException g tau = isMBU g x
+                     | Just (_, x) <- U.isIO tau = isMBU g x
+                     | otherwise             = false
+         validIOtype g tau | Just (_, x) <- U.isIO tau = case U.isUnit x of
                                                          Just _ -> true
-                                                         _ -> validXtype x
-                         | otherwise = validXtype tau
-         validXtype tau  | Just x <- U.isException tau = case U.isUnit x of
+                                                         _ -> validXtype g x
+                           | otherwise = validXtype g tau
+         validXtype g tau  | Just (_, x) <- U.isException g tau = case U.isUnit x of
                                                          Just _ -> true
-                                                         _ -> validMBtype x
-                         | otherwise = validMBtype tau
-         validMBtype tau | Just x <- U.isMaybe tau = not (niSpecial x)
-                         | Just x <- U.isList  tau = not (niSpecial x)
-                         | otherwise = not (niSpecial tau)
-         validCaftype tau | Just (_, x) <- U.isIO tau = validMBtype x
-                          | otherwise = validMBtype tau
+                                                         _ -> validMBtype g x
+                           | otherwise = validMBtype g tau
+         validMBtype g tau | Just x <- U.isMaybe tau = not (niSpecial g x)
+                           | Just x <- U.isList  tau = not (niSpecial g x)
+                           | otherwise = not (niSpecial g tau)
+         validCaftype g tau | Just (_, x) <- U.isIO tau = validMBtype g x
+                            | otherwise = validMBtype g tau
          validNIArg sigma | maybe true (const false) (sigmaTau Just sigma) = do
              g <- getST
-             U.error sym.pos (msgdoc (nice sigma g ++ " is not valid for native method arguments"))
+             U.error sym.pos (msgdoc (nicer sigma g ++ " is not valid for native method arguments"))
              stio false
          validNIArg sigma = do
              g <- getST
              let tau = maybe undefined id (sigmaTau Just sigma)
-                 xio = isJust (U.isIO tau) || isJust (U.isException tau)
-             if isMBU tau || isJust (U.isUnit tau)
+                 xio = isJust (U.isIO tau) || isJust (U.isException g tau)
+             if isMBU g tau || isJust (U.isUnit tau)
                  then do
-                     U.error sym.pos (msgdoc ("type  " ++ nice tau g
+                     U.error sym.pos (msgdoc ("type  " ++ nicer tau g
                          ++ "  is illegal for a native function argument,"
                          ++ " () may only appear to indicate an empty argument list."))
                      stio false
                  else if xio
                      then do
-                         U.warn sym.pos (msgdoc (nice sym g ++ "  has an argument of type  "
+                         U.symWarning U.warn sym (msgdoc (nice sym g ++ "  has an argument of type  "
                              ++ nice sigma g))
-                         U.hint sym.pos (msgdoc ("Exception, ST and IO types have a special meaning"
+                         U.symWarning U.hint sym (msgdoc ("Exception, ST and IO types have a special meaning"
                              ++ " in the native interface. "
                              ++ "Using them in argument position is most likely wrong."))
                          stio true
                      else stio true
-         retOk _ tau | isMBU tau = do
-             U.error sym.pos (msgdoc "The construct  Maybe ()  makes no sense in a native return type.")
-             stio false
-         retOk _ tau | not (validIOtype tau) = do
-             U.error sym.pos (msgdoc "Illegal nesting of IO, ST, Exception, Maybe and () in the return type.")
-             stio false
-         retOk NIStatic tau | null atys, not (validCaftype tau) = do
-             U.error sym.pos (msgdoc "A static member may not be void and it certainly throws no exceptions.")
-             stio false
-         retOk NIMember tau | not (validCaftype tau) = do
-             U.error sym.pos (msgdoc "An instance member may not be void and it certainly throws no exceptions.")
-             stio false
-         retOk _ _ = stio true
+         retOk nik tau   = do
+            g <- getST
+            if (isMBU g tau) then do
+                U.error sym.pos (msgdoc "The construct  Maybe ()  makes no sense in a native return type.")
+                return false
+            else if not (validIOtype g tau) then do
+                U.error sym.pos (msgdoc "Illegal nesting of IO, ST, Exception, Maybe and () in the return type.")
+                return false
+            else if nik == NIStatic && null atys && not (validCaftype g tau) then do
+                U.error sym.pos (msgdoc "A static member may not be void and it certainly throws no exceptions.")
+                return false
+            else if nik == NIMember && not (validCaftype g tau) then do
+                U.error sym.pos (msgdoc "An instance member may not be void and it certainly throws no exceptions.")
+                return false
+            else return true
          argsOk NIOp [x]   = validNIArg x
          argsOk NIOp [x,y] = liftM2 (&&) (validNIArg x) (validNIArg y)
          argsOk NIOp _ = do
@@ -1656,22 +1664,23 @@ methClass _  = undefined
 
 
 --- Tells if a native symbol is wrapped 
-wrapped (sym@SymV {nativ = Just item}) = niSpecial rty
+wrapped g (sym@SymV {nativ = Just item, throwing}) = not (null throwing) || niSpecial g rty
      where
          (rty, _) = U.returnType sym.typ.rho
-wrapped SymV {} = false
-wrapped SymD {} = false
-wrapped _ = error "wrapped: no symv"
+wrapped g SymV {} = false
+wrapped g SymD {} = false
+wrapped g _ = error "wrapped: no symv"
 -- 
 -- {--
 --  * Tell if a native function must be called through it's wrapper.
 --  *
 --  * Plain types and Maybe types can be called directly
 --  -}
-wrappedOnly (sym@SymV {nativ = Just item}) = niSpecial rty && isNothing (U.isMaybe rty)
+wrappedOnly g (sym@SymV {nativ = Just _, throwing}) 
+        = not (null throwing) || niSpecial g rty && isNothing (U.isMaybe rty)
     where
         (rty, _) = U.returnType sym.typ.rho
-wrappedOnly sym = error "wrappedOnly - no native function"
+wrappedOnly g sym = error "wrappedOnly - no native function"
 -- 
 -- 
 --- returns a binding for a direct call of a native method
@@ -1700,11 +1709,11 @@ nativeCall g (sym@SymV {nativ = Just item}) abinds = newBind g bsig (call jrty a
                  m1ex = JExMem just "mem1" []
                  just = JInvoke (JExMem sbind.jex "_Just" []) []
         baserty r
-             | Just (_, x) <- U.isIO r   = baserty x
-             | Just x <- U.isException r = baserty x
-             | Just x <- U.isMaybe r     = baserty x
-             | Just _ <- U.isUnit r      = r
-             | otherwise                 = r
+             | Just (_, x) <- U.isIO r     = baserty x
+             | Just (_, x) <- U.isException g r = baserty x
+             | Just x <- U.isMaybe r       = baserty x
+             | Just _ <- U.isUnit r        = r
+             | otherwise                   = r
         call jrty args = case niKind item of
              NIOp -> case args of
                  [a,b] -> JBin a item b
@@ -1730,17 +1739,23 @@ nativeCall g sym abinds = error ("nativeCall: no function "
     ++ show sym.pos.first.line
     ++ ", " ++ nicer sym g)
 -- 
-wrapCode g jreturn rtau (sym@SymV {nativ = Just item}) abinds
+wrapCode g jreturn rtau (sym@SymV {nativ = Just item, throwing}) abinds
     | Just (stau, atau) <- U.isIO rtau = let
             -- sjt = tauJT g stau           -- type #1 for parameterization of ST s a
             ajt     = tauJT g atau          -- return type of the ST action
             ssig    = ForAll [] (RhoTau [] stau)
-            mktup x = JReturn x -- (JInvoke (JStMem (JName "Prelude.tTuple2" "mk") [ajt, sjt])
-            rbody   = wrapCode g mktup atau sym abinds
-            -- tuple   = atau  -- TApp (TApp (TCon {pos=sym.pos, name = TName pPrelude "(,)"}) atau) stau
-            -- frho    = RhoFun [] ssig (RhoTau [] atau)   -- s -> a
-            -- tjt     = tauJT g tuple
-            -- fjt     = rhoJT g frho
+            mktup x = JReturn x
+            code    = wrapCode g mktup atau sym abinds 
+            try     = JBlockX "try" code
+            rbody
+                | null throwing   = code
+                | otherwise = try : catches
+                where
+                    catches = map mkCatch throwing
+                    mkCatch t = JBlockX (catch t) [JThrow wrap]
+                    wrap = (JX.invoke [JAtom "ex"] . JX.static . U.memberOf jnWrapped)
+                            "wrapIfNeeded" 
+                
             ret     = jreturn fun -- (JNew jtFun [mkST])
             fun     = JNewClass lambda [] [rMethod]
             lambda  = jtFunc 1
@@ -1749,20 +1764,21 @@ wrapCode g jreturn rtau (sym@SymV {nativ = Just item}) abinds
                                 args = [(attrFinal, ssig, Something, "_state")],
                                 body = JBlock rbody}
         in [ret]
-    | Just mtau <- U.isException rtau = let
+    | Just (exs, mtau) <- U.isException g rtau = let
             -- mjt = tauJT g mtau
             -- xjt = tauJT g (TCon {pos = sym.pos, name = TName pPreludeBase "JException"})
-            right x = jreturn (JInvoke (JStMem (JName (base ++ ".TEither.DRight") "mk")
-                                                [])
-                                        [x])
-            left    = jreturn (JInvoke (JStMem (JName (base ++ ".TEither.DLeft")  "mk")
-                                                [])
-                                        [JAtom "ex"])
+            
  
-            code    = wrapCode g right mtau sym abinds
+            code    = wrapCode g (jreturn . right) mtau sym abinds
             try     = JBlockX "try" code
-            catch   = JBlockX "catch (Exception ex)" [left]
-        in [try, catch]
+            mkCatch exs go = case U.isException g exs of
+                    Just (lty, rty) -> JBlockX (catch rty) r : mkCatch lty (left . go)
+                    Nothing -> [JBlockX (catch exs) [(jreturn . go) (JAtom "ex")]]
+                where
+                    r = [(jreturn . go . right) (JAtom "ex")]
+                    
+            -- catch   = JBlockX "catch (Exception ex)" [left]
+        in try : reverse ( mkCatch exs left )
     | Just atau <- U.isMaybe rtau = let
             -- ajt    = tauJT g atau
             -- bind   = nativeCall g sym abinds
@@ -1785,8 +1801,13 @@ wrapCode g jreturn rtau (sym@SymV {nativ = Just item}) abinds
          in [JEx bind.jex, jreturn unit]
      | otherwise = [jreturn (strictBind bind).jex]
      where
-        bind   = nativeCall g sym abinds
-        base = "PreludeBase"        
+        bind    = nativeCall g sym abinds
+        base    = "PreludeBase"
+        right x = (JInvoke (JStMem (JName (base ++ ".TEither.DRight") "mk") []) [x])
+        left  x = (JInvoke (JStMem (JName (base ++ ".TEither.DLeft")  "mk") []) [x])
+        catch rty = case tauJT g rty of
+                        Nativ{typ, typeargs} -> "catch (" ++ typ ++ " ex)"
+                        other -> error ("bad exception type " ++ show other)        
 wrapCode g jreturn rtau sym abinds = error "wrapCode: no SymV"
  
  
@@ -1810,14 +1831,14 @@ methCode g (sym@SymV {nativ = Just item}) si = [
         -- ftype       = (Ref (fname) ftargs)                         -- Ffoo<a,b,c>
         -- dftype      = defining ftype
         args        = if haswrapper then wArgs else rArgs
-        haswrapper  = arity > 0 && wrapped sym || (not (null bnds))
+        haswrapper  = arity > 0 && wrapped g sym || (not (null bnds))
         -- callWrapper = (toBoxed bndWrapper).jex
         -- bndWrapper  = bndWcode invWrapper
         -- invWrapper  = JInvoke (JX.static name)
         jreturn     = if arity > 0 then JReturn else JEx
         bndWcode  x = newBind g (ForAll [] (RhoTau [] rty))  x
  
-        wcode       = if wrapped sym
+        wcode       = if wrapped g sym
                         then wrapCode g jreturn rty sym (map (instArg g) args)
                         else let
                                 bind = nativeCall g sym (map (instArg g) args)
@@ -2250,7 +2271,7 @@ resolveConstraint pos (ctx@Ctx {cname, tau}) = do
                                  ++ nice csig g))
  
                          let tree = U.unifySigma g inst.typ csig
-                         rho  <-  U.substRho tree inst.typ.rho
+                             rho  = U.substRho tree inst.typ.rho
                          -- rhojt <- rhoJT rho
                          U.logmsg TRACEG pos (text ("makeCtx substituted: " ++ nice rho g))
                          subctx <- mapSt TC.reducedCtx  rho.context
@@ -2289,7 +2310,7 @@ instSymDirect pos sym sigma = do
         str | Local {} <- sym.name, null sym.typ.bound = sym.typ.rho.{context = []}
             | otherwise = sym.typ.rho
         model = newBind g sigma (JAtom "instSymDirect")
-    strho    <- U.substRho (U.unifySigma g sym.typ sigma) str
+        strho = U.substRho (U.unifySigma g sym.typ sigma) str
     U.logmsg TRACEG pos (text ("instSym: strho = " ++ nice strho g))
     contexts <- mapSt  TC.reducedCtx  strho.context
     ctxs     <- mapSt (resolveConstraint pos) contexts
@@ -2336,7 +2357,7 @@ instSym pos sym sigma = do
  
     let str | Local {} <- sym.name, null sym.typ.bound = sym.typ.rho.{context = []}
             | otherwise = sym.typ.rho
-    strho    <- U.substRho (U.unifySigma g sym.typ sigma) str
+        strho = U.substRho (U.unifySigma g sym.typ sigma) str
     U.logmsg TRACEG pos (text ("instSym: strho = " ++ nice strho g))
     contexts <- mapSt  TC.reducedCtx  strho.context
     ctxs     <- mapSt (resolveConstraint pos) contexts
@@ -2549,8 +2570,9 @@ genExpr rflg rm (app@App a b (Just sigma)) binds = do
             !tailcall   = rflg && isLazy
             
             genNative sym = do
+                g <- getST
                 let !acall  = isLazy && not tailcall
-                    !wcall  = not acall && (wrappedOnly sym || not (null sym.typ.bound))
+                    !wcall  = not acall && (wrappedOnly g sym || not (null sym.typ.bound))
                     atau    = fst (U.returnType (Symbol.typ sym).rho)
                     !depth      = ari sym
                     !aargs      = take depth args
@@ -2561,7 +2583,7 @@ genExpr rflg rm (app@App a b (Just sigma)) binds = do
                     si <- symInfo sym
                     abinds <- sequence (zipWith genArgEx si.argJTs aargs)
                     let call 
-                            | wrapped sym = case wrapCode g JEx atau sym abinds of
+                            | wrapped g sym = case wrapCode g JEx atau sym abinds of
                                     (JEx ex:_) -> Bind (nicer sigma g) sigma si.returnJT ex
                                     _ -> error "unexpected wrapCode result"
                             | otherwise = nativeCall g sym abinds

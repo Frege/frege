@@ -150,6 +150,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type simpletype      TauS
 //%type simpletypes     [TauS]
 //%type tauSC           [TauS]
+//%type tauSB           [TauS]
 //%type dvars           [TauS]
 //%type sigma           SigmaS
 //%type forall          SigmaS
@@ -251,6 +252,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%explain tyname       a type constructor
 //%explain tau          a non function type
 //%explain tauSC        a list of types
+//%explain tauSB        a list of types separated by '|'
 //%explain simpletype   a non function type
 //%explain simpletypes  non function types
 //%explain rhofun       a type
@@ -326,7 +328,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 %token VARID CONID QVARID QCONID QUALIFIER DOCUMENTATION
 %token PACKAGE IMPORT INFIX INFIXR INFIXL NATIVE DATA WHERE CLASS
 %token INSTANCE ABSTRACT TYPE TRUE FALSE IF THEN ELSE CASE OF DERIVE
-%token LET IN WHILE DO FORALL PRIVATE PROTECTED PUBLIC PURE
+%token LET IN WHILE DO FORALL PRIVATE PROTECTED PUBLIC PURE THROWS
 %token INTCONST STRCONST LONGCONST FLTCONST DBLCONST CHRCONST REGEXP BIGCONST
 %token ARROW DCOLON GETS EARROW TARROW DOTDOT
 %token LOP1 LOP2 LOP3 LOP4 LOP5 LOP6 LOP7 LOP8 LOP9 LOP10 LOP11 LOP12 LOP13 LOP14 LOP15 LOP16
@@ -733,18 +735,24 @@ nativestart:
 impurenativedef:
     nativestart DCOLON sigma
                     { \item\col\t -> NatDcl {pos=posLine item, vis=Public, name=posItem item,
-                                                meth=posItem item, typ=t, isPure=false, doc=Nothing}}
+                                                meth=posItem item, typ=t, isPure=false, 
+                                                throwing=[], doc=Nothing}}
     | nativestart nativename DCOLON sigma
                     { \item\j\col\t -> NatDcl {pos=posLine item, vis=Public, name=posItem item,
-                                                meth=j, typ=t, isPure=false, doc=Nothing}}
+                                                meth=j, typ=t, isPure=false, 
+                                                throwing=[], doc=Nothing}}
     | nativestart operator   DCOLON sigma
                     { \item\o\col\t -> do {
                             o <- binop o;
                             YYM.return (NatDcl {pos=posLine item, vis=Public, name=posItem item,
-                                                meth=posItem o, typ=t, isPure=false, doc=Nothing})}}
+                                                meth=posItem o, typ=t, isPure=false, 
+                                                throwing=[], doc=Nothing})}}
     | nativestart unop      DCOLON sigma
                     { \item\o\col\t -> NatDcl {pos=posLine item, vis=Public, name=posItem item,
-                                                meth=Token.value o, typ=t, isPure=false, doc=Nothing}}
+                                                meth=Token.value o, typ=t, isPure=false, 
+                                                throwing=[], doc=Nothing}}
+    | impurenativedef THROWS tauSC
+                    { \def\_\taus -> Def.{throwing=taus} def } 
     ;
 
 
@@ -805,6 +813,11 @@ tauSC:
     | tau ',' tauSC     { liste  }
     ;
 
+tauSB:
+    tau                 { single }
+    | tau '|' tauSB     { liste  }
+    ;
+
 tapp:
     simpletypes         { \taus -> Tau.mkapp (head taus) (tail taus) }
     ;
@@ -812,7 +825,7 @@ tapp:
 simpletype:
     tyvar
     | tyname            { \(tn::SName) -> TCon (yyline tn.id) tn}
-    | '(' tau ')'      { \_\t\_ -> t }
+    | '(' tau ')'       { \_\t\_ -> t }
     | '(' tau ',' tauSC ')'
                         {\_\t\(c::Token)\ts\_ ->
                             let
@@ -821,6 +834,7 @@ simpletype:
                                 tname = With1 baseToken c.{tokid=CONID, value=tuple i}
                             in  (TCon (yyline c) tname).mkapp tus
                         }
+    | '(' tau '|' tauSB ')' { \_\t\e\ts\_ -> mkEither (yyline e) t ts }
     | '[' tau ']'      {\a\t\_ -> TApp (TCon (yyline a)
                                              (With1 baseToken a.{tokid=CONID, value="[]"}))
                                         t }
@@ -891,8 +905,7 @@ datadef:
     ;
 
 nativepur:
-    NATIVE PURE     { \_\_ -> true  }
-    | PURE NATIVE   { \_\_ -> true  }
+    PURE NATIVE     { \_\_ -> true  }
     | NATIVE        { \_   -> false }
     ;
 

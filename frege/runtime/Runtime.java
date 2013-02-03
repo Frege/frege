@@ -64,6 +64,13 @@ public class Runtime {
 		return 0;
 	}
 	
+	/**
+	 * Implementation for frege.prelude.PreludeBase.getClass
+	 */
+	final public static Class<?> getClass(Object o) {
+		return o.getClass();
+	}
+	
     /**
      * <p> Utility method used by <code>String.show</code> to quote a string. </p>
      */
