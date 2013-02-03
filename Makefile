@@ -13,6 +13,7 @@
 #
 # YACC should be a BSD compatible yacc. This can be obtained from the net at various places.
 # Windows users look for pbyacc.exe, Ubuntu users use
+#
 #	sudo apt-get install byaccj  # byacc and pbyacc should also work
 #
 
@@ -72,19 +73,23 @@ GENDOC   = $(FREGE) frege.tools.Doc -d doc
 
 #	shadow Prelude files in the order they must be compiled
 SPRELUDE  =  shadow/frege/prelude/PreludeBase.fr shadow/frege/prelude/PreludeNative.fr \
-            shadow/frege/prelude/PreludeList.fr shadow/frege/prelude/PreludeMonad.fr \
-            shadow/frege/prelude/PreludeText.fr shadow/frege/prelude/Arrays.fr \
-            shadow/frege/prelude/Math.fr shadow/frege/prelude/Floating.fr
+		shadow/frege/prelude/PreludeList.fr shadow/frege/prelude/PreludeMonad.fr \
+		shadow/frege/prelude/PreludeText.fr \
+		shadow/frege/prelude/PreludeIO.fr \
+		shadow/frege/prelude/Arrays.fr \
+		shadow/frege/prelude/Math.fr shadow/frege/prelude/Floating.fr
 #	Prelude files in the order they must be compiled
 PRELUDE  =  frege/prelude/PreludeBase.fr frege/prelude/PreludeNative.fr \
-            frege/prelude/PreludeList.fr frege/prelude/PreludeMonad.fr \
-            frege/prelude/PreludeText.fr frege/prelude/Arrays.fr \
-            frege/prelude/Math.fr frege/prelude/Floating.fr
+		frege/prelude/PreludeList.fr frege/prelude/PreludeMonad.fr \
+		frege/prelude/PreludeText.fr \
+		frege/prelude/PreludeIO.fr \
+		frege/prelude/Arrays.fr \
+		frege/prelude/Math.fr frege/prelude/Floating.fr
 
 all:  frege.mk runtime compiler fregec.jar
 
 shadow-prelude:
-	cp $(PRELUDE)       shadow/frege/prelude/
+	cp $(PRELUDE) shadow/frege/prelude/
 
 clean:
 	rm -rf build/afrege build/bfrege build/frege
@@ -310,7 +315,7 @@ compiler1: $(RUNTIME)  $(DIR1)/check1  $(LIBF1)/PP.class $(COMPF1)/Grammar.class
 
 $(COMPF1)/Grammar.class: frege/compiler/Grammar.fr
 	$(FREGEC0)  -make frege.compiler.Grammar
-$(COMPF1)/Scanner.class: $(PRE1) $(COMPF1)/Utilities.class frege/compiler/Scanner.fr
+$(COMPF1)/Scanner.class: frege/compiler/Scanner.fr
 	$(FREGEC0)  -make frege.compiler.Scanner
 $(COMPF1)/Main.class : $(PRE1) $(LIBF1)/PP.class $(CLASSES) frege/Version.fr
 	$(FREGEC0)  -make frege.compiler.Main

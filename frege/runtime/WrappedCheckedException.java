@@ -93,4 +93,11 @@ public class WrappedCheckedException extends Undefined {
 		}
 		return r;
 	}
+	
+	/**
+	 * <p> Throw exception from monadic code.</p>
+	 */
+	public static void throwST(Throwable t) {
+		throw wrapIfNeeded(t);
+	}
 }
