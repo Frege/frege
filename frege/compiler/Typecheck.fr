@@ -225,7 +225,7 @@ checkgroup nms = do
         sym <- checkKind sym
         checkAmbiguous sym sym.typ
         checkReturn    sym sym.typ
-        sym <- removeCheckedCtx sym sym.typ
+        -- sym <- removeCheckedCtx sym sym.typ
         case sym.name of
             Local{} -> return ()
             aGlobalName -> do       -- issue #23
@@ -294,7 +294,8 @@ checkReturn sym sigma =
             if all (`elem` svars) tvars then stio ()
               else do
                 g <- getST
-                U.warn (sym.pos) (msgdoc ("application of " ++ sym.name.nice g ++ " will diverge."))
+                U.symWarning U.warn sym (msgdoc ("application of " ++ sym.name.nice g ++ " will diverge."))
+{-
 removeCheckedCtx :: Symbol -> Sigma -> StG Symbol
 removeCheckedCtx sym sigma
     | any Context.checked sigma.rho.context = do
@@ -302,7 +303,17 @@ removeCheckedCtx sym sigma
         U.changeSym new
         stio new 
     | otherwise = stio sym
+-}
 
+resolveConstraints :: Symbol -> StG ()
+resolveConstraints sym
+    | SymV{typ, expr=Just x, anno=false} <- sym = do
+        x   <- resolveHas x
+        cxs <- collectConstrs x
+        rho <- simplify sym.pos typ.rho.{context=cxs}
+        U.changeSym sym.{typ <- Sigma.{rho}, expr = Just x}
+    | otherwise = return () 
+     
 {--
  * look for applications of class member functions in the code of the named item
  * and replace them with instance member functions, if possible.
@@ -360,10 +371,15 @@ substInst x = stio (Left x)
 
 
 checkName nm = do
-    g <- getST
-    sym <- findV nm
-    sigma <- checkSym sym
-    U.logmsg TRACET sym.pos (text ("checkName:  " ++ sym.name.nice g ++ " :: " ++ sigma.nice g))
+    g       <- getST
+    sym     <- findV nm
+    sigma   <- checkSym sym
+    unless (nm.isLocal) do
+        sym     <- findV nm
+        resolveConstraints sym
+    when (U.isOn g.options.flags TRACET) do
+        sym     <- findV nm
+        U.logmsg TRACET sym.pos (text ("checkName:  " ++ sym.name.nice g ++ " :: " ++ sigma.nice g))
   where
     checkSym sym = do
         g <- getST
@@ -580,12 +596,19 @@ checkSigma1 annotated x s = do
     U.logmsg TRACET pos (text ("sigmaTvs: " ++ joined ", " (map (flip nice g) tvs)))
     U.logmsg TRACET pos (text ("envTvs:   " ++ joined ", " (map (flip nice g) eTvs)))
     U.logmsg TRACET pos (text ("badTvs: "   ++ joined ", " (map (flip nice g) badTvs)))
-    if null badTvs then checkConstraints skolTvs x rho
-        else do
+    if null badTvs 
+    then if annotated 
+        then checkConstraints skolTvs x rho
+        else -- this is justified by the fact that
+             -- constraints could not introduce type variables
+             -- that are not present in the type itself 
+            return x
+    else do
             let part1 = text "Type " <+> text (rho.nicer g)
-                part2 = text "inferred from  " <+> text (x.nice g) <+/> text " is not as polymorphic as"
+                part2 = text "inferred from  " <+> text (x.nice g) 
+                part3 = text "is not as polymorphic as"
                         <+/> text "expected type " <+/> text (s.nicer g)
-            U.error pos (part1 </> part2)
+            U.error pos (part1 </> part2 </> part3)
             stio x
   where
 
@@ -593,18 +616,24 @@ checkSigma1 annotated x s = do
         -- offered type must not be more constrained than expected
         checkConstraints tvs x ety = do
                 g <- getST
-                ectx <- exContext x
-                -- etvs <- mapSt (getTauTvs • Context.tau) ectx
+                x <-    resolveHas x
+                ectx <- collectConstrs x
+                let pos = getpos x
+                let sigma = unJust (Expr.typ x)
+                rho  <- simplify pos sigma.rho.{context=ectx}
+                let ectx = rho.context
+                x    <- return (x.{typ = Just sigma.{rho}}) 
+                 
                 ety <- canonicContext ety
                 etvss <- mapSt ctxTvs ectx
 
-                let pos = getpos x
+                
                 U.logmsg TRACET pos (text ("expr context:     "   ++ U.nicectx ectx g))
                 U.logmsg TRACET pos (text ("expected context: "   ++ U.nicectx ety.context g))
                 -- find constraints that mention skolemised vars that are not in the expected type
                 let implies = impliesG g
                     bad = [ ctx |   (ctx,ctvs) <- zip ectx etvss,
-                                    annotated || any (`elem` tvs) ctvs,
+                                    -- annotated || any (`elem` tvs) ctvs,
                                     not (any (`implies` ctx) ety.context) ]
 
                 unless (null bad) do
@@ -782,12 +811,18 @@ tcRho' (x@Mem {ex,member}) ety = do
                                 idKind <- insertkv (KeyTk member) (Right m.name)}}
                             tcRho (nApp (Vbl mpos m.name Nothing) ex) ety
                 sonst -> do
-                    U.error (getpos x) (text "can't find a type for " <+/> text (x.nicer g)
-                        <+/> text "`" <> text member.value <> text "`"
-                        <+/> text "is neither an overloaded function nor a member of "
-                        <+/> text (rho.nicer g))
-                    wrong <- newRhoTyVar ("wrong", KType)
-                    instRho x.{ex} wrong ety
+                    -- U.explain (getpos x) (msgdoc ("method " ++ member.value 
+                    --     ++ " in yet unknown type " ++ rho.nicer g))
+                    -- xrho <- newRhoTyVar ("revapp", KType)
+                    -- let yrho = xrho.{context=[Has{pos=Pos member member,
+                    --                             method = member.value,
+                    --                             tau, checked = false}]}
+                    -- U.error (getpos x) (text "can't find a type for " <+/> text (x.nicer g)
+                    --     <+/> text "`" <> text member.value <> text "`"
+                    --     <+/> text "is neither an overloaded function nor a member of "
+                    --     <+/> text (rho.nicer g))
+                    resolveme <- newRhoTyVar ("unresolved", KType)
+                    instRho x.{ex} resolveme ety
 
 tcRho' (x@Ifte a b c _) (ety@Infer _) = do
     a <- checkRho a (rhoBool)
@@ -909,3 +944,40 @@ tcPat' p _ = do
     g <- getST
     U.fatal (getpos p) (text ("can't tcPat:  " ++ p.nice g))
 
+--- resolve the x.m finally
+resolveHas = mapEx true rHas
+    where
+        rHas (x@Mem{ex, member, typ = Just sigma}) = do
+            app <- checkRho x.{typ = Nothing} sigma.rho -- now type of ex should be known
+            case app of
+                Mem{}
+                    | Just sigma <- ex.typ,
+                      RhoTau{tau} <- sigma.rho,
+                      TCon{}:_  <- tau.flat = do
+                        g <- getST 
+                        U.error (getpos x) (text "can't find a type for " <+/> text (x.nicer g)
+                            <+/> text "`" <> text member.value <> text "`"
+                            <+/> text "is neither an overloaded function nor a member of "
+                            <+/> text (sigma.rho.nicer g))
+                        return (Left x)
+                    | otherwise = do    
+                        g <- getST 
+                        U.error (getpos x) (text "can't find a type for " <+/> text (x.nicer g)
+                            <+/> text " because " <+/> text (ex.nicer g)
+                            <+/> text " does not have a known type.")
+                        return (Left x)
+                other -> return (Left app)
+        rHas (x@Mem{ex, member, typ = Nothing}) = do
+            g <- getST
+            error ("expression  " ++ x.nicer g ++ "  is untyped")
+        rHas x = return (Left x)
+
+--- collect all class constraints
+collectConstrs = U.foldEx true collC []
+    where
+        collC cxs x = case Expr.typ x of
+            Just sigma -> reducedCtxs sigma.rho.context >>= return . Left . flip mergeCtx cxs 
+            Nothing    -> return (Left cxs)  
+            
+             
+               
