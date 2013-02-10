@@ -61,12 +61,13 @@ pass7 = do
     g <- getST
 
     -- unroll let expressions
-    collectedvars <- allourvars
+    let collectedvars = allourvars g
     foreach collectedvars unrollSym
 
     -- simplify let expressions by lifting local function bindings to the top
     -- or inlining variables
-    collectedvars <- allourvars
+    g <- getST
+    let collectedvars = allourvars g
     foreach collectedvars unLetSym
 
     stio ("expressions", 2 * length collectedvars)
@@ -76,7 +77,7 @@ pass8 = do
     g <- getST
 
     -- find closed lambdas and make them private global functions
-    collectedvars <- allourvars 
+    let collectedvars = allourvars g 
     foreach collectedvars closedLambdaSym
     stio ("expressions", length collectedvars)
 
@@ -90,8 +91,8 @@ pass8 = do
  * - every symbol will get a strictness signature and status StrictChecked
  -}
 pass10 = do
-
-        ourvars <- allourvars
+        g <- getST
+        let ourvars = allourvars g
         names <- mapSt U.fundep ourvars
 
         let groups = U.tsort names
@@ -153,10 +154,11 @@ pass10 = do
 pass9 = do
     g <- getST
     -- set lambdadepth for each symbol
-    collectedvars <- allourvars
+    let collectedvars = allourvars g
     foreach collectedvars depthSym
     -- make all expressions easy
-    collectedvars <- allourvars
+    g <- getST
+    let collectedvars = allourvars g
     foreach collectedvars easySym
     
     stio ("expressions", length collectedvars)
@@ -192,19 +194,19 @@ easySym sym = do
 easyClassMethodSym :: Symbol -> StG ()
 easyClassMethodSym (sym@SymV{expr = Just x, typ}) = do
         easy <- goodClassMethod x
-        unless ( easy && sym.rkind `band` rkSafeTC != 0 && sym.rkind `band` rkTail == 0 ) do
+        unless ( easy && RSafeTC `member` sym.rkind && not (RTailRec `member` sym.rkind)) do
             g <- getST
             U.warn sym.pos (text (nice sym g
                 ++ (if easy then "" else " is not easy enough ") 
-                ++ (if sym.rkind `band` rkSafeTC != 0 then "" else " recurses deeply ")
-                ++ (if sym.rkind `band` rkTail == 0   then "" else " is tail recursive ")))
+                ++ (if RSafeTC  `member` sym.rkind  then "" else " recurses deeply ")
+                ++ (if RTailRec `member` sym.rkind  then " is tail recursive " else "")))
             let name = U.unusedName (VName (Global.thisPack g) (sym.name.base)) g
             
             nx <- replName sym.sid name x
             
             let anon = sym.{sid=0, name, vis = Protected, expr = Just nx}
                 vbl = Vbl{name, pos=anon.pos.change VARID name.base, typ=Just (ForAll [] sym.typ.rho)}
-                rk = (sym.rkind `bor` rkSafeTC)  `band` bcmpl rkTail
+                rk = (sym.rkind.unionE RSafeTC).differenceE RTailRec
             U.enter anon  
             x <- etaExpand vbl
             U.changeSym sym.{expr = Just x, rkind = rk}
@@ -362,18 +364,6 @@ etaExpand x = case x.typ of                 -- all other expressions
         stio x
 
 
-
-
-
--- constants for the rkind value
---- simple expression withoud self-/forward references.
-rkSimple = 16
---- can be called in tailcall
-rkSafeTC = 32
-noSafeTC = rkSafeTC `bxor` -1
---- tail calls itself
-rkTail   = 8
-
 {--
  * [usage] @returnKind group symbol@
  * [computes] the return type (lazy=0, boxed=1) of the r-Method, and, if a w-Method is needed,
@@ -395,40 +385,55 @@ rkTail   = 8
  -}
 returnKind syms (sym@SymV {nativ = Just _}) = do
         g <- getST
-        jt <- U.isJavaType ((fst • U.returnType) sym.typ.rho)
-        U.changeSym sym.{rkind = rkSafeTC + (if jt then 7 else 5)}
+        -- jt <- U.isJavaType ((fst • U.returnType) sym.typ.rho)
+        U.changeSym sym.{rkind = RState.fromList [RSafeTC, RValue]}
 
 returnKind syms (sym@SymV {expr = Just x, depth = 0}) = do
-        (w, x) <- returnExprKind syms sym x
+        w      <- returnExprKind syms sym x
         self   <- references [sym.sid] x        -- is it self-referential?
         rec    <- references syms x             -- is it recursive
         (_, deps) <- U.fundep sym
-        sx     <- isSimple x
-        let fwrefs
-                | Local{} <- sym.name = rec > 0
-                | otherwise = not (null deps)        -- possible forward references?
-            b32 = if rec > 0 then 0 else 32
-            b16 = if sx && not fwrefs && self == 0 then 16 else 0
-            rkind = if fwrefs then 0 + b16 + b32
-                else if self > 0 then 0 + b16 + b32
-                    else b32 + b16 + ord sym.strsig.isStrict
-        U.changeSym sym.{rkind, expr = Just x}
+        -- depsyms   <- mapSt U.findV deps
+        sx        <- isSimple x
+        let local = sym.name.isLocal                            -- is this a local item?
+            fwrefs
+                | local                = self > 0
+                | MName{}  <- sym.name = not (null deps)        -- possible forward references?
+                | null syms            = self > 0
+                | [mutual] <- syms     = mutual != sym.sid || self > 0
+                | otherwise            = true
+            safe   = if rec > 0 then RState.empty else RState.singleton RSafeTC
+            simple = if sx && not fwrefs && self == 0 
+                    then RState.singleton RSimple 
+                    else RState.empty
+            stricter = null sym.typ.bound           -- don't make 'undefined' strict!
+                        && not local
+                        && RSafeTC `member` safe
+                        && RSimple `member` simple 
+                    || Strictness.isStrict sym.strsig   -- if it is strict anyway        
+            value  = RState.singleton (if except then  RValue else RAlways)   
+            rkind = (safe.union simple).union value
+            stri  = if except && not (Strictness.isStrict sym.strsig)
+                    then S[] else sym.strsig
+            except 
+                | stricter,
+                  not (RSimple `member` simple),
+                  RValue `member` w,
+                  not (RSafeTC `member` w)  = false -- don't return a lazy result
+                                                    -- and force it right away in the eval() fun
+                | stricter, local, self > 0 = false -- local self refs must be lazy 
+                | otherwise                 = stricter
+        U.changeSym sym.{rkind, strsig = stri}
 
 returnKind syms (sym@SymV {expr = Just x}) = do
-        (w, x) <- returnExprKind syms sym x
+        w      <- returnExprKind syms sym x
         sx     <- isSimple x
-        let r = if w `band` 6 <= 2 then 0 else 1
-            b16 = if sx then 16 else 0
-            rkind = case sym.strsig of
-                    S ss | any Strictness.isStrict ss = b16+r+w
-                    otherwise = r+b16+(w `band` (rkTail + rkSafeTC))
-        -- when (rkind `band` rkSafeTC == 0) do
-        --    g <- getST
-        --    U.hint sym.pos (nice sym g ++ " is no safe tail call.")
-        U.changeSym sym.{rkind, expr = Just x}
+        let rkind = if sx then w.unionE RSimple else w
+        U.changeSym sym.{rkind}
 
 --- assume abstract class functions are tail call safe
-returnKind syms (sym@SymV {expr = Nothing, name = MName _ _}) = U.changeSym sym.{rkind=2+rkSafeTC}
+returnKind syms (sym@SymV {expr = Nothing, name = MName _ _}) 
+    = U.changeSym sym.{rkind=RState.singleton RSafeTC}
 returnKind _ _ = stio ()     -- abstract methods
 
 {--
@@ -484,11 +489,9 @@ references sids x = U.foldEx true refs 0 x
  *   it's lazy.
  * - Unsaturated applications are boxed (function types)
  -}
-returnExprKind syms sym (x@Lit {pos}) = stio (rkSafeTC + 6,x)
-returnExprKind syms sym (x@Con {pos}) = stio (rkSafeTC + 4,x)
-returnExprKind syms sym (x@Ann {ex})  = do
-        (n,ex) <- returnExprKind syms sym ex
-        stio (n, x.{ex})
+returnExprKind syms sym (x@Lit {pos}) = stio (RState.fromList [RSafeTC, RValue])
+returnExprKind syms sym (x@Con {pos}) = stio (RState.fromList [RSafeTC, RValue])
+returnExprKind syms sym (x@Ann {ex})  = returnExprKind syms sym ex
 
 returnExprKind syms sym (x@Vbl {name}) = do
     symv <- U.findV name
@@ -496,97 +499,95 @@ returnExprKind syms sym (x@Vbl {name}) = do
     case symv.expr of
         Nothing -> case symv.name of
             Local{} -> if symv.strsig.isStrict
-                        then case U.returnType symv.typ.rho of
-                            (tau, _) = do
-                                jt <- U.isJavaType tau
-                                stio (if jt then rkSafeTC + 6 else rkSafeTC + 4, x)
-                        else stio (rkSafeTC + 2, x)               -- lambda/case bound
+                        then stio (RState.fromList [RSafeTC, RValue])
+                        else stio (RState.fromList [RSafeTC, RAlways])             -- lambda/case bound
             _ -> case U.returnType symv.typ.rho of
-                (_,[]) -> stio (rkSafeTC + (symv.rkind `band` 1)*2 + 2, x)
-                _      -> stio (rkSafeTC + 4, x)        -- global function
-        Just (Lam {}) -> stio (rkSafeTC + 4, x)      -- return a local function
-        Just vx -> let !r = symv.rkind `band` rkSafeTC in if symv.strsig.isStrict then do
-                        jt <- U.isJavaType (fst (U.returnType symv.typ.rho))
-                        if jt then stio (r+6,x) else stio (r+4,x)
-                    else stio (r+2,x)
+                (_,[]) -> stio (BitSet.union (RState.singleton RSafeTC) symv.rkind)
+                _      -> stio (RState.fromList [RSafeTC, RValue])      -- global function
+        Just (Lam {})  -> stio (RState.fromList [RSafeTC, RValue])      -- return a local function
+        Just vx -> let !r = symv.rkind `intersection` RState.singleton RSafeTC in 
+                    if symv.strsig.isStrict 
+                        then stio (r.unionE RValue)
+                        else stio (r.unionE RAlways)
+
 returnExprKind syms sym (ex@App a b typ) = do
-    (_, a) <- returnExprKind syms sym a
-    (_, b) <- returnExprKind syms sym b
+    returnExprKind syms sym a
+    returnExprKind syms sym b
     let (f,_) = head flatx
         args  = tail flatx
         flatx = U.flatx ex
-        app = App a b typ
+        -- app = App a b typ
     case f of
         Vbl {name} -> do
             symf <- U.findV name
-            let r = symf.rkind `band` rkSafeTC
-                rw0 = symf.rkind `band` (rkSafeTC + 6)
-                rw = if rw0 `band` 6 == 0 then rw0 `bor` ((symf.rkind `band` 1)*2 + 2) else rw0
-            if isJust symf.nativ then stio (rkSafeTC + (symf.rkind `band` 6), app)
-              else if (length args < symf.depth) then stio (rkSafeTC + 4, app) -- unsaturated
-              -- else if (length args > symf.depth) then stio (r+2, app) // over saturated
+            let r  = symf.rkind `intersection` RState.singleton RSafeTC
+                rw = symf.rkind `intersection` (RState.fromList [RSafeTC, RAlways, RValue])
+            if isJust symf.nativ then stio (rw)
+              else if (length args < symf.depth) 
+                    then stio ((rw.differenceE RAlways).unionE RValue)     -- unsaturated function is a value
               else case symf.expr of
                     Nothing -> case name of
-                        Local{} -> stio (rkSafeTC + 2, app)  -- application of lambda/case bound
-                        _       -> stio (rw,app)             -- global fun
+                        Local{} -> stio (RState.singleton RSafeTC)  -- application of lambda/case bound
+                        _       -> stio (rw)                        -- global fun
                     Just _ -> do
                         g <- getST
                         if symf.sid == Symbol.sid sym
-                            then do
-                                jt <- U.isJavaType (fst (U.returnType symf.typ.rho))
-                                if jt then stio (rkSafeTC+8+6, app) else stio (rkSafeTC+8+4, app)
-                            else if r == 0 || (symf.sid `elem` syms)
-                                then stio (2, app)      -- lazy recursive application
-                                else stio (rw, app)     -- same as called
-        Con {name} -> stio (rkSafeTC+4, app)
+                            then stio (RState.fromList [RSafeTC, RTailRec, RValue])
+                            else if null r || (symf.sid `elem` syms)
+                                then stio (RState.singleton RAlways)    -- lazy recursive application
+                                else stio (rw)                          -- same as called
+        Con {name} -> stio (RState.fromList [RSafeTC, RValue])
         _ -> do
                 n <- references syms f
                 if n > 0
-                    then stio (2, app)                   -- better safe than sorry
-                    else stio (rkSafeTC + 2, app)
-            {-
-              do
-                g <- getST
-                U.fatal (getpos ex) ("returnExprKind: funny application " ++ nice ex g)
-                -}
+                    then stio (RState.singleton RAlways)       -- better safe than sorry
+                    else stio (RState.singleton RSafeTC)
+
 
 returnExprKind syms sym (Ifte c t e typ) = do
     rec <- references syms c    --
-    (_,  c) <- returnExprKind syms sym c
-    (w1, t) <- returnExprKind syms sym t
-    (w2, e) <- returnExprKind syms sym e
-    let res = if rec > 0 then minRkind w1 w2 `band` noSafeTC else minRkind w1 w2
-    stio (res, Ifte c t e typ)
+    returnExprKind syms sym c
+    w1 <- returnExprKind syms sym t
+    w2 <- returnExprKind syms sym e
+    let -- always = not (RValue `member` w1) && not (RValue `member` w2)
+        -- value  = (RValue `member` w1) && (RValue `member` w2)
+        res = if rec > 0 
+            then minRkind w1 w2 `difference` RState.fromList [RSafeTC, RValue] 
+            else minRkind w1 w2
+    stio (res)
 
-returnExprKind syms sym (x@Lam {ex}) = do
-        (n, ex) <- returnExprKind syms sym ex
-        stio (n, x.{ex})
+returnExprKind syms sym (x@Lam {ex}) = returnExprKind syms sym ex
+        
 returnExprKind syms sym (x@Let {env,ex}) = do
-        -- let nms = map U.pVarLocal (U.patVars pat)
         returnNames syms env
-        (n, ex) <- returnExprKind syms sym ex
-        stio (n, x.{ex})
+        returnExprKind syms sym ex
+        
 returnExprKind syms sym (x@Case {ex, alts}) = do
-    (_, ex) <- returnExprKind syms sym ex
+    returnExprKind syms sym ex
     rec     <- references syms ex
     wsalts <- mapSt (altExprKind syms sym) alts
-    let m = foldl1 minRkind (map fst wsalts)
-        res = if rec > 0 then m `band` noSafeTC else m
-    stio (res, x.{ex, alts = map snd wsalts})
+    let m = foldl1 minRkind wsalts
+        res = if rec > 0 then m `difference` RState.fromList [RSafeTC, RValue] else m
+    stio (res)
 returnExprKind syms sym _ = error "returnExprKindbad epr."
 
-altExprKind syms sym (alt@CAlt {ex}) = do
-     (n, ex) <- returnExprKind syms sym ex
-     stio (n, alt.{ex})
+altExprKind syms sym (alt@CAlt {ex}) = returnExprKind syms sym ex
 
 {--
- * combine two rkinds by taking the minimum of the lower 3 bits and the maximum of
- * the 2³ bit, which signifies tail recursion.
+    combine two rkinds by taking the minimum of the lower 3 bits and the maximum of
+    the 2³ bit, which signifies tail recursion.
  -}
-minRkind a b = safetc `bor` tailbit `bor` wrbits where
-    safetc  = (a `band` b) `band` rkSafeTC
-    tailbit = (a `bor` b) `band` 8
-    wrbits  = min (a `band` 7) (b `band` 7)
+minRkind a b = (safetc.union tailbit).union wrbits where
+    safetc  = if (RSafeTC `member` a) && (RSafeTC `member` b) 
+                then RState.singleton RSafeTC else RState.empty
+    tailbit = if (RTailRec `member` a) || (RTailRec `member` b)
+                then RState.singleton RTailRec else RState.empty
+    wrbits  = if (RValue `member` a) && (RValue  `member` b) 
+                                     && (RSafeTC `member` safetc)
+                then RState.singleton RValue
+                else if (RAlways `member` a) && (RAlways `member` b)
+                then RState.singleton RAlways
+                else RState.empty
 
 {--
  * [usage] returnNames names name
@@ -598,7 +599,8 @@ minRkind a b = safetc `bor` tailbit `bor` wrbits where
  -}
 returnNames sids nms = do
     syms  <- mapSt U.findV nms
-    foreach syms (returnKind (sids ++ map Symbol.sid syms))
+    let !deps = sids ++ map Symbol.sid syms
+    foreach syms (returnKind deps)
     -- returnKind nms sym
     -- U.changeSym sym.{rkind}
 
@@ -794,8 +796,8 @@ recycle expr rho = do
         g <- getST
         expr <- U.copyExpr Nil expr
         expr <- U.untypeExpr expr
-        let freevars = U.freeTVars [] rho
-        (metas, rho) <- TCU.instantiateTvs (ForAll freevars rho)
+        let freevars =  U.freeTVars [] rho
+        (metas, rho) <- TCU.instantiateTvs (ForAll (map Tau.varkind freevars) rho)
         x <- checkRho expr rho
         foreach (zip metas freevars) (uncurry unInst)
         x <- zonkExpr x
@@ -807,13 +809,12 @@ recycle expr rho = do
         -- our instantiated type variable could have been unified
         -- with something else, so follow the unification path
         -- until we find an unbound type variable
-        unInst (Meta Flexi{ref}) var = do
+        unInst (Meta Flexi{ref}) tvar = do
                 bound <- doio (ref.get)
                 case bound of
-                    Just tau -> unInst tau var
-                    Nothing  -> doio (ref.put (Just tv))
-            where tv = TVar{pos=Position.null, var}
-        unInst other var = return ()  
+                    Just tau -> unInst tau tvar
+                    Nothing  -> doio (ref.put (Just tvar))
+        unInst _ _ = return ()  
 
 recyclex :: Expr -> StG Expr
 recyclex expr = U.copyExpr Nil expr {- case expr.typ of
@@ -1080,7 +1081,8 @@ mkEasy !d (outer@Case{}) = do
         -- case a of {b -> case c of {f -> g; h -> i}; d -> case e of {f' -> g; h' -> i}}
         Case{} -> do
                 alts <- mapSt adapt ea.alts
-                mkEasy 0 ea.{alts, typ=outer.typ}
+                mkEasy 0 ea.{alts, typ=outer.typ, 
+                    ckind = if outer.ckind == CWhen then CWhen else ea.ckind}
             where
                 adapt :: CAlt -> StG CAlt
                 adapt calt = do
@@ -1208,6 +1210,30 @@ replPat pat = case pat of
             stio pat.{pat=p}
       | otherwise = stio pat
 
+{--
+    Rename unused patterns to "_"
+    
+    Later, in code generation, those patterns will be ignored
+    -}
+rmUnusedPat :: [Int] -> Pattern -> Pattern
+rmUnusedPat unused p = case p of
+        PVar{pos, uid, var}
+            | var == "_"        = p
+            | uid `elem` unused = p.{var = "_"}
+            | otherwise         = p
+        PCon{pos, qname, pats}  = p.{pats <- map (rmUnusedPat unused)}
+        PConFS{pos, qname, fields} -> undefined    -- TODO: complete code
+        PAt{pos, uid, var, pat}
+            | uid `elem` unused = rmUnusedPat unused pat
+            | otherwise         = p
+        PUser{pat, lazy}        = p.{pat <- rmUnusedPat unused}
+        PLit{pos, kind, value}  = p
+        PAnn{pat, typ}          = p.{pat <- rmUnusedPat unused}
+        PMat{pos, uid, var, value}
+            | uid `elem` unused = PLit{pos, kind=LRegex, value}
+            | otherwise         = p
+    
+
 --- find and remove unused local definitions
 unusedLet (x@Let {env,ex}) = do
         down <- references (map QName.uid env) ex
@@ -1292,7 +1318,8 @@ unLet (x@Let {env,ex}) | length env > 1 = do
             -- sym <- globalize sym
             g <- getST
             U.logmsg TRACE7 pos (text ("global: " ++ gsym.name.nice g ++ " = " ++ nice ex g))
-            let typ = ForAll (U.freeTVars [] sym.typ.rho) sym.typ.rho
+            let vks  = map Tau.varkind (U.freeTVars [] sym.typ.rho)
+            let typ = ForAll vks sym.typ.rho
             changeST Global.{sub <- SubSt.{
                                 idKind <- insertkv (KeyTk gsym.pos.first) (Right gsym.name)}}
             stio gsym.{expr = Just ex, typ}
@@ -1318,7 +1345,8 @@ unLet (xlet@Let {env=letenv,ex=letex,typ=lettyp})
                 ex <- replName sym.sid name ex  -- no reference to x anymore
                 letex2 <- replName sym.sid name letex  -- in the inner of the lambda or the let ex
                 let lamx = Lam {pat,ex,typ}
-                let typ  = ForAll (U.freeTVars [] sym.typ.rho) sym.typ.rho
+                let vks  = map Tau.varkind (U.freeTVars [] sym.typ.rho)
+                let typ  = ForAll vks sym.typ.rho
                 U.enter sym.{sid = 0, name, expr = Just lamx, vis = Private, typ}
                 changeST Global.{sub <- SubSt.{
                                 idKind <- insertkv (KeyTk sym.pos.first) (Right name)}}
@@ -1413,7 +1441,7 @@ closedLambda (app@App a b ty) = do
                 stio (Right (App a b ty))
                 -}
 
-closedLambda (Lam {pat,ex,typ = Just sigma}) = do
+closedLambda (lam@Lam {pat,ex,typ = Just sigma}) = do
         ex    <- U.mapEx true closedLambda ex   -- recurse
         used  <- U.localSyms ex                 -- find local vars used
         inner <- innerSids ex
@@ -1426,11 +1454,14 @@ closedLambda (Lam {pat,ex,typ = Just sigma}) = do
                 let name = U.unusedName (VName g.thisPack ("anon$" ++ show (getpos ex))) g
                     lamx = Lam {pat,ex,typ = Just sigma}
                     sym0  = U.patLocal (getpos ex) 0 "anonymous"
+                    vks   = map Tau.varkind (U.freeTVars [] sigma.rho)
                 
-                typ  <- TCU.cleanSigma (ForAll (U.freeTVars [] sigma.rho) sigma.rho)
+                typ  <- TCU.cleanSigma (ForAll vks sigma.rho)
                 let sym   = sym0.{name, expr=Just lamx, vis=Private, typ}
                     var   = Vbl {pos=sym.pos, name, typ = Just sigma}
                 U.enter sym
+                sym <- U.findV sym.name
+                TC.resolveConstraints sym
                 sym <- U.findV sym.name
                 depthSym sym
                 sym <- U.findV sym.name
@@ -1438,7 +1469,7 @@ closedLambda (Lam {pat,ex,typ = Just sigma}) = do
                         ++ " replaced with " ++ var.nice g
                         ++ " :: " ++ sym.typ.nice g))
                 stio (Right var)
-            else stio (Right (Lam {pat,ex,typ = Just sigma}))
+            else stio (Right lam)
 
 closedLambda (letex@Let{env,ex}) = do       -- do not change an inner symbol bound to a lambda
         syms <- mapSt U.findV env
@@ -1478,9 +1509,10 @@ patternStrictness p = case p of
         PAt {pos,uid,var,pat} -> do
             ps <- patternStrictness pat
             if ps == U then patternStrictness (PVar {pos,uid,var}) else stio ps
-        PStrict {pat} -> do
+        PUser {pat, lazy} -> do
             ps <- patternStrictness pat
-            if ps == U then stio (S[]) else stio ps
+            if lazy then stio U
+            else if ps == U then stio (S[]) else stio ps
         PLit {pos} -> stio (S[])
         PMat {pos} -> stio (S[])
         PAnn {pat} -> patternStrictness pat
@@ -1676,11 +1708,14 @@ strictness sids x = do
                     (fx, syms) <- appstr (U.flatx x)
                     U.logmsg TRACES (getpos x) (text ("strictness  " ++ nice x g ++ " :: " ++ names g syms))
                     stio (U.unflatx fx, syms)
-            Lam {ex} -> do
+            Lam {ex, pat} -> do
                     (ex, syms) <- strictness sids ex
                     foreach (my syms) mark
                     U.logmsg TRACES (getpos x) (text ("strictness  " ++ nice x g ++ " :: " ++ names g (them syms)))
-                    stio (x.{ex}, them syms)
+                    refs <- mapSt (\sid -> references [sid] ex) mine
+                    let unused = [ sid | (sid, 0) <- zip mine refs ]
+                        upat = rmUnusedPat unused pat
+                    stio (x.{ex, pat=upat}, them syms)
             Case {ex,alts} -> do
                     s0 <- patternStrictness (head alts).pat
                     U.logmsg TRACES (getpos x) (text ("first pattern is at least " ++ show s0))
@@ -1897,7 +1932,7 @@ patsComplete g ps
                 cols = map tail grp
                 result Nothing = Nothing
                 result (Just p) = Just (recon (p : map (const pany) (head cols)))
-                (refs, irefs) = partitioned (patternRefutable g <~ head) grp
+                (refs, irefs) = partitioned (patternRefutable g • head) grp
                 nrefs = [ p:rest | _:rest <- irefs, p <- cons ]
                 cons = constructors (head (head refs))
                 -- constructors :: Pattern -> ([Pattern] ->

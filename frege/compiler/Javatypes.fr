@@ -43,14 +43,17 @@ package frege.compiler.Javatypes where
 
 import frege.compiler.Data
 import frege.compiler.Utilities as U()
-import frege.IO (ClassLoader)
+import frege.compiler.Nice (text)
 
-native forName java.lang.Class.forName :: String -> Bool -> Maybe ClassLoader -> (IO (Exception Class))
-native getInterfaces :: Class -> IO [Class]
-native getSuperclass :: Class -> IO (Maybe Class)   -- null for Interfaces. primitives and Object 
+
+--- more elaborate version than in PreludeBase
+native forName java.lang.Class.forName 
+    :: String -> Bool -> ClassLoader -> (IO (ClassNotFoundException | Class a))
+native getInterfaces :: Class a -> IO [Class b]
+native getSuperclass :: Class a -> IO (Maybe (Class b))   -- null for Interfaces. primitives and Object 
 
 {--
-    Find out if one type is a subtype of another
+    Find out if the 1st type is a subtype of the 2nd type
 -}
 subTypeOf :: Global -> String -> String -> Bool
 subTypeOf g t1 t2 = t2 `elem` superTypes g t1
@@ -66,10 +69,42 @@ findSuperTypes this = do
     supersupers <- mapM findSuperTypes supers
     return (supers ++ concat supersupers)
 
-findAllSupers name = do
-    result <- doio (forName name false Nothing)
-    case result of
-        Left l -> return ()   -- error message?
-        Right c -> do
-            supers <- doio (findSuperTypes c)
-            U.nativeSupers name supers     
+{--
+    Because @Class.forName@ needs a name of the form @pack.Outer$Nested@ when
+    @Nested@ is nested in @Outer@, we successively replace "." with "$" whenever
+    we encounter a ClassNotFoundException.
+    -}
+classForName :: String -> StG (ClassNotFoundException | Class a)
+classForName fqn = do
+    g <- getST
+    try <- doio (forName fqn false g.sub.loader)
+    case try of
+        Right _ -> return try
+        Left ex 
+            | fqn ~ ´\.´,                                   -- x.Z
+              ex.getClass.getName ~ ´ClassNotFound´         -- perhaps inner class?
+            = classForName binary
+            | otherwise = return try
+            where
+                binary = compose (´\.´.splitted fqn)
+                -- reconstruct the class name, but last component is added with '$'
+                compose [a,b] = a ++ "$" ++ b
+                compose (a:b:cs) = compose (a ++ "." ++ b : cs)
+                compose _ = error "compose"     
+
+findAllSupers name 
+    | name `elem` primitiveTypes = return ()
+    | name ~ ´\[\]$´             = return ()
+    | otherwise = do
+        result <- classForName name
+        case result of
+            Left l -> do
+                g <- getST
+                syms <- mapM U.findT (U.typesOfNativ name g)
+                let oss = filter (flip Symbol.our g) syms
+                    pos = if null oss then Position.null else (head oss).pos 
+                U.error pos (text ("`" ++ name ++ "` is not a known java class"))
+            Right c -> do
+                supers <- doio (findSuperTypes c)
+                U.nativeSupers name supers
+                

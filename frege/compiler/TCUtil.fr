@@ -42,7 +42,7 @@
 package frege.compiler.TCUtil where
 
 import frege.List (Tree, values, lookup, insert, update, keys, including, union, contains)
-import Data.List as DL(unique, uniq, sort, elemBy)
+import Data.List as DL(unique, uniq, sort, elemBy, partition)
 
 import frege.compiler.Data
 import frege.compiler.Nice (msgdoc, text, </>, <+/>, <+>, nest)
@@ -55,8 +55,8 @@ data Expected t = Check t | Infer (IORef (Maybe t))
 newSigmaTyVar d = do rho <- newRhoTyVar d; stio (ForAll [] rho)
 newRhoTyVar   d = do ty <- newMeta d; stio (RhoTau [] ty)
 newMeta       d = do flexi <- newFlexiTyVar d; stio (Meta flexi)
-newFlexiTyVar t = do u <- U.uniqid; ref <- doio (IORef.new Nothing); stio (Flexi u ref t)
-newRigidTyVar n = do u <- U.uniqid; stio (Rigid u n)
+newFlexiTyVar (t,k) = do u <- U.uniqid; ref <- doio (IORef.new Nothing); stio (Flexi u ref t k)
+newRigidTyVar (n,k) = do u <- U.uniqid; stio (Rigid u n k)
 
 instSigma ex sig erho = do
         g <- getST
@@ -79,15 +79,15 @@ instRho ex ty ety = do
         g <- getST
         U.logmsg TRACET (getpos ex) (text ("instRho initial: " ++ ex.nice g ++ "  ::  "
                                         ++ ty.nice g))
-        ty <- contexts ex ty    -- make context canonical, merge others from ex and simplify
-        U.logmsg TRACET (getpos ex) (text ("instRho contexts: " ++ ex.nice g
-                                         ++ "  ::  " ++ ty.nice g))
+        -- ty <- contexts ex ty    -- make context canonical, merge others from ex and simplify
+        -- U.logmsg TRACET (getpos ex) (text ("instRho contexts: " ++ ex.nice g
+        --                                  ++ "  ::  " ++ ty.nice g))
         case ety of
             Check r   -> do subsCheckRR ex ty r
-                            ty <- canonicContext ty
-                            ty <- simplify (getpos ex) ty
+                            -- ty <- canonicContext ty
+                            -- ty <- simplify (getpos ex) ty
                             instExplain ex ty ety
-                            U.logmsg TRACET (getpos ex) (text ("instRho simplified: "
+                            U.logmsg TRACET (getpos ex) (text ("instRho subschecked: "
                                                 ++ ex.nice g ++ "  ::  " ++ ty.nice g))
                             stio (ex.{typ=Just (ForAll [] ty)})
             Infer ref -> do
@@ -132,7 +132,7 @@ subsCheckSR exp sig rho = do
     off <- instantiate sig
     subsCheckRR exp off rho
 
--- check constraints
+-- check constraints (used only from Classes.fr)
 -- offered type must not be less constrained than expected
 -- which means, all contexts from the expected type must be implied by the offered ones
 checkConstraints exp s1 s2 = do
@@ -195,8 +195,8 @@ unifyFun exp rho = unifyFun2 exp rho
 
 unifyFun2 exp (RhoTau cx tau)     = do
         g <- getST
-        arg_ty <- newMeta ("arg")
-        res_ty <- newMeta ("res")
+        arg_ty <- newMeta ("arg", KType)
+        res_ty <- newMeta ("res", KType)
         b <- unified exp tau (Tau.tfun arg_ty res_ty)
         unless b do
             g <- getST
@@ -213,7 +213,7 @@ unifyFun2 exp (RhoTau cx tau)     = do
 unifyFun2 exp rho = error "unifyFun2: no rhotau"
 
 
--- to do
+--- return the unbound sigma type variables
 sigmaTvs :: Sigma -> StG [MetaTv]
 sigmaTvs sig = do
     t <- getSigmaTvs sig
@@ -228,7 +228,8 @@ tauTvs tau = do
     t <- getTauTvs tau
     stio (keys t)
 
-ctxTvs (Ctx {tau}) = tauTvs tau
+ctxTvs :: ContextT a -> StG [MetaTvT a]
+ctxTvs ctx = tauTvs ctx.tau
 
 getSigmaTvs (ForAll _ rho) = getRhoTvs rho
 getRhoTvs (RhoFun cs sig rho) = do
@@ -241,7 +242,7 @@ getRhoTvs (RhoTau cs tau) = do
     tTvs  <- getTauTvs tau
     stio (fold union tTvs csTvs)
 
-getCtxTvs (Ctx {tau}) = getTauTvs tau
+getCtxTvs = getTauTvs . Context.tau
 
 getTauTvs tau = getTauTvsT Nil tau
 
@@ -273,26 +274,27 @@ envTvs sid = do
     tvss <- mapSt sigmaTvs sigmas
     stio (concat tvss)
 
-readTv (Rigid _ _) = stio Nothing
+readTv (Rigid{}) = stio Nothing
 readTv tv = tv.bound
-writeTv (Flexi _ ref _) tau = doio (ref.put (Just tau))
+writeTv (Flexi{ref}) tau = doio (ref.put (Just tau))
 writeTv tv _ = do
     g <- getST
     U.fatal Position.null (text ("write to rigid tyvar " ++ tv.nice g))
 
 skolemise :: Sigma -> StG ([MetaTv], Rho)
+skolemise (ForAll [] ty) = stio ([], ty)
 skolemise (ForAll ns ty) = do
     tvs <- mapSt newRigidTyVar ns
-    let tree = Tree.fromList (zip ns (map Meta tvs))
-    rho <- substRho tree ty
+    let tree = Tree.fromList (zip (map fst ns) (map Meta tvs))
+        rho  = substRho tree ty
     stio (tvs, rho)
 
 instantiate :: Sigma -> StG Rho
 instantiate (ForAll [] ty) = stio ty
 instantiate (ForAll ns ty) = do
     tvs <- mapSt newMeta ns
-    let tree = Tree.fromList (zip ns tvs)
-    substRho tree ty
+    let tree = Tree.fromList (zip (map fst ns) tvs)
+    return (substRho tree ty)
 
 {--
  * like instantiate, but give the tvs back
@@ -300,8 +302,8 @@ instantiate (ForAll ns ty) = do
 instantiateTvs (ForAll [] ty) = stio ([], ty)
 instantiateTvs (ForAll ns ty) = do
     tvs <- mapSt newMeta ns
-    let tree = Tree.fromList (zip ns tvs)
-    rho <- substRho tree ty
+    let tree = Tree.fromList (zip (map fst ns) tvs)
+        rho  = substRho tree ty
     stio (tvs, rho)
 
 
@@ -313,10 +315,11 @@ unify ex t1 t2 = do
             let pos = getpos ex
             U.error pos (part1 g </> part2 g </> part3 g)
     where
-        part1 g = text "type error in " <+/> text ex.is <+/> text (ex.nice g)
+        part1 g = text "type error in " <+/> text ex.is <+/> text (ex.nicer g)
         part2 g = text "type is  " <+/> text (t1.nicer g)
         part3 g = text "used as  " <+/> text (t2.nicer g)
 
+--- resolve 'Meta' types in the argument, but only in the left part of 'TApp's 
 reduced :: Tau -> StG Tau
 reduced tau 
     | Meta tv <- tau = do
@@ -346,18 +349,18 @@ unified ex t1 t2 = do
         (Meta tv, ty)        | tv.isFlexi = unifyVar ex tv (Right ty)
         (ty, Meta tv)        | tv.isFlexi = unifyVar ex tv (Left ty)
         -- (TFun a b, TFun c d)              = liftM2 (&&) (unified ex a c) (unified ex b d)
-        (TCon _ _, TCon _ _)              = if t1.name == t2.name 
+        (TCon{}, TCon{})              = if t1.name == t2.name 
                                                 then return true 
-                                                else unifyTCon t1.name t2.name
+                                                else unifyTCon (getpos ex) t1.name t2.name
         (TApp a b, TApp c d)              = liftM2 (&&) (unified ex a c) (unified ex b d) -- foldSt uniTs true (zip t1.flat t2.flat)
-        (Meta (Rigid _ s), ty)            = do
+        (Meta (Rigid _ s _), ty)          = do
                                             U.error (getpos ex) (msgdoc ("type  `" ++ ty.nicer g
                                                 ++ "` is not as polymorphic as suggested "
                                                 ++ " in the annotation where just  `" ++ s
                                                 ++ "`  is announced."))
                                             U.hint  (getpos ex) (msgdoc "The inferred type must be at least as polymorphic as the annotated one.")
                                             stio false
-        (ty, Meta (Rigid _ s))            = do
+        (ty, Meta (Rigid _ s _))          = do
                                             U.error (getpos ex) (msgdoc ("type  `" ++ ty.nicer g
                                                 ++ "` is not as polymorphic as suggested "
                                                 ++ " in the annotation where just  `" ++ s
@@ -371,7 +374,7 @@ unified ex t1 t2 = do
     -- unifyTCon will only be called with real type names (no aliases)
     -- It returns true if both 'TCon's describe native types and the 
     -- first one is a subtype of the other
-    unifyTCon t1 t2 = do
+    unifyTCon pos t1 t2 = do
         sym1 <- U.findT t1
         case sym1.nativ of
             Just c1 -> do
@@ -379,7 +382,12 @@ unified ex t1 t2 = do
                 case sym2.nativ of
                     Just c2 -> do
                         g <- getST
-                        return (subTypeOf g c1 c2)
+                        let result = subTypeOf g c1 c2
+                        when (not result) do
+                            U.hint pos (text ("supertypes of " ++ c1
+                                ++ ": " ++ joined ", " (U.supersOfNativ c1 g)))
+                            U.hint pos (text ("does not contain " ++ c2))
+                        return result 
                     nothing -> return false
             nothing -> return false
 
@@ -423,10 +431,14 @@ cleanRho (RhoTau ctxs tau)     = liftM2 RhoTau (zonkCtxs ctxs) (zonkTau tau)
 
 zonkCtxs ctxs = do
     ctxs <- mapSt zonkCtx ctxs
-    return (filter withVars ctxs) 
-zonkCtx (ctx@Ctx {tau}) = do tau <- zonkTau tau; stio ctx.{tau}
+    return (filter withVars ctxs)
+     
+zonkCtx ctx = do
+    let tau = Context.tau ctx 
+    tau <- zonkTau tau
+    return ctx.{tau}
 
-withVars (Ctx {tau}) = withTauVars tau
+withVars = withTauVars . Context.tau
 withTauVars (TCon {})  = false
 -- withTauVars (TFun a b) = withTauVars a || withTauVars b
 withTauVars (TApp a b) = withTauVars a || withTauVars b
@@ -447,7 +459,7 @@ zonkTau other = stio other      -- TVar and TCon
 
 substRigidSigma [] sigma = stio sigma
 substRigidSigma bound (ForAll b rho) = do
-        rho <- substRigidRho (filter (`notElem` b) bound) rho
+        rho <- substRigidRho (filter (`notElem` map fst b) bound) rho
         stio (ForAll b rho)
 substRigidRho [] rho = stio rho
 substRigidRho bound (RhoFun ctxs sig rho) = do
@@ -459,19 +471,20 @@ substRigidRho bound (RhoTau ctxs tau) = do
         ctxs <- mapSt (substRigidCtx bound) ctxs
         tau  <- substRigidTau bound tau
         stio (RhoTau ctxs tau)
-substRigidCtx bound (ctx@Ctx {tau}) = do
+
+
+substRigidCtx bound ctx = do
+        let tau = Context.tau ctx
         tau  <- substRigidTau bound tau
         stio ctx.{tau}
+
+
 substRigidTau bound (TApp a b) = do
         a  <- substRigidTau bound a
         b  <- substRigidTau bound b
         stio (TApp a b)
--- substRigidTau bound (TFun a b) = do
---         a  <- substRigidTau bound a
---         b  <- substRigidTau bound b
---         stio (TFun a b)
-substRigidTau bound (meta@Meta (Rigid {hint}))           -- this is what happens in the end
-    | hint `elem` bound = stio (TVar Position.null hint)
+substRigidTau bound (meta@Meta (Rigid {hint, kind}))           -- this is what happens in the end
+    | hint `elem` bound = stio (TVar Position.null kind hint)
 substRigidTau bound tau = stio tau
 
 
@@ -492,18 +505,18 @@ quantifiedExcept exc rhos = do
                                         MetaTv.isFlexi tv,
                                         tv `notElem` eTvs ]
             -- select a type variable name for each tv
-            newvars = take (length allTvs) [ v | v <- allBinders, v `notElem` used ]
+            newvars = filter (`notElem` used) allBinders
             bound   = zip newvars allTvs
             -- make sigma for rho with the tvs that appear in that rho
             mksig (rho,tvs) = liftM (ForAll nv) (zonkRho rho)
-                where nv = [ n | (n,v) <- bound, v `elem` tvs]
+                where nv = [ (n,MetaTv.kind v) | (n,v) <- bound, v `elem` tvs]
         foreach bound bind                      -- actually write TVars in the MetaTvs
         mapSt mksig (zip rhos rhosTvs)          -- create (and return) the sigmas
     where
         pos = Position.null -- Position.merges (map U.rhoPos rhos)
         -- TVar names used in the Rhos
         used = [ u | r <- rhos, u <- tyVarBndrs r ]
-        bind (var,tv) = writeTv tv (TVar {pos,var})
+        bind (var,tv) = writeTv tv (TVar {pos, var, kind=tv.kind})
 
 quantify rho = do
     sigs <- quantified [rho]
@@ -517,9 +530,9 @@ canonicSignature sig = (instantiate sig >>= zonkRho) >>= quantify
  * get all the binders used in ForAlls in the type so that when
  * quantifying an outer forall we can avoid these inner ones
  -}
-tyVarBndrs ty = (uniq <~ sort) (bndrs ty) where
+tyVarBndrs ty = (uniq • sort) (bndrs ty) where
     bndrs (RhoFun _ (ForAll tvs arg) res)
-                = (tvs ++ bndrs arg) ++ bndrs res
+                = (map fst tvs ++ bndrs arg) ++ bndrs res
     bndrs _     = []
 
 {--
@@ -530,7 +543,8 @@ tyVarBndrs ty = (uniq <~ sort) (bndrs ty) where
 exContext ex = case Expr.typ ex of
     Just (ForAll [] rho) -> do
         ctxs <- reducedCtxs rho.context     -- rho is canonical
-        stio (filter (not • Context.checked) ctxs)     -- remove checked ctx
+        -- stio (filter (not • Context.checked) ctxs)     -- remove checked ctx
+        return ctxs
     Just sig -> do
         g <- getST
         U.fatal (getpos ex) (text ("exContext: do not know yet what to do with  " ++ sig.nice g))
@@ -619,28 +633,31 @@ reducedTau meta           = reduced meta
  -}
 reducedCtxs ctxs = do
     rcs <- mapSt reducedCtx ctxs
-    stio (filter noVars rcs)
-  where
-    noVars (Ctx {tau}) = noTauVars tau
-    noTauVars (TVar {var}) = false
-    -- noTauVars (TFun a b) = noTauVars a && noTauVars b
-    noTauVars (TApp a b) = noTauVars a && noTauVars b
-    noTauVars meta       = true
+    stio rcs
+  -- where
+  --   noVars  = noTauVars . Context.tau
+  --   noTauVars (TVar {var}) = false
+  --   -- noTauVars (TFun a b) = noTauVars a && noTauVars b
+  --   noTauVars (TApp a b) = noTauVars a && noTauVars b
+  --   noTauVars meta       = true
 
 {-- reduce a 'Context' so that we will not see any meta variables -}
-reducedCtx (ctx@Ctx {tau}) = do tau <- reducedTau tau; stio ctx.{tau}
+reducedCtx ctx = do
+    let tau = Context.tau ctx 
+    tau <- reducedTau tau 
+    stio ctx.{tau}
 
 {--
  * merge two already reduced 'Context's
  -}
 mergeCtx [] ctx = ctx
 mergeCtx (c:cs) ctx
-    | Context.checked c = filter (not • sameCtx c) (mergeCtx cs ctx)
+    -- Context.checked c = filter (not • sameCtx c) (mergeCtx cs ctx)
     | elemBy sameCtx c ctx = mergeCtx cs ctx
     | otherwise = c : mergeCtx cs ctx
 
 sameCtx :: Context -> Context -> Bool
-sameCtx ca cb = ca.cname == cb.cname && sameTau ca.tau cb.tau
+sameCtx ca cb = ca.{cname?} && cb.{cname?} && ca.cname == cb.cname && sameTau ca.tau cb.tau
 
 --- check idendity of 2 'Tau's. This works only on 'reducedTau's.
 sameTau (Meta a) (Meta b) = a == b
@@ -652,7 +669,8 @@ sameTau _ _ = false
 
 --- if /C/ is a super class of /D/, then /D tau/ implies /C tau/ for the same tau
 --- example: 'Ord' a implies 'Eq' a
-impliesG g (Ctx _ d t1 _) (Ctx _ c t2 _) = isSuper c g d && sameTau t1 t2
+impliesG g (Ctx _ d t1) (Ctx _ c t2) = isSuper c g d && sameTau t1 t2
+
 {--
  * simplify a 'Rho' 'Context'
  * - if context is of the form @C a@ or @C (a b ...)@, check that it is not implied
@@ -666,8 +684,9 @@ simplify pos rho = do
     logmsg TRACET pos (text ("simplify " ++ rho.nice g))
     let
         implies = impliesG g
-        single (Ctx pos name tau _) = nice (TApp (TCon {pos,name}) tau) g
-        singler (Ctx pos name tau _) = nicer (TApp (TCon {pos,name}) tau) g
+        single, singler :: Context -> String
+        single  ctx = nicectx  [ctx] g
+        singler ctx = nicerctx [ctx] g
     context <- reducedCtxs rho.context
     case rho.context of
         [] -> stio rho
@@ -691,22 +710,21 @@ simplify pos rho = do
                         when (not (null implications)) do
                             U.explain pos (text ("the implications of " ++ singler ctx
                                 ++ "  are  " ++ joined ", " (map singler implications)))
-                        rho <- simplify pos rho.{context = ctxs ++ implications}
+                        rho <- simplify pos rho.{context = ctxs2 ++ implications}
                         tau <- reducedTau ctx.tau
-                        stio rho.{context <- (ctx.{checked=true, tau}:)}
+                        stio rho -- .{context <- (ctx.{checked=true, tau}:)}
                   where ctxs2 = filter (not • (ctx `implies`)) ctxs
-                        isVarMeta (TVar {var}) = true
-                        isVarMeta (Meta _)     = true
-                        isVarMeta _            = false
+isVarMeta (TVar {var}) = true
+isVarMeta (Meta _)     = true
+isVarMeta _            = false
+
 
 instanceOf :: Position -> QName -> Tau -> StG [Context]
 instanceOf pos qn tau = do
     g <- getST
     U.logmsg TRACET pos (text ("is " ++ nice tau g ++ " instance of " ++ nice qn g ++ "?"))
     U.explain pos (text ("type  " ++ nicer tau g ++ "  must be instance of  " ++ nice qn g))
-    let tcon = {-  case tau of 
-            TFun _ _ -> TCon {pos = Position.null, name = TName pPreludeBase "->"}
-            _        -> -} head tau.flat
+    let tcon =  head tau.flat
         showtn (TName pack base) = pack.un ++ "." ++ base
         showtn _ = error "showtn: must be type name"
     case tcon of
@@ -714,7 +732,7 @@ instanceOf pos qn tau = do
             U.logmsg TRACET pos (text ("tcon is " ++ showtn name))
             clas <- findC qn
             U.logmsg TRACET pos (text ("class " ++ showtn clas.name ++ " has instances for "
-                                          ++ show (map (showtn • fst) clas.insts)))
+                                          ++ joined ", " (map (showtn • fst) clas.insts)))
             case filter ((name ==) • fst) clas.insts of
                 [] -> do
                     U.error pos (msgdoc (nicer tau g ++ " is not an instance of " ++ nice qn g))

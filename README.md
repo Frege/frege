@@ -1,7 +1,10 @@
 What is Frege?
 ==============
 
-Frege is a non-strict, pure functional programming language in the spirit of Haskell. It enjoys a strong static type system with type inference. Higher rank types are supported, though type annotations are required for that.
+Frege is a [non-strict](http://en.wikipedia.org/wiki/Non-strict_programming_language), 
+pure functional programming language in the spirit of Haskell. 
+It enjoys a strong static type system with type inference. 
+Higher rank types are supported, though type annotations are required for that.
 
 Frege programs are compiled to Java and run in a JVM. Existing Java Classes and Methods can be used seamlessly from Frege.
 
@@ -17,22 +20,28 @@ Frege is thought as a substitute for this missing GHC port. While not derived fr
 Project State
 -------------
 
-The compiler, an Eclipse plugin and a provisional version of the documentation can be [downloaded](https://github.com/Frege/frege/downloads). Note that Frege requires JDK 7 to compile and run programs.
+The compiler, an Eclipse plugin and a provisional version of the documentation can be [downloaded](http://code.google.com/p/frege/downloads/list). 
+Note that Frege requires JDK 7 to compile and run programs.
 
-The compiler and the documentation tool are quite stable, the documentation provisional and the library is evolving. It already supports important parts of the Haskell 2010 standard library.
+The compiler and the documentation tool are quite stable, the documentation provisional and the library is evolving. 
+It already supports important parts of the Haskell 2010 standard library.
 
-See the [Getting Started](https://github.com/Frege/frege/wiki/Getting-Started) page for getting started at the command-line or read the Eclipse plugin page.
+See the [Getting Started](https://github.com/Frege/frege/wiki/Getting-Started) page for 
+getting started at the command-line or read the [Eclipse plugin](https://github.com/Frege/eclipse-plugin) page.
+
+There is also an [interpreter (REPL)](https://github.com/Frege/frege-repl). 
+An online version of the REPL is running on [Google App Engine](http://tryfrege.appspot.com/).
 
 Contributions
 -------------
 
 If you are interested in contributing, here are some hot topics:
 
-* write frege code to support more of the Java API
+* write Frege code to support more of the Java API
 * create a nicer logo
 * port Haskell libraries or tools
 * open issues on the Issues page if you find bugs, errors in documentation, etc.
-* vote for Enhancement issues you consider most important by "starring" them or create new ones.
+* help make Frege popular by writing code for projects like Rosetta Stone or Computer Language Shootout.
 
 Contact
 -------
@@ -44,8 +53,10 @@ Specific programming problems are best solved on
 [Stack Overflow](http://stackoverflow.com/questions/tagged/frege),
 we check questions tagged "frege" on a regular basis.
 
-If you find a bug, please let us know by opening an issue in the issue tracker.
+If you find a bug or have an idea for enhancements, please let us know by opening an issue in the issue tracker.
 (You'll need a GitHub account to do this.)
+
+Please understand that the issue tracker is neither a discussion forum nor a place to ask questions.
 
 Links
 ----

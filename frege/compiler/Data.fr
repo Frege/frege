@@ -46,10 +46,18 @@ package frege.compiler.Data
 
 
 import frege.List (Tree, each)
-import frege.IO   (PrintWriter,  `<<`,  getProperty, URLClassLoader)
+import Java.IO(PrintWriter)
+import Java.Net(URLClassLoader)
+
 
 import frege.compiler.Classtools    as CT()
 import frege.compiler.BaseTypes public
+import frege.compiler.BaseTypes public(BitSet.member member, 
+    BitSet.union bitunion, BitSet.intersection intersection, 
+    BitSet.difference difference)
+
+infixr 6 intersection difference
+infixr 5 bitunion
 
 
 --- compiler options
@@ -67,7 +75,7 @@ data Options = !Options {
 data Severity = HINT | WARNING | ERROR
 data Message = !Msg { pos :: Position, level :: Severity, text :: String }
 
-{-
+{--
     Informs how tokens like 'VARID', 'CONID' and 'QUALIFIER' have been
     resolved.
     
@@ -109,12 +117,16 @@ data GenSt = !Gen {
     runique :: Int                     --- unique numbers for rhos
     sunique :: Int                     --- unique numbers for sigmas
     xunique :: Int                     --- unique numbers for exprs
+    kunique :: Int                     --- unqiue numbers for kinds
     tTree   :: Tree TauA Int           --- tau table
     rTree   :: Tree RhoA Int           --- rho table
     sTree   :: Tree SigmaA Int         --- sigma table
     xTree   :: Tree ExprA Int          --- expr table
+    kTree   :: Tree KindA Int          --- kind table
     consts  :: Tree (Literalkind, String) Int   --- constant table
     lambdas :: Tree (Int, [QName]) [Symbol] --- lambda table
+    syminfo :: Tree Symbol SymInfo      --- cached information about symbols return/arg types
+    jimport :: Tree String Pack         --- packages we have a java import statement for, by base name
 }
 
 --- compiler state, appears like it was global, but threaded through 'StIO' monad
@@ -145,10 +157,12 @@ data Global = !Global {
     runique (g::Global)     = g.gen.runique
     sunique (g::Global)     = g.gen.sunique
     xunique (g::Global)     = g.gen.xunique
+    kunique (g::Global)     = g.gen.kunique
     tTree (g::Global)       = g.gen.tTree
     rTree (g::Global)       = g.gen.rTree
     sTree (g::Global)       = g.gen.sTree
     xTree (g::Global)       = g.gen.xTree
+    kTree (g::Global)       = g.gen.kTree
     thisPack (g::Global)    = g.sub.thisPack
     resolved :: Global -> Token -> Maybe IdInfo 
     resolved g t = g.sub.idKind.lookup (KeyTk t)
@@ -158,7 +172,9 @@ data Global = !Global {
     thisTab :: Global -> Symtab
     thisTab g = case g.packages.lookup g.thisPack of
         Just st -> st
-        Nothing -> error ("no symtab for package " ++ show (g.thisPack.unpack g))
+        Nothing -> if  IDE `member` g.options.flags 
+            then  error ("no symtab for package " ++ show (g.thisPack.unpack g))
+            else  Nil        -- be tolerant in the IDE
 
 --- the symbol table
 type Symtab = Tree String Symbol
@@ -196,7 +212,7 @@ abstract data Pack = P String where
     nice p g
         -- p == pPrelude   = "Prelude"
         | p == Global.thisPack g = ""
-        | otherwise = case filter ((p==) <~ snd) ((Global.namespaces g).each) of
+        | otherwise = case filter ((p==) • snd) ((Global.namespaces g).each) of
                 ((NSX s, _):_) -> s
                 _              -> (nsName p).unNS
     (P a) ==  (P b) = a.==  b
@@ -223,12 +239,13 @@ magicPack (nm@´\.´)
 magicPack nm = nm
 
 --- a prominent package
-pPrelude = (Pack.new • fromMaybe "frege.Prelude" • IO.getProperty) "frege.prelude"
+pPrelude = (Pack.new • fromMaybe "frege.Prelude" • System.getProperty) "frege.prelude"
 pPreludeBase    = Pack.new "frege.prelude.PreludeBase"
 pPreludeNative  = Pack.new "frege.prelude.PreludeNative"
 pPreludeText    = Pack.new "frege.prelude.PreludeText"
 pPreludeList    = Pack.new "frege.prelude.PreludeList"
 pPreludeMonad   = Pack.new "frege.prelude.PreludeMonad"
+pPreludeIO      = Pack.new "frege.prelude.PreludeIO"
 
 {-- List of Prelude packages and the namespace that needs to be assigned on import time
 
@@ -245,6 +262,7 @@ preludePacks = (pPreludeBase,  Just "PreludeBase") : map fppack [
                     ("List",   Just "PreludeList"),       -- because of list comprehension
                     ("Text",   Just "PreludeText"),       -- because of derive Show
                     ("Monad",  Just "PreludeMonad"),      -- because of derive Show
+                    ("IO",     Just "PreludeIO"),         -- because of derive Exceptional
                ]
        where
             fppack (s,mb) = (Pack.new ("frege.prelude.Prelude" ++ s), mb)
@@ -262,7 +280,7 @@ importAlways = [ ImpDcl {pos=Position.null, pack=Pack.un p, as=Just n, imports =
 -}
 inPrelude :: Pack -> Global -> Bool
 inPrelude p g = (p `elem` map fst preludePacks)
-              || g.options.flags `band`  (1 `bshl`  ord INPRELUDE) != 0
+              || Flags.member INPRELUDE g.options.flags 
 
 --- namespace name
 data NSName = NSX { unNS :: String }
@@ -321,6 +339,7 @@ data QName =
             Just sy -> sy.follow g
             Nothing -> Nothing
         istuple s   = QName.base s ~ #^\(,+\)$#
+        --- tell if a 'Qname' is from the module we're just compiling
         public our :: QName -> Global -> Bool
         our     (TName p  _) g = p.== (Global.thisPack g)
         our     (VName p  _) g = p.== (Global.thisPack g)
@@ -358,7 +377,9 @@ data JName = !JName {qual :: String, base :: String} where
         show (JName p  x) = p ++ "." ++ x
 
 instance Show JName
-derive   Eq   JName
+instance Eq   JName where
+    ja == jb = show ja == show jb
+    hashCode ja = hashCode ja.show
 
 {--
     symbol state (for 'Symbol.SymV' symbols)
@@ -374,7 +395,7 @@ derive Enum SymState
     -}
 data Symbol =
         !SymT    {sid::Int, pos::Position, vis::Visibility, doc::Maybe String, name::QName,
-                 typ::Sigma, env::Symtab, nativ::Maybe String,
+                 kind::Kind, typ::Sigma, env::Symtab, nativ::Maybe String,
                  product::Bool, enum::Bool, pur::Bool, newt::Bool}  --- data type
         | !SymL  {sid::Int, pos::Position, vis::Visibility, name::QName,
                  alias::QName}                                      --- alias name
@@ -384,38 +405,40 @@ data Symbol =
                  strsig :: Strictness }                             --- data constructor
         | !SymC  {sid::Int, pos::Position, vis::Visibility, doc::Maybe String, name::QName,
                  tau::Tau, supers::[QName], insts::[(QName, QName)],
-                 env::Symtab, vkind :: Int}                         --- class
+                 env::Symtab}                         --- class
         | !SymI  {sid::Int, pos::Position, vis::Visibility, doc::Maybe String, name ::QName,
                  clas::QName, typ::Sigma, env::Symtab}              --- instance
         | !SymV  {sid::Int, pos::Position, vis::Visibility, doc::Maybe String, name ::QName,
                  typ::Sigma, expr::Maybe Expr, nativ::Maybe String,
                  pur::Bool, anno::Bool, exported::Bool, state::SymState,
-                 strsig :: Strictness, depth :: Int, rkind :: Int } --- variable or function
+                 strsig :: Strictness, depth :: Int, rkind :: RState,
+                 throwing :: [Tau]  {-- list of exceptions thrown  -}
+                 over :: [QName ]   {-- list of overloaded members -} } --- variable or function
         | !SymA  {sid::Int, pos::Position, vis::Visibility, doc::Maybe String, name ::QName,
-                 typ::Sigma, vars::[Tau]}                           --- type alias
+                 kind::Kind, typ::Sigma, vars::[Tau]}                           --- type alias
     where
         follow (ali@SymL {alias}) g = alias.find g
         follow sym g = Just sym
-        kind (SymT {name}) g = "data type"
-        kind (SymD {name}) g = "constructor"
-        kind (SymC {name}) g = "class"
-        kind (SymI {name}) g = "instance"
-        kind (SymV {name,nativ, expr}) g = if isJust nativ then "native " ++ fun else fun
+        category (SymT {name}) g = "data type"
+        category (SymD {name}) g = "constructor"
+        category (SymC {name}) g = "class"
+        category (SymI {name}) g = "instance"
+        category (SymV {name,nativ, expr}) g = if isJust nativ then "native " ++ fun else fun
             where fun | MName t b <- name, Just sym <- t.find g
-                                          = sym.kind g ++ " member " ++ funval
+                                          = sym.category g ++ " member " ++ funval
                       | MName _ _ <- name = "member " ++ funval
                       | otherwise         = funval
                   funval | isJust nativ = "function"
                          | Just (Lam {}) <- expr = "function"
                          | otherwise = "value"
-        kind (SymA {name}) g = "type alias"
-        kind (SymL {alias}) g = case alias.find g of
-            Just sym -> "alias for " ++ sym.kind g
+        category (SymA {name}) g = "type alias"
+        category (SymL {alias}) g = case alias.find g of
+            Just sym -> "alias for " ++ sym.category g
             Nothing  -> "alias"
-        nice (sym@SymL {alias}) g = kind sym g ++ " `" ++ alias.nice g ++ "`"
-        nice sym g = kind sym g ++ " `" ++ sym.name.nice g ++ "`"
-        nicer (sym@SymL {alias}) g = kind sym g ++ " `" ++ alias.nicer g ++ "`"
-        nicer sym g = kind sym g ++ " `" ++ sym.name.nicer g ++ "`"
+        nice (sym@SymL {alias}) g = category sym g ++ " `" ++ alias.nice g ++ "`"
+        nice sym g = category sym g ++ " `" ++ sym.name.nice g ++ "`"
+        nicer (sym@SymL {alias}) g = category sym g ++ " `" ++ alias.nicer g ++ "`"
+        nicer sym g = category sym g ++ " `" ++ sym.name.nicer g ++ "`"
         --- Symbols are ordered *only* by the @sid@ field, which is a unique number
         sym1 <=> sym2 = (Symbol.sid sym1).<=> (Symbol.sid sym2)
         sym1 == sym2  = (Symbol.sid sym1).==  (Symbol.sid sym2)
@@ -424,7 +447,8 @@ data Symbol =
 
 instance Ord Symbol
 
-data ConField s = !Field { pos:: Position, name, doc :: Maybe String, typ :: SigmaT s }
+data ConField s = !Field { pos :: Position,   name, doc :: Maybe String, 
+                           vis :: Visibility, strict :: Bool,   typ :: SigmaT s }
 
 --- Strictness information for function arguments
 --- This is stored in 'SymD' and 'SymV' symbols.
@@ -460,7 +484,7 @@ instance Show Strictness where
 decodeS :: String -> Strictness
 decodeS s = fst (decode s) where
     decode     (s @ #^u#)  = (U, strtail s 1)
-    decode     (s @ #^s#)  = (S list, rest) where (!list,!rest) = decodeList (strtail s 1)
+    decode     (s @ #^s#)  = (S list, rest) where (list,rest) = decodeList (strtail s 1)
     decode     s           = Prelude.error ("decodeS: bad string " ++ s.show)
     decodeList (s @ #^\(#) = listElems (strtail s 1)
     decodeList  s          = ([], s)
@@ -474,28 +498,26 @@ decodeS s = fst (decode s) where
  * type to model type variables in type checking
  -}
 data MetaTvT s =
-          !Flexi {uid::Int, ref :: (IORef (Maybe (TauT s))), hint::String}
-        | !Rigid {uid::Int, hint::String}
+          !Flexi {uid::Int, ref :: (IORef (Maybe (TauT s))), hint::String, kind::Kind}
+        | !Rigid {uid::Int, hint::String, kind::Kind}
         where
             --- tell if the 'MetaTv' is bound
-            bound (Flexi _ r _) = doio (r.get)
-            bound (Rigid _ _)   = stio Nothing
+            bound (Flexi{ref}) = doio (ref.get)
+            bound (Rigid{})   = stio Nothing
             --- tell if the 'MetaTv' is flexible
-            isFlexi (Flexi _ _ _) = true
-            isFlexi _             = false
+            isFlexi (Flexi{}) = true
+            isFlexi _         = false
 
 instance Eq MetaTvT s where
-    Flexi u1 _ _ == Flexi u2 _ _  = u1.== u2
-    Rigid u1 _   == Rigid u2 _    = u1.== u2
-    _            == _             = false
+    tv1 == tv2  = tv1.uid.== tv2.uid
     hashCode x = x.uid
 
 
 instance Ord MetaTvT s where
-    Flexi _  _  _ <=> Rigid _  _      = Lt
-    Rigid _  _    <=> Flexi _  _  _   = Gt
-    Flexi u1 _ _  <=> Flexi u2 _  _   = u1.<=> u2
-    Rigid u1 _    <=> Rigid u2 _      = u1.<=> u2
+    Flexi{} <=> Rigid{}   = Lt
+    Rigid{} <=> Flexi{}   = Gt
+    tv1     <=> tv2       = tv1.uid.<=> tv2.uid
+
 
 type MetaTv = MetaTvT QName
 
@@ -507,9 +529,11 @@ data TauT s =
     -- !TFun (TauT s) (TauT s)
     -- TAli pos::Position name::s (SigmaT s)
     | !TCon {pos::Position, name::s}
-    | !TVar {pos::Position, var::String}
+    | !TVar {pos::Position,  kind::Kind, var::String}
     | !Meta (MetaTvT s)
     where
+        varkind (TVar{var,kind}) = (var,kind)
+        varkind _ = error "varkind only applicable to TVar"
         tfun a b = TApp (TApp (TCon Position.null (TName pPreludeBase "->")) a) b
         getFun (TApp (TApp TCon{name = TName p "->"} a) b) | p == pPreludeBase = Just (a,b)
         getFun _ = Nothing
@@ -531,9 +555,10 @@ data TauT s =
 data TauA = !TauA {kind::Int, tcon::Maybe QName, suba::Int, subb::Int, tvar::String}
 data RhoA = !RhoA {rhofun::Bool, cont::[ContextA], sigma::Int, rhotau::Int}
 data ContextA = !CtxA {clas::QName, tau::Int}
-data SigmaA = !SigmaA {bound::[String], rho::Int}
+data SigmaA = !SigmaA {bound::[String], kinds::[Int], rho::Int}
 data ExprA = !ExprA {xkind::Int, name::Maybe QName, lkind::Int, varval::Maybe String,
                     alts :: [Int], subx1 :: Int, subx2 :: Int, subx3 :: Int}
+data KindA = !KindA {kind, suba, subb :: Int}                    
 derive Eq  TauA
 derive Ord TauA
 derive Eq  ContextA
@@ -544,6 +569,8 @@ derive Eq  SigmaA
 derive Ord SigmaA
 derive Eq  ExprA
 derive Ord ExprA
+derive Eq KindA
+derive Ord KindA
 
 
 
@@ -560,17 +587,20 @@ type Tau = TauT QName
 {--
  * The type for modelling sigma types
  -}
-data SigmaT s = !ForAll { bound :: [String], rho :: (RhoT s) }
+data SigmaT s = !ForAll { bound :: [(String, Kind)], rho :: RhoT s } where
+    vars (ForAll b _)  = map fst b
+    kinds (ForAll b _) = map snd b
 
---* sigmas as returned from parsing
+--- sigmas as returned from parsing
 type SigmaS = SigmaT SName
---* sigmas as used in typecheck
+--- sigmas after translation
 type Sigma =  SigmaT QName
 
 {--
  * The type for modelling class assertions
  -}
-data ContextT s = Ctx {pos :: Position, cname :: s, tau :: TauT s, checked :: Bool }
+data ContextT s = Ctx {!pos :: Position, !cname :: s, !tau :: TauT s }
+                
 type Context    = ContextT QName
 type ContextS   = ContextT SName
 
@@ -581,9 +611,9 @@ data RhoT s =
       !RhoFun {context::[ContextT s], sigma::SigmaT s, rho::RhoT s}
     | !RhoTau {context::[ContextT s], tau::TauT s}
 
---* rho as returned from parsing
+--- rho as returned from parsing
 type RhoS = RhoT SName
---* rho as used in typechecker
+--- rho as used in typechecker
 type Rho  = RhoT QName
 
 --- cross module visibility of items
@@ -672,6 +702,29 @@ javakeywords = Tree.insertlist Tree.Nil [(kw, "_"++kw) | kw <- [
     "throw"
     ]]
 
+--- The names of the java primitive types 
+primitiveTypes = ["byte", "short", "boolean", "char", "int", "long", "float", "double" ]
+
+--- The names of certain classes in @java.lang@
+{-- If we have a package imported whose base name is one of this, we better do not
+    generate a java import statement for it and use it unqualified.
+    -}
+javaLangNames = [
+    "Appendable", "AutoCloseable", "CharSequence", "Cloneable", "Comparable",
+    "Iterable", "Runnable", 
+    "Boolean", "Byte", 
+    "Character", "Class", "ClassLoader", "ClassValue", "Compiler",
+    "Double", "Enum", "Float",
+    "InheritableThreadLocal", "Integer",
+    "Long", "Math", "Number", "Object",
+    "Package", "Process", "ProcessBuilder",
+    "Runtime", "RuntimePermission",
+    "SecurityManager", "Short", "StackTraceElement", "StrictMath", 
+    "String", "StringBuffer", "StringBuilder", "System",
+    "Thread", "ThreadGroup", "ThreadLocal", "Throwable",
+    "Void"]
+
+type SigExs = (SigmaS, [TauS])
 {--
  * definitions
  -}
@@ -692,7 +745,7 @@ data DefinitionT =
                     clas::SName, typ::SigmaS,
                     doc::Maybe String}
     | AnnDcl    {pos::Position, vis::Visibility, name::String, typ::SigmaS, doc::Maybe String}
-    | NatDcl    {pos::Position, vis::Visibility, name::String, typ::SigmaS,
+    | NatDcl    {pos::Position, vis::Visibility, name::String, txs::[SigExs],
                     meth::String, isPure::Bool, doc::Maybe String}
     | FunDcl    {poss::[Position]            --- because of multiple clauses
                     vis::Visibility, name::String,
@@ -735,9 +788,12 @@ linkAll  = Imports { publik = false, except = true,  items = [] }
 linkNone = Imports { publik = false, except = false, items = [] }
 
 {--
- * alternatives (constructors) in a data declaration
+    Alternatives (constructors) in a data declaration.
+    
+    Note: every field has its own strictness information, the overall strictness 
+    of the data constructor is derived from that.
  -}
-data DCon = DCon {pos::Position, vis::Visibility, name::String, strict::Bool,
+data DCon = DCon {pos::Position, vis::Visibility, name::String, -- strict::Bool,
                         flds::[ConField SName], doc::Maybe String}
 type DConS = DCon
 
@@ -803,7 +859,7 @@ data PatternT q =
     | PCon     { pos::Position, qname::q, pats :: [PatternT q] }            -- Con
     | PConFS   { pos::Position, qname::q, fields::[(String, PatternT q)] }  -- Con { field, ... }
     | !PAt     { pos::Position, uid::Int, var::String, pat::PatternT q}     -- a@pat
-    | !PStrict { pat :: PatternT q}                                         -- strict pattern !pat
+    | !PUser   { pat :: PatternT q, lazy :: Bool}                           -- !pat or ?pat
     | !PLit    { pos::Position, kind::Literalkind, value::String}           -- 42 #foo#
     | !PAnn    { pat::PatternT q, typ::SigmaT q}                            -- pat::forall a.Eq a => a -> a
     | !PMat    { pos::Position, uid::Int, var::String, value::String}       -- m~#foo#
@@ -1069,8 +1125,31 @@ tokens pos
             e = pos.end
             s = pos.start
 
+-- ##################### Code Gen Stuff #################################
+{--
+    Model of Java types
+ -}
+data JType =
+      !Ref   { jname :: JName,  typeargs :: [JType] }  --- frege type (extends Algebraic)
+    | !TArg  { var   :: String }                    --- type argument @A@
+    | !Nativ { typ   :: String, typeargs :: [JType] }  --- native type
+    | !Lazy  { yields :: JType }                    --- lazy type that yields etype
+    -- | !Func  { args :: Int, yields :: JType }       {-- function that can take so many
+    --                                                     arguments before yielding a result -} 
+    | Lambda                                        --- some function
+    | Something                                     {-- something unknown that can be casted
+                                                        to the desired type -} 
+    | Applicable                                    --- result of apply
 
-
+{--
+    Information needed for generating function calls, etc.
+    
+    -}
+data SymInfo = SI {
+        returnJT    :: JType     --- the type delivered by a call to this function
+        argJTs      :: [JType]   --- declared argument java types
+        argSigs     :: [Sigma]   --- argument sigma types
+    }
 
 
 --- avoid writing 'State' 'Global' all the time

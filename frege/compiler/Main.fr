@@ -109,6 +109,7 @@ import frege.Version
 import frege.List (Tree)
 import frege.IO(`<<`, stdout, stderr, File, OutputStreamWriter, PrintWriter)
 import frege.compiler.Nice (text, msgdoc)
+import frege.compiler.GUtil
 
 import frege.compiler.Classtools  as CT(FregePackage)
 import frege.compiler.Data
@@ -125,7 +126,7 @@ import frege.compiler.Transform   as P7()
 import frege.compiler.TCUtil      as TCU()
 import frege.compiler.Typecheck   as TC()
 import frege.compiler.GenMeta     as GM()
-import frege.compiler.GenUtil     as GU()
+import frege.compiler.gen.Util     as GU()
 import frege.compiler.GenJava7    as G7()
 import frege.compiler.EclipseUtil as EU()
 
@@ -134,7 +135,7 @@ import frege.compiler.EclipseUtil as EU()
 public stdOptions = Options {
       source = "-",             -- read from standard input
       sourcePath = ["."],
-      flags = fold U.setFlag 0 [WARNINGS, WITHCP, RUNJAVAC],     -- obviously
+      flags = fold U.setFlag Flags.empty [WARNINGS, WITHCP, RUNJAVAC],     -- obviously
       dir = ".",                -- work in current directory
       path = [],                -- same as java classpath
       prefix = "",              -- no prefix
@@ -142,7 +143,8 @@ public stdOptions = Options {
       tRanges = []
     }
 
-private ideOptions = stdOptions.{flags = fold U.setFlag 0 [WARNINGS, HINTS, IDE]}
+private ideOptions = stdOptions.{flags = 
+            Flags.fromList [COMMENTS, WARNINGS, HINTS, IDE]}
 
 --- utility function to create 'Options' data structure
 createopts sp flags dir path prefix = stdOptions.{
@@ -169,10 +171,11 @@ stdPrinter out = do
     either exception fromOSW eos
   where
     fromOSW :: OutputStreamWriter -> IO PrintWriter
-    fromOSW osw = do writer <- osw.toWriter; PrintWriter.fromWriterAf writer true
+    fromOSW osw = PrintWriter.fromWriterAf osw true
     exception exc = do
         stderr << "Can't make OutputStreamWriter: " << JException.getMessage exc << "\n"
         throw exc
+
 --- here it starts all
 main args = do
     rc <- mainIO args
@@ -182,11 +185,11 @@ main args = do
 --- the main function of the compiler
 mainIO ["-help"] = do
     stderr  << "usage:\n"
-    stderr  << "    java frege.compiler.Main [flags] [xy.fr] compile xy.fr or stdin\n"
+    stderr  << "    java frege.compiler.Main [flags] [items ....]\n"
     stderr  << "    java frege.compiler.Main -help           print this message\n"
     stderr  << "    java frege.compiler.Main -version        print version information\n\n"
     stderr  << "    JVM properties:\n"
-    stderr  << "        \"-Dfrege.javac=javac -J-Xmx512m\"   java compiler and options, default javac\n"
+    stderr  << "        \"-Dfrege.javac=javac -J-Xmx512m\"   java compiler and options, default internal\n"
 --  stderr  << "        \"-Dfrege.inPrelude=true\"           compile as prelude module, default false\n"
     stderr  << "        \"-Dfrege.prelude=other.Prelude\"    package name of Prelude, default frege.Prelude\n"
     usage
@@ -247,12 +250,16 @@ protected standardOptions = do
                 runique = 0,
                 sunique = 0,
                 xunique = 1,
+                kunique = 1,
                 tTree = Nil,
                 rTree = Nil,
                 sTree = Nil,
-                xTree = (Nil).insert GU.defEA 0,        -- so that 0 never indexes valid expression
+                xTree = Nil .insert GU.defEA 0,        -- so that 0 never indexes valid expression
+                kTree = Nil .insert (KindA {kind=0, suba=0, subb=0}) 0, -- kind0 = *
                 consts = Nil,
                 lambdas = Nil,
+                syminfo = Nil,
+                jimport = Nil,
             },
             unique = 1,
             packages = Nil,
@@ -263,10 +270,16 @@ protected standardOptions = do
             typEnv = []
         }
 
-native getOpArr frege.compiler.JavaUtils.getOperators
-            :: IO.URLClassLoader -> String -> IO (Exception (Maybe CT.OpArr))
+-- native getOpArr frege.compiler.JavaUtils.getOperators
+--             :: IO.URLClassLoader -> String -> IO (Exception (Maybe CT.OpArr))
 
-getOperators :: String -> StG (Exception (Maybe CT.OpArr))
+classNotFound :: Throwable -> IO (Throwable | Maybe CT.FregePackage)
+classNotFound = return . Left
+
+{--
+    This will be called from Scanner for each import 
+-}
+getOperators :: String -> StG (CatchAll (Maybe CT.OpArr))
 getOperators packstr = do
     global <- getST
     case global of
@@ -275,7 +288,9 @@ getOperators packstr = do
                 case c.lookup  packstr of
                     Just fp -> return (Right (Just fp.ops))
                     Nothing -> do
-                        efp <- doio (CT.getFrege g.sub.loader packstr)
+                        efp <- doio do
+                            CT.getFrege g.sub.loader packstr >>= return . Right
+                                `catch`  classNotFound
                         case efp of
                             Right (Just fp) -> do
                                 g <- getST
@@ -292,18 +307,19 @@ getOperators packstr = do
                     Right (_, Just fp) ->    return (Right (Just fp.ops))
 
 
-make :: Global -> String -> IO (Exception (Bool, Maybe FregePackage))
+make :: Global -> String -> IO (CatchAll (Bool, Maybe FregePackage))
 make g packstr = do
         return $! StG.run (U.logmsg TRACEM Position.null (text ("make" ++ packstr))) g
         cache <- g.cache.get
         case cache.lookup packstr of
             Just fp -> IO.return (Right (false, Just fp))
             Nothing -> do
-                        fp <- CT.getFrege g.sub.loader packstr
+                        fp <- CT.getFrege g.sub.loader packstr >>= return . Right
+                            `catch` classNotFound
                         either missing currentP fp
     where
         filename1 = ((#\.#.matcher packstr).replaceAll "/") ++ ".fr"
-        filename  = (("^" ++ g.options.prefix).compile.matcher filename1).replaceFirst ""
+        filename  = ((regforce ("^" ++ g.options.prefix)).matcher filename1).replaceFirst ""
         findFile [] f = IO.return Nothing
         findFile (d:ds) f = do
             let fname = d ++ "/" ++ f
@@ -318,28 +334,30 @@ make g packstr = do
             return $! StG.run (U.logmsg TRACEM Position.null (text (packstr ++ " " ++ show exc))) g
             fn <- findFile g.sourcePath filename
             maybe (cantFind Nothing filename) makeNow fn
-        currentP Nothing = IO.return (Left (Undefined.new "no frege class").toException)
+        currentP :: Maybe FregePackage -> IO (Exception (Bool, Maybe FregePackage))
+        currentP Nothing = IO.return (Left ((Undefined.new "no frege class")))
         currentP (Just fp) = do
             let time = FregePackage.time fp
             return $! StG.run (U.logmsg TRACEM Position.null (text (packstr
                         ++ " time:" ++ show time))) g
             fn <- findFile g.sourcePath filename
             maybe (cantFind (Just fp) filename) (makeIfModified fp time) fn
-        cantFind Nothing fstr = IO.return (Left (
+        cantFind :: Maybe FregePackage -> String -> IO (Exception (Bool, Maybe FregePackage))
+        cantFind Nothing fstr = IO.return (Left ((
             Undefined.new ("can't make " ++ packstr
-                ++ ", source file " ++ fstr ++ " missing")).toException)
+                ++ ", source file " ++ fstr ++ " missing"))))
         cantFind jfp fstr = do
             return $! StG.run (U.logmsg TRACEM Position.null (text (fstr ++ " not found, can't remake"))) g
             IO.return (Right (false, jfp))
+        makeNow :: File -> IO (Exception (Bool, Maybe FregePackage))         
         makeNow (fn::File) = do
             path <- fn.getPath
             return (StG.run (U.logmsg TRACEM Position.null (text path)) g)
             (_,gr) <- files [path] g.{sub <- SubSt.{errors = 0}}    -- with fresh env
-            if (gr.errors > 0) then let
-                        exc = (Undefined.new "compilation failed").toException
-                    in IO.return (Left exc)
-                else do
-                    fp  <- CT.getFrege g.sub.loader packstr
+            if (gr.errors < 1) 
+                then do
+                    fp  <- CT.getFrege g.sub.loader packstr >>= return . Right
+                            `catch` classNotFound
                     case fp of
                         Left x ->  IO.return (Left x)
                         Right (Just y) -> do
@@ -348,6 +366,8 @@ make g packstr = do
                             IO.return (Right (true, Just y))
                         Right Nothing ->
                             IO.return (Right (true, Nothing))
+                else 
+                    IO.return (Left (Undefined.new "compilation failed"))
         -- getFrege (Left x) pack = IO.return (Left x)
         -- getFrege (Right cl) pack = CT.getFrege cl pack
         makeIfModified (fp::FregePackage) time (fn::File) = do
@@ -356,7 +376,7 @@ make g packstr = do
             return $! StG.run (U.logmsg TRACEM Position.null (text ("modified " ++ path ++ " " ++ show mod))) g
             if mod > time then makeNow fn
                 else do
-                    let imp1 = [ (Pack.new s).unpack g | i <- 0..fp.imps.length-1, s <- fp.imps.[i].toList ]
+                    let imp1 = [ (Pack.new s).unpack g | i <- enumFromTo 0 (fp.imps.length-1), s <- fp.imps.[i].toList ]
                         imps | packstr == pPreludeBase.unpack g = []
                              | otherwise = pPreludeBase.unpack g:imp1
                     return $! StG.run (U.logmsg TRACEM Position.null (text ("dependencies " ++ (show imps)))) g
@@ -371,19 +391,21 @@ make g packstr = do
                         Right (Just sub) -> do
                             return $! StG.run (U.logmsg TRACEM Position.null (text ("out of date with respect to " ++ sub))) g
                             makeNow fn
+        makeDeps :: Long -> Maybe String -> [String] -> IO (Exception (Maybe String))                            
         makeDeps time b [] = IO.return (Right b)
         makeDeps time b (sp:sps) = do
             made <- make g.{options <- Options.{source=packstr}} sp
             case made of
                 Left x -> IO.return (Left x)
                 Right (true, _) -> makeDeps time (Just sp) sps
-                Right (_, Nothing) -> IO.return (Left ((Undefined.new "what is wrong?").toException))
+                Right (_, Nothing) -> IO.return (Left ((Undefined.new "something is wrong")))
                 Right (_, Just subfp) -> if subfp.time > time
                     then makeDeps time (Just sp) sps
                     else makeDeps time b         sps
 
+
 {--
- *  run the compiler for each file
+    run the compiler for each file
  -}
 files :: [String] -> Global -> IO ((), Global)
 files [] g = IO.return ((), g)
@@ -491,10 +513,10 @@ postParse = do
 
 
 
-noClassLoader :: JException -> IO ()
+noClassLoader :: Throwable -> IO ()
 noClassLoader x = do
-        stderr << "Can't make class loader due to " << JException.catched x << ": "
-               << JException.getMessage x << "\n"
+        stderr << "Can't make class loader due to " << x.catched << ": "
+               << x.getMessage << "\n"
         return ()
 
 openPrinter = do
@@ -508,7 +530,7 @@ openPrinter = do
             GM.banner version
             stio ("file", 1)
 
----  make filename from package name  @x.y.z.Packet@ =>  @dest\/x\/y\/z\/Packet.java@
+---  make filename from package name  @x.y.z.Packet@ =>  @dest/x/y/z/Packet.java@
 targetPath suffix = do
     g <- getST
     let target = g.options.dir ++ "/"
@@ -540,7 +562,7 @@ openFilePrinter suffix = do
 
 --- utility function to run a command.
 --- takes a command line and produces an exit code
-native runJavac frege.compiler.JavaUtils.runJavac :: StringArr -> IO Int
+native runJavac frege.runtime.Javac.runJavac :: StringArr -> IO Int
 
 --- run the java compiler
 javac = do
@@ -588,7 +610,10 @@ lexPassIDE !content = do
                           • SubSt.{messages    = []}
                           • SubSt.{toExport    = []}
                           }
-    changeST Global.{locals = Nil, typEnv = []}
+    so <- doio standardOptions
+    changeST Global.{gen = so.gen}                          
+    changeST Global.{locals = Nil, typEnv = [], genEnv = [], 
+                    javaEnv = Nil, packages = Nil, namespaces = Nil}
     g <- getST
     tokens <- Lex.passCS content getOperators
     stio ("tokens", length tokens)
@@ -621,42 +646,12 @@ parsePass = do
     g       <- getST
     result <- Parse.pass (filter Token.noComment g.sub.toks.toList)
     case result of
-        Just (packname, defs, doc) -> do
+        Just (Program.Module (packname, defs, doc)) -> do
             changeST Global.{sub <-  SubSt.{thisPack = Pack.new packname}}
             changeST Global.{sub <- (SubSt.{definitions = defs}
                                      • SubSt.{packageDoc = doc})}
             stio ("tokens",  g.sub.toks.length)
-        Nothing -> stio ("tokens", g.sub.toks.length)
-
-{-
-lexicalAnalysis = do
-        g <- getST
-        now   <- doio $ IO.currentTimeMillis()
-        tokens <- Lex.pass (getOperators g)
-        let !nts = length tokens
-        later <- doio $ IO.currentTimeMillis()
-        global <- getST
-
-        when (U.isOn global.options.flags VERBOSE) do
-            doio do
-                global.stderr.append " lexical analysis took "
-                   << (later-now).double / 1000.0 << "s, "
-                   << nts << " tokens, " << (nts.long  * 1000L) `div` (max 1L (later-now))
-                   << " tokens/s\n"
-            stio ()
-
-        case (global.errors == 0) of
-            true -> do
-                result <- Parse.pass tokens
-                case result of
-                    Just (packname, defs, doc) -> do
-                        changeST Global.{sub <-  SubSt.{thisPack = Pack.new packname}}
-                        changeST Global.{sub <- (SubSt.{definitions = defs}
-                                                 • SubSt.{packageDoc = doc})}
-                        stio ("tokens", nts)
-                    Nothing -> stio ("tokens", nts)
-            false -> stio ("tokens", nts)
--}
+        nothing -> stio ("tokens", g.sub.toks.length)
 
 
 --- print options
@@ -667,7 +662,7 @@ printopts opts = do
     stderr << "Destination directory " << opts.dir << "\n"
     unless (Nothing == opts.encoding) (stderr << "Source file encoding: " << unJust opts.encoding << "\n" >> return ())
     stderr << "Flags:                "
-        << (joined " " <~ map show <~ filter (U.isOn opts.flags)) (HINTS .. TRACEZ)
+        << opts.flags
         << "\n"
     return ()
 
@@ -681,6 +676,8 @@ usage = stderr
             << "       -nocp           exclude java classpath from -fp\n"
             << "       -hints          print more detailed error messages and warnings\n"
             << "       -inline         inline functions where possible\n"
+            << "       -comments       generate commented code\n"
+            << "       -strict         enable strict(er) semantics (eperimental)\n"
             << "       -explain i[-j]  print some debugging output from type checker\n"
             << "                       regarding line(s) i (to j). May help to understand\n"
             << "                       inexplicable type errors better.\n"
@@ -711,6 +708,9 @@ flagtree = Tree.fromList [
     ("-nowarn", (U.clrFlag, WARNINGS)),
     ("-make",   (U.setFlag, MAKE)),
     ("-inline", (U.setFlag, INLINE)),
+    ("-strict", (U.setFlag, STRICT)),
+    ("-lazy",   (U.clrFlag, STRICT)),
+    ("-comments", (U.setFlag, COMMENTS)),
     ("-v",      (U.setFlag, VERBOSE)),
     ("-j",      (U.clrFlag, RUNJAVAC)),
     ("-x1",     (U.setFlag, TRACE1)),
@@ -725,13 +725,14 @@ flagtree = Tree.fromList [
     ("-xt",     (U.setFlag, TRACET)),           -- type checker
     ("-xx",     (U.setFlag, TRACEX)),           -- env operations, lots of output
     ("-xm",     (U.setFlag, TRACEM)),           -- make operations
+    ("-xk",     (U.setFlag, TRACEK)),           -- kind inference
     ("-xo",     (U.setFlag, TRACEO)),           -- optimizer
     ("-xs",     (U.setFlag, TRACES)),           -- strictness
     ("-xg",     (U.setFlag, TRACEG)),           -- code generator
     ("-xz",     (U.setFlag, TRACEZ)),           -- on demand, for mysterious things
     ]
 
---* scan command line with some sanity checks, return indication of success
+--- scan command line with some sanity checks, return indication of success
 scanOpts :: Options -> [String] -> IO (Maybe (Options, [String]))
 scanOpts opts [] = IO.return (Just (opts, []))
 scanOpts opts ("-d":xs)  | null xs || head xs ~ #^-# = do
@@ -846,6 +847,8 @@ scanOpts opts ("-explain" : m~#^(\d+)(\D(\d+))?$# : args) =
                 Just s2 ->  (s1.atoi, s2.atoi)
                 Nothing ->  (s1.atoi, s1.atoi)
             Nothing -> (0, Int.maxBound)                 -- just to make warning go away
+scanOpts opts ("-version":args)  = mainIO ["-version"] >> scanOpts opts args
+scanOpts opts ("-help":args)     = mainIO ["-help"]    >> scanOpts opts args            
 scanOpts opts ((flag@#^-#):args) = case flagtree.lookup flag of
     Just (f, flag) -> scanOpts opts.{flags = f opts.flags flag} args
     Nothing -> do

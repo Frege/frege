@@ -38,7 +38,7 @@
  * Generate interface data for frege packages.
  *
  * The interface data are custom java annotations on the class that is generated from
- * a package. The format is definded in @frege\/MD.java@.
+ * a package. The format is definded in @frege/runtime/Meta.java@.
 
  * The information will be used by the compiler, the documentation tool
  * and the quickcheck tool.
@@ -49,13 +49,12 @@ package frege.compiler.GenMeta where
 import frege.Prelude except(print,println,break)
 import frege.List (Tree, insertkv, keys, each, values)
 import Data.List as DL(sortBy)
-import frege.IO   (File)
 
 import frege.compiler.Data
 import frege.compiler.Utilities as U(print, println)
 import frege.lib.PP             ()
-import frege.compiler.Transform (patsComplete, openCaseWhen, rkSafeTC, rkTail, rkSimple)
-import frege.compiler.GenUtil
+import frege.compiler.Transform (patsComplete, openCaseWhen)
+import frege.compiler.gen.Util
 
 
 
@@ -64,27 +63,33 @@ post = do
     changeST Global.{gen <- GenSt.{rTree = Nil}}
     changeST Global.{gen <- GenSt.{sTree = Nil}}
     changeST Global.{gen <- GenSt.{xTree = Nil}}
+    changeST Global.{gen <- GenSt.{kTree = Nil}}
     changeST Global.{gen <- GenSt.{consts = Nil}}
     stio true
 
 
 pass = do
     g <- getST
-    let JName pack _ = g.thisPack.className g
+    let JName pack main = g.thisPack.className g
     when (pack != "") do print "package "; print pack; println ";"; println ""
     -- imports
-    println "import frege.MD;"
-    println "import frege.RT;"
-    println "import frege.rt.*;"
-    unless (inPrelude g.thisPack g) do
+    -- println "import frege.runtime.Meta;"
+    -- println "import frege.runtime.Runtime;"
+    -- println "import frege.runtime.*;"
+    unless (false && inPrelude g.thisPack g) do
         let javaimport p = do
-                print   "import "
-                print (Pack.className p g).show
-                println ";"
-        foreach preludePacks (javaimport • fst)
+                g <- getST
+                let b = Pack.className p g
+                when (b.base `notElem` (main:javaLangNames)
+                    && g.gen.jimport.lookup b.base == Nothing) do
+                        changeST Global.{gen <- GenSt.{jimport <- insertkv b.base p}}  
+                        println  ("import " ++ b.show ++ ";")
+                    
+        foreach (keys g.packages) javaimport 
 
 
     println ""
+    println "@SuppressWarnings(\"unused\")"
 
 
     let nss = [ (n,p) | (n,p) <- each g.namespaces, p != g.thisPack ]
@@ -110,12 +115,14 @@ pass = do
     symls <- envLinks g.thisTab
 
     g <- getST
-    ctime <- doio $ (IO.currentTimeMillis())
+    ctime <- doio $ (System.currentTimeMillis())
 
-    let ataus = (map fst • sortBy (comparing snd) • each) g.tTree
-        arhos = (map fst • sortBy (comparing snd) • each) g.rTree
-        asigs = (map fst • sortBy (comparing snd) • each) g.sTree
-        exprs = (map fst • sortBy (comparing snd) • each) g.xTree
+    let table x = (map fst • sortBy (comparing snd) • each) x
+        ataus = table g.tTree
+        arhos = table g.rTree
+        asigs = table g.sTree
+        exprs = table g.xTree
+        kinds = table g.kTree
     pp  (annotation "FregePackage" [
                 ("source", anno g.options.source),
                 ("time",   anno ctime),
@@ -132,7 +139,8 @@ pass = do
                 ("taus",  anno ataus),
                 ("rhos",  anno arhos),
                 ("sigmas", anno asigs),
-                ("exprs", anno exprs)])
+                ("exprs", anno exprs),
+                ("kinds", anno kinds)])
 
     println ""
 
@@ -182,8 +190,8 @@ banner v = do
     println ""
 
 
-annoSimple kind val = text "@MD." <> text kind <> bracket "(" val ")"
-annoArr    kind vs  = text "@MD." <> text kind <> bracket "({" (sep "," vs) "})"
+annoSimple kind val = text "@Meta." <> text kind <> bracket "(" val ")"
+annoArr    kind vs  = text "@Meta." <> text kind <> bracket "({" (sep "," vs) "})"
 some vs = bracket "{" (sep "," vs) "}"     -- some annotations in a list
 
 
@@ -193,10 +201,32 @@ mkOp (s,tid)
     | tid < NOP0 = AOP s 1 (ord tid - ord ROP0)
     | otherwise  = AOP s 2 (ord tid - ord NOP0)
 
+flatKind KType = stio (KindA {kind=0, suba=0, subb=0})
+flatKind KGen  = stio (KindA {kind=1, suba=0, subb=0})
+flatKind KVar  = stio (KindA {kind=2, suba=0, subb=0})
+flatKind (KApp a b) = do
+    suba <- kindIndex a
+    subb <- kindIndex b
+    stio (KindA {kind=3, suba, subb})
+
+kindIndex k = do
+    kflat <- flatKind k
+    kaIndex kflat
+
+kaIndex k = do    
+    g <- getST
+    case g.kTree.lookup k of
+        Just i -> stio i
+        Nothing -> do
+            changeST Global.{gen <- GenSt.{kunique <- (1+)} • GenSt.{kTree <- insertkv k g.kunique}}
+            stio g.kunique
 
 
-flatTau (TVar {var})  = stio (TauA {kind=3,tcon=Nothing,suba=0,subb=0,tvar=var})
-flatTau (TCon {name}) = stio (TauA {kind=2,tcon=Just name,suba=0,subb=0,tvar=""})
+flatTau (TVar {var,kind})  = do
+    suba <- kindIndex kind
+    return (TauA {kind=3,tcon=Nothing,suba,subb=0,tvar=var})
+flatTau (TCon {name}) = do
+    return (TauA {kind=2,tcon=Just name,suba=0,subb=0,tvar=""})
 flatTau (TApp a b) = do
     suba <- tauIndex a
     subb <- tauIndex b
@@ -221,7 +251,8 @@ taIndex ta = do
 
 flatSigma (ForAll bnd rho) = do
     rho <- rhoIndex rho
-    stio (SigmaA {bound=bnd,rho})
+    kinds <- mapM kindIndex (map snd bnd)
+    stio (SigmaA {bound=map fst bnd,rho,kinds})
 
 sigIndex :: Sigma -> StG Int
 sigIndex sig = do
@@ -242,6 +273,7 @@ flatCtx (Ctx {pos, cname, tau}) = do
     -- U.logmsg TRACE9 pos (tau.nice g)
     tau <- tauIndex tau
     stio (CtxA {clas=cname,tau})
+    
 
 flatRho (RhoFun ctx sig rho) = do
     cont <- mapSt flatCtx ctx
@@ -384,13 +416,14 @@ expIndex exp = encodeX exp >>= mbIndex
             ai <- expIndex (Vbl {pos=Position.null, name=VName pPreludeBase "~", typ = Nothing})
             a1 <- eaIndex defEA.{xkind=1, subx1 = ai, subx2 = ei}
             stio (Just defEA.{xkind=1, subx1 = a1, subx2 = pi})
-        encodeP (PStrict {pat}) = do
+        encodeP (PUser {pat,lazy}) = do
             px <- encodeP pat
             case px of
                 Nothing -> stio Nothing
                 just -> do
                     pi <- mbIndex px
-                    ai <- expIndex (Vbl {pos=Position.null, name=VName pPreludeBase "!", typ = Nothing})
+                    let unop = if lazy then "?" else "!"
+                    ai <- expIndex (Vbl {pos=Position.null, name=VName pPreludeBase unop, typ = Nothing})
                     stio (Just defEA.{xkind=1, subx1 = ai, subx2 = pi})
         encodeP PConFS{} = stio Nothing
 
@@ -406,11 +439,13 @@ eaIndex expa = do
 annoSymA syma = do
     vars <- mapSt tauIndex (Symbol.vars syma)
     typ  <- sigIndex (Symbol.typ syma)
+    kind <- kindIndex syma.kind
     let a = annotation "SymA" [
                 ("offset", anno syma.pos.first.offset),
                 ("name", anno (Symbol.name syma)),
                 ("vars", anno vars),
                 ("typ",  anno typ),
+                ("kind", anno kind),
                 ("publik", if syma.vis == Public then PP.nil else anno false),
                 ("doc", maybe PP.nil anno (Symbol.doc syma))
             ]
@@ -433,8 +468,9 @@ annoSymV symv = do
             --     ++ " exported = " ++ show symv.exported))
                                     
             exp <- if candidate && (
-                          symv.depth == 0 && symv.rkind `band` rkSimple != 0
-                          || symv.rkind `band` rkSafeTC != 0 && symv.rkind `band` rkTail == 0
+                          symv.depth == 0 && RSimple `member` symv.rkind 
+                          || RSafeTC `member` symv.rkind  
+                                && not (RTailRec `member` symv.rkind)
                         )
                         then maybe (stio 0) expIndex symv.expr
                         else stio 0
@@ -444,14 +480,15 @@ annoSymV symv = do
                     | otherwise = false
                 reason
                     | symv.depth == 0 = "may be too expensive to recompute"
-                    | symv.rkind `band` rkSafeTC == 0 = "may be deeply recursive"
-                    | symv.rkind `band` rkTail   != 0 = "is tail recursive"
+                    | not (RSafeTC  `member` symv.rkind)  = "may be deeply recursive"
+                    | RTailRec `member` symv.rkind        = "is tail recursive"
                     | otherwise = "contains let expressions, where clauses, references to private items or case expressions that may fail"
 
             when (sorry) do
                 (if classop then U.error else U.hint) symv.pos
                      (text ("The code of " ++ nice symv g
                                 ++ " cannot be exported because it " ++ reason ++ ". "))
+            ttaus <- mapM (tauIndex) symv.throwing                                
             let !a = annotation "SymV" [
                     ("offset", anno symv.pos.first.offset),
                     ("name", anno symv.name),
@@ -464,7 +501,9 @@ annoSymV symv = do
                     ("rkind", anno symv.rkind),
                     ("expr", if exp == 0 then PP.nil else anno exp),
                     ("publik", if symv.vis == Public then PP.nil else anno false),
-                    ("doc", maybe PP.nil anno symv.doc)]
+                    ("doc", maybe PP.nil anno symv.doc),
+                    ("throwing", if null ttaus then PP.nil else anno ttaus),
+                    ("over", if null symv.over then PP.nil else anno symv.over)]
             stio a
 
 annoSymL sym = annotation "SymL" [
@@ -478,20 +517,37 @@ annoSymL sym = annotation "SymL" [
 annoSymD sym = do
     g <- getST
     typ <- sigIndex (Symbol.typ sym)
-    let fnms = map (fromMaybe "" • ConField.name)  sym.flds
-    ftys <- mapSt (sigIndex • ConField.typ) sym.flds
+    fields <- mapSt conFieldA sym.flds
     let a = annotation "SymD" [
                     ("offset", anno (Symbol.pos sym).first.offset),
                     ("name",  anno (Symbol.name  sym)),
-                    ("stri",  lit sym.strsig.show),
+                    -- ("stri",  lit sym.strsig.show),
                     ("cid",   anno (Symbol.cid   sym)),
                     ("typ",   anno typ),
-                    ("fnms",  if null fnms || all null fnms then PP.nil else anno fnms),
-                    ("ftys",  if null ftys then PP.nil else anno ftys),
+                    ("fields", anno fields),
+                    -- ("fnms",  if null fnms || all null fnms then PP.nil else anno fnms),
+                    -- ("ftys",  if null ftys then PP.nil else anno ftys),
                     ("priv",  if sym.vis == Private then anno true else PP.nil),
                     ("publik", if sym.vis == Public then PP.nil else anno false),
                     ("doc", maybe PP.nil anno (Symbol.doc sym))]
     stio a
+
+data ConFieldA = !FieldA{pos::Position, name,doc :: Maybe String, vis :: Visibility, strict :: Bool, typ :: Int}
+ 
+conFieldA Field{pos, name, doc, vis, strict, typ} = do
+    sig <- sigIndex typ
+    return FieldA{pos, name, doc, vis, strict, typ=sig}
+ 
+instance Anno ConFieldA where
+    anno FieldA{pos, name, doc, vis, strict, typ} = annotation "Field" [
+            ("doc",     maybe PP.nil anno doc),
+            ("name",    maybe PP.nil anno name),
+            ("offset",  anno pos.first.offset),
+            ("privat",  if vis == Private then anno true else PP.nil),
+            ("sigma",   anno typ),
+            ("strict",  if strict then PP.nil else anno strict),
+        ]
+
 
 annoSymC sym = do
     tau <- tauIndex (Symbol.tau sym)
@@ -501,7 +557,6 @@ annoSymC sym = do
                     ("offset", anno (Symbol.pos sym).first.offset),
                     ("name",  anno (Symbol.name  sym)),
                     ("tau",   anno tau),
-                    ("vkind", if sym.vkind == 0  then PP.nil else anno sym.vkind),
                     ("sups",  if null sym.supers then PP.nil else anno sym.supers),
                     ("ins1",  if null sym.insts  then PP.nil else anno (map fst sym.insts)),
                     ("ins2",  if null sym.insts  then PP.nil else anno (map snd sym.insts)),
@@ -530,10 +585,12 @@ annoSymT sym = do
     memc <- envCons   (Symbol.env sym)
     meml <- envLinks  (Symbol.env sym)
     memv <- envValues (Symbol.env sym)
+    kind <- kindIndex sym.kind
     let a = annotation "SymT" [
                     ("offset", anno (Symbol.pos sym).first.offset),
                     ("name",  anno (Symbol.name  sym)),
                     ("typ",   anno typ),
+                    ("kind",  anno kind),
                     ("cons",  some memc),
                     ("lnks",  some meml),
                     ("funs",  some memv),

@@ -38,20 +38,7 @@
  * This is pass 3 of the frege compiler, imlemented in 'pass'.
  -}
 
-{-
- * $Author$
- * $Revision$
- * $Date$
- * $Id$
- -}
-
 package frege.compiler.Enter where
-
---- This is $Revision$
-protected version = v "$Revision$" where
-    v (m ~ #(\d+)#) | Just g <- m.group 1 = g.atoi
-    v _ = 0
-
 
 import frege.List (Tree, keys, values, insertkv)
 import Data.List  as DL(uniqBy, sort, sortBy)
@@ -117,17 +104,18 @@ chgddef (d@DatDcl {pos}) = do
                 in [ d | (f,p) <- fields, d <- gen g p dsym.name cons f]
         work _ _ = error "work: need a SymT"
         gen :: Global -> Position -> QName -> [Symbol] -> String -> [DefinitionS]
-        gen g pos tname cons f = let
-                model = FunDcl {vis=Public, poss = [pos], name="", pats=[pvar "this"], expr = var "x", doc=Nothing}
+        gen g fpos tname cons f = let
+                pos   = fpos.{first <- Token.{offset <- succ}}
+                model = FunDcl {vis=Public, poss = [fpos], name="", pats=[pvar "this"], expr = var "x", doc=Nothing}
                 symf =  model.{name = f, expr = getExpr,
                                 doc = getdoc}   -- Just ("access field @" ++ f ++ "@")}
-                symu =  model.{name = "upd$" ++ f, expr = updExpr,
+                symu =  model.{name = "upd$" ++ f, expr = updExpr,  poss = [pos],
                                 pats=[pvar "this", pvar "that"],
                                 doc = Just ("update field @" ++ f ++ "@")}
-                symc =  model.{name = "chg$" ++ f, expr = chgExpr,
+                symc =  model.{name = "chg$" ++ f, expr = chgExpr,  poss = [pos], 
                                 pats=[pvar "this", pvar "that"],
                                 doc = Just ("change field @" ++ f ++ "@")}
-                symh =  model.{name = "has$" ++ f, expr = hasExpr,
+                symh =  model.{name = "has$" ++ f, expr = hasExpr,  poss = [pos],
                                 doc = Just ("check if constructor has field @" ++ f ++ "@")}
                 -- -------------- utility functions ---------------
                 -- get the doc for field f
@@ -146,18 +134,18 @@ chgddef (d@DatDcl {pos}) = do
                 -- displayed name of a constructor
                 cname sym = case Symbol.name sym of
                     MName tn base -> With1 pos.first.{tokid=CONID, value=tn.base}
-                                           pos.first.{tokid=CONID,value=base}
+                                           pos.first.{tokid=CONID, value=base}
                     _ -> error "constructor must be a member"
                 -- [PVar c1, PVar c2, PVar c3, ...]
                 -- subpats "_" = repeat (PVar {name="_",pos})
-                subpats c = [ pvar (c   ++ show a)   | a <- 1..1000 ]
-                subvars   = [ var  ("a" ++ show a)   | a <- 1..1000 ]
+                subpats c = [ pvar (c   ++ show a)   | a <- enumFromTo 1 1000 ]
+                subvars   = [ var  ("a" ++ show a)   | a <- enumFromTo 1 1000 ]
                 -- construct pattern  Con s1 s2 s3 ... sn
                 conpat con s = PCon {qname=cname con,pos,pats}
                     where pats = take (arity con) (subpats s)
                 reppat v (pcon@PCon {}) = pcon.{pats <- map sv}
                     where
-                        sv (p@PVar {var}) | var == v = PStrict p
+                        -- sv (p@PVar {var}) | var == v = PUser{pat=p, lazy=false}
                         sv p = p
                 reppat v p = p
                 -- construct simple (pattern) variables
@@ -193,7 +181,7 @@ chgddef (d@DatDcl {pos}) = do
                     | otherwise = Case CNoWarn this (hasAlts ++ [last]) Nothing
                 hasAlts = [ CAlt {pat=conpat con "_", ex = vTrue}
                                                         | con <- cons, v <- occurs con f]
-                last = CAlt {pat=pvar "no", ex = vFalse}
+                last = CAlt {pat=pvar "_", ex = vFalse}
             in [symf, symu, symc, symh]
 chgddef d = stio d      -- leave others unchanged
 
@@ -218,7 +206,7 @@ post = do
     stio true
 
 transTVar :: TauS -> Tau
-transTVar (TVar {var,pos}) = TVar {var,pos}
+transTVar (TVar {var,pos,kind}) = TVar {var,pos,kind}
 transTVar _ = error "transTVar: no TVar"
 
 
@@ -252,7 +240,7 @@ enter1 fname (d@ClaDcl {pos}) = do
         changeST Global.{sub <-
             SubSt.{idKind <- insertkv (KeyTk pos.first) (Right tname)}}
         U.enter (SymC {sid=0, pos=d.pos, vis=d.vis, doc=d.doc, name=tname,
-                       tau=transTVar d.clvar, vkind=0, supers=[], insts=[], env=Nil})
+                       tau=transTVar d.clvar, supers=[], insts=[], env=Nil})
 
         let vdefs = map Definition.{vis <- max d.vis} d.defs
             xdefs = filter ((>d.vis) • Definition.vis) d.defs
@@ -289,7 +277,7 @@ enter1 !fname (!d@InsDcl {pos=!pos}) = do
                  sid=0, clas=fname "", typ=pSigma, env=Nil})
         enter (MName tname) d.defs
 
-        !typ  <- U.transSigmaP true d.typ
+        !typ  <- U.transSigma d.typ
         !clas <- U.defaultXName (Pos d.clas.id d.clas.id) (TName pPreludeBase "Eq") d.clas
 
         case U.instTSym typ g of
@@ -399,14 +387,15 @@ enter1 fname (d@AnnDcl {pos}) = do
 enter1 fname (d@DatDcl {pos}) = do
         g <- getST
         let dname = TName g.thisPack d.name
+            kind  = foldr KApp KType dsig.kinds
             dtcon = TCon {pos=d.pos, name=dname}
             dtau  = if null d.vars then dtcon else dtcon.mkapp (map transTVar d.vars)
             drho  = RhoTau [] dtau
-            dsig  = ForAll (map Tau.var d.vars)
-            dsym  = SymT {sid=0, pos=d.pos, vis=d.vis, doc=d.doc, name=dname, typ=dsig drho,
+            dsig  = ForAll (map Tau.varkind d.vars) drho
+            dsym  = SymT {sid=0, pos=d.pos, vis=d.vis, doc=d.doc, name=dname, typ=dsig,
                             product = length d.ctrs == 1,
                             enum = null d.vars && all (0==) (map (length • DCon.flds) d.ctrs),
-                            nativ = Nothing, pur = false,
+                            nativ = Nothing, pur = false, kind,
                             newt = length d.ctrs == 1 && 1 == (length • DCon.flds • head) d.ctrs,
                             env=Nil}
         U.enter dsym
@@ -426,13 +415,13 @@ enter1 fname (d@DatDcl {pos}) = do
             let fs = map ConField.{typ = pSigma} dcon.flds  -- zip (map fst dcon.flds) (repeat pSigma)
                 fnms = [ n | Field {name = Just n} <- dcon.flds ]
                 fnps = [ (p, n) | Field {pos=p, name = Just n} <- dcon.flds ]
-                ssig = S (take (length dcon.flds) allStrict)
+                ssig = S [ if ConField.strict f then S[] else U | f <- dcon.flds]
                 !cqname = mname dcon.name
                 register (p, n) = changeST Global.{sub <- SubSt.{
                     idKind <- insertkv (KeyTk (Position.first p)) (Right (mname n))}}
             foreach fnms (checkunique dcon.pos (mname dcon.name) fnms)
             U.enter (SymD {name = mname dcon.name, typ=pSigma, flds = fs,
-                cid=cid, sid=0, strsig = if dcon.strict then ssig else U,
+                cid=cid, sid=0, strsig = ssig,
                 pos=dcon.pos, vis=dcon.vis, doc=dcon.doc})
             changeST Global.{
                 sub <- SubSt.{
@@ -455,10 +444,14 @@ enter1 fname (d@JavDcl {pos}) = do
         let !dname = TName g.thisPack d.name
             dtcon = TCon {pos=d.pos, name=dname}
             dtau  = dtcon.mkapp (map transTVar d.vars)
+            primitive = d.jclas `elem` primitiveTypes
+            ktype = if primitive then KType else KGen
+            kind  = foldr KApp ktype dsig.kinds 
+            dsig  = ForAll (map Tau.varkind d.vars) (RhoTau [] dtau)
         U.enter (SymT {sid=0, pos=d.pos, vis=d.vis, doc=d.doc, name=dname,
                        product = false, enum = false, newt = false, pur = d.isPure,
-                       typ=ForAll (map Tau.var d.vars) (RhoTau [] dtau),
-                       nativ = Just d.jclas, env=Nil})
+                       typ=dsig,
+                       kind, nativ = Just d.jclas, env=Nil})
         changeST Global.{
             sub <- SubSt.{
                 idKind <- insertkv (KeyTk pos.first) (Right dname)}}
@@ -467,11 +460,12 @@ enter1 fname (d@JavDcl {pos}) = do
 enter1 fname (d@TypDcl {pos}) = do
         g <- getST
         let !dname = TName g.thisPack d.name
+            kind = KVar
         changeST Global.{
             sub <- SubSt.{
                 idKind <- insertkv (KeyTk pos.first) (Right dname)}}
         U.enter (SymA {sid=0, pos=d.pos, vis=d.vis, doc=d.doc,
-                       name = dname, typ = pSigma,
+                       name = dname, typ = pSigma, kind,
                        vars = map transTVar d.vars})
 
 
@@ -483,10 +477,10 @@ deriveInst (d@InsDcl {pos}) = stio d
 deriveInst (d@DrvDcl {pos}) = do
         g <- getST
         clas <- U.defaultXName pos (TName pPreludeBase "Eq") d.clas
-        typ  <- U.transSigmaP true d.typ
+        typ  <- U.transSigma d.typ
         case U.instTSym typ g of
             Just (sym@SymT {env}) | ctrs <- U.envConstructors env,
-                                    not (null ctrs) -> do
+                                    not (null ctrs) || clas.base == "Exceptional" -> do
                 dcls <- deriveDcls pos clas sym ctrs
                 -- dtyp <- withDerivedContext pos d.typ d.clas
                 stio idcl.{defs=dcls, typ=withDerivedContext pos d.typ d.clas}
@@ -504,7 +498,7 @@ deriveInst (d@DrvDcl {pos}) = do
         withDerivedContext pos (ForAll [] rho) clas
             | null rho.context = ForAll [] rho.{context}
             where
-                context = [ Ctx pos clas (TVar pos v) false | v <- U.freeTVars [] rho ]
+                context = [ Ctx pos clas (TVar pos KVar v) | v <- U.freeTVnames [] rho ]
         withDerivedContext pos sigma clas = sigma
 
 deriveInst d = do
@@ -518,7 +512,7 @@ deriveDcls :: Position -> QName -> Symbol -> [Symbol] -> StG [DefinitionS]
 deriveDcls pos clas forty ctrs = do
     g <- getST
     U.logmsg TRACE4 pos (text ("derive " ++ QName.nice clas g ++ " for " ++ Symbol.nice forty g))
-    let derivable = ["Eq", "Ord", "Enum", "Bounded", "Show"]
+    let derivable = ["Eq", "Ord", "Enum", "Bounded", "Show", "Exceptional"]
         con = head ctrs
         -- arity of a constructor
         arity sym = length (Symbol.flds sym)
@@ -530,8 +524,8 @@ deriveDcls pos clas forty ctrs = do
             _ -> error "constructor must be a member"
         -- [PVar c1, PVar c2, PVar c3, ...]
         -- subpats "_" = repeat (pvar "_")
-        subpats c = [ pvar (c ++ show a) | a <- 1..1000 ]
-        subvars c = [ var  (c ++ show a) | a <- 1..1000 ]
+        subpats c = [ pvar (c ++ show a) | a <- enumFromTo 1 1000 ]
+        subvars c = [ var  (c ++ show a) | a <- enumFromTo 1 1000 ]
         -- construct pattern  Con s1 s2 s3 ... sn
         conpat :: Symbol -> String -> PatternS
         conpat con s = PCon {qname=cname con, pos=pos.change QCONID con.name.base, pats}
@@ -549,24 +543,38 @@ deriveDcls pos clas forty ctrs = do
                         pos=pos.change VARID s, typ = Nothing}
         !varg1  = var  "arg1"
         !varg2  = var  "arg2"
+        !varg3  = var  "arg3"
+        
         !parg1  = pvar "arg1"
         !parg2  = pvar "arg2"
+        !parg3  = pvar "arg3"
+        
+        vOrd    = var "ord"
+        vFrom   = var "from"
         -- misc global SNames
         tuple2Name  = With1 baseToken pos.first.{tokid=CONID, value="(,)"}
-        -- unitName    = With1 baseToken pos.first.{tokid=CONID, value="()"}
+        consName    = With1 baseToken pos.first.{tokid=CONID, value=":"}
+        nilName     = With1 baseToken pos.first.{tokid=CONID, value="[]"}
         eqName      = With2 baseToken pos.first.{tokid=CONID, value="Ordering"} pos.first.{tokid=CONID, value="Eq"}
         eqeqName    = With2 baseToken pos.first.{tokid=CONID, value="Eq"} pos.first.{tokid=VARID, value="=="}
+        lteqName    = Simple pos.first.{tokid=VARID, value="<"}
         hashName    = With2 baseToken pos.first.{tokid=CONID, value="Eq"} pos.first.{tokid=VARID, value="hashCode"}
         addName     = With2 baseToken pos.first.{tokid=CONID, value="Int"} pos.first.{tokid=VARID, value="+"}
         mulName     = With2 baseToken pos.first.{tokid=CONID, value="Int"} pos.first.{tokid=VARID, value="*"}
         -- undefName   = With1 baseToken pos.first.{tokid=VARID, value="undefined"}
         errorName   = With1 baseToken pos.first.{tokid=VARID, value="error"}
+        mapName     = With1 listToken pos.first.{tokid=VARID, value="map"}
+        intEnumFTTName = With2 baseToken pos.first.{tokid=CONID, value="Int"} pos.first.{tokid=VARID, value="enumFromThenTo"}
         appName     = With2 baseToken pos.first.{tokid=CONID, value="String"} pos.first.{tokid=VARID, value="++"}
         showName    = With1 pos.first.{tokid=CONID, value="PreludeText"} pos.first.{tokid=VARID, value="show"}
         ptcon pats  = PCon {qname=tuple2Name, pos=pos.change CONID "(,)", pats}
         !vtcon      = Con  {name= tuple2Name, pos=pos.change CONID "(,)", typ = Nothing}
         ptup a b = ptcon [a,b]
         vtup a b = nApp  (nApp  vtcon a) b
+        -- lists
+        consCon = Con {name = consName, pos = pos.change CONID ":", typ = Nothing}
+        nilCon  = Con {name = nilName, pos = pos.change CONID "[]", typ = Nothing}
+        singleton x = nApp (nApp consCon x) nilCon 
         -- misc constructors and vars
         !pEq = PCon {qname=eqName, pos=pos.change CONID "Eq", pats=[]}
         -- !pUn = PCon {qname=unitName, pos=pos.change CONID "()", pats=[]}
@@ -575,9 +583,12 @@ deriveDcls pos clas forty ctrs = do
         !vTrue  = Lit {kind=LBool, value="true",  pos, typ = Nothing}
         -- !vUndef = Vbl {name=undefName, pos=pos.change VARID "undefined", typ = Nothing}
         !vError = Vbl {name=errorName, pos=pos.change VARID "error", typ = Nothing}
+        !vMap   = Vbl {name=mapName,   pos=pos.change VARID "map", typ = Nothing}
+        !vIntEnumFTT = Vbl {name=intEnumFTTName, pos=pos.change VARID "enumFromThenTo", typ=Nothing}
         !vApp   = Vbl {name=appName,   pos=pos.change VARID "++", typ = Nothing}
         !vShow  = Vbl {name=showName,  pos=pos.change VARID "show", typ = Nothing}
         !opEq   = Vbl {name=eqeqName,  pos=pos.change VARID "==", typ = Nothing}
+        !opLt   = Vbl {name=lteqName,  pos=pos.change VARID "<", typ = Nothing}
         !opHash = Vbl {name=hashName,  pos=pos.change VARID "hashCode", typ = Nothing}
         !opAdd  = Vbl {name=addName,   pos=pos.change VARID "+", typ = Nothing}
         !opMul  = Vbl {name=mulName,   pos=pos.change VARID "*", typ = Nothing}
@@ -708,18 +719,26 @@ deriveDcls pos clas forty ctrs = do
                     joinit s [v] = showsv s v ")"
                     joinit s (a:b:c) = joinit (showsv s a ", ") (b:c)
 
-        deriveClass "Enum" = [ord, from, succ, pred]  -- , eq]
+        deriveClass "Enum" = [ord, from, succ, pred,
+                                eFromThenTo, eFromThen]  -- , eq]
             where
                 -- eq      = publicfun "=="    [pvar "a", pvar "b"]  eqex
                 ord     = publicfun "ord"   [pvar "r"]      oex
                 from    = publicfun "from"  [pvar "r"]      fex
                 succ    = publicfun "succ"  [pvar "r"]      sex
                 pred    = publicfun "pred"  [pvar "r"]      pex
+                eFromThenTo = publicfun "enumFromThenTo" [parg1, parg2, parg3]
+                                eFTTex
+                eFromThen = publicfun "enumFromThen" [parg1, parg2]
+                                eFTex                                
                 -- eqex    = (opEq `nApp`
                 --             ((var "<=>" `nApp` var "a") `nApp` var "b")) `nApp`
                 --                 pEq
                 ctup    = sortBy (comparing Symbol.cid) ctrs
                 ctdn    = reverse ctup
+                max     = Con {name=cname (head ctdn), pos, typ = Nothing}
+                min     = Con {name=cname (head ctup), pos, typ = Nothing}
+                minmax  = Ifte (mkop varg1 opLt varg2) max min Nothing
                 oex     = nApp (gvar "PreludeBase" "constructor") (var "r")
                 fex     = Case CNormal (var "r") (map fromalt ctup ++ [last]) Nothing
                 sex     = Case CNormal (var "r") (mkalts "succ " ctup) Nothing
@@ -732,6 +751,12 @@ deriveDcls pos clas forty ctrs = do
                 mkalts s [x] = [calt (conpat x "_") (nApp vError (string (s ++ show (cname x))))]
                 mkalts s (x:y:zs) = calt (conpat x "_") (Con  {name=cname y, pos, typ = Nothing}) : mkalts s (y:zs)
                 mkalts s [] = []
+                eFTTex
+                    | length ctrs > 1  = nApp (nApp vMap vFrom)
+                            (fold nApp vIntEnumFTT 
+                                (map (nApp vOrd) [varg1, varg2, varg3]))
+                    | otherwise = singleton min
+                eFTex   = fold nApp (var "enumFromThenTo") [varg1, varg2, minmax]
 
         deriveClass "Bounded" = [minval, maxval]
             where
@@ -742,6 +767,21 @@ deriveDcls pos clas forty ctrs = do
                 maxval  = publicfun "maxBound" [] max
                 minval  = publicfun "minBound" [] min
 
+        deriveClass "Exceptional" =  [
+                NatDcl{pos, vis=Public, name="javaClass", 
+                    txs = [(ForAll [] (RhoTau [] tapp), [])], 
+                    meth = fromMaybe "?" forty.nativ ++ ".class", 
+                    isPure = true, 
+                    doc = Nothing}]
+            where
+                tapp = TApp pClass (TCon pos this)
+                pClass = TCon{pos, name = With1 baseToken pos.first.{tokid=CONID, value="Class"}}
+                this = case forty.name of
+                    TName p b -> With1 pos.first.{tokid=CONID, value=x}
+                                        pos.first.{tokid=CONID, value=b}
+                                    where x = head [ s | (NSX s, ps) <- g.namespaces.each,
+                                                            ps == p ]
+                    _ -> error ("Cannot derive for non type: " ++ nicer forty g)
         deriveClass s = error ("can't deriveClass " ++ s)
 
     case clas of
@@ -755,7 +795,13 @@ deriveDcls pos clas forty ctrs = do
                     ++ (if length bad == 1 then head bad ++ " is not a nullary constructor"
                         else joined ", " bad ++ " are not nullary constructors")))
                 stio []
-
+        TName ppp "Exceptional" 
+            | inPrelude ppp g = if isJust forty.nativ
+                then return (deriveClass "Exceptional")
+                else do
+                    U.error pos (msgdoc ("Can't derive Exceptional for " ++ forty.nicer g
+                        ++ ", only native types are allowed"))
+                    return []
         TName ppp ccc | inPrelude ppp g,
                         ccc `elem` derivable -> stio (deriveClass ccc)
         _ -> do

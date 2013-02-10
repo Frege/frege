@@ -80,15 +80,14 @@ public version = v "$Revision$" where
 
 -- import of library packages
 
-import frege.IO(`<<`, stdout, stderr, stdin,
-                BufferedReader, FileInputStream, InputStream, InputStreamReader)
+
 import frege.List(Tree, keys, contains, fromKeys, each)
 import Data.List as DL(partitioned, takeUntil)
 
 -- import of compiler packages
 import frege.compiler.Data       except (is)
 import frege.compiler.Nice       except (group, layout, break)
-import frege.compiler.Classtools (getOperators, Operator, OpArr)
+import frege.compiler.Classtools (Operator, OpArr)
 import frege.compiler.Utilities  as U(cval)
 
 data CharSeq s = native java.lang.CharSequence where
@@ -102,7 +101,7 @@ data CharSeq s = native java.lang.CharSequence where
     [usage] @slurp filename encoding@
     [return] the content of text file @filename@ appropriatly decoded according to the files @encoding@
 -}
-native slurp frege.compiler.JavaUtils.slurp :: String -> String -> IO (Exception String)
+native slurp frege.runtime.CompilerSupport.slurp :: String -> String -> IO (Exception String)
 
 {--
  * A map of keywords to 'TokenID's
@@ -136,7 +135,7 @@ kwtree = Tree.insertlist Nil [
     ("abstract", ABSTRACT),
     ("do" ,  DO),
     ("forall" ,  FORALL),
-    -- ("continue" ,  CONTINUE),
+    ("throws" ,  THROWS),
     -- ("break" ,  BREAK),
     -- ("while" ,  WHILE),
     ("infix" ,  INFIX),
@@ -467,8 +466,9 @@ findInfixImports ts = loop start ts where
 
 --- special symbols in tree
 specialT = Tree.fromList [("::", DCOLON), 
-                            ("=>", EARROW), ("⇒", EARROW), 
-                            ("->", ARROW),  ("→", ARROW), 
+                            ("..", DOTDOT), ("…", DOTDOT),
+                            ("=>", EARROW), ("⇒", EARROW),
+                            ("->", ARROW),  ("→", ARROW),
                             ("<-", GETS),   ("←", GETS)]
 
 --- find the package name of an import this one depends on
@@ -496,7 +496,9 @@ processImports prefix getop (tree@Right _) (cmd:cmds)
         where
     mkImport _ _  (err@Left _)    = StG.return err
     mkImport n ts (tree@Right _)
-        | null name = StG.return $ Left (n, msgdoc "Package name missing after `import´")
+        | null name = do
+            U.error n (msgdoc "Package name missing after `import´")
+            StG.return tree
         | otherwise = do
             (loaded::Exception (Maybe OpArr)) <- getop name
             g <- getST
@@ -507,10 +509,12 @@ processImports prefix getop (tree@Right _) (cmd:cmds)
                 -- see the error in the import pass, because every package except frege.Prelude
                 -- will try to import frege.Prelude
                 Left _ | name == pPreludeBase.unpack g -> StG.return tree
-                Left jex           -> StG.return $ Left (n, msgdoc ("Could not import package "
-                                                        ++ name
-                                                        ++ " (" ++ show jex ++ ")"))
-                Right (Just oparr) -> StG.return $ fold ins tree [ oparr.[i] | i <- 0..oparr.length - 1]
+                Left jex           -> do
+                    let err = (msgdoc ("Could not import package "
+                                            ++ name
+                                            ++ " (" ++ show jex ++ ")"))
+                    return (Left (n, err))
+                Right (Just oparr) -> StG.return $ fold ins tree [ oparr.[i] | i <- enumFromTo 0 (oparr.length-1) ]
                 _                  -> StG.return $ tree      -- no operators
         where
             name = fromMaybe "" (getPackage prefix ts)
@@ -540,12 +544,12 @@ packToken t
 processInfix xs = fold single (Right specialT) xs where
     single (err@Left _) _ = err
     single (tree@Right _)  (t1:ts)
-        | null ts = Left (Pos t1 t1, msgdoc ("Malformed `" ++ t1.value ++ "´ declaration."))
+        | null ts = tree    -- Left (Pos t1 t1, msgdoc ("Malformed `" ++ t1.value ++ "´ declaration."))
         | Token.tokid t1 == INFIXL = mkInfix LOP0 ts tree
         | Token.tokid t1 == INFIXR = mkInfix ROP0 ts tree
         | Token.tokid t1 == INFIX  = mkInfix NOP0 ts tree
         | Token.tokid t1 == IMPORT = tree -- mkImport t1.line ts tree
-        | otherwise = Left (Pos t1 t1, msgdoc ("Token `" ++ t1.value ++ "´ is invalid here"))
+        | otherwise = tree -- Left (Pos t1 t1, msgdoc ("Token `" ++ t1.value ++ "´ is invalid here"))
     single _ [] = error ("single: empty command")
     mkInfix op [] tree = error "Cannot happen, this is checked in single"
     mkInfix op (t1:ts) tree
@@ -647,6 +651,8 @@ substOp start tree (t:ts)
     | t.tokid == SOMEOP = case tree.lookupS (U.enclosed t.value) of
                 Just tid -> Token tid  t.value t.line t.col t.offset : substOp start tree ts
                 Nothing  -> Token NOP1 t.value t.line t.col t.offset : substOp start tree ts
+    | t.tokid == PURE,  -- pure is only keyword before native 
+      null ts || (head ts).tokid != NATIVE = t.{tokid=VARID} : substOp start tree ts 
     | t.tokid == CHAR
                 = check (collect t ts) (t:ts)
     | otherwise = t : substOp start tree ts
@@ -692,7 +698,7 @@ passCS cs getop =
         g <- getST
         let prefix  =  g.options.prefix
         let tokens = layout [0] nocomms
-            ifximps =  (reverse <~ findInfixImports) tokens
+            ifximps =  (reverse • findInfixImports) tokens
             tree0   = processInfix ifximps
         imps <- processImports prefix getop (Right specialT) ifximps
         let tree2 = either Left (ourinfix tree0) imps

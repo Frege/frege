@@ -91,8 +91,9 @@ import frege.List (Tree, values, lookup, insertkv, insert, update, keys, includi
 
 import frege.compiler.Data
 import frege.compiler.Nice          except (group, break)
-import frege.compiler.Utilities     as U(pSigma, findC, findD, findV, freeTVars,
+import frege.compiler.Utilities     as U(pSigma, findC, findD, findV, freeTVars, freeTVnames,
                                             mapEx, changeSym)
+import frege.compiler.Kinds         as K()                                            
 
 import frege.compiler.TCUtil
 import frege.compiler.Javatypes
@@ -115,7 +116,8 @@ memberTree = do
 pass = do
     U.logmsg TRACET Position.null (text "start type check pass")
     mtree <- memberTree
-    ourvars <- U.allourvars
+    g <- getST
+    let ourvars = U.allourvars g
 
     let
         fundep (SymV {name, expr=Just x})  = do
@@ -147,6 +149,7 @@ pass = do
 
     stio ("functions", length names)
 
+--- e.g. @tc "Int"@ is the 'Tau' with type constructor for @PreludeBase.Int@
 tc n = TCon {pos=Position.null, name=TName pPreludeBase n}
 
 mainSigma = ForAll [] (RhoFun [] (ForAll [] (RhoTau [] strings)) (RhoTau [] iovoid))
@@ -207,7 +210,7 @@ checkgroup nms = do
     when (length g.typEnv > 0 && length nms == 1) do
         quantifyOne nms
     foreach nms verbose
-    foreach nms typeSanity
+    foreach nms typeSanity 
     g <- getST
     when (g.errors == 0 && length g.typEnv == 0) (foreach nms substInstMethod)
     -- changeST Global.{checking=g.checking}
@@ -219,15 +222,49 @@ checkgroup nms = do
         U.explain (Symbol.pos sym) (text (sym.nice g ++ " :: " ++ sig.nicer g))
     typeSanity nm = do
         sym <- findV nm
+        sym <- checkKind sym
         checkAmbiguous sym sym.typ
         checkReturn    sym sym.typ
-        removeCheckedCtx sym sym.typ
+        -- sym <- removeCheckedCtx sym sym.typ
+        case sym.name of
+            Local{} -> return ()
+            aGlobalName -> do       -- issue #23
+                    -- there is no way a local function can have constraints:
+                    -- Either the constraint is of the form C (T x), then it was checked and discharged
+                    -- Or, it is of the form C a, then it is passed upwards
+                    -- Or, it used to be of the form C t1234 and t1234 was substituted meanwhile.
+                    -- Hence, all constraints on local functions must be removed
+                    case sym.expr of
+                        Nothing -> return ()
+                        Just x   -> do
+                            ex <- U.mapEx false removeCtx x
+                            changeSym sym.{expr = Just ex} 
+              where
+                    scrapCtx it = do
+                        let sig = (Symbol.typ it).{rho <- Rho.{context=[]}}
+                        nex <- case it.expr of
+                            Just x  -> U.mapEx false removeCtx x >>= (return . Just)
+                            Nothing -> return Nothing
+                        changeSym it.{typ=sig, expr = nex}
+                    removeCtx (it@Let{env}) = do
+                        syms <- mapM U.findV env
+                        foreach syms scrapCtx
+                        return (Left it)
+                    removeCtx x = return (Left x)
 
+checkKind sym = case Symbol.name sym of
+    Local{} -> return sym
+    global  -> do
+        (sig, _) <- K.kiSigma [] [] sym.typ
+        let new = sym.{typ=sig}
+        U.changeSym new
+        return new
+         
 checkAmbiguous sym (ForAll bnd r) = do
         let ra = r.{context=[]}                     -- ctx => rho    --> rho
             rb = (rhoInt).{context=r.context}       -- Int           --> ctx => Int
-            va = freeTVars [] ra
-            vb = freeTVars [] rb
+            va = freeTVnames [] ra
+            vb = freeTVnames [] rb
             bad = filter (`notElem` va) vb
         if null bad then stio ()
           else do
@@ -242,12 +279,13 @@ checkAmbiguous sym (ForAll bnd r) = do
             U.hint  (Symbol.pos sym) (msgdoc ("This can happen through constructs like (Enum.ord • Enum.from) "
                     ++ " where a class context is both introduced and eliminated locally so "
                     ++ "that a caller can not know which type is meant."))
+
 checkReturn :: Symbol -> Sigma -> StG ()
 checkReturn sym sigma =
     case U.returnType sigma.rho of
         (_, []) -> stio ()
         (t, ss) -> do
-            let svars = [ v | ForAll bs br <- ss, v <- U.freeTVars bs br ]
+            let svars = [ v | ForAll bs br <- ss, v <- U.freeTVnames (map fst bs) br ]
                         ++ keys (U.freeCtxTVars [] Nil sigma.rho.context)
                 tvars = case t of
                     TVar {pos} -> [t.var]
@@ -256,13 +294,26 @@ checkReturn sym sigma =
             if all (`elem` svars) tvars then stio ()
               else do
                 g <- getST
-                U.warn (sym.pos) (msgdoc ("application of " ++ sym.name.nice g ++ " will diverge."))
-removeCheckedCtx :: Symbol -> Sigma -> StG ()
+                U.symWarning U.warn sym (msgdoc ("application of " ++ sym.name.nice g ++ " will diverge."))
+{-
+removeCheckedCtx :: Symbol -> Sigma -> StG Symbol
 removeCheckedCtx sym sigma
-    | any Context.checked sigma.rho.context =
-      U.changeSym sym.{typ = sigma.{rho <- Rho.{context <- filter (not • Context.checked)}}}
-    | otherwise = stio ()
+    | any Context.checked sigma.rho.context = do
+        let new = sym.{typ = sigma.{rho <- Rho.{context <- filter (not • Context.checked)}}}
+        U.changeSym new
+        stio new 
+    | otherwise = stio sym
+-}
 
+resolveConstraints :: Symbol -> StG ()
+resolveConstraints sym
+    | SymV{typ, expr=Just x, anno=false} <- sym = do
+        x   <- resolveHas x
+        cxs <- collectConstrs x
+        rho <- simplify sym.pos typ.rho.{context=cxs}
+        U.changeSym sym.{typ <- Sigma.{rho}, expr = Just x}
+    | otherwise = return () 
+     
 {--
  * look for applications of class member functions in the code of the named item
  * and replace them with instance member functions, if possible.
@@ -320,16 +371,24 @@ substInst x = stio (Left x)
 
 
 checkName nm = do
-    g <- getST
-    sym <- findV nm
-    sigma <- checkSym sym
-    U.logmsg TRACET sym.pos (text ("checkName:  " ++ sym.name.nice g ++ " :: " ++ sigma.nice g))
+    g       <- getST
+    sym     <- findV nm
+    sigma   <- checkSym sym
+    unless (nm.isLocal) do
+        sym     <- findV nm
+        resolveConstraints sym
+    when (U.isOn g.options.flags TRACET) do
+        sym     <- findV nm
+        U.logmsg TRACET sym.pos (text ("checkName:  " ++ sym.name.nice g ++ " :: " ++ sigma.nice g))
   where
     checkSym sym = do
         g <- getST
         U.logmsg TRACET (Symbol.pos sym) (text ("typechecking " ++ sym.nice g ++ ", state=" ++ show sym.state))
         case sym of
-            SymV {nativ = Just _, typ = t} | not (U.isPSigma t) -> stio t
+            SymV {nativ = Just _, typ = t} | not (U.isPSigma t) -> do
+                (sig, _) <- K.kiSigma [] [] t
+                U.changeSym sym.{typ=sig}
+                return t
             SymV {expr = Nothing, name, pos, typ = t}
                 | not (U.isPSigma t),
                   MName c _ <- name,
@@ -338,8 +397,9 @@ checkName nm = do
                     U.changeSym sym.{state=Typechecked, vis=Abstract}
                     stio t
                 | otherwise = do
-                    U.error pos (msgdoc ("implementation missing for " ++ show sym.name))
-                    U.changeSym sym.{state=Typechecked}
+                    U.error pos (msgdoc ("implementation missing for " ++ sym.nice g))
+                    (sig, _) <- K.kiSigma [] [] t
+                    U.changeSym sym.{state=Typechecked, typ=sig}
                     stio t
             SymV {expr = Just x, typ = t}
                 | U.isPSigma t,
@@ -356,19 +416,13 @@ checkName nm = do
                                         else ForAll [] rho
                     U.changeSym sym.{typ = newsig, expr=Just ex, state = newstate}
                     stio newsig
-                -- | other <- sym.state = U.fatal sym.pos ("illegal state " ++ show other
-                --                    ++ " while typechecking " ++ sym.nice g)
-            -- SymV {expr = Just x, state = Typechecked } = do
-            --    U.changeSym sym.{state=Unchecked}
-            --    sym <- findV sym.name
-            --    checkSym sym
-            -- SymV {expr = Just x, sig = Just t, state = Recursive } = stio t
             SymV {expr = Just x, typ = t, state, anno}
                 | not (U.isPSigma t), state == Unchecked  = do
-                    x <- checkAnnotated x t
+                    (sig, _) <- K.kiSigma [] [] t
+                    x <- checkAnnotated x sig
                     -- t <- canonicSignature t
-                    U.changeSym sym.{state = Typechecked, expr = Just x {-, typ = t-} }
-                    stio t
+                    U.changeSym sym.{state = Typechecked, expr = Just x, typ = sig }
+                    stio sig
                 | not (U.isPSigma t), state == Typechecked && anno = stio t     -- opt: do not recheck annotated
                 | not (U.isPSigma t), state == Recursive || state == Typechecked = do
                     (rho, ex) <- inferRho x
@@ -420,8 +474,8 @@ quantifyWith f nms = do
             case sym of
                 SymV {expr = Just x} -> do
                     zex <- zonkExpr x           -- from here on no bound Meta anywhere
-                    zex <- zonkRigid (Sigma.bound sigma) zex    -- replace Rigid#nnn a where a is bound
-                    sigma <- substRigidSigma (Sigma.bound sigma) sigma
+                    zex <- zonkRigid (Sigma.vars sigma) zex    -- replace Rigid#nnn a where a is bound
+                    sigma <- substRigidSigma (Sigma.vars sigma) sigma
                     changeSym sym.{typ = sigma, expr = Just zex, anno = true}
                     g <- getST
                     U.logmsg TRACET (Symbol.pos sym) (text ("qfy: " ++ sym.nice g ++ " :: " ++ sigma.nicer g))
@@ -430,6 +484,7 @@ quantifyWith f nms = do
 
 
 -- zonkRigid []    ex = stio ex
+zonkRigid :: [String] -> Expr -> StG Expr
 zonkRigid bound ex = do
         g <- getST
         U.logmsg TRACEZ (getpos ex) (text ("zonkRigid " ++ show bound ++ " " ++ nice ex g))
@@ -437,11 +492,11 @@ zonkRigid bound ex = do
     where
         symWork (symv@ SymV {pos, expr, typ = sig}) = do
                         g <- getST
-                        U.logmsg TRACEZ (getpos ex) (text ("symWork: " ++ show (bound ++ sig.bound) ++ " " ++ nice ex g))
-                        rho   <- substRigidRho (bound ++ sig.bound) sig.rho
+                        U.logmsg TRACEZ (getpos ex) (text ("symWork: " ++ show (bound ++ sig.vars) ++ " " ++ nice ex g))
+                        rho   <- substRigidRho (bound ++ sig.vars) sig.rho
                         expr  <- case expr of
                             Just x  -> do
-                                x <- zonkRigid (bound ++ sig.bound) x
+                                x <- zonkRigid (bound ++ sig.vars) x
                                 stio (Just x)
                             Nothing -> stio Nothing
                         changeSym symv.{expr, typ = ForAll sig.bound rho}
@@ -509,10 +564,10 @@ approximate x = do
     stio (ForAll [] rho)
 approxRho :: Expr -> StG Rho
 approxRho (Lam {ex}) = do
-    sig <- newSigmaTyVar "arg"
+    sig <- newSigmaTyVar ("arg", KType)
     rho <- approxRho ex
     stio (RhoFun [] sig rho)
-approxRho _ = newRhoTyVar "res"
+approxRho _ = newRhoTyVar ("res", KType)
 
 
 inferRho x = do
@@ -541,12 +596,19 @@ checkSigma1 annotated x s = do
     U.logmsg TRACET pos (text ("sigmaTvs: " ++ joined ", " (map (flip nice g) tvs)))
     U.logmsg TRACET pos (text ("envTvs:   " ++ joined ", " (map (flip nice g) eTvs)))
     U.logmsg TRACET pos (text ("badTvs: "   ++ joined ", " (map (flip nice g) badTvs)))
-    if null badTvs then checkConstraints skolTvs x rho
-        else do
+    if null badTvs 
+    then if annotated 
+        then checkConstraints skolTvs x rho
+        else -- this is justified by the fact that
+             -- constraints could not introduce type variables
+             -- that are not present in the type itself 
+            return x
+    else do
             let part1 = text "Type " <+> text (rho.nicer g)
-                part2 = text "inferred from  " <+> text (x.nice g) <+/> text " is not as polymorphic as"
+                part2 = text "inferred from  " <+> text (x.nice g) 
+                part3 = text "is not as polymorphic as"
                         <+/> text "expected type " <+/> text (s.nicer g)
-            U.error pos (part1 </> part2)
+            U.error pos (part1 </> part2 </> part3)
             stio x
   where
 
@@ -554,18 +616,24 @@ checkSigma1 annotated x s = do
         -- offered type must not be more constrained than expected
         checkConstraints tvs x ety = do
                 g <- getST
-                ectx <- exContext x
-                -- etvs <- mapSt (getTauTvs • Context.tau) ectx
+                x <-    resolveHas x
+                ectx <- collectConstrs x
+                let pos = getpos x
+                let sigma = unJust (Expr.typ x)
+                rho  <- simplify pos sigma.rho.{context=ectx}
+                let ectx = rho.context
+                x    <- return (x.{typ = Just sigma.{rho}}) 
+                 
                 ety <- canonicContext ety
                 etvss <- mapSt ctxTvs ectx
 
-                let pos = getpos x
+                
                 U.logmsg TRACET pos (text ("expr context:     "   ++ U.nicectx ectx g))
                 U.logmsg TRACET pos (text ("expected context: "   ++ U.nicectx ety.context g))
                 -- find constraints that mention skolemised vars that are not in the expected type
                 let implies = impliesG g
                     bad = [ ctx |   (ctx,ctvs) <- zip ectx etvss,
-                                    annotated || any (`elem` tvs) ctvs,
+                                    -- annotated || any (`elem` tvs) ctvs,
                                     not (any (`implies` ctx) ety.context) ]
 
                 unless (null bad) do
@@ -600,15 +668,15 @@ tcRho x expty = case expty of
 
 
 rhoFor s = RhoTau [] (TCon {pos=Position.null,name=TName pPreludeBase s})
-rhoBool     = rhoFor "Bool"
-rhoChar     = rhoFor "Char"
+rhoBool     = rhoFor "Bool" 
+rhoChar     = rhoFor "Char" 
 rhoString   = RhoTau [] tauString
-rhoInt      = rhoFor "Int"
-rhoLong     = rhoFor "Long"
-rhoDouble   = rhoFor "Double"
-rhoFloat    = rhoFor "Float"
-rhoRegex    = rhoFor "Regex"
-rhoMatcher  = rhoFor "Matcher"
+rhoInt      = rhoFor "Int" 
+rhoLong     = rhoFor "Long" 
+rhoDouble   = rhoFor "Double" 
+rhoFloat    = rhoFor "Float" 
+rhoRegex    = RhoTau [] (TCon {pos=Position.null,name=TName pPreludeNative "Regex"}) 
+rhoMatcher  = RhoTau [] (TCon {pos=Position.null,name=TName pPreludeNative "Matcher"})
 rhoInteger  = rhoFor "Integer"
 tauString   = TApp (tc "StringJ") (tc "Char")
 
@@ -708,7 +776,7 @@ tcRho' (x@Mem {ex,member}) ety = do
     case rho of
         RhoFun _ _ _ -> do
             U.error pos (text ("primary expression  " ++ ex.nice g ++ "  must not be a function"))
-            wrong <- newRhoTyVar "wrong"
+            wrong <- newRhoTyVar ("wrong", KType)
             instRho x.{ex} wrong ety
         RhoTau _ tau -> do
             tau <- reduced tau
@@ -743,12 +811,18 @@ tcRho' (x@Mem {ex,member}) ety = do
                                 idKind <- insertkv (KeyTk member) (Right m.name)}}
                             tcRho (nApp (Vbl mpos m.name Nothing) ex) ety
                 sonst -> do
-                    U.error (getpos x) (text "can't find a type for " <+/> text (x.nicer g)
-                        <+/> text "`" <> text member.value <> text "`"
-                        <+/> text "is neither an overloaded function nor a member of "
-                        <+/> text (rho.nicer g))
-                    wrong <- newRhoTyVar "wrong"
-                    instRho x.{ex} wrong ety
+                    -- U.explain (getpos x) (msgdoc ("method " ++ member.value 
+                    --     ++ " in yet unknown type " ++ rho.nicer g))
+                    -- xrho <- newRhoTyVar ("revapp", KType)
+                    -- let yrho = xrho.{context=[Has{pos=Pos member member,
+                    --                             method = member.value,
+                    --                             tau, checked = false}]}
+                    -- U.error (getpos x) (text "can't find a type for " <+/> text (x.nicer g)
+                    --     <+/> text "`" <> text member.value <> text "`"
+                    --     <+/> text "is neither an overloaded function nor a member of "
+                    --     <+/> text (rho.nicer g))
+                    resolveme <- newRhoTyVar ("unresolved", KType)
+                    instRho x.{ex} resolveme ety
 
 tcRho' (x@Ifte a b c _) (ety@Infer _) = do
     a <- checkRho a (rhoBool)
@@ -785,7 +859,7 @@ tcPat p expty = case expty of
         U.logmsg TRACET (getpos p) (text ("tcPat Check  " ++ p.nice g ++ "  for  " ++ s.nice g))
         tcPat' p expty
 
-sigFor s = ForAll [] (RhoTau [] (TCon {pos=Position.null,name=TName pPreludeBase s}))
+sigFor s   = ForAll [] (RhoTau [] (TCon {pos=Position.null,name=TName pPreludeBase s}))
 sigBool    = ForAll [] rhoBool
 sigChar    = ForAll [] rhoChar
 sigString  = ForAll [] rhoString
@@ -831,7 +905,7 @@ tcPat' (p@PVar {uid,var}) ety = do
     -- U.logmsg TRACET p.pos (text("lookup PVar{uid=" ++ show uid ++ "} --> " ++ show sym.name))
     case U.isPSigma sym.typ of
         true -> do
-            sig <- newSigmaTyVar var
+            sig <- newSigmaTyVar (var, KType)
             U.changeSym sym.{typ = sig, state = Typechecked}
             instPatSigma p sig ety
         false -> instPatSigma p sym.typ ety
@@ -855,7 +929,7 @@ tcPat' (p@PAnn {pat,typ}) ety = do
     checkPat pat typ
     instPatSigma p typ ety
 
-tcPat' (p@PStrict {pat}) ety = tcPat' pat ety
+tcPat' (p@PUser {pat}) ety = tcPat' pat ety
 
 tcPat' (p@PAt {pos,uid,var,pat}) (ety@Infer _) = do
     sig <- inferPat pat
@@ -870,3 +944,126 @@ tcPat' p _ = do
     g <- getST
     U.fatal (getpos p) (text ("can't tcPat:  " ++ p.nice g))
 
+--- Resolve the x.m finally
+--- Resolve overloaded methods
+resolveHas = mapEx true rHas
+    where
+        rHas (x@Mem{ex, member, typ = Just sigma}) = do
+            app <- checkRho x.{typ = Nothing} sigma.rho -- now type of ex should be known
+            case app of
+                Mem{}
+                    | Just sigma <- ex.typ,
+                      RhoTau{tau} <- sigma.rho = do
+                        tau <- reduced tau
+                        case tau.flat of
+                            TCon{}:_   = do
+                                g <- getST 
+                                U.error (getpos x) (text "can't find a type for " 
+                                    <+/> text (x.nicer g)
+                                    <+/> text "`" <> text member.value <> text "`"
+                                    <+/> text "is neither an overloaded function nor a member of "
+                                    <+/> text (sigma.rho.nicer g))
+                                return (Left x)
+                            unknown = badsigma sigma
+                    | Just sigma <- ex.typ = badsigma sigma
+                    | otherwise = badsigma pSigma
+                    where
+                        badsigma sigma =  do
+                                g <- getST 
+                                U.error (getpos x) (text "can't find a type for " 
+                                    <+/> text (x.nicer g) 
+                                    <+/> text " because " 
+                                    <+/> (text (ex.nicer g)
+                                            <+> text "::" 
+                                            <+> text (nicer sigma g))
+                                    <+/> text " does not have a definite type.")
+                                return (Left x)
+                other -> return (Left app)      -- Mem resolved!
+        rHas (x@Mem{ex, member, typ = Nothing}) = do
+            g <- getST
+            error ("expression  " ++ x.nicer g ++ "  is untyped")
+        rHas (v@Vbl{pos, name, typ}) | not name.isLocal = do
+            sym <- U.findV name
+            case sym.over of
+                [] -> return (Right v)
+                _  -> resolveOver v sym
+        rHas x = return (Left x)
+
+--- resolve overloaded variable
+resolveOver :: Expr -> Symbol -> StG (Expr|Expr)
+resolveOver v sym = do
+        g <- getST
+        let sigma = (unJust v.typ)
+        U.logmsg TRACET v.pos (text ("overloaded " ++ nice v.name g 
+                                    ++ " :: " ++ nice sigma g))
+                                            
+        let candidates = overloads g sym
+        
+        U.logmsg TRACET v.pos (text ("by " 
+            ++ joined ", " (map (flip nice g . Symbol.name) candidates)))
+            
+        checked <- resolve v.pos sigma candidates
+        case checked of
+            [] -> do
+                U.error v.pos (text "overloaded " <+> text (nicer v g) 
+                    <+> text " cannot be resolved at type "
+                    <+/> text (nicer sigma g))
+                return (Right v)
+            [s] -> do
+                U.explain v.pos (msgdoc ("overloaded " ++ nicer v.name g 
+                                    ++ " :: " ++ nicer sigma g
+                                    ++ "  resolved to  "
+                                    ++ nicer s.name g))
+                x <- checkSigma Vbl{pos=v.pos, name=s.name, typ=Nothing} sigma
+                return (Right x)
+            _ -> do 
+                U.error v.pos (text "overloaded " <+> text (nicer v g) 
+                    <+> text " is ambiguos at type "
+                    <+/> text (nicer sigma g)
+                    </> text "It could mean one of "
+                    </> Nice.stack [ text (nicer s.name g) 
+                                        <+> text " :: " 
+                                        <+> text (nicer s.typ g)
+                                | s <- candidates ]) 
+                return (Right v)
+    where
+        resolve pos sigma [] = return []
+        resolve pos sigma (sym:syms) = do
+            g1 <- getST
+            changeST Global.{options <- Options.{flags <- flip U.setFlag OVERLOADING}}
+            tvs <- sigmaTvs sigma
+            x <- checkSigma Vbl{pos, name=Symbol.name sym, typ=Nothing} sigma
+            foreach tvs unBind
+            changeST Global.{options <- Options.{flags <- flip U.clrFlag OVERLOADING}}
+            g <- getST
+            changeST Global.{sub <- SubSt.{errors = g1.errors}}
+            if (g.errors > g1.errors)
+            then resolve pos sigma syms
+            else do
+                rs <- resolve pos sigma syms
+                return (sym:rs)
+        unBind (Flexi{ref}) = doio (ref.put Nothing)
+        unBind Rigid{} = return ()    
+        overloads g sym = case sym of
+            SymV{over=[]} -> [sym]
+            SymV{pos, name = MName{tynm, base}, over=(_:_)}
+                | Just SymT{nativ = Just this} <- tynm.findit g,
+                  ov <- [ sy | m <- sym.over, sy <- m.findit g ],
+                  syms <- [ sy | s  <- U.supersOfNativ this g, 
+                                 q  <- U.typesOfNativ s g, 
+                                 h  <- (MName q base).findit g,
+                                 sy <- overloads g h] 
+                = ov++syms
+            SymV{} -> [ sy | m <- sym.over, sy <- m.findit g ]
+            _ -> []
+            
+
+--- collect all class constraints
+collectConstrs = U.foldEx true collC []
+    where
+        collC cxs x = case Expr.typ x of
+            Just sigma -> reducedCtxs sigma.rho.context >>= return . Left . flip mergeCtx cxs 
+            Nothing    -> return (Left cxs)  
+            
+             
+               

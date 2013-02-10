@@ -46,7 +46,6 @@ import frege.Prelude except (error, print, println, break)
 import frege.List (Tree, Map, OrdSet, updatekv, insertkv,
                     union, including, contains, keys, values, fromKeys)
 import Data.List as DL(partitioned, sortBy)
-import frege.IO(`<<`)
 
 import frege.compiler.Data
 import frege.compiler.Nice except(group)
@@ -85,34 +84,40 @@ infixop line op n = if n >= 0 && n < 16
 
 
 --- get flag bit
-flag :: Flag -> Int
-flag f = 1 `bshl` ord f
+flag :: Flag -> Flags
+flag = Flags.singleton
 
 --- @setFlag flags f@ set flag _f_ in _flags_
-setFlag flags f = flags `bor` flag f
+setFlag = Flags.unionE   -- flags f = flags `bor` flag f
 
 --- @flagSet f flags@ set flag _f_ in _flags_
-flagSet f flags = flags `bor` flag f
+flagSet = flip Flags.unionE
 
 --- @clrFlag flags f@ clear flag _f_ in _flags_
-clrFlag flags f = flags `band` (flag f `bxor` (negate 1))
+clrFlag = Flags.differenceE -- flags f = flags `band` (flag f `bxor` (negate 1))
 
 --- check if flag is on
-isOn :: Int -> Flag -> Bool
-isOn flags f = (flags `band` flag f) != 0
+isOn :: Flags -> Flag -> Bool
+isOn flags f = member f flags
 
 --- check if flag is off
-isOff :: Int -> Flag -> Bool
-isOff flags f = (flags `band` flag f) == 0
+isOff :: Flags -> Flag -> Bool
+isOff fs = not . isOn fs
+
+--- tell if the compiler is in strict mode
+strictMode :: Global -> Bool
+strictMode g = isOn g.options.flags STRICT 
 
 --- the path separator used here
-pathSep = fromMaybe ":"  (IO.getProperty "path.separator")
+pathSep = fromMaybe ":"  (System.getProperty "path.separator")
 
 --- a pattern that can be used to 'Regex.split' a 'String' by the path separator
-pathRE = pathSep.quote.compile
+pathRE = case regcomp pathSep.quote of
+    Right p -> p
+    Left _ -> Prelude.error ("cannot regcomp " ++ pathSep.quote)
 
 --- the class path this JVM started with, as ['String']
-classPath = (pathRE.splitted <~ fromMaybe "." <~ IO.getProperty) "java.class.path"
+classPath = (pathRE.splitted • fromMaybe "." • System.getProperty) "java.class.path"
 
 --- get us the one and only class loader
 theClassLoader opt = CT.makeClassLoader (ourPath opt)
@@ -126,7 +131,9 @@ ourPath opt = result where
 --################### functions operating on the state ##############################
 {-- trace output from stateful computation -}
 debugST :: Flag -> String -> StG Bool
-debugST f s = inState (debug f s)
+debugST f s = do
+    g <- getST
+    return (debug f s g)
 
 {-- trace from anywhere -}
 debug :: Flag -> String -> Global -> Bool
@@ -144,9 +151,12 @@ error n s = do
         ns  = if n.start == maxBound then packageEnd g else n
         is  = "E " ++ opt.source ++ ":" ++ show ns ++ ":"
         -- ef  = if ns == ">" then id else (1+)
-    if isOn g.options.flags IDE
-        then changeST Global.{sub <- SubSt.{messages <- (Msg {pos=ns, level=ERROR, text=pretty 40 s}:)}}
-        else doio (g.stderr.println (pretty 78 (text is <+> nest 4 s)))
+    if isOn g.options.flags OVERLOADING
+    then explain n s
+    else if isOn g.options.flags IDE
+    then changeST Global.{sub <- SubSt.{messages <- (Msg {pos=ns, level=ERROR, text=pretty 64 s}:)}}
+    else doio (g.stderr.println (pretty 78 (text is <+> nest 4 s)))
+    
     changeST Global.{sub <- SubSt.{errors <- (1+)}}
 
 {--
@@ -316,7 +326,7 @@ instance Positioned (PatternT a) where
     is p = "pattern"
     --- get the line number of a pattern
     getpos (PAnn p t)   = (getpos p).merge t.getpos
-    getpos (PStrict p)  = getpos p
+    getpos (PUser{pat})    = getpos pat
     getpos (PCon {pos,pats}) = fold Position.merge pos (map getpos pats)
     getpos (PAt {pos,pat})   = pos.merge pat.getpos
     getpos p | p.{pos?} = p.pos
@@ -355,8 +365,8 @@ rhoPos = Rho.getpos
 --- get the 'Position' of a tau type
 tauPos = Tau.getpos
 
-
--- turn a function (Global -> a) into StG a
+--- warning: inState f should be replaced by f g
+--- turn a function (Global -> a) into StG a
 inState f = do g <- getST; stio (f g)
 
 {--
@@ -375,7 +385,7 @@ reproduce pos g = joined "" (loop list)
             -}
 
 --- show expression using the operator table from the global state
-showexM x = inState (showex false x)
+showexM x = getST >>= return . (showex false x)
 showex nicest x global = showprec 17 x where
     optree = Global.optab global
     -- showprec :: Int -> ExprT Nice:q -> String
@@ -389,7 +399,7 @@ showex nicest x global = showprec 17 x where
         | #\.\[\].\:# <- sv = ":"
         | otherwise = sv
         where
-            sv  = nice name global
+            sv  = if nicest then nicer name global else nice name global
 
 
     showprec  n (Con {name,pos,typ}) = showprec  n (Vbl {name,pos,typ})
@@ -516,7 +526,7 @@ instance Nice (Nice q, QNameMatcher q) => PatternT q where
             showp 0 (PLit {kind=LLong, value}) = value ++ "L"
             showp 0 (PLit {kind=LFloat, value}) = value ++ "f"
             showp 0 (PLit {value}) = value
-            showp 0 (PStrict p) = "!" ++ showp 0 p
+            showp 0 (PUser p lazy) = (if lazy then "?" else "!") ++ showp 0 p
             showp 0 p = "(" ++ showp 17 p ++ ")"
             showp 17 (PAnn p t) = showp 15 p ++ "::" ++ t.nice g
             showp 17 p = showp 15 p
@@ -533,10 +543,12 @@ instance Nice (Nice q, QNameMatcher q) => PatternT q where
             showp _  p = Prelude.error ("can't show pattern with constructor" ++ show (constructor p))
 
 instance Nice (Nice t, QNameMatcher t) => SigmaT t where
-    nice (ForAll bndrs rho) g | null bndrs = rho.nice g
-                              | otherwise  = "forall " ++ joined " " bndrs ++ "." ++ rho.nice g
-    nicer (ForAll bndrs rho) g | null bndrs = rho.nicer g
-                              | otherwise  = "forall " ++ joined " " bndrs ++ "." ++ rho.nicer g
+    nice (ForAll bndrs rho) g 
+        | null bndrs = rho.nice g
+        | otherwise  = "forall " ++ (joined " " . map fst) bndrs ++ "." ++ rho.nice g
+    nicer (ForAll bndrs rho) g 
+        | null bndrs = rho.nicer g
+        | otherwise  = "forall " ++ (joined " " . map fst) bndrs ++ "." ++ rho.nicer g
 
 instance Nice (Nice t, QNameMatcher t) => RhoT t where
     nice (RhoFun ctx sigma rho) g
@@ -556,7 +568,8 @@ nicectx xs g
     | [ctx] <- xs = single ctx ++ " => "
     | otherwise   = "(" ++ joined "," (map single xs) ++ ") => "
     where
-        single (Ctx pos name tau _) = nice (TApp (TCon {pos,name}) tau) g
+        single (Ctx pos name tau) = nice (TApp (TCon {pos,name}) tau) g
+        
 
 
 nicerctx :: (Nice t, QNameMatcher t) => [ContextT t] -> Global -> String
@@ -565,7 +578,8 @@ nicerctx xs g
     | [ctx] <- xs = single ctx ++ " => "
     | otherwise   = "(" ++ joined "," (map single xs) ++ ") => "
     where
-        single (Ctx pos name tau _) = nicer (TApp (TCon {pos,name}) tau) g
+        single (Ctx pos name tau) = nicer (TApp (TCon {pos,name}) tau) g
+        
 
 instance Nice (Nice t, QNameMatcher t) => TauT t where
     nicer t g = showt 2 (unAlias g t) -- if isOn g.options.flags IDE then showt 2 (unAlias g t) else nice t g
@@ -578,7 +592,20 @@ instance Nice (Nice t, QNameMatcher t) => TauT t where
             showt _ (t@TApp _ _)
                 | [TCon {name}, t] <- flat, name.nice g ~ #\[\]$# = "[" ++ showt 2 t ++ "]"
                 | (TCon {name}:ts) <- flat, name.nice g ~ #\(,+\)$# = "(" ++ joined "," (map (showt 2) ts) ++ ")"
-                where flat = t.flat
+                | isEither flat = "(" ++ showEither flat ++ ")"
+                where 
+                    flat = t.flat
+                    isEither [TCon{name}, a, b] = name.nice g ~ ´\bEither$´
+                    isEither _ = false
+                    showEither [_, a, b]
+                        | TApp{} <- a, isEither aflat = showEither aflat ++ " | " ++ showt 2 b
+                        | otherwise =  showt 2 a ++ " | " ++ showt 2 b
+                        where aflat = Tau.flat a
+                    showEither _ = Prelude.error ("only good for Either a b")
+            showt 1 fun
+                | [TCon {name}, a, b] <- Tau.flat fun,
+                  name.nice g ~ ´->$´
+                                  = "(" ++ showt 1 a ++ "->" ++ showt 2 b ++ ")"
             showt 1 (TApp a b)    = showt 1 a ++ " " ++ showt 0 b
             showt 1 x             = showt 0 x
             showt 0 (TVar {var})  = var
@@ -628,12 +655,12 @@ instance QNameMatcher QName where
 unAlias :: QNameMatcher a => Global -> TauT a -> Tau
 unAlias g tau = if isOn g.options.flags SPECIAL then fake tau else unAlias (fake tau)
     where
-        -- fake (TFun a b)      = TFun (fake a) (fake b)
-        fake (TApp a b)      = TApp (fake a) (fake b)
-        fake TVar{pos,var}   = TVar pos var
+        -- fake (TFun a b)        = TFun (fake a) (fake b)
+        fake (TApp a b)           = TApp (fake a) (fake b)
+        fake TVar{pos,var,kind}   = TVar pos kind var
         fake (Meta x)        = case x.bound.run g of
             (Just tau, _) -> fake tau
-            otherwise     -> TVar Position.null ("t" ++ show x.uid)
+            otherwise     -> TVar Position.null KVar ("t" ++ show x.uid)
         fake TCon{pos,name}  = TCon{pos, name = fakeQName name}
 
         unAlias  tau = case tau of
@@ -645,15 +672,17 @@ unAlias g tau = if isOn g.options.flags SPECIAL then fake tau else unAlias (fake
             where
 
                 aliased (tau1@TApp a b) (SymA{pos,name,typ}) = case rho of
-                        RhoTau [] tau2 -> case unify Nil tau2 tau1 of
+                        -- the expansion of the type alias must be more than a tvar 
+                        RhoTau [] tau2 | not (isTvApp tau2) -> case unify Nil tau2 tau1 of
                             Just subst -> Just (substTau env aApp)
                                 where env = Tree.map unAlias subst
                             Nothing    -> Nothing
                         _              -> Nothing
                     where
                         rho = typ.rho
+                        vs  = map fst typ.bound
                         aApp :: Tau
-                        aApp = fold TApp (TCon pos name) (map (TVar pos) typ.bound)
+                        aApp = fold TApp (TCon pos name) (map (TVar pos KVar) vs)
 
                 aliased _ _ = Nothing
 
@@ -701,12 +730,12 @@ isTauFun fun g | [TCon {name}, _, _] <- Tau.flat fun, name.nice g ~ ´->$´ = tr
                | otherwise =  false
 
 instance Nice (Nice s, QNameMatcher s) => MetaTvT s where
-    nice (Rigid i s) g = "t" ++ show i ++ "#" ++ s
-    nice (flexi@Flexi i _ s) g
+    nice (Rigid i s _) g = "t" ++ show i ++ "#" ++ s
+    nice (flexi@Flexi i _ s _) g
         | (Just t, _) <- flexi.bound.run g = "<" ++ t.nice g ++ ">"
         | otherwise                                  = "<" ++ show i ++ " " ++ s ++ ">"
-    nicer (Rigid i s) g = "t" ++ show i ++ "#" ++ s     -- "t#" ++ show i
-    nicer (flexi@Flexi i _ _) g
+    nicer (Rigid i s _) g = "t" ++ show i ++ "#" ++ s     -- "t#" ++ show i
+    nicer (flexi@Flexi i _ _ _) g
         | (Just t, _) <- flexi.bound.run g = t.nicer g
         | otherwise                                  = "t" ++ show i
 {- ########### expression and pattern manipulation ############## -}
@@ -768,9 +797,9 @@ instTData _ = Prelude.error "no RhoFun as instance"
 
 {-- a provisional 'Sigma' shared by all 'Symbol's that have no type yet -}
 pSigma :: Sigma
-pSigma =  ForAll [] (RhoTau [] (Meta (Rigid (negate 1) "provisional")))
+pSigma =  ForAll [] (RhoTau [] (Meta (Rigid (negate 1) "provisional" KVar)))
 {-- check if this is the provisional 'Sigma' -}
-isPSigma (ForAll [] (RhoTau [] (Meta (Rigid n          "provisional")))) = n == negate 1
+isPSigma (ForAll [] (RhoTau [] (Meta (Rigid n          "provisional" KVar)))) = n == negate 1
 isPSigma _ = false
 
 {-- create a symbolic link to given qname -}
@@ -793,7 +822,7 @@ private enterWith insupd p n s = do
                     ntab <- insupd tab n s
                     changeST Global.{packages <- updatekv p ntab}
             Nothing  -> do
-                    sp <- inState (Pack.unpack p)
+                    let sp = Pack.unpack p g
                     error (Symbol.pos s) (fill ([text "package", text "`" <> text sp <> text "`"]
                                                  ++  break "does not exist."))
 
@@ -804,8 +833,8 @@ private insertSym tab key value = case tab.lookup key of
     Nothing -> stio (tab.insert key value)
     Just old  -> do
         g <- getST
-        on <- inState (Symbol.nice old)
-        qn <- inState (Symbol.nice value)
+        let on = Symbol.nice old g
+            qn = Symbol.nice value g
         case value of
             SymV {pos} -> error pos (msgdoc("duplicate function or pattern binding for `"
                             ++ value.name.nice g ++ "`, already bound on line "
@@ -819,7 +848,8 @@ private updateSym :: Symtab -> String -> Symbol -> StG Symtab
 private updateSym tab key value = case tab.lookup key of
     Just _   -> stio (tab.update key value)
     Nothing  -> do
-        qn <- inState (Symbol.nice value)
+        g <- getST
+        let qn = Symbol.nice value g
         error value.pos (fill (break ("cannot update " ++ qn ++ "  " ++ show (keys tab))))
         stio (tab.update key value)
 
@@ -838,11 +868,12 @@ private updateSym tab key value = case tab.lookup key of
 enter :: Symbol -> StG ()
 enter sym
     | sym.{alias?} = do
-            asy <- inState sym.alias.find
+            g <- getST
+            let asy = sym.alias.find g
             case asy of
                 Nothing -> do
-                    sa <- inState sym.nice
-                    st <- inState sym.alias.nice
+                    let sa  = sym.nicer g
+                        -- st  = sym.alias.nice g
                     error sym.pos (fill (break ("can't enter " ++ sa ++ " for unknown target")))
                 Just _ -> enterOrUpdate
     | otherwise    = enterOrUpdate
@@ -893,7 +924,7 @@ changeSym sym = do
                 let tsy = do a <- t.find g; a.follow g
                 case tsy of
                     Nothing -> do
-                        qn <- inState t.nice
+                        let qn =  t.nice g
                         error sym.pos (fill ([text "namespace", text "`" <> text qn <> text "`"] ++ break "does not exist"))
                     Just typ | typ.{env?} = do
                                 env <- updateSym typ.env sym.name.key sym
@@ -929,7 +960,7 @@ private enterByName sym = do
             let tsy = do a <- t.find g; a.follow g
             case tsy of
                 Nothing -> do
-                    qn <- inState t.nice
+                    let qn = t.nice g
                     error sym.pos (msgdoc("namespace `" ++ qn ++ "` does not exist"))
                 Just typ | typ.{env?} = do
                             env <- insertSym typ.env sym.name.key sym
@@ -976,7 +1007,8 @@ typesOfNativ nativ g = case lookup g.javaEnv nativ of
     Just (_,ls)  -> ls
     nothing -> []
 
---- Find the super types that are associated with a native type.
+--- Find the proper super types that are associated with a native type.
+--- (i.e. the type itself is not in the list)
 supersOfNativ :: String -> Global -> [String]
 supersOfNativ nativ g = case lookup g.javaEnv nativ of
     Just (cs, _)  -> cs
@@ -1090,14 +1122,14 @@ tsort odeps = result where
         where
             di = deparr.frozenElemAt i
             ti = t `including` i
-    deeps = Array.fromList [ deepdep Nil i | i <- 0..(deparr.length-1) ]
+    deeps = Array.fromList [ deepdep Nil i | i <- enumFromTo 0 (deparr.length-1) ]
     i `dependson` j = deeps.frozenElemAt i `contains` j
     sortit [] = []
     sortit (x:xs) = sortit before ++ (eqs:sortit after) where
         (anfang, after) = partitioned (x `dependson`) xs
         (same, before)  = partitioned (`dependson` x) anfang
         eqs = x:same
-    sorted = sortit (0..deeps.length-1)
+    sorted = sortit (enumFromTo 0 (deeps.length-1))
     -- fatal4 = Prelude.error "tsort: can't map back??"
     back ints = map i2o.frozenElemAt ints
     result = [ back is | is <- sorted ]
@@ -1108,12 +1140,17 @@ tsort odeps = result where
 isTName (TName _ _) = true
 isTName _           = false
 
---- return a list of strings that are unbound 'TVar's
---- the first argument is the list of 'TVar's bound outside this rho
-freeTVars bound rho = keys (freeRhoTVars bound Nil rho)
+--- return a list of 'TVar's that are unbound in the type
+--- the first argument is the list of 'TVar' names bound outside this rho
+freeTVars :: [String] -> RhoT a -> [TauT a]
+freeTVars bound rho = values (freeRhoTVars bound Nil rho)
+
+--- like freeTVars, but returns only 'TVar'  names
+freeTVnames :: [String] -> RhoT a -> [String]
+freeTVnames bound rho = keys (freeRhoTVars bound Nil rho)
 
 freeRhoTVars bound collected (RhoFun ctx (ForAll bndleft rho1) rho2) =
-    freeRhoTVars (bndleft ++ bound) (freeRhoTVars bound ctxcoll rho2) rho1
+    freeRhoTVars (map fst bndleft ++ bound) (freeRhoTVars bound ctxcoll rho2) rho1
         where ctxcoll = freeCtxTVars bound collected ctx
 freeRhoTVars bound collected (RhoTau ctx tau) = freeTauTVars bound ctxcoll tau
         where ctxcoll = freeCtxTVars bound collected ctx
@@ -1126,89 +1163,101 @@ freeCtxTVars bnd coll cs = fold ctxTVars coll cs
 
 
 
-freeTauTVars bound collected (TVar _ s)
-    | s `elem` bound = collected
-    | otherwise = collected `including` s
+freeTauTVars bound collected (tv@TVar{var})
+    | var `elem` bound = collected
+    | otherwise = insert collected var tv
 freeTauTVars bound collected (TApp a b)
                 = freeTauTVars bound (freeTauTVars bound collected a) b
 -- freeTauTVars bound collected (TFun a b)
 --                 = freeTauTVars bound (freeTauTVars bound collected a) b
 freeTauTVars _ collected _ = collected
 
--- substSigma :: Tree String (TauT t) ->  SigmaT t -> StG (SigmaT t)
-substSigma t (ForAll bndrs rho) = do
-        rho <- substRho t' rho
-        stio (ForAll bndrs rho)
-    where t' = fold Tree.delete t bndrs
-substRho t (RhoFun ctx sig rho) = do
-        ctx <- mapSt (substCtx t) ctx
-        sig <- substSigma t sig
-        rho <- substRho t rho
-        stio (RhoFun ctx sig rho)
-substRho t (RhoTau ctx tau) = liftM2 RhoTau (mapSt (substCtx t) ctx) (substTau t tau)
--- substTau t (TFun a b)       = liftM2 TFun (substTau t a) (substTau t b)
-substTau t (tau@TCon _ _)   = stio tau
-substTau t (TApp a b)       = liftM2 TApp (substTau t a) (substTau t b)
-substTau t (typ@Meta (Flexi n r s)) = do
-        bound <- doio (r.get)
-        case bound of
-            Nothing  = stio typ
-            Just tau = substTau t tau
-substTau t (typ@Meta _)     = stio typ
-substTau t (typ@TVar {var}) = case Tree.lookupS t var of
-        Just tau -> stio tau
-        Nothing  -> stio typ
-substCtx t (x@Ctx {tau}) = do
-        tau <- substTau t tau
-        stio (x.{tau})
+--- note: type must not contain bound Metas
+substSigma :: Tree String (TauT t) ->  SigmaT t  -> SigmaT t
+substSigma t (ForAll bndrs rho) = ForAll bndrs (substRho t' rho)
+    where t' = fold Tree.delete t (map fst bndrs)
+substRho t (RhoFun ctx sig rho) = let
+            ctx' = map (substCtx t) ctx
+            sig' = substSigma t sig 
+            rho' = substRho t rho 
+        in (RhoFun ctx' sig' rho')
+substRho t (RhoTau ctx tau)  = RhoTau (map (substCtx t) ctx) (substTau t tau)
+substTau t (tau@TCon{})      = tau
+substTau t (TApp a b)        = TApp (substTau t a) (substTau t b)
 
-{--
- * Make sure that the type application is indeed a type.
- *
- * If the first arg is @true@, partial applications are allowed.
- -}
-checkTApp :: Bool -> [Tau] -> StG Tau
-checkTApp partial (con:as) = do
-        g <- getST
-        let t = Tau.mkapp con as
-            units   = repeat (TCon {pos=Position.null, name=TName pPreludeBase "()"})  -- for err correction
-        case con of
-            TCon {pos,name} -> case name.findit g of
-                -- Just (SymT {typ=ForAll bs _}) | null as, null bs = stio con
-                Just (SymT {typ=ForAll bs _}) -> if length as <= length bs then stio t  -- no kind errors
-                    else if length as < length bs then if !partial then do
-                        error pos (fill
-                            (break "too few arguments for application of type constructor"
-                                ++ [text (name.nice g) <> text ","]
-                                ++ break "there must be"
-                                ++ [lit (length bs)]))
-                        stio (Tau.mkapp t (take (length bs - length as) units))
-                      else do stio t
-                    else do error pos (fill (break "too many arguments for application of type constructor"
-                                    ++ [text (name.nice g) <> text ","]
-                                    ++ break "at most" ++ [lit (length bs)]
-                                    ++ break "are allowed."))
-                            stio (Tau.mkapp con (take (length bs) as))
-                _ -> fatal (tauPos t) (fill (break "not a type constructor: " ++ [text (name.nice g)]))
-            TVar {pos} -> stio t
-            _ -> fatal (tauPos t) (fill (break "type application of " ++ [text (con.nice g)]))
-checkTApp _ _ = undefined       -- must only be called with tau.flat
+substTau t (typ@Meta Flexi{ref}) = case unsafeGetRef ref of
+        Just _ -> Prelude.error ("bound Meta not allowed in substTau")
+        _      -> typ
+substTau t (typ@Meta _)      = typ     -- Meta must be unbound
+
+substTau t (typ@TVar {var})  = case Tree.lookupS t var of
+        Just tau -> tau
+        Nothing  -> typ
+
+substCtx :: Tree String (TauT a) -> ContextT a -> ContextT a        
+substCtx t x  = x.{tau <- substTau t}
+
 {-
-checkTApp partial (con@TCon {pos,name}) = do
-        g <- getST
-        let units   = repeat (TCon {pos=0, name=TName pPrelude "()"})
-        case name.findit g of
-            Just (SymT {typ=ForAll bs _}) -> if length bs == 0 then stio con
-                    else if !partial && length bs > 0 then do
-                        error pos ("too few arguments for application of type constructor "
-                            ++ name.nice g ++ ", there must be " ++ show (length bs))
-                        stio (Tau.mkapp con (take (length bs) units))
-                    else stio con
-            _ -> fatal (tauPos t) ("not a type constructor: " ++ name.nice g)
-checkTApp t = do
-    g <- getST
-    fatal (tauPos t) ("not a type application: " ++ t.nice g)
-    -}
+    We use this *only* to check if our premise, that no bound
+    Meta variable ever occurs in 'substTau'  always holds.
+    
+    Note that substTau was in the StG monad earlier, and we
+    followed bound Meta. On a second thought, it would appear
+    to be better to remove that if it wasn't necessary.
+    
+    Hence we want to make sure that the property introduced
+    post factum holds.
+-}
+
+private pure native unsafeGetRef get  :: IORef a -> a               
+
+-- {--
+--  * Make sure that the type application is indeed a type.
+--  *
+--  * If the first arg is @true@, partial applications are allowed.
+--  -}
+-- checkTApp :: Bool -> [Tau] -> StG Tau
+-- checkTApp partial (con:as) = do
+--         g <- getST
+--         let t = Tau.mkapp con as
+--             units   = repeat (TCon {pos=Position.null, name=TName pPreludeBase "()"})  -- for err correction
+--         case con of
+--             TCon {pos,name} -> case name.findit g of
+--                 -- Just (SymT {typ=ForAll bs _}) | null as, null bs = stio con
+--                 Just (SymT {typ=ForAll bs _}) -> if length as <= length bs then stio t  -- no kind errors
+--                     else if length as < length bs then if !partial then do
+--                         error pos (fill
+--                             (break "too few arguments for application of type constructor"
+--                                 ++ [text (name.nice g) <> text ","]
+--                                 ++ break "there must be"
+--                                 ++ [lit (length bs)]))
+--                         stio (Tau.mkapp t (take (length bs - length as) units))
+--                       else do stio t
+--                     else do error pos (fill (break "too many arguments for application of type constructor"
+--                                     ++ [text (name.nice g) <> text ","]
+--                                     ++ break "at most" ++ [lit (length bs)]
+--                                     ++ break "are allowed."))
+--                             stio (Tau.mkapp con (take (length bs) as))
+--                 _ -> fatal (tauPos t) (fill (break "not a type constructor: " ++ [text (name.nice g)]))
+--             TVar {pos} -> stio t
+--             _ -> fatal (tauPos t) (fill (break "type application of " ++ [text (con.nice g)]))
+-- checkTApp _ _ = undefined       -- must only be called with tau.flat
+-- {-
+-- checkTApp partial (con@TCon {pos,name}) = do
+--         g <- getST
+--         let units   = repeat (TCon {pos=0, name=TName pPrelude "()"})
+--         case name.findit g of
+--             Just (SymT {typ=ForAll bs _}) -> if length bs == 0 then stio con
+--                     else if !partial && length bs > 0 then do
+--                         error pos ("too few arguments for application of type constructor "
+--                             ++ name.nice g ++ ", there must be " ++ show (length bs))
+--                         stio (Tau.mkapp con (take (length bs) units))
+--                     else stio con
+--             _ -> fatal (tauPos t) ("not a type constructor: " ++ name.nice g)
+-- checkTApp t = do
+--     g <- getST
+--     fatal (tauPos t) ("not a type application: " ++ t.nice g)
+--     -}
 
 --- numbers from 0 on
 numbers = iterate (1+) 0
@@ -1225,7 +1274,7 @@ pReturn (p@PConFS{}) = do
     let ret (nm, pat) = do p <- pReturn pat; return (nm, p)
     fields <- mapSt ret p.fields
     return p.{fields}
-pReturn (p@PStrict{pat}) = do
+pReturn (p@PUser{pat}) = do
     pat <- pReturn pat
     return p.{pat}
 pReturn (p@PAnn{pat}) = do
@@ -1277,11 +1326,14 @@ replaceLocals syms x = stio (Left x)
  * If the name is a 'Local' one, the 'Symbol.sid' is set to the 'QName.uid'
  -}
 vSym pos name = SymV {pos,
-                        sid= if QName.{uid?} name then name.uid else 0,
-                                name, vis=Private, doc=Nothing,
-                                typ=pSigma, expr=Nothing, nativ=Nothing,
-                                pur=false, anno=false, exported=false, state=Unchecked,
-                                strsig = Strictness.U, depth = 0, rkind = 0 }
+                    sid= if QName.{uid?} name then name.uid else 0,
+                    name, vis=Private, doc=Nothing,
+                    typ=pSigma, expr=Nothing, nativ=Nothing,
+                    pur=false, anno=false, exported=false, 
+                    state=Unchecked,
+                    strsig = Strictness.U, depth = 0, 
+                    rkind = RState.empty,
+                    throwing = [], over = [] }
 
 --- check how man lambdas are nested inside each other
 lambdaDepth (Lam {ex}) = 1 + lambdaDepth ex
@@ -1300,18 +1352,19 @@ rhoTau tau        = RhoTau [] tau
  * 2) if there are variables in forall, make sure there are no free variables in the type
  * 3) make sure the variables in forall actually do appear in the type
  -}
+validSigma :: SigmaT a -> StG (SigmaT a)
 validSigma (ForAll [] rho) = do
     let vs = freeTVars [] rho
-    rho <- validRho vs rho
-    stio (ForAll vs rho)
+    rho <- validRho (map Tau.var vs) rho
+    stio (ForAll  (map Tau.varkind vs)  rho)
 validSigma sig = validSigma1 [] sig
 validSigma1 outer (ForAll bound rho) = do
     g <- getST
     -- logmsg TRACE5 (rhoPos rho) ("outer: " ++ display outer)
     -- logmsg TRACE5 (rhoPos rho) ((ForAll bound rho).nice g)
-    let vs = freeTVars (bound++outer) rho
-        fs = freeTVars outer rho
-        ov = [ v | v <- bound, v `notElem` fs ]
+    let vs = freeTVnames (map fst bound++outer) rho
+        fs = freeTVnames outer rho
+        ov = [ v | (v,_) <- bound, v `notElem` fs ]
     -- logmsg TRACE5 (rhoPos rho) ("vs: " ++ display vs)
     -- logmsg TRACE5 (rhoPos rho) ("fs: " ++ display fs)
     -- logmsg TRACE5 (rhoPos rho) ("ov: " ++ display ov)
@@ -1320,7 +1373,7 @@ validSigma1 outer (ForAll bound rho) = do
     unless (null ov)
         (error (rhoPos rho) (fill (break ("bound type variable(s) " ++ joined ", " ov
             ++ " not appearing in type"))))
-    rho <- validRho (vs ++ bound ++ outer) rho
+    rho <- validRho (vs ++ map fst bound ++ outer) rho
     stio (ForAll bound rho)
 
 {--
@@ -1334,12 +1387,6 @@ validSigma1 outer (ForAll bound rho) = do
  -}
 -- validRho :: [String] -> RhoT Ord:a -> StG (RhoT a)
 validRho bound rho = do
-        {-
-        let ctxx = rhoContext rho
-            ctxs = Rho.context rho ++ ctxx
-            tree = Tree.fromList [(tv.var, tv) | Ctx _ _ tv _ <- ctxx] // .classes=[] see rhoContext
-        rho <- substRho tree rho    // replace TVar x [Class] with TVar x []
-        -}
         foreach (Rho.context rho) check
         case rho of
             RhoFun _ sig r -> do
@@ -1348,38 +1395,21 @@ validRho bound rho = do
                  stio rho.{sigma=sig, rho=r}
             _ -> stio rho
     where
-        check (Ctx pos qname tau checked) = do
+        check (Ctx pos qname tau) = do
             let vars = keys (freeTauTVars [] Nil tau)
                 bads = filter (`notElem` bound) vars
             unless (null bads) do
                 error pos (fill (break ("context must not name type variables " ++ joined "," bads)))
             stio ()
-            {-
-        rhoContext rho = [ Ctx p c (TVar {pos=p,var=t}) false |
-                            ((c,t),p) <- uniqBy (using fst)
-                                            (sortBy (comparing fst) (rhoCtx [] rho)) ]
-        rhoCtx acc (RhoTau _ tau) = tauCtx acc tau
-        rhoCtx acc (RhoFun _ (ForAll _ r) rho) = rhoCtx (rhoCtx acc r) rho
-        tauCtx acc (tv@TVar {pos}) = [ ((q,tv.var), tv.pos) | q <- tv.classes ] ++ acc
-        tauCtx acc (TFun a b)  = tauCtx (tauCtx acc a) b
-        tauCtx acc (TApp a b)  = tauCtx (tauCtx acc a) b
-        tauCtx acc (TCon {pos}) = acc
-        tauCtx acc (Meta _) = acc
-        -}
-
+        
 {--
  * check a sigma and translate it to 'QName' form.
  -}
-transSigma sigma = transSigmaP false sigma
-{--
- * check a sigma and translate it to 'QName' form, partial applications are
- * allowed when the first argument is @true@
- -}
-transSigmaP partial sigma = do
+transSigma sigma = do
         sigma <- validSigma sigma
         case sigma of
             ForAll bound rho -> do
-                rho <- transRho partial rho
+                rho <- transRho rho
                 case rho of
                     RhoTau _ _ -> stio (ForAll bound rho)
                     _          -> stio (ForAll bound (unTau rho))
@@ -1387,47 +1417,40 @@ transSigmaP partial sigma = do
 {--
  * transform a string context to q 'QName' context
  -}
-transCtx (Ctx pos name tau check) = do
+transCtx (Ctx pos name tau) = do
         name <- defaultXName pos (TName pPreludeBase "Eq") name
-        tau  <- transTau true tau
-        stio (Ctx pos name tau check)
+        tau  <- transTau tau
+        stio (Ctx pos name tau)
+
 
 {--
  * check a rho and translate it to 'QName' form
  -}
-transRho partial (RhoFun ctx (ForAll bnd rho1) rho2) = do
-        rho1 <- transRho false rho1
-        rho2 <- transRho false rho2
+transRho :: RhoS -> StG Rho
+transRho (RhoFun ctx (ForAll bnd rho1) rho2) = do
+        rho1 <- transRho rho1
+        rho2 <- transRho rho2
         ctx  <- mapSt transCtx ctx
         stio (RhoFun ctx (ForAll bnd rho1) rho2)
-transRho partial (RhoTau ctx tau) = do
-        tau <- transTau partial tau
+transRho  (RhoTau ctx tau) = do
+        tau <- transTau tau
         ctx  <- mapSt transCtx ctx
-        -- stio $ unTau (RhoTau ctx tau)
         stio $ RhoTau ctx tau
 
 {--
- * check a tau and translate it to 'QName' form
+    check a tau and translate it to 'QName' form
  -}
-transTau :: Bool -> TauT SName -> StG (TauT QName)
-transTau partial (TVar {pos,var}) = do
-        -- mbcs <- mapSt (resolveTName pos) classes
-        -- let classes = [ c | Just c <- mbcs ]
-        stio (TVar {pos,var})
+transTau :: TauT SName -> StG (TauT QName)
+transTau (TVar{pos,var,kind}) = return (TVar {pos,var,kind})
 
--- transTau partial (TFun a b) = do
---     a <- transTau false a
---     b <- transTau false b
---     stio (TFun a b)
-
-transTau partial (t@Meta _) = do    -- Meta must not happen at this time
+transTau (t@Meta _) = do    -- Meta must not happen at this time
     g <- getST
     fatal (tauPos t) (text("meta type must not occur at this time: " ++ t.nice g))
 
-transTau partial (con@TCon {pos,name}) = transTApp partial [con]
-transTau partial (t@TApp _ _) = transTApp partial t.flat
+transTau (con@TCon {pos,name}) = transTApp [con]
+transTau (t@TApp _ _) = transTApp t.flat
 
-transTApp partial (con:as) = do
+transTApp (con:as) = do
      case con of
         TCon {pos,name} -> do
             tname <- resolveTName pos name
@@ -1438,19 +1461,24 @@ transTApp partial (con:as) = do
                 Just tn -> case tn.findit g of
                     Just (SymT {name,typ=ForAll bs _}) -> do
                             let ncon = TCon {pos, name}
-                            as <- mapSt (transTau false) as
-                            checkTApp partial (ncon:as)
+                            as <- mapSt transTau as
+                            return (Tau.mkapp ncon as)
+                            -- checkTApp partial (ncon:as)
                     Just (alias@SymA {typ})
                         | ForAll bs (RhoTau _ tau) <- typ,
                           length as >= length bs = do
-                                as <- mapSt (transTau true) as  -- partial args allowed in alias
-                                let env = Tree.fromList (zip bs as)
+                                as <- mapSt transTau as  -- partial args allowed in alias
+                                let env = Tree.fromList (zip (map fst bs) as)
                                     ras = drop (length bs) as
-                                nt <- substTau env tau
-                                case nt of
-                                    TApp _ _  -> checkTApp partial (nt.flat ++ ras)
-                                    nt | null ras  = stio nt
-                                       | otherwise = checkTApp partial (nt:ras)
+                                let nt = substTau env tau
+                                -- make sure errors are flagged on the right position
+                                let posnt = case Tau.flat nt of
+                                        (tcon:xs) | tcon.{pos?} = Tau.mkapp tcon.{pos} xs
+                                        other -> nt
+                                case posnt of
+                                    TApp _ _  -> return (Tau.mkapp posnt ras)
+                                    nt | null ras  = stio posnt
+                                       | otherwise = return (Tau.mkapp posnt ras)
                         | ForAll bs (RhoTau _ tau) <- typ,
                           length as < length bs = do
                                 error pos (msgdoc ("apply " ++ alias.nice g ++ " to at least "
@@ -1468,10 +1496,10 @@ transTApp partial (con:as) = do
                         unit
           where unit = stio (TCon {pos, name=TName pPreludeBase "()"})
         other -> do
-            con <- transTau false con
-            as  <- mapSt (transTau false) as
+            con <- transTau con
+            as  <- mapSt transTau as
             stio (Tau.mkapp con as)
-transTApp _ _ = undefined                   -- must only be used with tau.flat
+transTApp _ = undefined                   -- must only be used with tau.flat
 
 --- make sure only canonical names are returned from resolve
 canonical g qname = case QName.findit qname g of
@@ -1497,19 +1525,48 @@ protected resolve fname pos sname = do
         (psyms, asyms)
             | null psyms, null asyms = stio []      -- not found erros was flagged by resolve3
             | null asyms = do   -- only private symbols found
-                error pos (msgdoc ("`" ++ show sname ++ "´ resolves to private " ++ (flip nice g • head) psyms
+                error pos (msgdoc ("`" ++ show sname ++ "´ resolves to private " ++ (flip nicer g • head) psyms
                             ++ ", access is not allowed."))
                 stio []         -- ignore private ones
             | otherwise = do
                 let ss = reverse asyms
+                foreach ss docWarningSym
                 foreach ss (traceSym sname)
                 stio (map Symbol.name ss) -- some public ones found
             where
+                docWarningSym :: Symbol -> StG ()
+                docWarningSym sym = do
+                    g <- getST
+                    docWarning pos (sym.name.nicer g) sym.doc
+                     
                 traceSym :: SName -> Symbol -> StG ()
                 traceSym sname symbol = do
                     logmsg TRACE5 pos (text (show sname ++ " resolved to " ++ nice symbol g ++ " ("
                         ++ QName.show symbol.name ++ ", " ++ show symbol.vis ++ ")"))
 
+{-- 
+    Print the warning encoded in documentation code, if any.
+    
+    The flag @NODOCWARNNGS@ is temporarily set by import to avoid
+    warnings on names that are resolved, but not used.
+    -}
+docWarning pos msg (Just (m~´^\s*warning:\s*([^\n]+)´)) = do
+    g <- getST
+    unless (isOn g.options.flags NODOCWARNINGS) do
+        warn pos (msgdoc (msg ++ ": " ++ fromMaybe "?" (m.group 1)))
+docWarning pos msg _ = return ()
+
+{-- 
+    Print a warning or hint regarding a symbol only if the documentation comment
+    does not start with "nowarn:"
+    -} 
+symWarning :: (Position -> DOCUMENT -> StG ()) -> Symbol -> DOCUMENT -> StG ()
+symWarning warn sym msg = do
+     case sym.doc of
+        Just ´^\s*nowarn:´ -> return ()
+        other -> warn sym.pos msg 
+
+    
 -- resolve3 keeps the original name, i.e. 'Int.<=>' will not be resolved to 'Ord.<=>'
 private resolve3 fname pos (Simple Token{value=qs}) = do
     g <- getST
@@ -1519,7 +1576,9 @@ private resolve3 fname pos (Simple Token{value=qs}) = do
         vname = VName g.thisPack s
         tname = TName g.thisPack s
         find x = QName.findit x g
-        names = [mname, vname, tname]
+        names
+            | mname == vname = [mname, tname]           -- avoid duplicate warnings/finds
+            | otherwise      = [mname, vname, tname]
         found = map find names
         result = [ sym | Just sym <- found ]                -- canonical through findit
 --                                  (Symbol.name sym).base == s,
@@ -1748,8 +1807,8 @@ dlDistance src dst = at t3 m n
         m = length src
         n = length dst
         ins tree (x,y) = insert tree x y
-        t1 = fold ins Nil [ ((i,0), i) | i <- 0..m ]
-        t2 = fold ins t1  [ ((0,j), j) | j <- 0..n ]
+        t1 = fold ins Nil [ ((i,0), i) | i <- enumFromTo 0 m ]
+        t2 = fold ins t1  [ ((0,j), j) | j <- enumFromTo 0 n ]
         t3 = loop t2 1 1
         loop t i j
             | i <= m, j <= n = loop (insert t (i,j) dijx) i (j+1)
@@ -2053,14 +2112,14 @@ allBinders = single ++ [ s1++s2 | s1 <- allBinders, s2 <- single ]
     where single = [ctos c | c <- "αβγδεζηθιßκλμνξοπρςστυφχψω" ]   -- 'a' .. 'z' ]
 
 allAsciiBinders = single ++ [ s1++s2 | s1 <- allBinders, s2 <- single ]
-    where single = [ctos c | c <- 'a' .. 'z' ]
+    where single = [ctos c | c <- enumFromTo 'a' 'z' ]
 
 --- find all our 'SymV' symbols
-allourvars = do
-    g <- getST
+allourvars :: Global -> [Symbol]
+allourvars g = 
     let collectedenvs = g.thisTab : [ Symbol.env sy | sy <- values g.thisTab, Symbol.{env?} sy ]
-        collectedvars = [ v | env <- collectedenvs, v@SymV {name} <- values env, name.our g]
-    stio collectedvars
+    in [ v | env <- collectedenvs, v@SymV {name} <- values env, name.our g]
+    
 
 --- find all 'SymV' symbols, be they ours or not
 allvars = do
@@ -2177,35 +2236,45 @@ javaName g qname = case qname.findit g of
             SymT {name} -> t "T" name
             SymD {name = MName tname base} -> case tname.findit g of
                 Just (SymT {product,enum}) -> if enum
-                    then memberOf (javaName g tname) (mangled base)
+                    then memberOf (t "T" tname) (mangled base)
                     else if product
-                        then javaName g tname
-                        else memberOf (javaName g tname) ("D" ++ mangled base)
+                        then t "T" tname
+                        else memberOf (t "T" tname) ("D" ++ mangled base)
                 fail -> Prelude.error "javaName: tname is no SymT"
             SymC {name} -> t "C" name
             SymI {name} -> t "I" name
-            SymV {name = MName tname base}
-                | Just (SymT {product=false,enum=false,newt=false,nativ=Nothing}) <- tname.findit g
-                            = memberOf (memberOf tjname "M") mbase
-                | Just (SymC {sid}) <- tname.findit g = memberOf (memberOf tjname "I") mbase
-                | otherwise = memberOf tjname mbase
+            SymV {name = MName tname base} = case tname.findit g of
+                    Just (SymT {product=false,enum=false,newt=false,nativ=Nothing}) 
+                                      = memberOf (memberOf tjname "M") mbase
+                    Just (SymC {sid}) = memberOf (memberOf tjname "I") mbase
+                    otherwise         = memberOf tjname mbase
                 where tjname = javaName g tname
-                      mbase  = vid sym.name.base
+                      mbase  = mangled sym.name.base
             SymV {name = VName pname base}
                 | pname == g.thisPack = JName (pname.className g).base vbase
-                | inPrelude pname g = JName (pname.className g).base vbase
+                | hasJavaImport pname g = JName (pname.className g).base vbase
                 | otherwise = memberOf (pname.className g) vbase
-                where vbase = vid sym.name.base
+                where vbase = mangled sym.name.base
             other -> Prelude.error ("javaName: strange symbol " ++ nice sym g)
         Nothing -> Prelude.error ("javaName: cannot findit " ++ nice qname g)
     where
-        vid name = mangled name
+        -- vid name = mangled name
         t letter (TName pack base)
-            | pack == g.thisPack = JName    ""                   (letter ++ mangled base)
-            | inPrelude pack g    = JName    (pack.className g).base (letter ++ mangled base)
-            | otherwise          = memberOf (pack.className g)   (letter ++ mangled base)
+            | pack == g.thisPack   = JName    ""                   (letter ++ mangled base)
+            | hasJavaImport pack g = JName    (pack.className g).base (letter ++ mangled base)
+            | otherwise            = memberOf (pack.className g)   (letter ++ mangled base)
         t _ _ = Prelude.error "t: need a TName"
 
+{-- By convention, if the classname base of some package is unique among
+    all known packages, an import statement will be generated so that we can
+    use the package base name unqualified.
+    
+    This is to avoid even more clutter in java code.
+    -}
+hasJavaImport :: Pack -> Global -> Bool    
+hasJavaImport p g = case g.gen.jimport.lookup ((p.className g).base) of
+    Just imported -> imported == p
+    otherwise     -> false     
 {--
     Given a 'JName' and a member name, returns the 'JName' of the member.
  -}
@@ -2222,10 +2291,29 @@ isUnit _                                               = Nothing
 isMaybe (TApp (TCon {name = TName p "Maybe"}) ty) | p == pPreludeBase = Just ty
 isMaybe _ = Nothing
 
-isException (TApp (TApp (TCon {name = TName p1 "Either"})
-                        (TCon {name = TName p2 "JException"}))
-                  ty) |  p1 == pPreludeBase, p2 == pPreludeBase = Just ty
-isException _ = Nothing
+{-- 
+    @isException g tau@ returns 'Just' (_left_, _right_) if and only if the following
+    conditions both hold:
+    - _tau_ is of the form 'Either' _left_ _right_
+    - _left_ is ('isThrowable' g _left_) or ('isException' g _left_) is not 'Nothing'    
+-}  
+isException g (TApp (TApp con ex) ty) 
+    | isEither con, isEx ex = Just (ex, ty)
+    where
+        isEither  TCon {name = TName p1 "Either"} = p1 == pPreludeBase
+        isEither  _                               = false 
+        isEx (TApp (TApp con a) b) = isEither con && isEx a && isThrowable g b
+        isEx x = isThrowable g x 
+isException g _ = Nothing
+
+{-- 
+    @true@ if and only if in environment _g_, 
+    type _t_ denotes a sub type of @java.lang.Throwable@ 
+-}
+isThrowable g ty = case instTauSym ty g of
+        Just SymT{nativ=Just x} -> x == "java.lang.Throwable" 
+                                     || "java.lang.Throwable" `elem` supersOfNativ x g
+        other -> false
 
 isIO (TApp (TApp (TCon {name = TName p "ST"}) st ) ty)
     | p == pPreludeBase = Just (st, ty)
@@ -2269,7 +2357,7 @@ unifyTau g t _ _ = t
  * the bounded variables of @sigma1@ in @sigma2@
  * which must be a valid substitution of the former (up to contexts).
  -}
-sigmaInst g sigma1 sigma2 = [ s | Just s <-  map (Tree.lookupS tree) (Sigma.bound sigma1) ]
+sigmaInst g sigma1 sigma2 = [ s | Just s <-  map (Tree.lookupS tree) (Sigma.vars sigma1) ]
     where tree =  unifySigma g sigma1 sigma2
 
 
@@ -2302,8 +2390,10 @@ tauToCtx tau
         tauCtx (TApp (TCon {pos=tpos, name}) tvapp)
             | isTvApp tvapp = do
                 let pos = tpos.merge (getpos tvapp)
-                stio [Ctx {pos, cname=name, tau = tvapp, checked = false}]
+                stio [Ctx {pos, cname=name, tau = tvapp}]
         tauCtx tau = bad tau
-        isTvApp (TVar {}) = true
-        isTvApp (TApp a b) = isTvApp a && isTvApp b
-        isTvApp _ = false
+
+--- true if and only if the 'Tau' type is a 'TVar' or an application of 'TVar's
+isTvApp (TVar {}) = true
+isTvApp (TApp a b) = isTvApp a && isTvApp b
+isTvApp _ = false
