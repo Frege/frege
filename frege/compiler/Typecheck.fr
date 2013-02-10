@@ -944,7 +944,8 @@ tcPat' p _ = do
     g <- getST
     U.fatal (getpos p) (text ("can't tcPat:  " ++ p.nice g))
 
---- resolve the x.m finally
+--- Resolve the x.m finally
+--- Resolve overloaded methods
 resolveHas = mapEx true rHas
     where
         rHas (x@Mem{ex, member, typ = Just sigma}) = do
@@ -975,13 +976,87 @@ resolveHas = mapEx true rHas
                                     <+/> (text (ex.nicer g)
                                             <+> text "::" 
                                             <+> text (nicer sigma g))
-                                    <+/> text " does not have a valid type.")
+                                    <+/> text " does not have a definite type.")
                                 return (Left x)
                 other -> return (Left app)      -- Mem resolved!
         rHas (x@Mem{ex, member, typ = Nothing}) = do
             g <- getST
             error ("expression  " ++ x.nicer g ++ "  is untyped")
+        rHas (v@Vbl{pos, name, typ}) | not name.isLocal = do
+            sym <- U.findV name
+            case sym.over of
+                [] -> return (Right v)
+                _  -> resolveOver v sym
         rHas x = return (Left x)
+
+--- resolve overloaded variable
+resolveOver :: Expr -> Symbol -> StG (Expr|Expr)
+resolveOver v sym = do
+        g <- getST
+        let sigma = (unJust v.typ)
+        U.logmsg TRACET v.pos (text ("overloaded " ++ nice v.name g 
+                                    ++ " :: " ++ nice sigma g))
+                                            
+        let candidates = overloads g sym
+        
+        U.logmsg TRACET v.pos (text ("by " 
+            ++ joined ", " (map (flip nice g . Symbol.name) candidates)))
+            
+        checked <- resolve v.pos sigma candidates
+        case checked of
+            [] -> do
+                U.error v.pos (text "overloaded " <+> text (nicer v g) 
+                    <+> text " cannot be resolved at type "
+                    <+/> text (nicer sigma g))
+                return (Right v)
+            [s] -> do
+                U.explain v.pos (msgdoc ("overloaded " ++ nicer v.name g 
+                                    ++ " :: " ++ nicer sigma g
+                                    ++ "  resolved to  "
+                                    ++ nicer s.name g))
+                x <- checkSigma Vbl{pos=v.pos, name=s.name, typ=Nothing} sigma
+                return (Right x)
+            _ -> do 
+                U.error v.pos (text "overloaded " <+> text (nicer v g) 
+                    <+> text " is ambiguos at type "
+                    <+/> text (nicer sigma g)
+                    </> text "It could mean one of "
+                    </> Nice.stack [ text (nicer s.name g) 
+                                        <+> text " :: " 
+                                        <+> text (nicer s.typ g)
+                                | s <- candidates ]) 
+                return (Right v)
+    where
+        resolve pos sigma [] = return []
+        resolve pos sigma (sym:syms) = do
+            g1 <- getST
+            changeST Global.{options <- Options.{flags <- flip U.setFlag OVERLOADING}}
+            tvs <- sigmaTvs sigma
+            x <- checkSigma Vbl{pos, name=Symbol.name sym, typ=Nothing} sigma
+            foreach tvs unBind
+            changeST Global.{options <- Options.{flags <- flip U.clrFlag OVERLOADING}}
+            g <- getST
+            changeST Global.{sub <- SubSt.{errors = g1.errors}}
+            if (g.errors > g1.errors)
+            then resolve pos sigma syms
+            else do
+                rs <- resolve pos sigma syms
+                return (sym:rs)
+        unBind (Flexi{ref}) = doio (ref.put Nothing)
+        unBind Rigid{} = return ()    
+        overloads g sym = case sym of
+            SymV{over=[]} -> [sym]
+            SymV{pos, name = MName{tynm, base}, over=(_:_)}
+                | Just SymT{nativ = Just this} <- tynm.findit g,
+                  ov <- [ sy | m <- sym.over, sy <- m.findit g ],
+                  syms <- [ sy | s  <- U.supersOfNativ this g, 
+                                 q  <- U.typesOfNativ s g, 
+                                 h  <- (MName q base).findit g,
+                                 sy <- overloads g h] 
+                = ov++syms
+            SymV{} -> [ sy | m <- sym.over, sy <- m.findit g ]
+            _ -> []
+            
 
 --- collect all class constraints
 collectConstrs = U.foldEx true collC []
