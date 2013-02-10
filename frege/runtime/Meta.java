@@ -223,6 +223,7 @@ public class Meta {
         int      expr()         default 0;          // index into expression table if >0
         boolean  publik()       default true;       // will it be imported by default
         int[]	throwing()		default {};			// index of taus this function throws
+        QName[] over()			default {};			// names of members this one overloads
     }
 
     /**

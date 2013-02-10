@@ -152,6 +152,8 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type tauSC           [TauS]
 //%type tauSB           [TauS]
 //%type dvars           [TauS]
+//%type sigex           D.SigExs
+//%type sigexs          [D.SigExs]
 //%type sigma           SigmaS
 //%type forall          SigmaS
 //%type rhofun          RhoS
@@ -261,6 +263,8 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%explain tapp         a type application
 //%explain forall       a qualified type
 //%explain sigma        a qualified type
+//%explain sigex        a method type with optional throws clause
+//%explain sigexs       method types with optional throws clauses
 //%explain boundvar     a type variable bound in a forall
 //%explain boundvars    type variables bound in a forall
 //%explain rop13        ':'
@@ -732,27 +736,35 @@ nativestart:
     | NATIVE '-'           { \_\b  -> vid b }
     ;
 
+sigex: 
+    sigma THROWS tauSC      { \a\_\c -> (a, c) }
+    | sigma                 { \a -> (a, [])    }
+    ;
+
+sigexs:
+    sigex                   { single }
+    | sigex '|' sigexs      { liste }
+    ;
+
 impurenativedef:
-    nativestart DCOLON sigma
+    nativestart DCOLON sigexs
                     { \item\col\t -> NatDcl {pos=posLine item, vis=Public, name=posItem item,
-                                                meth=posItem item, typ=t, isPure=false, 
-                                                throwing=[], doc=Nothing}}
-    | nativestart nativename DCOLON sigma
+                                                meth=posItem item, txs=t, isPure=false, 
+                                                doc=Nothing}}
+    | nativestart nativename DCOLON sigexs
                     { \item\j\col\t -> NatDcl {pos=posLine item, vis=Public, name=posItem item,
-                                                meth=j, typ=t, isPure=false, 
-                                                throwing=[], doc=Nothing}}
-    | nativestart operator   DCOLON sigma
+                                                meth=j, txs=t, isPure=false, 
+                                                doc=Nothing}}
+    | nativestart operator   DCOLON sigexs
                     { \item\o\col\t -> do {
                             o <- binop o;
                             YYM.return (NatDcl {pos=posLine item, vis=Public, name=posItem item,
-                                                meth=posItem o, typ=t, isPure=false, 
-                                                throwing=[], doc=Nothing})}}
-    | nativestart unop      DCOLON sigma
+                                                meth=posItem o, txs=t, isPure=false, 
+                                                doc=Nothing})}}
+    | nativestart unop      DCOLON sigexs
                     { \item\o\col\t -> NatDcl {pos=posLine item, vis=Public, name=posItem item,
-                                                meth=Token.value o, typ=t, isPure=false, 
-                                                throwing=[], doc=Nothing}}
-    | impurenativedef THROWS tauSC
-                    { \def\_\taus -> Def.{throwing=taus} def } 
+                                                meth=Token.value o, txs=t, isPure=false, 
+                                                doc=Nothing}} 
     ;
 
 
