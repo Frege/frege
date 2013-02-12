@@ -960,7 +960,7 @@ visdalt:
     strictdalt
     | PUBLIC    strictdalt      { \_\dc -> (dc::DConS).{vis = Public}    }
     | PRIVATE   strictdalt      { \_\dc -> (dc::DConS).{vis = Private}   }
-    // PROTECTED strictdalt      { \_\dc -> (dc::DConS).{vis = Protected} }
+    | PROTECTED strictdalt      { \_\dc -> (dc::DConS).{vis = Protected} }
     ;
 
 strictdalt:
