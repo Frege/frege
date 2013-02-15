@@ -252,11 +252,18 @@ public class Runtime {
 			throw new Error(ex);
 		}
 		finally {
-			stdout.close();
-			stderr.close();
+			stdout.flush();
+			stderr.flush();
 		}
 		return;
 	}
+	
+	final public static void exit(int n) {
+		stdout.close();
+		stderr.close();
+		System.exit(n);
+	}
+	
 	final public static boolean fork(Lambda it) {
 		Lazy a = it.apply(true).result();
 	    if (java.util.concurrent.ForkJoinTask.inForkJoinPool())
@@ -264,3 +271,5 @@ public class Runtime {
 	    return true;
 	}
 }
+
+
