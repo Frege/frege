@@ -187,7 +187,7 @@ package frege.tools.YYgen;
  * This is my first frege program I wrote that really did something useful.
  * The style is horrible (iw, May 9, 2009)
  -}
-import frege.IO(FileReader, FileInputStream, BufferedReader, PrintWriter, `<<`,  stderr);
+import Java.IO;
 import Java.Net(URL, URLArray, URLClassLoader);
 -- import Java.Lang(Throwable, ClassLoader, System);
 import frege.List(Tree, keys, lookup);
@@ -207,88 +207,66 @@ ressource (Just _) = "frege/tools/YYgenparM-fr";
 yygenpar :: Maybe a -> IO [String];
 yygenpar how = do
         thiscl <- ClassLoader.current
-        exUcl <- URLClassLoader.new urls thiscl
-        either noClassLoader (loadRessource how) exUcl
+        urls   <- URLArray.fromListST []
+        loader <- URLClassLoader.new urls thiscl
+        loadRessource how loader
+    `catch` noClassLoader
     where
-        urls  = URLArray.fromList []
         noClassLoader (exc :: Throwable) = do
-            stderr << "Can't create loader (" << exc.getMessage << ")"
+            stderr <- stderr
+            stderr.println ("Can't create loader (" ++ exc.getMessage ++ ")")
             System.exit 1
             IO.return []
 ;
 
-loadRessource :: Maybe a -> URLClassLoader -> IO [String];
+loadRessource :: Maybe a -> MutIO URLClassLoader -> IO [String];
 loadRessource which loader = do
         mbUrl <- loader.getResource (ressource which)
         maybe noFile loadUrl mbUrl
     where
         noFile = do
-            stderr << "Can't find ressource " << (ressource which) << "\n"
-            IO.exit 1
+            stderr <- stderr
+            stderr.println("Can't find ressource " ++ (ressource which))
+            System.exit 1
             IO.return []
 ;
 
 loadUrl :: URL -> IO [String];
 loadUrl url = do
-        eStream <- url.openStream
-        either noStream loadInputStream eStream
+        stream <- url.openStream
+        isr <- InputStreamReader.new stream "UTF-8"
+        ifile <- BufferedReader.new isr
+        lines <- ifile.getlines
+        return (map uncr lines)
+    `catch` noStream
     where
         noStream (exc::Throwable) = do
-            stderr << "Can't get at resource (" << exc.getMessage << ")\n"
-            IO.exit 1
-            IO.return []
-;
-
-loadInputStream :: IO.InputStream -> IO [String];
-loadInputStream is = do
-        isx <- IO.InputStreamReader.encoded is "UTF-8"
-        isr <- case isx of
-            Left exc -> do
-                stderr << exc.getClass.getName << ": " << exc.getMessage << "\n"
-                -- fall back to unencoded input .....
-                IO.InputStreamReader.new is
-            Right isr -> IO.return isr
-        ifile <- BufferedReader.fromISR isr
-        lines <- ifile.getlines
-        IO.return (map uncr lines)
+            stderr <- stderr
+            stderr.println( "Can't get at resource (" ++ exc.getMessage ++ ")")
+            System.exit 1
+            return []
 ;
 
 --- remove carriage returns from strings
 uncr s = (#\r#.matcher s).replaceAll "";
 
-openSrc Nothing s = BufferedReader.open s;
-openSrc (Just enc) s = do
-            fis <- IO.FileInputStream.open s
-            case fis of
-                Left err -> IO.return (Left err)
-                Right fis -> brFromIS enc fis.inputStream
-;
-
-brFromIS enc is = do
-            isr <- IO.InputStreamReader.encoded is enc
-            brFromISR isr
-;
-
-brFromISR eisr = case eisr of
-                Left  err -> IO.return (Left err)
-                Right isr -> do
-                    br <- BufferedReader.fromISR isr
-                    IO.return (Right br)
-;
 
 --- give back file content as list of lines
 fileContent :: String -> IO [String];
 fileContent fn = do
-        efile <- openSrc (Just "UTF-8") fn
-        either failure success efile
+        file <- utf8Reader fn
+        lines <- file.getlines
+        return (map uncr lines)
+    `catch` failure
     where
         failure :: Throwable -> IO [String]
-        failure exc = error ("Can't read: " ++ exc.getMessage)
-        success :: BufferedReader -> IO [String]
-        success file = do
-            lines <- file.getlines
-            IO.return (map uncr lines)
-    ;
+        failure exc = do
+            stderr <- stderr
+            stderr.println ("Can't read: " ++ exc.getMessage)
+            System.exit 1
+            return undefined
+        
+;
 
 scanlines lines = let
     isTline #^\s*\d+\s*(\w+)\s*:# = true;
@@ -489,11 +467,8 @@ mkState (stnum, ss) = let
             x -> error ("bad action "++x);
         };
       in A action item stnum;
-    parseaction s = IO.performUnsafe $ (do
-                stderr << "Bad action line: " << s << "\n";
-                IO.exit 1;
-                IO.return undefined;
-            )
+    parseaction s = error ("Bad action line: " ++ s);
+                
     nactions = map parseaction (grep (\l -> !(isGotoline l)) rest);
     gactions = map parseaction (grep isGotoline rest);
   in St stnum (prods) (nactions) (gactions);
@@ -528,34 +503,33 @@ genst (St n ps srea goto) = let
     -- j2 = append j1 errskip;
 in joined ";\n" j1 ++ ";\n";
 
-printstates states stdout = stdout >>= fio IO.return prState states -- (map prState states)
+printstates states (out :: MutIO PrintWriter) = mapM_ prState states
     where
-        prState (St n ps srea gotos) out
+        prState (St n ps srea gotos)
             | (acc:_) <- accept = do
-                    out <- IO.append out (genstate n ps acc) << ";\n"
-                    out <- IO.append out ("yyaccept (yyvs,_) = yybadprod " ++ show n ++ " yyvs;\n")
-                    -- prState (St n ps (filter (not <~ isAccept) srea) gotos) out
+                    out.print (genstate n ps acc ++ ";\n")
+                    out.print ("yyaccept (yyvs,_) = yybadprod " ++ show n ++ " yyvs;\n")
                     yyaction
             | otherwise = yyaction
             where
                 yyaction = do
-                    out <- IO.append out ("private yyaction" ++ show n ++ " t = ")
-                    doCase (filter isCact actions) (filter isTact actions) (filter isDefact actions) out
-                doCase [] [] other out
-                    | [other] <- other = IO.append out (genst n other)
+                    out.print ("private yyaction" ++ show n ++ " t = ")
+                    doCase (filter isCact actions) (filter isTact actions) (filter isDefact actions)
+                doCase [] [] other
+                    | [other] <- other = out.print (genst n other)
                     | otherwise = error ("not exactly one default action in state " ++ show n)
-                doCase [] tacts other out = do
-                        out <- IO.append out "  case yytoken t of {\n"
-                        out <- fio IO.return (flip IO.append) (map (genst n) tacts) out
-                        out <- IO.append out "    _ -> "
-                        out <- doCase [] [] other out
-                        IO.append out "  };\n"
-                doCase cacts tacts other out = do
-                        out <- IO.append out "  case yychar t of {\n"
-                        out <- fio IO.return (flip IO.append) (map (genst n) cacts) out
-                        out <- IO.append out "  _ -> "
-                        out <- doCase [] tacts other out
-                        IO.append out "};\n"
+                doCase [] tacts other = do
+                        out.print "  case yytoken t of {\n"
+                        mapM_ (out.print) (map (genst n) tacts)
+                        out.print "    _ -> "
+                        doCase [] [] other
+                        out.print "  };\n"
+                doCase cacts tacts other = do
+                        out.print "  case yychar t of {\n"
+                        mapM_ (out.print) (map (genst n) cacts)
+                        out.print "  _ -> "
+                        doCase [] tacts other
+                        out.print "};\n"
                 accept = filter isAccept srea
                 actions = if any isDefact srea then srea else srea ++ [A Error Def n]
                 isDefact (A _ Def _) = true
@@ -596,20 +570,21 @@ extrrules sts = fold (\as\s -> append as (extrrule s)) [] sts;
 
 
 
-printpr monadic states reds stdout = let
+printpr monadic states reds (stdout::MutIO PrintWriter) = let
     prods = uniq (sort (extrrules states))
     grules = (map genrule • uniqBy (\Prod a _ _\Prod b _ _ -> a==b)) prods
-    prlines xs = stdout >>= fio IO.return prline xs where
-        prline x out = IO.append out x << ";\n"
+    prlines xs = mapM_ prline xs where
+        prline x = stdout.print (x ++ ";\n")
     prprods (x:xs) | (Prod r _ _) <- x = do
                 prlines (map (\p -> genprod monadic p reds) (same r))
                 -- stdout << ";\n"
                 unless (emptystack (same r))
-                    (do
-                        stdout << "private yyprod" << r << " yyvals = yybadprod "
-                            << r << " yyvals;\n"
+                    do
+                        stdout.print( "private yyprod" ++ show r 
+                            ++ " yyvals = yybadprod "
+                            ++ show r ++ " yyvals;\n")
                         return ()
-                    )
+                    
                 prprods (rest r)
             where
                 emptystack ps = any e ps where e (Prod _ _ s) = null s
@@ -618,9 +593,9 @@ printpr monadic states reds stdout = let
     prprods [] = return ()
   in do
     prlines grules;
-    stdout << "yyrule _ = \"<unknown rule>\";\n\n";
+    stdout.print( "yyrule _ = \"<unknown rule>\";\n\n");
     prprods prods;
-    stdout << ";\n\n";
+    stdout.print ";\n\n";
     return ()
 ;
 
@@ -749,7 +724,7 @@ in loop myreds acc where {
     loop (r:rs) acc = loop rs  ((r,newst):acc);
     loop [] acc     = acc;
 };
-gengoto2 x _ _ = undefined ( "dont know how to gen goto for " ++ show x );
+gengoto2 x _ _ = error ( "dont know how to gen goto for " ++ show x );
 
 gengotos2 prods (St n _ _ gs) = loop gs [] where {
         loop (g:gs') acc' = loop gs' (gengoto2 g prods acc');
@@ -774,13 +749,13 @@ altgotos2 prods sts = loop sts [] where {
 
 listmax = 64;
 
-pracase :: Show a => String -> [(Int, a)] -> PrintWriter -> IO PrintWriter;
+pracase :: Show a => String -> [(Int, a)] -> MutIO PrintWriter -> IO ();
 pracase array xs out = do
-        out <- IO.append out "let \n"
-        out <- fio IO.return prsub nxss out
-        IO.append out ind << "  in "
-            << seqs  << " `seq` "
-            << array << ".fromInxList (" << subs << ");\n"
+        out.print "let \n"
+        mapM_ prsub nxss
+        out.print (ind ++ "  in "
+            ++ seqs  ++ " `seq` "
+            ++ array ++ ".fromInxList (" ++ subs ++ ");\n")
     where
         xss = split xs
         nxss = zip (iterate succ 1) xss
@@ -795,15 +770,15 @@ pracase array xs out = do
         split xs
             | length xs <= listmax = [xs]
             | otherwise            = take listmax xs : split (drop listmax xs)
-        prsub (n, xs) out = do
-            out <- IO.append out ind << "sub" << n << " = ["
+        prsub (n, xs) = do
+            out.print (ind ++ "sub" ++ show n ++ " = [")
             let dsp (a,b) = "  (" ++ display a ++ ", " ++ display b ++ ")"
-            out <- IO.append out
+            out.print
                 • fold (++) ""
                 • intersperse ",\n"
                 • map (ind ++)           -- --> "    (a, 'b')"
                 • map dsp $ xs           -- (a,b) --> "(a, 'b')"
-            IO.append out "];\n"
+            out.print "];\n"
 ;
 
 
@@ -874,8 +849,8 @@ numbertypes n (t:ts) tr = numbertypes (n+1) ts (Tree.insert tr t n);
 numprod (Prod r _ _) = (r, "yyprod" ++ show r);
 listred (i, code) = "private reduce" ++ show i ++ " = " ++  code;
 
-printreds reds stdout = stdout >>= fio IO.return prRed reds where
-    prRed red out = IO.append out (listred red)
+printreds reds stdout = mapM_ (prRed stdout) reds where
+    prRed out red = PrintWriter.print out (listred red)
 ;
 
 gengos xs = let
@@ -897,38 +872,30 @@ gengos xs = let
         "} } in goto red;\n";
     in gois ++ gotop ++ gocases ++ gobot;
 
---* a function to print lists to an appendable
-fio :: Monad m => (r -> m r) -> (a -> r -> m r) -> [a] -> r -> m r;
-fio ret f (a:as) acc = f a acc >>=  fio ret f as;
-fio ret f []     acc = ret acc;
 
 {--
  * create frege code for go tabs
  -}
-printgos :: [(Int, [(Int,Int)])] -> PrintWriter -> IO PrintWriter;
+printgos :: [(Int, [(Int,Int)])] -> MutIO PrintWriter -> IO ();
 printgos pops jout =
     do
-        jout <- IO.append jout source
-        jout <- fio IO.return (flip printgoi) pops jout
+        jout.print source
+        mapM_ (printgoi jout) pops
         -- jout <- jout.append "public static int[][] yygoarr = new int[" << size << "][];\n"
-        jout <- IO.append jout "private yygos = " >>= pracase "Array" gcs
-        -- jout <- jout.append "static {\n"
-        -- jout <- fio IO.return (\e\(j::IO.PrintWriter)
-        --                  -> j.append "yygoarr[" << fst e << "] = " << snd e << ";\n") gcs jout
-        -- jout <- jout.append "}\n"
-        -- jout <- jout.append "public static int[] yygo(int i) { return yygoarr[i]; }\n"
-        IO.return jout
+        jout.print "private yygos = "
+        pracase "Array" gcs jout
+        return ()
     where
-        source = "\n\ndecodeArr s1 s2 = IntArray.fromInxList (zip (un s1) (un s2))\n" ++
+        source = "\n\ndecodeArr s1 s2 = IntArr.fromInxList (zip (un s1) (un s2))\n" ++
                  "    where\n" ++
                  "        un :: String -> [Int]\n" ++
                  "        un = (map ord . unpacked)\n\n" 
         -- size = 1 + (fold max (negate 1) <~ map fst) gcs
         gcs  = mkgos pops
         mkgos cs = [ (n, "yygo" ++ show n ) | (n, _:_) <- cs ]
-        printgoi :: PrintWriter -> (Int, [(Int,Int)]) -> IO PrintWriter
-        printgoi jout (_,[]) = IO.return jout
-        printgoi jout (i,tupels) = IO.append jout yygo
+        printgoi :: MutIO PrintWriter -> (Int, [(Int,Int)]) -> IO ()
+        printgoi jout (_,[]) = IO.return ()
+        printgoi jout (i,tupels) = jout.print yygo
             where
                 yygo = "private yygo" ++ show i ++ " = decodeArr "
                     ++ show s1 ++ " " ++ show s2 ++ "\n" 
@@ -956,16 +923,18 @@ main _ = do
         return ()
 ;
 
+cantwrite :: String -> FileNotFoundException -> IOMut PrintWriter;
+cantwrite s fex = do
+    stderr <- stderr
+    stderr.println ("Can't write to " ++ s ++ ": " ++ fex.getMessage)
+    System.exit 1
+    return undefined
+;
+
 mainIO monadic file = do
         newFile <- IO.File.new file
-        printer <- IO.PrintWriter.encoded newFile "UTF-8"
-        let stdout = case printer of
-                -- Right prw -> IO.return prw
-                Left err -> do
-                    stderr << "Can't write to " << file << ": " << err.getMessage << "\n"
-                    IO.exit 1
-                    IO.return undefined
-                Right prw -> IO.return prw
+        stdout <- IO.PrintWriter.new newFile "UTF-8"
+                    `catch` cantwrite file 
         tlines <- fileContent "y.tab.c"
         olines <- fileContent "y.output"
         let (top, tail, reds, typeinfo, explanations) = scanytablines tlines
@@ -981,18 +950,18 @@ mainIO monadic file = do
             newgo = (gotree.keyvalues Lt)
             -- [St astate _ _ _] = grep collectacceptactions states
         stderr << "we have " << length newgo << " go elements\n";
-        stdout << "//begin top\n";
-        stdout << joined "\n" top << "\n//end top\n";
+        stdout.print "//begin top\n";
+        stdout.print (joined "\n" top ++ "\n//end top\n");
         -- stdout -- "import frege.List (joined);\n"
         -- stdout << "import Java.Lang (System);\n"
-        maybe (stdout << "\n") (\x -> stdout << "type YYM = " << x << ";\n" ) monadic
-        stdout << compiletypes tinfo types;
-        stdout << genshowsi types;
-        stdout << "showst st = joined \" \" (map (\\(_,si) -> showsi si) (reverse st));\n"
-            << "yydebug = (maybe \"\" id (System.getenv \"YYDEBUG\")).toLowerCase ~ #(1|yes|true|on)#;\n"
-            << "yytrace s = (if yydebug then trace s else false) `seq` ();\n"
-            << "yydbgAccept  s t = yytrace ("
-            << "\"in state \" ++ show s ++ \" accept  \" ++ show t ++  \"\\n\" );\n";
+        maybe (stdout.print "\n") (\x -> stdout.print ("type YYM = " ++ x ++ ";\n") ) monadic
+        stdout.print (compiletypes tinfo types);
+        stdout.print (genshowsi types);
+        stdout.print ("showst st = joined \" \" (map (\\(_,si) -> showsi si) (reverse st));\n"
+            ++ "yydebug = (maybe \"\" id (System.getenv \"YYDEBUG\")).toLowerCase ~ #(1|yes|true|on)#;\n"
+            ++ "yytrace s = (if yydebug then trace s else false) `seq` ();\n"
+            ++ "yydbgAccept  s t = yytrace ("
+            ++ "\"in state \" ++ show s ++ \" accept  \" ++ show t ++  \"\\n\" );\n");
         stderr << "doing states...";
         printstates states stdout;
         stderr << "ok\n";
@@ -1003,23 +972,25 @@ mainIO monadic file = do
         printpr monadic states reds stdout;
         stderr << "ok\n";
         stderr << "writing tables ...\n";
-        stdout  << "private yyprods = " >>= pracase "Array" (uniq nprods);
-        stdout  << "private yyacts  = " >>= pracase "Array" (actions states);
-        stdout  << "private yyrecs  = " >>= pracase "Array" (recoveries explanations states);
-        stdout  << "private yyeacts = " >>= pracase "Array" (eactions states);
+        stdout.print "private yyprods = ";
+        pracase "Array" (uniq nprods) stdout;
+        stdout.print "private yyacts  = ";
+        pracase "Array" (actions states) stdout;
+        stdout.print "private yyrecs  = ";
+        pracase "Array" (recoveries explanations states) stdout;
+        stdout.print "private yyeacts = ";
+        pracase "Array" (eactions states) stdout;
         stderr <<  "ok\n";
         stderr << "doing gotos ...";
         -- jout <- printer clname
-        stdout >>= printgos newgo;
+        printgos newgo stdout;
         stderr << "ok\n";
         -- stdout << "protected native yygo " << clname << ".yygo :: Int -> Maybe IntArr;\n"
         genparlines <- yygenpar monadic
-        stdout -- << gengos newgo << "\n"
-            -- "yyloop (yyvals@((" ++ show astate ++ ", _):_)) yytoks = yyaccept (yyvals, yytoks);\n"
-            << joined "\n" genparlines << "\n"
-            << "//begin tail\n" << joined "\n" tail << "\n//end tail\n"
+        stdout.print
+            (joined "\n" genparlines ++ "\n"
+                ++ "//begin tail\n" ++ joined "\n" tail ++ "\n//end tail\n")
 
-        pw <- stdout
-        pw.close
+        stdout.close
         return ()
 ;

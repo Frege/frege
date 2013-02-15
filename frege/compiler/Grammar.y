@@ -53,6 +53,7 @@ import frege.compiler.Utilities as U(
     posItem, posLine, unqualified, tuple)
 import frege.compiler.GUtil
 
+type IntArray = IntArr
 
 // this will speed up the parser by a factor of 70, cause yyprods comes out monotyped.
 private yyprod1 :: [(Int, YYsi ParseResult Token)]

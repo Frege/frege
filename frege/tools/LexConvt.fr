@@ -1,12 +1,5 @@
 -- «•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»
 
-{-
- * $Author$
- * $Revision$
- * $Id$
- * $Date$
- -}
-
 {--
     Copyright © 2011, Ingo Wechsung
  *
@@ -50,9 +43,7 @@
 
 package frege.tools.LexConvt where       -- first comment
 
-import frege.IO (Reader, BufferedReader, InputStreamReader, FileInputStream, Appendable,
-                File,
-                OutputStreamWriter, PrintWriter, stdout, stderr, `<<`)
+import Java.IO
 
 data Stat = Normal | Esc Stat | InChar | InString | InPat
     | Slash1 Stat   --- saw '/' in 'Normal' or 'Block'
@@ -75,6 +66,8 @@ dispatch (StarA stat) app ch = stara stat app ch
 dispatch (Block stat) app ch = block stat app ch
 dispatch (StarB stat) app ch = starb stat app ch
 
+append :: MutIO PrintWriter -> String -> IO ()
+append = PrintWriter.print
 
 normal app '\\' = return (Esc Normal)
 normal app '\'' = do
@@ -121,110 +114,86 @@ escaped s app ch = do
     return s
 
 inchar app '\'' = do
-    Appendable.append app "'"
+    append app "'"
     return Normal
 inchar app '\\' = return (Esc InChar)
 inchar app ch   = append app (display ch) >> return InChar
 
 
 instring app '"' = do
-    Appendable.append app "\""
+    append app "\""
     return Normal
 instring app '\\' = return (Esc InString)
-instring app ch   = Appendable.append app (Char.display ch) >> return InString
+instring app ch   = append app (Char.display ch) >> return InString
 
 inpat app '#' = do
-    Appendable.append app "#"
+    append app "#"
     return Normal
 inpat app '\\' = return (Esc InPat)
-inpat app ch   = Appendable.append app (Char.display ch) >> return InPat
+inpat app ch   = append app (Char.display ch) >> return InPat
 
 foo = #abcd\b#
 
 convert from to = cvt from to Normal where
     cvt from to state = do
-        input <- Reader.read from
-        case input of
-            Left x -> throw x
-            Right i
-                | i < 0 = return state
-                | otherwise = do
-                    let ch = Char.from i
-                    ns <- dispatch state to ch
-                    cvt from to ns
+        i <- Reader.read from
+        if i < 0 then return state
+        else do
+            let ch = Char.from i
+            ns <- dispatch state to ch
+            cvt from to ns
 
 -- ---------------------- code to open files and make printers ---------------
-openSrc s = do
-    fis <- FileInputStream.open s
-    case fis of
-        Left err -> IO.return (Left err)
-        Right fis -> brFromIS fis.inputStream
+openSrc s = utf8Reader s
 
-brFromIS is = do
-    eisr <- InputStreamReader.encoded is "UTF-8"
-    case eisr of
-        Left  err -> IO.return (Left err)
-        Right isr -> do
-            br <- BufferedReader.fromISR isr
-            IO.return (Right br)
-
-stdoutPrinter = stdPrinter stdout
+stdoutPrinter = stdPrinter System.out
 stdPrinter out = do
     out <- out
-    eos <- OutputStreamWriter.new out "UTF-8"
-    either exception fromOSW eos
-  where
-    fromOSW :: OutputStreamWriter -> IO PrintWriter
-    fromOSW osw = do writer <- osw.toWriter; PrintWriter.fromWriterAf writer true
-    exception exc = do
-        stderr << "Can't make OutputStreamWriter: " << JException.getMessage exc << "\n"
-        throw exc
-
+    osw <- OutputStreamWriter.new out "UTF-8"
+    PrintWriter.new osw
+  
 -- ----------------------------- main -------------------------
 main args = do
     results <- mapM process args
-    if all id results then return () else IO.exit 1
+    if all id results then return () else System.exit 1
 
 process filename = do
-    ereader <- openSrc filename
-    case ereader of
-        Left no -> do
-            stderr << "Couldn't read " << filename << ": " << no.getMessage << "\n"
+    stderr <- stderr
+    reader <- openSrc filename
+    let target = filename ++ ".cvt"
+    let bakfile = filename ++ ".bak"
+    ofile <- File.new target
+    bfile <- File.new bakfile
+    file  <- File.new filename
+    writer <- PrintWriter.new ofile "UTF-8"
+    endstate <- convert reader writer
+    stderr.println("converted " ++ filename ++ " state is " ++ show endstate)
+    writer.close
+    reader.close
+    b <- move file bfile
+    if b then do
+            b <- move ofile file
+            if b then return true else do
+                stderr.println("couldn't rename " ++ target ++ " to " ++ filename)
+                return false
+         else do
+            stderr.println("couldn't rename " ++ filename ++ " to " ++ bakfile)
             return false
-        Right reader -> do
-            let target = filename ++ ".cvt"
-            let bakfile = filename ++ ".bak"
-            ofile <- File.new target
-            bfile <- File.new bakfile
-            file  <- File.new filename
-            opw   <- PrintWriter.encoded ofile "UTF-8"
-            case opw of
-                Left no -> do
-                    stderr << "Couldn't write " << target << ": " << no.getMessage << "\n"
-                    return false
-                Right writer -> do
-                    endstate <- convert reader writer
-                    stderr << "converted " << filename << " state is " << endstate << "\n"
-                    writer.close
-                    reader.close
-                    b <- move file bfile
-                    if b then do
-                            b <- move ofile file
-                            if b then return true else do
-                                stderr << "couldn't rename " << target << " to " << filename << "\n"
-                                return false
-                         else do
-                            stderr << "couldn't rename " << filename << " to " << bakfile << "\n"
-                            return false
-
+  `catch` exception where
+    exception :: Throwable -> IO Bool
+    exception no = do
+            stderr <- stderr
+            stderr.println("Couldn't process " ++ filename ++ ": " ++ no.getMessage)
+            return false
+        
 --- return true if file doesn't exist or has been deleted
-deleteIfExists :: File -> IO Bool
+deleteIfExists :: MutIO File -> IO Bool
 deleteIfExists f = do
     b <- f.exists
     if b then f.delete else return true
 
 --- move a to b and return true if successfull
-move :: File -> File -> IO Bool
+move :: MutIO File -> MutIO File -> IO Bool
 move from to = do
     b <- deleteIfExists to
     if b then from.renameTo to else return false

@@ -147,11 +147,16 @@ catch action handler = doCatch javaClass action handler
     -}
 native finally frege.runtime.WrappedCheckedException.doFinally  :: IO a -> IO b -> IO a
 
+private native throwRT frege.runtime.WrappedCheckedException.throwST 
+    :: PreludeBase.Throwable -> ST s ()
+
 --- Deliberatly throw an exception in the 'ST' monad.
-native throwST frege.runtime.WrappedCheckedException.throwST :: PreludeBase.Throwable -> ST s ()
+throwST  :: PreludeBase.Throwable -> ST s a
+throwST ex = throwRT ex >> return undefined
 
 --- Deliberatly throw an exception in the 'IO' monad.
-native throwIO frege.runtime.WrappedCheckedException.throwST :: PreludeBase.Throwable -> IO ()
+throwIO :: PreludeBase.Throwable -> IO a
+throwIO ex = throwRT ex >> return undefined
 
 {--
     Make sure that exceptions thrown during construction of an action can be catched.
@@ -171,3 +176,141 @@ native throwIO frege.runtime.WrappedCheckedException.throwST :: PreludeBase.Thro
     > return a >>= (\a -> return b >>= (\b -> f a b))
     -}
 try f a = return a >>= f
+
+-- -------------------------------------------------------------------------
+--          Mutable Native Data Types
+-- -------------------------------------------------------------------------
+
+{--
+    'Mutable' is a wrapper for native data types. 
+    A value of type @Mutable s x@ is really an @x@, but it is tied to 'ST' thread s,
+    wherefrom it cannot escape. 
+    
+    The compiler will enforce the following rules:
+    
+    1. When type checking @x.m@ and @(x::Mutable s T)@, @m@ will be searched in the namespace @T@
+    2. An impure native method must only take and return @Mutable s T@, unless @T@ is
+       itself *@pure@* (of course, all algebraic data types are pure)
+    3. A pure type @T@ must not appear as @Mutable s T@ in native functions.
+    4. Pure native functions may not return @Mutable s t@ for any @t@.
+    5. Pure native functions must not normally get arguments of type @Mutable s T@. (see below)
+    6. In a type of the form @ST x (Mutable y d)@, it will be enforced that _x_ is the same
+       type as _y_. Furthermore, all phantom types of all 'Mutable' types must be the same
+       in a type signature.
+    
+    To understand the motivation for rule 5, observe that the 'Mutable.Mutable' 
+    data constructor cannot be applied in Frege code, hence the only possibility 
+    to obtain a value of type @Mutable s t@  is through a native function. 
+    But by rule 4 above, this could only happen in the 'ST' or 'IO' monad, 
+    from whence those values cannot escape. The 'ST' monad is a context where
+    the sequence of actions matters. If we allowed passing mutable data to pure
+    functions, their results would depend on whether 'ST' actions modified the 
+    value before the result is actually evaluated.
+    
+    Although in a strict sense, no pure function should get mutable data, rule 5 is only
+    enforced for native pure functions, as normal frege functions couldn't do anything
+    with the native value, except passing them on to native functions eventually.
+    
+    There will be means to get a read-only copy ('freeze') of a mutable value through
+    class 'Freezable'.
+    
+    There is also the possibility that, although a value is mutable, 
+    there are certain properties that cannot change (such as the length of an array). 
+    It will be possible to bypass rule 5 in such cases.
+    
+    To summarize:
+    
+    - Mutable data live in the 'ST' or 'IO' monad, from whence they cannot escape.
+    - They can be passed only to other 'ST' actions that operate in the same thread,
+      as indicated by the phantom type, that is either a type variable or 'RealWorld'.
+    - Read only copies of mutable values and mutable copies of read-only values can be obtained.        
+    - Rule 5 can be bypassed in exceptional cases.
+    
+    -}
+abstract data Mutable s a = Mutable a where
+    --- obtain a read-only copy of a mutable value through cloning or serialization.
+    freeze (Mutable x) = Freezable.freeze x
+    --- obtain a mutable copy of a read only value through cloning or serialization.
+    thaw   x = Mutable (Freezable.thaw x)
+    --- Apply a pure function to a mutable value that pretends to be read-only.
+    --- The function must not rely on anything that could change in the mutable data!
+    readonly f (Mutable x) =  f x
+
+--- Apply a pure function to a mutable value that pretends to be read-only.
+--- The function must not rely on anything that could change in the mutable data!
+readonly  = Mutable.readonly 
+
+--- They type for mutable values that are tied to the 'IO' monad.
+type MutIO = Mutable RealWorld
+
+--- They type of 'IO' actions that return a mutable value of type _d_
+--- This is an abbreviation for @ST RealWorld (Mutable RealWorld d)@ 
+type IOMut d = IO (MutIO d)
+
+--- They type of 'ST' actions that return a mutable value of type _d_
+--- This is an abbreviation for @ST s (Mutable s d)@ 
+type STMut s d = ST s (Mutable s d)
+
+
+{--
+ * Type class for mutable values that support making read-only copies.
+ * To be implemented with care.
+ -}
+class Freezable f where
+    {--
+     * "Freeze" a mutable native value. The result is supposed to be immutable
+     * or at least not reachable from other parts of the code, especially from java code.
+     *
+     * The most prominent way to freeze a value is by 'clone'-ing it, if that is supported.
+     -}
+    protected freeze :: f -> f
+    {--
+     * The inverse of 'freeze' creates a value (an object) which can be passed
+     * to impure functions without compromising the frozen object passed as argument.
+
+     * One possibility to thaw an object properly is by cloning it.
+
+     * If 'thaw' is not implemented correctly, bad things may happen.
+
+     -}
+    protected thaw   :: f -> f
+
+
+
+
+{--
+ * For a data type declared like
+ * > data D = native Javatype
+ * where @Javatype@ implements the @java.lang.Cloneable@ interface,
+ * one can get implementations for 'Freezable.freeze'
+ * and 'Freezable.thaw' by just stating
+ * > instance Cloneable D
+ * The 'freeze' and 'thaw' operations are implemented in terms of 'clone'.
+ -}
+class Cloneable (Freezable f) => f  where
+    {--
+     *  @clone v@ must be a native method that works like @java.lang.Object#clone@.
+     -}
+    pure native clone :: f -> f 
+    freeze x = clone x
+    thaw   x = clone x
+
+{--
+ * For a data type declared like
+ * > data D = native Javatype
+ * where @Javatype@ implements the @java.io.Serializable@ interface,
+ * one can get implementations for 'freeze'
+ * and 'thaw' by just stating
+ * > instance Serializable D
+ * The 'freeze' and 'thaw' operations are implemented in terms of 'copySerializable',
+ * which serializes its argument to a byte array and creates a new copy by
+ * deserializing it from the byte array.
+ -}
+class Serializable (Freezable f) => f  where
+    {--
+     *  @copySerializable v@ is supposed to be a native function that is
+     *  implemented by @frege.runtime.Runtime.copySerializable@ at the instantiated type.
+     -}
+    pure native copySerializable frege.runtime.Runtime.copySerializable :: f -> f
+    freeze x = copySerializable x
+    thaw   x = copySerializable x

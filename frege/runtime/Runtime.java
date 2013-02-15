@@ -39,7 +39,10 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
+import java.io.OutputStreamWriter;
+import java.io.PrintWriter;
 import java.io.Serializable;
+import java.nio.charset.StandardCharsets;
 
 
 /**
@@ -70,6 +73,20 @@ public class Runtime {
 	final public static Class<?> getClass(Object o) {
 		return o.getClass();
 	}
+	
+	/**
+	 * Provide UTF-8 encoded standard printer for stdout with autoflush
+	 */
+	public static PrintWriter stdout = new PrintWriter(
+			new OutputStreamWriter(System.out, StandardCharsets.UTF_8),
+			true);
+	
+	/**
+	 * Provide UTF-8 encoded standard printer for stderr with autoflush
+	 */
+	public static PrintWriter stderr = new PrintWriter(
+			new OutputStreamWriter(System.err, StandardCharsets.UTF_8),
+			true);
 	
     /**
      * <p> Utility method used by <code>String.show</code> to quote a string. </p>
@@ -220,6 +237,10 @@ public class Runtime {
 			} catch (Exception ex) {
 				throw new Error(ex); // ex.printStackTrace();
 			}
+			finally {
+				stdout.close();
+				stderr.close();
+			}
 			return;
 		} 
 		// comment following block for java6
@@ -229,6 +250,10 @@ public class Runtime {
 					.getRuntime().availableProcessors()).submit(action).get();
 		} catch (Exception ex) {
 			throw new Error(ex);
+		}
+		finally {
+			stdout.close();
+			stderr.close();
 		}
 		return;
 	}

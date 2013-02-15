@@ -235,8 +235,6 @@ $(PREL)/PreludeList.class: $(PREL)/PreludeBase.class frege/prelude/PreludeList.f
 	$(FREGECC) frege/prelude/PreludeList.fr
 $(PREL)/PreludeText.class: $(PREL)/PreludeList.class frege/prelude/PreludeText.fr
 	$(FREGECC) frege/prelude/PreludeText.fr
-$(DIR1)/IO.class: frege/IO.fr
-	$(FREGEC0) $?
 $(DIR1)/List.class: frege/List.fr
 	$(FREGEC0) $?
 $(CONTROL1)/Monoid.class: frege/control/Monoid.fr
@@ -308,7 +306,7 @@ $(DATA1)/Maybe.class: frege/data/Maybe.fr
 $(LIBF1)/ForkJoin.class: frege/lib/ForkJoin.fr
 	$(FREGEC0) $?
 
-PRE1 = $(DIR1)/Prelude.class $(DIR1)/IO.class $(DIR1)/List.class $(DATA1)/Bits.class
+PRE1 = $(DIR1)/Prelude.class $(DIR1)/List.class $(DATA1)/Bits.class
 
 compiler1: $(RUNTIME)  $(DIR1)/check1  $(LIBF1)/PP.class $(COMPF1)/Grammar.class $(COMPF1)/Main.class
 	@echo stage 1 compiler ready
