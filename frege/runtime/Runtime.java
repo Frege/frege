@@ -35,8 +35,10 @@
 
 package frege.runtime;
 
+import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.InputStreamReader;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.io.OutputStreamWriter;
@@ -87,6 +89,12 @@ public class Runtime {
 	public static PrintWriter stderr = new PrintWriter(
 			new OutputStreamWriter(System.err, StandardCharsets.UTF_8),
 			true);
+	
+	/**
+	 * Provide UTF-8 decoded standard inupt Reader
+	 */
+	public static BufferedReader stdin = new BufferedReader(
+			new InputStreamReader(System.in, StandardCharsets.UTF_8));
 	
     /**
      * <p> Utility method used by <code>String.show</code> to quote a string. </p>

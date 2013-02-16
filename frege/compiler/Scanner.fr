@@ -89,19 +89,17 @@ import frege.compiler.Data       except (is)
 import frege.compiler.Nice       except (group, layout, break)
 import frege.compiler.Classtools (Operator, OpArr)
 import frege.compiler.Utilities  as U(cval)
+import Java.IO(UnsupportedEncodingException, IOException)
 
-data CharSeq s = native java.lang.CharSequence where
-    pure native charAt                                  :: CharSeq Immutable -> Int -> Char
-    pure native length                                  :: CharSeq Immutable -> Int
-    pure native subSeq  subSequence                     :: CharSeq Immutable -> Int -> Int -> CharSeq Immutable
-    pure native toString                                :: CharSeq Immutable -> String
-    pure native fromString "(java.lang.CharSequence)"   :: String -> CharSeq Immutable
+
+type CharSeq = CharSequence     -- from Java.Lang
 
 {--
     [usage] @slurp filename encoding@
     [return] the content of text file @filename@ appropriatly decoded according to the files @encoding@
 -}
-native slurp frege.runtime.CompilerSupport.slurp :: String -> String -> IO (Exception String)
+native slurp frege.runtime.CompilerSupport.slurp :: String -> String -> IO String
+    throws  UnsupportedEncodingException, IOException 
 
 {--
  * A map of keywords to 'TokenID's
@@ -283,7 +281,7 @@ infixr 13 `!:`
 {--
     Scan a 'CharSeq' and take care of offsets
 -}
-lex :: CharSeq Immutable -> Int -> Int -> Int -> [Token]
+lex :: CharSeq -> Int -> Int -> Int -> [Token]
 lex !cs !line !col !start
     | endOfSeq        = []
     | ch == '\n'      = lex cs (line+1) 1   (start+1)
@@ -403,7 +401,7 @@ lex !cs !line !col !start
 
 
 
-lexComment :: Int -> Bool -> Token -> CharSeq Immutable -> Int -> Int -> Int -> [Token]
+lexComment :: Int -> Bool -> Token -> CharSeq -> Int -> Int -> Int -> [Token]
 lexComment !nest !block !proto !cs !line !col !i
     | i >= cs.length = if block
                         then [proto.{tokid=LEXERROR, value = (cs.subSeq proto.offset i).toString}]
@@ -500,7 +498,7 @@ processImports prefix getop (tree@Right _) (cmd:cmds)
             U.error n (msgdoc "Package name missing after `import´")
             StG.return tree
         | otherwise = do
-            (loaded::Exception (Maybe OpArr)) <- getop name
+            (loaded::(Throwable|Maybe OpArr)) <- getop name
             g <- getST
             case loaded of
                 -- we can ignore non existance of frege.Prelude for now,
@@ -676,23 +674,30 @@ substOp start tree (t:ts)
           where name rest = packed (take (length cs - length rest) cs)
 
 --- this is the lexical analysis pass
-pass :: (String -> StG (Exception (Maybe OpArr))) -> StG [Token]
+pass :: (String -> StG (Throwable|Maybe OpArr)) -> StG [Token]
 pass getop =
     do
         global <- getST
         let opts   = global.options
 
-        fdata <- doio (slurp opts.source (maybe "utf-8" id opts.encoding))
+        fdata <- doio (slurp opts.source (maybe "utf-8" id opts.encoding) >>= return . Right
+                        `catch` cantread opts.source
+                        `catch` badencoding)
         case fdata of
             Left exc -> do
-                U.error Position.null (msgdoc ("Cannot read source file: " ++ show exc))
+                U.error Position.null (msgdoc exc)
                 stio []
             Right string -> passCS (CharSeq.fromString string) getop
+  where
+    cantread :: String -> IOException -> IO (String|String)
+    cantread src exc = (return . Left) ("Can't read " ++ src ++ ": " ++ exc.getMessage)
+    badencoding ::  UnsupportedEncodingException -> IO (String|String)
+    badencoding exc = (return . Left) exc.getMessage
 
 {--
     This is the entry point for lexical analysis of a program contained in an immutable @java.lang.CharSequence@
 -}
-passCS :: CharSeq Immutable -> (String -> StG (Exception (Maybe OpArr))) -> StG [Token]
+passCS :: CharSeq -> (String -> StG (Throwable|Maybe OpArr)) -> StG [Token]
 passCS cs getop =
     do
         g <- getST
@@ -741,20 +746,13 @@ dependencies cs = (getPackages "" • findInfixImports) tokens
 --- Wrapper around 'dependencies'
 main ["-d" , file] = do
         fdata <- slurp file "utf-8"
-        case fdata of
-            Left exc -> throw exc
-            Right cs -> do
-                let deps = dependencies (CharSeq.fromString cs)
-                mapM_ println deps
-                return ()
+        let deps = dependencies (CharSeq.fromString fdata)
+        mapM_ println deps
+        return ()
 --- test
 main [fileortext] = do
         fdata <- slurp fileortext "utf-8"
-        case fdata of
-            Left exc -> do
-                println (layout [0] $ lex (CharSeq.fromString fileortext) 1 1 0)
-                return ()
-            Right string -> do
-                println (layout [0] $ lex (CharSeq.fromString string) 1 1 0)
-                return ()
+            `catch` (\(t::Throwable) -> return fileortext)
+        println (layout [0] $ lex (CharSeq.fromString fdata) 1 1 0)
+        return ()
 main xs = main [joined "\n" xs]
