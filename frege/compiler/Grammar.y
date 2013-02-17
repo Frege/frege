@@ -79,7 +79,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type packagename     (Pos String)
 //%type packagename1    (Pos String)
 //%type nativename      String
-//%type nativepur       Bool
+//%type nativepur       (Bool, Bool)
 //%type docs            String
 //%type opstring        String
 //%type boundvar        String
@@ -88,6 +88,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type packageclause   (String, Maybe String, Position)
 //%type unop            Token
 //%type operator        Token
+//%type qop             SName
 //%type rop13           Token
 //%type aeq             Token
 //%type varidkw         Token
@@ -197,12 +198,14 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type guard           Guard
 //%type guards          [Guard]
 //%type qualifiers      (Token -> SName)
+//%type qualified       (Token -> SName)
 //%type kind            Kind
 //%type simplekind      Kind
 //%explain mbdot        '.' or '•'
 //%explain thenx        then branch
 //%explain elsex        else branch
 //%explain qualifiers   qualified type name
+//%explain qualified    possibly qualified operator
 //%explain package      a package
 //%explain packageclause a package clause
 //%explain packagename  a package name
@@ -211,6 +214,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%explain semicoli     the next definition
 //%explain varop        a variable or an operator
 //%explain operator     an operator
+//%explain qop          a qualified operator
 //%explain operators    some operators
 //%explain import       a package import
 //%explain infix        a fixity declaration
@@ -333,7 +337,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 %token VARID CONID QVARID QCONID QUALIFIER DOCUMENTATION
 %token PACKAGE IMPORT INFIX INFIXR INFIXL NATIVE DATA WHERE CLASS
 %token INSTANCE ABSTRACT TYPE TRUE FALSE IF THEN ELSE CASE OF DERIVE
-%token LET IN WHILE DO FORALL PRIVATE PROTECTED PUBLIC PURE THROWS
+%token LET IN WHILE DO FORALL PRIVATE PROTECTED PUBLIC PURE THROWS MUTABLE
 %token INTCONST STRCONST LONGCONST FLTCONST DBLCONST CHRCONST REGEXP BIGCONST
 %token ARROW DCOLON GETS EARROW TARROW DOTDOT
 %token LOP1 LOP2 LOP3 LOP4 LOP5 LOP6 LOP7 LOP8 LOP9 LOP10 LOP11 LOP12 LOP13 LOP14 LOP15 LOP16
@@ -602,7 +606,8 @@ importitem:
     | CONID '(' memspecs ')'        { \v\_\ms\_ -> protoItem.{ name = Simple v, members = Just ms} }
     | CONID '(' ')'                 { \v\_\_    -> protoItem.{ name = Simple v, members = Just []} }
     | qconid                        { \v        -> protoItem.{ name = v } }
-    | operator                      { \t        -> protoItem.{ name = Simple t } }
+    | qop                           { \t        -> protoItem.{ name = t } }
+    | operator                      { \v        -> protoItem.{ name = Simple v} }
     | unop                          { \v        -> protoItem.{ name = Simple v} }
     ;
 
@@ -670,6 +675,12 @@ varop:
 qvarop:  QUALIFIER QUALIFIER varop  { \n\t\v     -> With2 n t v}
     |    QUALIFIER varop            { \t\v       -> With1 t v}
     |    varop                      { \v         -> Simple v }
+    |    qop 
+    ;
+
+qop: 
+    operator PURE QUALIFIER PURE             { \a\_\b\_ -> With1 b a }
+    | operator PURE QUALIFIER QUALIFIER PURE { \a\_\b\c\_ -> With2 b c a }
     ;
 
 operator:
@@ -714,9 +725,9 @@ annotation:
 
 annoitem:
     varid
-    | '(' operator ')'          { \_\a\_ -> do binop a }
-    | '(' unop ')'              { \_\a\_ -> vid a }
-    | '(' '-' ')'               { \_\a\_ -> vid a }
+    | '(' operator ')'           { \_\a\_ -> vid a}
+    | '(' unop ')'               { \_\a\_ -> vid a }
+    | '(' '-' ')'                { \_\a\_ -> vid a }
     ;
 
 annoitems:
@@ -918,18 +929,23 @@ datadef:
     ;
 
 nativepur:
-    PURE NATIVE     { \_\_ -> true  }
-    | NATIVE        { \_   -> false }
+    PURE NATIVE         { \_\_ -> (true, false)  }
+    | MUTABLE NATIVE    { \_\_ -> (false, true)  }
+    | NATIVE            { \_   -> (false, false) }
     ;
 
 datainit:
     DATA CONID '=' nativepur nativename {
         \dat\d\docu\pur\jt -> JavDcl {pos=yyline d, vis=Public, name=Token.value d,
-                                    jclas=jt, vars=[], defs=[], isPure = pur, doc=Nothing}
+                                    jclas=jt, vars=[], defs=[], 
+                                    isPure = fst pur, isMutable = snd pur, 
+                                    doc=Nothing}
     }
     | DATA CONID dvars '=' nativepur nativename {
         \dat\d\ds\docu\pur\jt -> JavDcl {pos=yyline d, vis=Public, name=Token.value d,
-                                    jclas=jt, vars=ds, defs=[], isPure = pur, doc=Nothing}
+                                    jclas=jt, vars=ds, defs=[], 
+                                    isPure = fst pur, isMutable = snd pur, 
+                                    doc=Nothing}
     }
     | DATA CONID dvars '=' dalts {
         \dat\d\ds\docu\alts -> DatDcl {pos=yyline d, vis=Public, name=Token.value d,
@@ -1195,59 +1211,59 @@ topex:
     ;
 
 binex:
-    binex ROP16 binex                   { mkapp }
-    | binex LOP16 binex                 { mkapp }
-    | binex NOP16 binex                 { mkapp }
-    | binex ROP15 binex                 { mkapp }
-    | binex LOP15 binex                 { mkapp }
-    | binex NOP15 binex                 { mkapp }
-    | binex ROP14 binex                 { mkapp }
-    | binex LOP14 binex                 { mkapp }
-    | binex NOP14 binex                 { mkapp }
-    | binex ROP13 binex                 { mkapp }
-    | binex LOP13 binex                 { mkapp }
-    | binex NOP13 binex                 { mkapp }
-    | binex ROP12 binex                 { mkapp }
-    | binex LOP12 binex                 { mkapp }
-    | binex NOP12 binex                 { mkapp }
-    | binex ROP11 binex                 { mkapp }
-    | binex LOP11 binex                 { mkapp }
-    | binex NOP11 binex                 { mkapp }
-    | binex ROP10 binex                 { mkapp }
-    | binex LOP10 binex                 { mkapp }
-    | binex NOP10 binex                 { mkapp }
-    | binex ROP9  binex                 { mkapp }
-    | binex LOP9  binex                 { mkapp }
-    | binex NOP9  binex                 { mkapp }
-    | binex ROP8  binex                 { mkapp }
-    | binex LOP8  binex                 { mkapp }
-    | binex NOP8  binex                 { mkapp }
-    | binex ROP7  binex                 { mkapp }
-    | binex LOP7  binex                 { mkapp }
-    | binex NOP7  binex                 { mkapp }
-    | binex ROP6  binex                 { mkapp }
-    | binex LOP6  binex                 { mkapp }
-    | binex NOP6  binex                 { mkapp }
-    | binex ROP5  binex                 { mkapp }
-    | binex LOP5  binex                 { mkapp }
-    | binex NOP5  binex                 { mkapp }
-    | binex ROP4  binex                 { mkapp }
-    | binex LOP4  binex                 { mkapp }
+      binex ROP16 qualified binex                 { mkqapp }
+    | binex LOP16 qualified binex                 { mkqapp }
+    | binex NOP16 qualified binex                 { mkqapp }
+    | binex ROP15 qualified binex                 { mkqapp }
+    | binex LOP15 qualified binex                 { mkqapp }
+    | binex NOP15 qualified binex                 { mkqapp }
+    | binex ROP14 qualified binex                 { mkqapp }
+    | binex LOP14 qualified binex                 { mkqapp }
+    | binex NOP14 qualified binex                 { mkqapp }
+    | binex ROP13 qualified binex                 { mkqapp }
+    | binex LOP13 qualified binex                 { mkqapp }
+    | binex NOP13 qualified binex                 { mkqapp }
+    | binex ROP12 qualified binex                 { mkqapp }
+    | binex LOP12 qualified binex                 { mkqapp }
+    | binex NOP12 qualified binex                 { mkqapp }
+    | binex ROP11 qualified binex                 { mkqapp }
+    | binex LOP11 qualified binex                 { mkqapp }
+    | binex NOP11 qualified binex                 { mkqapp }
+    | binex ROP10 qualified binex                 { mkqapp }
+    | binex LOP10 qualified binex                 { mkqapp }
+    | binex NOP10 qualified binex                 { mkqapp }
+    | binex ROP9  qualified binex                 { mkqapp }
+    | binex LOP9  qualified binex                 { mkqapp }
+    | binex NOP9  qualified binex                 { mkqapp }
+    | binex ROP8  qualified binex                 { mkqapp }
+    | binex LOP8  qualified binex                 { mkqapp }
+    | binex NOP8  qualified binex                 { mkqapp }
+    | binex ROP7  qualified binex                 { mkqapp }
+    | binex LOP7  qualified binex                 { mkqapp }
+    | binex NOP7  qualified binex                 { mkqapp }
+    | binex ROP6  qualified binex                 { mkqapp }
+    | binex LOP6  qualified binex                 { mkqapp }
+    | binex NOP6  qualified binex                 { mkqapp }
+    | binex ROP5  qualified binex                 { mkqapp }
+    | binex LOP5  qualified binex                 { mkqapp }
+    | binex NOP5  qualified binex                 { mkqapp }
+    | binex ROP4  qualified binex                 { mkqapp }
+    | binex LOP4  qualified binex                 { mkqapp }
     | binex '-'   binex                 { mkapp }
     | '-' binex                         { \m\x -> nApp (Vbl (yyline m) (With1 baseToken m.{tokid=VARID, value="negate"}) Nothing) x}
-    | binex NOP4  binex                 { mkapp }
-    | binex ROP3  binex                 { mkapp }
-    | binex LOP3  binex                 { mkapp }
-    | binex NOP3  binex                 { mkapp }
-    | binex ROP2  binex                 { mkapp }
-    | binex LOP2  binex                 { mkapp }
-    | binex NOP2  binex                 { mkapp }
-    | binex ROP1  binex                 { mkapp }
-    | binex LOP1  binex                 { mkapp }
-    | binex NOP1  binex                 { mkapp }
-    | binex ROP0  appex                 { mkapp }   // we need this only for precedence trickery
-    | appex LOP0  binex                 { mkapp }
-    | appex NOP0  appex                 { mkapp }
+    | binex NOP4  qualified binex                 { mkqapp }
+    | binex ROP3  qualified binex                 { mkqapp }
+    | binex LOP3  qualified binex                 { mkqapp }
+    | binex NOP3  qualified binex                 { mkqapp }
+    | binex ROP2  qualified binex                 { mkqapp }
+    | binex LOP2  qualified binex                 { mkqapp }
+    | binex NOP2  qualified binex                 { mkqapp }
+    | binex ROP1  qualified binex                 { mkqapp }
+    | binex LOP1  qualified binex                 { mkqapp }
+    | binex NOP1  qualified binex                 { mkqapp }
+    | binex ROP0  qualified appex                 { mkqapp }   // we need this only for precedence trickery
+    | appex LOP0  qualified binex                 { mkqapp }
+    | appex NOP0  qualified appex                 { mkqapp }
     | appex
     ;
 
@@ -1261,6 +1277,13 @@ unex:
     primary
     | unop unex                        { \u\p -> nApp (Vbl {pos=yyline u, name=Simple u, typ=Nothing}) p}
     ;
+
+qualified:
+                                       { Simple }
+    | PURE QUALIFIER PURE              { \_\a\_   -> With1 a }
+    | PURE QUALIFIER QUALIFIER PURE    { \_\a\b\_ -> With2 a b }
+    ;
+
 
 qualifiers:
     QUALIFIER                         { With1 }
@@ -1323,15 +1346,23 @@ term:
     | '(' ')'                       { \z\_   -> Con (yyline z) (With1 baseToken z.{tokid=CONID, value="()"}) Nothing}
     | '(' commata ')'               { \z\n\_ -> Con (yyline z) (With1 baseToken z.{tokid=CONID, value=tuple (n+1)}) Nothing}
     | '(' unop ')'                  { \_\x\_ -> Vbl {pos=yyline x, name=Simple x, typ=Nothing} }
-    | '(' operator ')'              { \_\o\_ -> (varcon o) (yyline o) (Simple o) Nothing}
+    | '(' operator ')'              { \_\x\_ -> (varcon x) (yyline x) (Simple x) Nothing }
+    | '(' qop ')'                   { \_\(qo::SName)\_ -> (varcon qo.id) (yyline qo.id) (qo) Nothing}
     | '(' '-' ')'                   { \_\m\_ -> (Vbl (yyline m) (With1 baseToken m) Nothing) }
     | '(' operator expr ')'         { \z\o\x\_ ->  let // (+1) --> flip (+) 1
                                         flp = Vbl (yyline o) (With1 baseToken underlineToken.{value="flip"}) Nothing
                                         op  = (varcon o) (yyline o) (Simple o) Nothing
                                         ex = nApp (nApp flp op) x
                                     in ex}
+    | '(' qop expr ')'              { \z\(o::SName)\x\_ ->  let // (+1) --> flip (+) 1
+                                        flp = Vbl (yyline o.id) (With1 baseToken underlineToken.{value="flip"}) Nothing
+                                        op  = (varcon o.id) (yyline o.id) o Nothing
+                                        ex = nApp (nApp flp op) x
+                                    in ex}
     | '(' binex operator ')'        { \_\x\o\_ ->  // (1+) --> (+) 1
                                         nApp ((varcon o) (yyline o) (Simple o) Nothing) x}
+    | '(' binex qop ')'             { \_\x\(o::SName)\_ ->  // (1+) --> (+) 1
+                                        nApp ((varcon o.id) (yyline o.id) o Nothing) x}
     | '(' binex '-' ')'             { \_\x\o\_ ->  // (1+) --> (+) 1
                                         nApp ((varcon o) (yyline o) (Simple o) Nothing) x}
     | '(' expr ',' exprSC ')'       { \a\e\(x::Token)\es\_ -> fold nApp (Con (yyline a)

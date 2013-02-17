@@ -74,22 +74,26 @@ GENDOC   = $(FREGE) frege.tools.Doc -d doc
 #	shadow Prelude files in the order they must be compiled
 SPRELUDE  =  shadow/frege/prelude/PreludeBase.fr shadow/frege/prelude/PreludeNative.fr \
 		shadow/frege/prelude/PreludeList.fr shadow/frege/prelude/PreludeMonad.fr \
-		shadow/frege/prelude/PreludeText.fr \
 		shadow/frege/prelude/PreludeIO.fr \
+		shadow/frege/java/Lang.fr \
+		shadow/frege/prelude/PreludeText.fr \
 		shadow/frege/prelude/Arrays.fr \
 		shadow/frege/prelude/Math.fr shadow/frege/prelude/Floating.fr
 #	Prelude files in the order they must be compiled
 PRELUDE  =  frege/prelude/PreludeBase.fr frege/prelude/PreludeNative.fr \
 		frege/prelude/PreludeList.fr frege/prelude/PreludeMonad.fr \
-		frege/prelude/PreludeText.fr \
 		frege/prelude/PreludeIO.fr \
+		frege/java/Lang.fr \
+		frege/prelude/PreludeText.fr \
 		frege/prelude/Arrays.fr \
 		frege/prelude/Math.fr frege/prelude/Floating.fr
 
 all:  frege.mk runtime compiler fregec.jar
 
 shadow-prelude:
-	cp $(PRELUDE) shadow/frege/prelude/
+	jar -cf shadow.jar $(PRELUDE)
+	cd shadow && jar -xf ../shadow.jar
+	rm shadow.jar
 
 clean:
 	rm -rf build/afrege build/bfrege build/frege
@@ -160,7 +164,7 @@ compiler: compiler2 $(COMPF)/Grammar.class $(COMPF)/Main.class tools
 $(COMPF)/Grammar.class: frege/compiler/Grammar.fr $(COMPF)/Scanner.class $(COMPF)/GUtil.class
 	$(FREGEC2) -v frege/compiler/Grammar.fr
 frege/compiler/Grammar.fr: frege/compiler/Grammar.y
-	@echo 1 shift/reduce conflict is ok
+	@echo 49 shift/reduce conflicts expected
 	$(YACC) -v frege/compiler/Grammar.y
 	$(FREGE) -cp fregec.jar frege.tools.YYgen -m State  frege/compiler/Grammar.fr
 	$(FREGE) -cp fregec.jar frege.tools.LexConvt frege/compiler/Grammar.fr
