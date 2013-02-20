@@ -118,11 +118,11 @@ sanitycheck:
 	$(JAVA) -version
 
 
-frege.mk: Makefile mkmk.pl
-	perl mkmk.pl <Makefile >frege.mk
+frege.mk: Makefile scripts/mkmk.pl
+	perl scripts/mkmk.pl <Makefile >frege.mk
 
 dist: fregec.jar
-	perl mkdist.pl
+	perl scripts/mkdist.pl
 
 
 
@@ -170,7 +170,7 @@ frege/compiler/Grammar.fr: frege/compiler/Grammar.y
 	$(FREGE) -cp fregec.jar frege.tools.LexConvt frege/compiler/Grammar.fr
 	rm -f frege/compiler/Grammar.fr.bak
 frege/Version.fr: .git/index
-	perl mkversion.pl >frege/Version.fr
+	perl scripts/mkversion.pl >frege/Version.fr
 $(COMPF)/Scanner.class: $(DIR)/Prelude.class frege/compiler/Scanner.fr
 	$(FREGEC2)  -make frege.compiler.Scanner
 $(COMPF)/GUtil.class: $(COMPF)/Scanner.class frege/compiler/GUtil.fr
@@ -351,7 +351,7 @@ doc/index.html: $(RUNTIME)
 docu: build/frege/tools/Doc.class
 	javadoc -private -sourcepath . -d doc -encoding UTF-8 frege.runtime
 	$(FREGECC)  -make frege/StandardLibrary.fr
-	perl gendocmk.pl >makedoc
+	perl scripts/gendocmk.pl >makedoc
 	$(MAKE) -f makedoc docu
 	rm makedoc
 
@@ -365,4 +365,4 @@ diffs:
 	diff -b -r -x "*.class" -I "This code was generated with the frege compiler version" -I "^ +source=" save  build
 
 savejava:
-	perl savejava.pl
+	perl scripts/savejava.pl
