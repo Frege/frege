@@ -266,10 +266,10 @@ public class Runtime {
 		return;
 	}
 	
-	final public static void exit(int n) {
+	final public static void exit() {
 		stdout.close();
 		stderr.close();
-		System.exit(n);
+		System.exit(exitCode);
 	}
 	
 	final public static boolean fork(Lambda it) {
@@ -277,6 +277,16 @@ public class Runtime {
 	    if (java.util.concurrent.ForkJoinTask.inForkJoinPool())
 	    	java.util.concurrent.ForkJoinTask.adapt(a).fork();
 	    return true;
+	}
+	
+	/**
+	 * set this if you need a different exit code
+	 */
+	private static volatile int exitCode = 0;
+	final public static void setExitCode(int a) {
+		synchronized (stdin) {
+			exitCode = a > exitCode && a < 256 ? a : exitCode; 
+		}
 	}
 }
 
