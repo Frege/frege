@@ -106,8 +106,8 @@ data JLocale = pure native java.util.Locale
 public format s f = formatLocale Nothing s f
 
 import frege.Version
+import Java.IO()
 import frege.List (Tree)
-import frege.IO(`<<`, stdout, stderr, File, OutputStreamWriter, PrintWriter)
 import frege.compiler.Nice (text, msgdoc)
 import frege.compiler.GUtil
 
@@ -164,68 +164,66 @@ runfregec !compilees !opts !pw = do
 runcompiler compilees sp flags dir path prefix pw = runfregec compilees opts pw
     where opts = createopts sp flags dir path prefix
 
-stdoutPrinter = stdPrinter stdout
-stdPrinter out = do
-    out <- out
-    eos <- OutputStreamWriter.new out "UTF-8"
-    either exception fromOSW eos
-  where
-    fromOSW :: OutputStreamWriter -> IO PrintWriter
-    fromOSW osw = PrintWriter.fromWriterAf osw true
-    exception exc = do
-        stderr << "Can't make OutputStreamWriter: " << JException.getMessage exc << "\n"
-        throw exc
+-- stdoutPrinter = stdPrinter System.out
+-- stdPrinter out = do
+--         out <- out
+--         osw <- OutputStreamWriter.new out "UTF-8"
+--         PrintWriter.new osw true
+--     `catch` exception
+--   where
+--     exception :: IO.IOException -> IOMut PrintWriter
+--     exception exc = do
+--         System.err << "Can't make printer: " << exc.getMessage << "\n"
+--         throwIO exc
+        
+        
 
 --- here it starts all
 main args = do
     rc <- mainIO args
-    if rc == 0 then return () else IO.exit rc
+    setExitCode rc
 
 
 --- the main function of the compiler
 mainIO ["-help"] = do
-    stderr  << "usage:\n"
-    stderr  << "    java frege.compiler.Main [flags] [items ....]\n"
-    stderr  << "    java frege.compiler.Main -help           print this message\n"
-    stderr  << "    java frege.compiler.Main -version        print version information\n\n"
-    stderr  << "    JVM properties:\n"
-    stderr  << "        \"-Dfrege.javac=javac -J-Xmx512m\"   java compiler and options, default internal\n"
---  stderr  << "        \"-Dfrege.inPrelude=true\"           compile as prelude module, default false\n"
-    stderr  << "        \"-Dfrege.prelude=other.Prelude\"    package name of Prelude, default frege.Prelude\n"
+    let stderr = IO.stderr
+    mapM_ stderr.println [
+            "usage:",
+            "    java frege.compiler.Main [flags] [items ....]",
+            "    java frege.compiler.Main -help           print this message",
+            "    java frege.compiler.Main -version        print version information",
+            "",
+            "    JVM properties:",
+            "        \"-Dfrege.javac=javac -J-Xmx512m\"   java compiler and options, default internal",
+            "        \"-Dfrege.prelude=other.Prelude\"    package name of Prelude, default frege.Prelude",
+        ]
     usage
     IO.return 0
 
 mainIO ["-version"] = println version >> return 0
 
--- mainIO [] = mainIO ["-help"]
 
 mainIO args = do
-    now   <- IO.currentTimeMillis()
+    now   <- System.currentTimeMillis()
     mbopt <- scanOpts stdOptions args
     case mbopt of
         Nothing -> return 1
         Just (opt, fs) -> do
             when (U.isOn opt.flags VERBOSE) (printopts opt)
             global <- standardOptions
-            excl   <- U.theClassLoader opt
-            case excl of
-                Left exc -> noClassLoader exc >> return 1
-                Right loader -> do
-                    (_, g) <- files fs global.{options = opt, sub <- SubSt.{loader}}
-                    return (if g.errors > 0 then 1 else 0)
+            loader <- U.theClassLoader opt 
+            (_, g) <- files fs global.{options = opt, sub <- SubSt.{loader}}
+            return (if g.errors > 0 then 1 else 0)
 
 eclipseOptions = do
     g <- standardOptions
     return g.{options = ideOptions}
     
 protected standardOptions = do
-    cache    <- IORef.new Nil      -- start out with empty cache
-    exld     <- U.theClassLoader stdOptions
-    eprinter <- stdPrinter stderr
-    oprinter <- stdoutPrinter
-    either throw (global cache eprinter oprinter) exld
-  where
-    global cache eprinter oprinter loader = return Global {
+    cache    <- Ref.new Nil      -- start out with empty cache
+    loader   <- U.theClassLoader stdOptions
+
+    return Global {
             options = stdOptions,
             sub = Sub {
                 cache, loader,
@@ -241,11 +239,11 @@ protected standardOptions = do
                 messages = [],
                 cancelled = return false,
                 nextPass = 1,
-                stderr = eprinter,
+                stderr = IO.stderr,
                 toExport = []
             },
             gen = Gen {
-                printer = oprinter,
+                printer = IO.stdout,
                 tunique = 0,
                 runique = 0,
                 sunique = 0,
@@ -279,7 +277,7 @@ classNotFound = return . Left
 {--
     This will be called from Scanner for each import 
 -}
-getOperators :: String -> StG (CatchAll (Maybe CT.OpArr))
+getOperators :: String -> StG (Throwable | (Maybe CT.OpArr))
 getOperators packstr = do
     global <- getST
     case global of
@@ -306,18 +304,23 @@ getOperators packstr = do
                     Right (_, Nothing) ->    return (Right Nothing)
                     Right (_, Just fp) ->    return (Right (Just fp.ops))
 
-
-make :: Global -> String -> IO (CatchAll (Bool, Maybe FregePackage))
+ 
+make :: Global -> String -> IO (Throwable | (Bool, Maybe FregePackage))
 make g packstr = do
-        return $! StG.run (U.logmsg TRACEM Position.null (text ("make" ++ packstr))) g
+        return $! StG.run (U.logmsg TRACEM Position.null (text ("make " ++ packstr))) g
         cache <- g.cache.get
         case cache.lookup packstr of
             Just fp -> IO.return (Right (false, Just fp))
             Nothing -> do
+                        g.cache.put (cache.insert packstr (
+                            error ("forbidden cyclic import involving package  " ++ packstr)))
                         fp <- CT.getFrege g.sub.loader packstr >>= return . Right
                             `catch` classNotFound
                         either missing currentP fp
+    `catch` circularity 
     where
+        circularity :: Undefined -> IO (Throwable | (Bool, Maybe FregePackage))
+        circularity = return . Left 
         filename1 = ((#\.#.matcher packstr).replaceAll "/") ++ ".fr"
         filename  = ((regforce ("^" ++ g.options.prefix)).matcher filename1).replaceFirst ""
         findFile [] f = IO.return Nothing
@@ -334,7 +337,7 @@ make g packstr = do
             return $! StG.run (U.logmsg TRACEM Position.null (text (packstr ++ " " ++ show exc))) g
             fn <- findFile g.sourcePath filename
             maybe (cantFind Nothing filename) makeNow fn
-        currentP :: Maybe FregePackage -> IO (Exception (Bool, Maybe FregePackage))
+        currentP :: Maybe FregePackage -> IO (Throwable | (Bool, Maybe FregePackage))
         currentP Nothing = IO.return (Left ((Undefined.new "no frege class")))
         currentP (Just fp) = do
             let time = FregePackage.time fp
@@ -342,15 +345,17 @@ make g packstr = do
                         ++ " time:" ++ show time))) g
             fn <- findFile g.sourcePath filename
             maybe (cantFind (Just fp) filename) (makeIfModified fp time) fn
-        cantFind :: Maybe FregePackage -> String -> IO (Exception (Bool, Maybe FregePackage))
+        cantFind :: Maybe FregePackage -> String -> IO (Throwable | (Bool, Maybe FregePackage))
         cantFind Nothing fstr = IO.return (Left ((
             Undefined.new ("can't make " ++ packstr
                 ++ ", source file " ++ fstr ++ " missing"))))
-        cantFind jfp fstr = do
+        cantFind (Just fp) fstr = do
             return $! StG.run (U.logmsg TRACEM Position.null (text (fstr ++ " not found, can't remake"))) g
-            IO.return (Right (false, jfp))
-        makeNow :: File -> IO (Exception (Bool, Maybe FregePackage))         
-        makeNow (fn::File) = do
+            cache <- g.cache.get
+            g.cache.put (cache.insert packstr fp)
+            IO.return (Right (false, Just fp))
+        makeNow :: MutableIO File -> IO (Throwable | (Bool, Maybe FregePackage))         
+        makeNow fn = do
             path <- fn.getPath
             return (StG.run (U.logmsg TRACEM Position.null (text path)) g)
             (_,gr) <- files [path] g.{sub <- SubSt.{errors = 0}}    -- with fresh env
@@ -370,7 +375,7 @@ make g packstr = do
                     IO.return (Left (Undefined.new "compilation failed"))
         -- getFrege (Left x) pack = IO.return (Left x)
         -- getFrege (Right cl) pack = CT.getFrege cl pack
-        makeIfModified (fp::FregePackage) time (fn::File) = do
+        makeIfModified (fp::FregePackage) time (fn::MutableIO File) = do
             mod  <- fn.lastModified
             path <- fn.getPath
             return $! StG.run (U.logmsg TRACEM Position.null (text ("modified " ++ path ++ " " ++ show mod))) g
@@ -391,7 +396,7 @@ make g packstr = do
                         Right (Just sub) -> do
                             return $! StG.run (U.logmsg TRACEM Position.null (text ("out of date with respect to " ++ sub))) g
                             makeNow fn
-        makeDeps :: Long -> Maybe String -> [String] -> IO (Exception (Maybe String))                            
+        makeDeps :: Long -> Maybe String -> [String] -> IO (Throwable | (Maybe String))                            
         makeDeps time b [] = IO.return (Right b)
         makeDeps time b (sp:sps) = do
             made <- make g.{options <- Options.{source=packstr}} sp
@@ -419,12 +424,10 @@ files (src:srcs) g = do
                     res <- make g ((Pack.new src).unpack g)
                     case res of
                         Left x -> do
-                            g.stderr.append "Couldn't make " << src << ": " << x
-                            g.stderr.printLn
+                            g.stderr.println ("Couldn't make " ++ src ++ ": " ++ show x)
                             IO.return ((), g.{sub <- SubSt.{errors = 1}})
                         Right (false, _) -> do
-                            g.stderr.append src << " is up to date"
-                            g.stderr.printLn
+                            g.stderr.println(src ++ " is up to date")
                             files srcs g
                         Right (true, _) -> files srcs g
           else doFile (src:srcs)
@@ -442,29 +445,30 @@ files (src:srcs) g = do
  -}
 run :: StG ()
 run = do
-    p <- doio $ stdoutPrinter
-    changeST Global.{gen <- GenSt.{printer=p}}    -- just to have no undefined value there
+    -- p <- doio $ stdoutPrinter
+    changeST Global.{gen <- GenSt.{printer=IO.stdout}}    -- just to have no undefined value there
     foreach passes runpass
 
 runpass (pass,description,post) = do
     state <- getST
     when (state.errors == 0) do
-        now   <- doio $ IO.currentTimeMillis()
+        now   <- doio $ System.currentTimeMillis()
         (itemnm, items) <- pass
         state <- getST
         postconditionHolds <- if state.errors == 0 then post else stio true
-        later <- doio $ IO.currentTimeMillis()
+        later <- doio $ System.currentTimeMillis()
         when (state.errors > 0) (doio $ state.printer.close >> IO.return ())
         when (length description > 0 && U.isOn state.options.flags VERBOSE) do
-            doio $ do  state.stderr.append description << " took "
-                          << format "%.3f" ((later-now+1L).float / 1e3f) << "s, "
-                          << items << " " << itemnm
+            doio $ do  state.stderr.print (description ++ " took "
+                          ++ format "%.3f" ((later-now+1L).float / 1e3f) ++ "s, "
+                          ++ show items ++ " " ++ itemnm)
                        when (items > 1) do
-                            state.stderr.append " ("
-                                   << (Int.long items*1000L) `div` max 1L (later-now) << " "
-                                   << itemnm << "/s)"
+                            state.stderr.print (" ("
+                                   ++ show ((Int.long items*1000L) `div` max 1L (later-now))
+                                   ++ " "
+                                   ++ itemnm ++ "/s)")
                             return ()
-                       state.stderr.printLn
+                       state.stderr.println
             stio ()
         unless (postconditionHolds) do
             doio (state.stderr.println "FATAL: post condition violated")
@@ -515,8 +519,8 @@ postParse = do
 
 noClassLoader :: Throwable -> IO ()
 noClassLoader x = do
-        stderr << "Can't make class loader due to " << x.catched << ": "
-               << x.getMessage << "\n"
+        IO.stderr.println ("Can't make class loader due to " ++ x.catched ++ ": "
+               ++ x.getMessage)
         return ()
 
 openPrinter = do
@@ -541,24 +545,14 @@ targetPath suffix = do
 openFilePrinter suffix = do
     g <- getST
     target <- targetPath suffix
-    let mkpw  = do
-            file       <- File.new target
-            parentFile <- file.getParentFile
-            let opw    =  PrintWriter.encoded file "UTF-8"
-            case parentFile of
-                Just dir -> do
-                    dir.mkdirs    -- make sure all directories are there
-                    opw
-                Nothing -> opw
-    epw <- doio mkpw
-    case epw of
-        Left exc -> do
-            U.error (packageStart g)  (text ("Can't write to " ++ target ++ " (" ++ exc.catched ++ ")"))
-            stio ()
-        Right pw -> do
-            -- pw <- doio $ PrintWriter.fromWriterAf (pw.toWriter) true
-            changeST Global.{gen <- GenSt.{printer=pw}}
-            stio ()
+    file   <- doio $ File.new target
+    parentFile <- doio $ file.getParentFile
+    case parentFile of
+        Just dir ->  doio $ dir.mkdirs    -- make sure all directories are there
+        Nothing -> return false
+    pw <- doio (IO.PrintWriterIO.new file "UTF-8")
+    changeST Global.{gen <- GenSt.{printer=pw}}
+    stio ()
 
 --- utility function to run a command.
 --- takes a command line and produces an exit code
@@ -572,7 +566,7 @@ javac = do
     let cmd = StringArr.fromList (command ++ arguments)
             where 
                 command = maybe ["javac"] ´\s+´.splitted  
-                                            (IO.getProperty "frege.javac") 
+                                            (System.getProperty "frege.javac") 
                 arguments = ["-cp", joined U.pathSep (U.ourPath g.options),
                     "-d",  g.options.dir,
                     "-encoding", "UTF-8",
@@ -582,8 +576,8 @@ javac = do
         when (rc != 0) do
             U.error (packageEnd g) (msgdoc "java compiler errors are most likely caused by erronous native definitions")
     -- from now on, we are printing to stdout again
-    printer <- doio stdoutPrinter
-    changeST Global.{gen <- GenSt.{printer=printer}}
+    -- printer <- doio stdoutPrinter
+    changeST Global.{gen <- GenSt.{printer=IO.stdout}}
     stio ("source file", 1)
 
 lexPass = do
@@ -635,71 +629,81 @@ withOption flag = changeST Global.{options <- Options.{flags <- flip U.setFlag f
 newLoader = do
     -- changeST Global.{options <- Options.{flags=ideOptions.flags}}
     g <- getST
-    exld <- doio $ U.theClassLoader g.options
-    case exld of
-        Left exc -> do
-            doio (noClassLoader exc)
-            stio ()
-        Right loader -> changeST Global.{sub <- SubSt.{loader}}
+    loader <- doio $ U.theClassLoader g.options
+    changeST Global.{sub <- SubSt.{loader}}
 
 parsePass = do
-    g       <- getST
-    result <- Parse.pass (filter Token.noComment g.sub.toks.toList)
-    case result of
-        Just (Program.Module (packname, defs, doc)) -> do
-            changeST Global.{sub <-  SubSt.{thisPack = Pack.new packname}}
-            changeST Global.{sub <- (SubSt.{definitions = defs}
-                                     • SubSt.{packageDoc = doc})}
-            stio ("tokens",  g.sub.toks.length)
-        nothing -> stio ("tokens", g.sub.toks.length)
-
+        g       <- getST
+        result <- Parse.pass (filter Token.noComment g.sub.toks.toList)
+        case result of
+            Just (Program.Module (packname, defs, doc)) -> do
+                changeST Global.{sub <-  SubSt.{thisPack = Pack.new packname}}
+                changeST Global.{sub <- (SubSt.{definitions = defs}
+                                         • SubSt.{packageDoc = doc})}
+                when (U.isOn g.options.flags IDE) do
+                    changeST Global.{sub <- SubSt.{toks <- Array.fromList . ideClean . Array.toList}}
+                stio ("tokens",  g.sub.toks.length)
+            nothing -> stio ("tokens", g.sub.toks.length)
+    where
+        -- prepare token list for IDE: no inserted semicolons and braces, operator qualifiers
+        ideClean :: [Token] -> [Token]
+        ideClean (t:ts)                 -- restore original qualification
+            | t.tokid > LOP0 && t.tokid < SOMEOP = case t.qual of
+                [q1]    -> q1 : t : ideClean ts
+                [q1,q2] -> q1 : q2 : t : ideClean ts
+                _       -> t : ideClean ts
+        ideClean (t:ts)
+            | t.col == 0 = ideClean ts      -- inserted semicolon or brace
+            | otherwise  = t : ideClean ts
+        ideClean [] = []
 
 --- print options
 printopts opts = do
-    stderr << "You have selected the following options:\n"
-    stderr << "Source file:          " << Options.source opts << "\n"
-    stderr << "Frege path:           " << U.ourPath opts << "\n"
-    stderr << "Destination directory " << opts.dir << "\n"
-    unless (Nothing == opts.encoding) (stderr << "Source file encoding: " << unJust opts.encoding << "\n" >> return ())
-    stderr << "Flags:                "
-        << opts.flags
-        << "\n"
+    let stderr = IO.stderr
+    stderr.println "You have selected the following options:"
+    stderr.println ("Source file:          " ++ Options.source opts)
+    stderr.println ("Frege path:           " ++ show (U.ourPath opts))
+    stderr.println ("Destination directory " ++ opts.dir)
+    unless (Nothing == opts.encoding) 
+        (stderr.println ("Source file encoding: " ++ unJust opts.encoding))
+    stderr.println ("Flags:                " ++ show opts.flags)
     return ()
 
 --- print usage information common to many tools
-usage = stderr
-            << "    flags:\n"
-            << "       -d directory    target directory for *.java and *.class files\n"
-            << "       -fp classpath   where to find imported frege packages\n"
-            << "       -enc charset    charset for source code files, standard is UTF-8\n"
-            << "       -enc DEFAULT    platform default charset for source code files\n"
-            << "       -nocp           exclude java classpath from -fp\n"
-            << "       -hints          print more detailed error messages and warnings\n"
-            << "       -inline         inline functions where possible\n"
-            << "       -comments       generate commented code\n"
-            << "       -strict         enable strict(er) semantics (eperimental)\n"
-            << "       -explain i[-j]  print some debugging output from type checker\n"
-            << "                       regarding line(s) i (to j). May help to understand\n"
-            << "                       inexplicable type errors better.\n"
-            << "       -nowarn         don't print warnings (not recommended)\n"
-            << "       -v              verbose mode on\n"
-            << "       -make           build outdated or missing imports\n"
-            << "       -sp srcpath     look for source files in srcpath, default is .\n"
-            << "       -j              do not run the java compiler\n"
-            << "       -prefix stage   prefix for package names, used in compiler development\n"
-            << "       -xN             debugging output from pass N, where N elem (1..9)\n"
-            << "       -xt             debugging output from type checker\n"
-            << "       -xo             debugging output from optimizer\n"
-            << "       -xs             debugging output from strictness analysis\n"
-            << "       -xg             debugging output from code generation\n"
-            << "       -xr i[-j]       confine tracing to range of line numbers or just a line\n"
-            << "                       multiple ranges can be specified\n"
-            << "\n"
-            << "A classpath is a list of jar files, zip-Files or directories separated by "
-            << U.pathSep << "\n"
-            << "A srcpath is a list of directories separated by "
-            << U.pathSep << "\n"
-            << "To get parser debugging output, set YYDEBUG environment variable to 1\n"
+usage = mapM_ IO.stderr.println [
+            "    flags:",
+            "       -d directory    target directory for *.java and *.class files",
+            "       -fp classpath   where to find imported frege packages",
+            "       -enc charset    charset for source code files, standard is UTF-8",
+            "       -enc DEFAULT    platform default charset for source code files",
+            "       -nocp           exclude java classpath from -fp",
+            "       -hints          print more detailed error messages and warnings",
+            "       -inline         inline functions where possible",
+            "       -comments       generate commented code",
+            "       -strict         enable strict(er) semantics (eperimental)",
+            "       -explain i[-j]  print some debugging output from type checker",
+            "                       regarding line(s) i (to j). May help to understand",
+            "                       inexplicable type errors better.",
+            "       -nowarn         don't print warnings (not recommended)",
+            "       -v              verbose mode on",
+            "       -make           build outdated or missing imports",
+            "       -sp srcpath     look for source files in srcpath, default is .",
+            "       -j              do not run the java compiler",
+            "       -prefix stage   prefix for package names, used in compiler development",
+            "       -xN             debugging output from pass N, where N elem [1..9]",
+            "       -xt             debugging output from type checker",
+            "       -xo             debugging output from optimizer",
+            "       -xs             debugging output from strictness analysis",
+            "       -xg             debugging output from code generation",
+            "       -xr i[-j]       confine tracing to range of line numbers or just a line",
+            "                       multiple ranges can be specified",
+            "",
+            "A classpath is a list of jar files, zip-Files or directories separated by "
+            ++ U.pathSep,
+            "A srcpath is a list of directories separated by "
+            ++ U.pathSep,
+            "To get parser debugging output, set YYDEBUG environment variable to 1",
+        ]
 
 --- used to look up flag values
 flagtree = Tree.fromList [
@@ -736,28 +740,27 @@ flagtree = Tree.fromList [
 scanOpts :: Options -> [String] -> IO (Maybe (Options, [String]))
 scanOpts opts [] = IO.return (Just (opts, []))
 scanOpts opts ("-d":xs)  | null xs || head xs ~ #^-# = do
-    stderr << "option -d must be followed by a directory name\n"
+    IO.stderr.println "option -d must be followed by a directory name."
     IO.return Nothing
 scanOpts opts ("-d":dir:args) = do
     f     <- File.new dir
     isdir <- f.isDirectory
-    -- unless isdir (stderr << dir << " is not a directory" << "\n" >> return ())
     if isdir then do
             canRead <- f.canRead
             if canRead then do
                     canWrite <- f.canWrite
                     if canWrite then scanOpts opts.{dir} args
                         else do
-                            stderr << "directory " << dir << " is not writable.\n"
+                            IO.stderr.println ("directory " ++ dir ++ " is not writable.")
                             IO.return Nothing
                 else do
-                    stderr << "directory " << dir << " is not readable.\n"
+                    IO.stderr.println ("directory " ++ dir ++ " is not readable.")
                     IO.return Nothing
         else do
-            stderr << dir << " is not a directory\n"
+            IO.stderr.println (dir ++ " is not a directory.")
             IO.return Nothing
 scanOpts opts ("-sp":xs) | null xs || head xs ~ #^-# = do
-    stderr << "option -sp must be followed by source path\n"
+    IO.stderr.println "option -sp must be followed by source path."
     IO.return Nothing
 scanOpts opts ("-sp":path:args) = do
     let ps = U.pathRE.splitted path
@@ -772,19 +775,19 @@ scanOpts opts ("-sp":path:args) = do
                 then if isdir
                   then IO.return true
                   else do
-                        stderr << pe << " should be a directory\n"
+                        IO.stderr.println (pe ++ " should be a directory")
                         IO.return false
                 else do
-                    stderr << pe << " is not readable\n"
+                    IO.stderr.println (pe ++ " is not readable")
                     IO.return false
               else do
-                stderr << pe << " does not exist\n"
+                IO.stderr.println (pe ++ " does not exist")
                 IO.return false
     bits <- sequence pschecked
     rest <- scanOpts opts.{sourcePath = ps} args
     if fold (&&) true bits then IO.return rest else IO.return Nothing
 scanOpts opts ("-fp":xs) | null xs || head xs ~ #^-# = do
-    stderr << "option -fp must be followed by classpath\n"
+    IO.stderr.println "option -fp must be followed by classpath"
     IO.return Nothing
 scanOpts opts ("-fp":path:args) = do
     let ps = U.pathRE.splitted path
@@ -801,33 +804,33 @@ scanOpts opts ("-fp":path:args) = do
                   then IO.return true
                   else if isjar then IO.return true
                     else do
-                        stderr << pe << " should be a jar or zip archive or a directory\n"
+                        IO.stderr.println (pe ++ " should be a jar or zip archive or a directory")
                         IO.return false
                 else do
-                    stderr << pe << " is not readable\n"
+                    IO.stderr.println (pe ++ " is not readable")
                     IO.return false
               else do
-                stderr << pe << " does not exist\n"
+                IO.stderr.println (pe ++ " does not exist")
                 IO.return false
     bits <- sequence pschecked
     rest <- scanOpts opts.{path = ps} args
     if fold (&&) true bits then IO.return rest else IO.return Nothing
 scanOpts opts (#^-enc(oding)?$#:xs) | null xs || head xs ~ #^-# = do
-    stderr << "option -enc must be followed by code name\n"
+    IO.stderr.println "option -enc must be followed by code name"
     IO.return Nothing
 scanOpts opts (#^-enc(oding)?$#:enc:args) = scanOpts opts.{encoding = mbEncoding} args
     where mbEncoding = if enc == "DEFAULT" then Nothing else Just enc
 scanOpts opts ("-prefix":xs) | null xs || head xs ~ #^-# = do
-    stderr << "option -prefix must be followed by prefix string\n"
+    IO.stderr.println "option -prefix must be followed by prefix string"
     IO.return Nothing
 scanOpts opts ("-prefix":pre:args) = scanOpts opts.{prefix = pre} args
 scanOpts opts ("-xr":xs) | null xs || head xs !~ #^\d+(\D\d+)?$# = do
-    stderr << "option -xr must be followed by number range\n"
+    IO.stderr.println "option -xr must be followed by number range"
     IO.return Nothing
 scanOpts opts ("-xr" : m~#^(\d+)(\D(\d+))?$# : args) =
     if a <= b then scanOpts opts.{tRanges <- ((a,b):)} args
-    else do stderr << "Did you mean \"-xr " << b << "," << a
-                    << "\"? Line specific tracing will be off.\n"
+    else do IO.stderr.println ("Did you mean \"-xr " ++ show  b ++ "-" ++ show a
+                    ++ "\"? This way, line specific tracing will be off")
             scanOpts opts.{tRanges <- ((a,b):)} args    -- do what he said, not what he meant
     where (a,b) = case m.group 1 of
             Just s1 -> case m.group 3 of
@@ -835,12 +838,12 @@ scanOpts opts ("-xr" : m~#^(\d+)(\D(\d+))?$# : args) =
                 Nothing ->  (s1.atoi, s1.atoi)
             Nothing -> (0, Int.maxBound)                 -- just to make warning go away
 scanOpts opts ("-explain":xs) | null xs || head xs !~ #^\d+(\D\d+)?$# = do
-    stderr << "option -explain must be followed by number range\n"
+    IO.stderr.println "option -explain must be followed by number range\n"
     IO.return Nothing
 scanOpts opts ("-explain" : m~#^(\d+)(\D(\d+))?$# : args) =
     if a <= b then scanOpts opts.{tRanges <- ((a,b):), flags = U.setFlag opts.flags EXPLAIN} args
-    else do stderr << "Did you mean \"-explain " << b << "-" << a
-                    << "\"? This way, explaining will be off.\n"
+    else do IO.stderr.println ("Did you mean \"-explain " ++ show b ++ "-" ++ show a
+                    ++ "\"? This way, explaining will be off.")
             scanOpts opts.{tRanges <- ((a,b):)} args    -- do what he said, not what he meant
     where (a,b) = case m.group 1 of
             Just s1 -> case m.group 3 of
@@ -852,11 +855,11 @@ scanOpts opts ("-help":args)     = mainIO ["-help"]    >> scanOpts opts args
 scanOpts opts ((flag@#^-#):args) = case flagtree.lookup flag of
     Just (f, flag) -> scanOpts opts.{flags = f opts.flags flag} args
     Nothing -> do
-        stderr << "invalid flag " << flag << ", use -help for command line syntax\n"
+        IO.stderr.println ("invalid flag " ++ flag ++ ", use -help for command line syntax.")
         scanOpts opts args
         IO.return Nothing
 scanOpts opts filenames | head filenames !~ #^-# = IO.return (Just (opts, filenames))
 scanOpts opts (wrong:args)  = do
-        stderr << "invalid argument `" << wrong << "`,  use -help for command syntax\n"
+        IO.stderr.println ("invalid argument `" ++ wrong ++ "`,  use -help for command syntax.")
         scanOpts opts args
         IO.return Nothing

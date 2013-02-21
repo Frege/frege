@@ -53,6 +53,7 @@ import frege.compiler.Utilities as U(
     posItem, posLine, unqualified, tuple)
 import frege.compiler.GUtil
 
+type IntArray = IntArr
 
 // this will speed up the parser by a factor of 70, cause yyprods comes out monotyped.
 private yyprod1 :: [(Int, YYsi ParseResult Token)]
@@ -78,7 +79,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type packagename     (Pos String)
 //%type packagename1    (Pos String)
 //%type nativename      String
-//%type nativepur       Bool
+//%type nativepur       (Bool, Bool)
 //%type docs            String
 //%type opstring        String
 //%type boundvar        String
@@ -103,7 +104,6 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type qvarids         [SName]
 //%type qconid          SName
 //%type qunop           (Pos String)
-//%type binop           (Pos String)
 //%type tyname          SName
 //%type annoitem        (Pos String)
 //%type nativestart     (Pos String)
@@ -152,6 +152,8 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type tauSC           [TauS]
 //%type tauSB           [TauS]
 //%type dvars           [TauS]
+//%type sigex           D.SigExs
+//%type sigexs          [D.SigExs]
 //%type sigma           SigmaS
 //%type forall          SigmaS
 //%type rhofun          RhoS
@@ -233,7 +235,6 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%explain qvarids      a list of qualified variable names
 //%explain importitem   an import item
 //%explain alias        a simple name for a member or import item
-//%explain binop        a binary operator
 //%explain commata      a sequence of one or more ','
 //%explain topdefinition a top level declaration
 //%explain publicdefinition a declaration
@@ -261,6 +262,8 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%explain tapp         a type application
 //%explain forall       a qualified type
 //%explain sigma        a qualified type
+//%explain sigex        a method type with optional throws clause
+//%explain sigexs       method types with optional throws clauses
 //%explain boundvar     a type variable bound in a forall
 //%explain boundvars    type variables bound in a forall
 //%explain rop13        ':'
@@ -328,7 +331,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 %token VARID CONID QVARID QCONID QUALIFIER DOCUMENTATION
 %token PACKAGE IMPORT INFIX INFIXR INFIXL NATIVE DATA WHERE CLASS
 %token INSTANCE ABSTRACT TYPE TRUE FALSE IF THEN ELSE CASE OF DERIVE
-%token LET IN WHILE DO FORALL PRIVATE PROTECTED PUBLIC PURE THROWS
+%token LET IN WHILE DO FORALL PRIVATE PROTECTED PUBLIC PURE THROWS MUTABLE
 %token INTCONST STRCONST LONGCONST FLTCONST DBLCONST CHRCONST REGEXP BIGCONST
 %token ARROW DCOLON GETS EARROW TARROW DOTDOT
 %token LOP1 LOP2 LOP3 LOP4 LOP5 LOP6 LOP7 LOP8 LOP9 LOP10 LOP11 LOP12 LOP13 LOP14 LOP15 LOP16
@@ -597,7 +600,7 @@ importitem:
     | CONID '(' memspecs ')'        { \v\_\ms\_ -> protoItem.{ name = Simple v, members = Just ms} }
     | CONID '(' ')'                 { \v\_\_    -> protoItem.{ name = Simple v, members = Just []} }
     | qconid                        { \v        -> protoItem.{ name = v } }
-    | operator                      { \t        -> protoItem.{ name = Simple t } }
+    | operator                      { \t        -> protoItem.{ name = opSname t } }
     | unop                          { \v        -> protoItem.{ name = Simple v} }
     ;
 
@@ -624,7 +627,7 @@ memspecs:
 alias:
     VARID
     | CONID
-    | operator
+    | operator              { \v -> do { op <- unqualified v; return op }} 
     ;
 
 varid:   VARID              { vid }
@@ -660,11 +663,12 @@ qconid:  QUALIFIER QUALIFIER CONID  { \n\t\v     -> With2 n t v}
     ;
 
 varop:
-    VARID | operator | unop
+    VARID | unop
 
 qvarop:  QUALIFIER QUALIFIER varop  { \n\t\v     -> With2 n t v}
     |    QUALIFIER varop            { \t\v       -> With1 t v}
-    |    varop                      { \v         -> Simple v }
+    |    varop                      { Simple  }
+    |    operator                   { opSname }
     ;
 
 operator:
@@ -732,27 +736,35 @@ nativestart:
     | NATIVE '-'           { \_\b  -> vid b }
     ;
 
+sigex: 
+    sigma THROWS tauSC      { \a\_\c -> (a, c) }
+    | sigma                 { \a -> (a, [])    }
+    ;
+
+sigexs:
+    sigex                   { single }
+    | sigex '|' sigexs      { liste }
+    ;
+
 impurenativedef:
-    nativestart DCOLON sigma
+    nativestart DCOLON sigexs
                     { \item\col\t -> NatDcl {pos=posLine item, vis=Public, name=posItem item,
-                                                meth=posItem item, typ=t, isPure=false, 
-                                                throwing=[], doc=Nothing}}
-    | nativestart nativename DCOLON sigma
+                                                meth=posItem item, txs=t, isPure=false, 
+                                                doc=Nothing}}
+    | nativestart nativename DCOLON sigexs
                     { \item\j\col\t -> NatDcl {pos=posLine item, vis=Public, name=posItem item,
-                                                meth=j, typ=t, isPure=false, 
-                                                throwing=[], doc=Nothing}}
-    | nativestart operator   DCOLON sigma
+                                                meth=j, txs=t, isPure=false, 
+                                                doc=Nothing}}
+    | nativestart operator   DCOLON sigexs
                     { \item\o\col\t -> do {
                             o <- binop o;
                             YYM.return (NatDcl {pos=posLine item, vis=Public, name=posItem item,
-                                                meth=posItem o, typ=t, isPure=false, 
-                                                throwing=[], doc=Nothing})}}
-    | nativestart unop      DCOLON sigma
+                                                meth=posItem o, txs=t, isPure=false, 
+                                                doc=Nothing})}}
+    | nativestart unop      DCOLON sigexs
                     { \item\o\col\t -> NatDcl {pos=posLine item, vis=Public, name=posItem item,
-                                                meth=Token.value o, typ=t, isPure=false, 
-                                                throwing=[], doc=Nothing}}
-    | impurenativedef THROWS tauSC
-                    { \def\_\taus -> Def.{throwing=taus} def } 
+                                                meth=Token.value o, txs=t, isPure=false, 
+                                                doc=Nothing}} 
     ;
 
 
@@ -905,18 +917,23 @@ datadef:
     ;
 
 nativepur:
-    PURE NATIVE     { \_\_ -> true  }
-    | NATIVE        { \_   -> false }
+    PURE NATIVE         { \_\_ -> (true, false)  }
+    | MUTABLE NATIVE    { \_\_ -> (false, true)  }
+    | NATIVE            { \_   -> (false, false) }
     ;
 
 datainit:
     DATA CONID '=' nativepur nativename {
         \dat\d\docu\pur\jt -> JavDcl {pos=yyline d, vis=Public, name=Token.value d,
-                                    jclas=jt, vars=[], defs=[], isPure = pur, doc=Nothing}
+                                    jclas=jt, vars=[], defs=[], 
+                                    isPure = fst pur, isMutable = snd pur, 
+                                    doc=Nothing}
     }
     | DATA CONID dvars '=' nativepur nativename {
         \dat\d\ds\docu\pur\jt -> JavDcl {pos=yyline d, vis=Public, name=Token.value d,
-                                    jclas=jt, vars=ds, defs=[], isPure = pur, doc=Nothing}
+                                    jclas=jt, vars=ds, defs=[], 
+                                    isPure = fst pur, isMutable = snd pur,
+                                    doc=Nothing}
     }
     | DATA CONID dvars '=' dalts {
         \dat\d\ds\docu\alts -> DatDcl {pos=yyline d, vis=Public, name=Token.value d,
@@ -948,7 +965,7 @@ visdalt:
     strictdalt
     | PUBLIC    strictdalt      { \_\dc -> (dc::DConS).{vis = Public}    }
     | PRIVATE   strictdalt      { \_\dc -> (dc::DConS).{vis = Private}   }
-    // PROTECTED strictdalt      { \_\dc -> (dc::DConS).{vis = Protected} }
+    | PROTECTED strictdalt      { \_\dc -> (dc::DConS).{vis = Protected} }
     ;
 
 strictdalt:
@@ -1310,15 +1327,15 @@ term:
     | '(' ')'                       { \z\_   -> Con (yyline z) (With1 baseToken z.{tokid=CONID, value="()"}) Nothing}
     | '(' commata ')'               { \z\n\_ -> Con (yyline z) (With1 baseToken z.{tokid=CONID, value=tuple (n+1)}) Nothing}
     | '(' unop ')'                  { \_\x\_ -> Vbl {pos=yyline x, name=Simple x, typ=Nothing} }
-    | '(' operator ')'              { \_\o\_ -> (varcon o) (yyline o) (Simple o) Nothing}
+    | '(' operator ')'              { \_\o\_ -> (varcon o) (yyline o) (opSname o) Nothing}
     | '(' '-' ')'                   { \_\m\_ -> (Vbl (yyline m) (With1 baseToken m) Nothing) }
     | '(' operator expr ')'         { \z\o\x\_ ->  let // (+1) --> flip (+) 1
                                         flp = Vbl (yyline o) (With1 baseToken underlineToken.{value="flip"}) Nothing
-                                        op  = (varcon o) (yyline o) (Simple o) Nothing
+                                        op  = (varcon o) (yyline o) (opSname o) Nothing
                                         ex = nApp (nApp flp op) x
                                     in ex}
     | '(' binex operator ')'        { \_\x\o\_ ->  // (1+) --> (+) 1
-                                        nApp ((varcon o) (yyline o) (Simple o) Nothing) x}
+                                        nApp ((varcon o) (yyline o) (opSname o) Nothing) x}
     | '(' binex '-' ')'             { \_\x\o\_ ->  // (1+) --> (+) 1
                                         nApp ((varcon o) (yyline o) (Simple o) Nothing) x}
     | '(' expr ',' exprSC ')'       { \a\e\(x::Token)\es\_ -> fold nApp (Con (yyline a)

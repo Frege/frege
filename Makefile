@@ -74,22 +74,26 @@ GENDOC   = $(FREGE) frege.tools.Doc -d doc
 #	shadow Prelude files in the order they must be compiled
 SPRELUDE  =  shadow/frege/prelude/PreludeBase.fr shadow/frege/prelude/PreludeNative.fr \
 		shadow/frege/prelude/PreludeList.fr shadow/frege/prelude/PreludeMonad.fr \
-		shadow/frege/prelude/PreludeText.fr \
 		shadow/frege/prelude/PreludeIO.fr \
+		shadow/frege/java/Lang.fr \
+		shadow/frege/prelude/PreludeText.fr \
 		shadow/frege/prelude/Arrays.fr \
 		shadow/frege/prelude/Math.fr shadow/frege/prelude/Floating.fr
 #	Prelude files in the order they must be compiled
 PRELUDE  =  frege/prelude/PreludeBase.fr frege/prelude/PreludeNative.fr \
 		frege/prelude/PreludeList.fr frege/prelude/PreludeMonad.fr \
-		frege/prelude/PreludeText.fr \
 		frege/prelude/PreludeIO.fr \
+		frege/java/Lang.fr \
+		frege/prelude/PreludeText.fr \
 		frege/prelude/Arrays.fr \
 		frege/prelude/Math.fr frege/prelude/Floating.fr
 
 all:  frege.mk runtime compiler fregec.jar
 
 shadow-prelude:
-	cp $(PRELUDE) shadow/frege/prelude/
+	jar -cf shadow.jar $(PRELUDE)
+	cd shadow && jar -xf ../shadow.jar
+	rm shadow.jar
 
 clean:
 	rm -rf build/afrege build/bfrege build/frege
@@ -114,11 +118,11 @@ sanitycheck:
 	$(JAVA) -version
 
 
-frege.mk: Makefile mkmk.pl
-	perl mkmk.pl <Makefile >frege.mk
+frege.mk: Makefile scripts/mkmk.pl
+	perl scripts/mkmk.pl <Makefile >frege.mk
 
 dist: fregec.jar
-	perl mkdist.pl
+	perl scripts/mkdist.pl
 
 
 
@@ -160,13 +164,13 @@ compiler: compiler2 $(COMPF)/Grammar.class $(COMPF)/Main.class tools
 $(COMPF)/Grammar.class: frege/compiler/Grammar.fr $(COMPF)/Scanner.class $(COMPF)/GUtil.class
 	$(FREGEC2) -v frege/compiler/Grammar.fr
 frege/compiler/Grammar.fr: frege/compiler/Grammar.y
-	@echo 1 shift/reduce conflict is ok
+	@echo 49 shift/reduce conflicts expected
 	$(YACC) -v frege/compiler/Grammar.y
 	$(FREGE) -cp fregec.jar frege.tools.YYgen -m State  frege/compiler/Grammar.fr
 	$(FREGE) -cp fregec.jar frege.tools.LexConvt frege/compiler/Grammar.fr
 	rm -f frege/compiler/Grammar.fr.bak
 frege/Version.fr: .git/index
-	perl mkversion.pl >frege/Version.fr
+	perl scripts/mkversion.pl >frege/Version.fr
 $(COMPF)/Scanner.class: $(DIR)/Prelude.class frege/compiler/Scanner.fr
 	$(FREGEC2)  -make frege.compiler.Scanner
 $(COMPF)/GUtil.class: $(COMPF)/Scanner.class frege/compiler/GUtil.fr
@@ -235,8 +239,6 @@ $(PREL)/PreludeList.class: $(PREL)/PreludeBase.class frege/prelude/PreludeList.f
 	$(FREGECC) frege/prelude/PreludeList.fr
 $(PREL)/PreludeText.class: $(PREL)/PreludeList.class frege/prelude/PreludeText.fr
 	$(FREGECC) frege/prelude/PreludeText.fr
-$(DIR1)/IO.class: frege/IO.fr
-	$(FREGEC0) $?
 $(DIR1)/List.class: frege/List.fr
 	$(FREGEC0) $?
 $(CONTROL1)/Monoid.class: frege/control/Monoid.fr
@@ -308,7 +310,7 @@ $(DATA1)/Maybe.class: frege/data/Maybe.fr
 $(LIBF1)/ForkJoin.class: frege/lib/ForkJoin.fr
 	$(FREGEC0) $?
 
-PRE1 = $(DIR1)/Prelude.class $(DIR1)/IO.class $(DIR1)/List.class $(DATA1)/Bits.class
+PRE1 = $(DIR1)/Prelude.class $(DIR1)/List.class $(DATA1)/Bits.class
 
 compiler1: $(RUNTIME)  $(DIR1)/check1  $(LIBF1)/PP.class $(COMPF1)/Grammar.class $(COMPF1)/Main.class
 	@echo stage 1 compiler ready
@@ -349,7 +351,7 @@ doc/index.html: $(RUNTIME)
 docu: build/frege/tools/Doc.class
 	javadoc -private -sourcepath . -d doc -encoding UTF-8 frege.runtime
 	$(FREGECC)  -make frege/StandardLibrary.fr
-	perl gendocmk.pl >makedoc
+	perl scripts/gendocmk.pl >makedoc
 	$(MAKE) -f makedoc docu
 	rm makedoc
 
@@ -363,4 +365,4 @@ diffs:
 	diff -b -r -x "*.class" -I "This code was generated with the frege compiler version" -I "^ +source=" save  build
 
 savejava:
-	perl savejava.pl
+	perl scripts/savejava.pl

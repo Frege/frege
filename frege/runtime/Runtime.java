@@ -35,11 +35,16 @@
 
 package frege.runtime;
 
+import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.InputStreamReader;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
+import java.io.OutputStreamWriter;
+import java.io.PrintWriter;
 import java.io.Serializable;
+import java.nio.charset.StandardCharsets;
 
 
 /**
@@ -70,6 +75,26 @@ public class Runtime {
 	final public static Class<?> getClass(Object o) {
 		return o.getClass();
 	}
+	
+	/**
+	 * Provide UTF-8 encoded standard printer for stdout with autoflush
+	 */
+	public static PrintWriter stdout = new PrintWriter(
+			new OutputStreamWriter(System.out, StandardCharsets.UTF_8),
+			true);
+	
+	/**
+	 * Provide UTF-8 encoded standard printer for stderr with autoflush
+	 */
+	public static PrintWriter stderr = new PrintWriter(
+			new OutputStreamWriter(System.err, StandardCharsets.UTF_8),
+			true);
+	
+	/**
+	 * Provide UTF-8 decoded standard inupt Reader
+	 */
+	public static BufferedReader stdin = new BufferedReader(
+			new InputStreamReader(System.in, StandardCharsets.UTF_8));
 	
     /**
      * <p> Utility method used by <code>String.show</code> to quote a string. </p>
@@ -220,6 +245,10 @@ public class Runtime {
 			} catch (Exception ex) {
 				throw new Error(ex); // ex.printStackTrace();
 			}
+			finally {
+				stdout.close();
+				stderr.close();
+			}
 			return;
 		} 
 		// comment following block for java6
@@ -230,12 +259,35 @@ public class Runtime {
 		} catch (Exception ex) {
 			throw new Error(ex);
 		}
+		finally {
+			stdout.flush();
+			stderr.flush();
+		}
 		return;
 	}
+	
+	final public static void exit() {
+		stdout.close();
+		stderr.close();
+		System.exit(exitCode);
+	}
+	
 	final public static boolean fork(Lambda it) {
 		Lazy a = it.apply(true).result();
 	    if (java.util.concurrent.ForkJoinTask.inForkJoinPool())
 	    	java.util.concurrent.ForkJoinTask.adapt(a).fork();
 	    return true;
 	}
+	
+	/**
+	 * set this if you need a different exit code
+	 */
+	private static volatile int exitCode = 0;
+	final public static void setExitCode(int a) {
+		synchronized (stdin) {
+			exitCode = a > exitCode && a < 256 ? a : exitCode; 
+		}
+	}
 }
+
+

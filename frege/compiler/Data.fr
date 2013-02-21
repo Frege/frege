@@ -46,7 +46,6 @@ package frege.compiler.Data
 
 
 import frege.List (Tree, each)
-import Java.IO(PrintWriter)
 import Java.Net(URLClassLoader)
 
 
@@ -106,13 +105,13 @@ data SubSt = !Sub {
     thisPack    :: Pack                 --- the current package
     thisPos     :: Position             --- from *package* ... *where* 
     nsPos       :: Tree NSName Position --- where NS was introduced
-    stderr      :: PrintWriter          --- error messages go here, UTF-8 encoded
+    stderr      :: PrintWriter    --- error messages go here, UTF-8 encoded
     toExport    :: [SName]              --- inlineable functions from this package
 }
 
 --- items that are set and used during code generation
 data GenSt = !Gen {
-    printer :: PrintWriter             --- generated java code goes here, UTF-8 encoded
+    printer :: PrintWriter       --- generated java code goes here, UTF-8 encoded
     tunique :: Int                     --- unique numbers for taus
     runique :: Int                     --- unique numbers for rhos
     sunique :: Int                     --- unique numbers for sigmas
@@ -297,6 +296,7 @@ private instTSym _ g = Nothing
 --- return type symbol for constructor of tau, if any
 private instTauSym tau g = case tau of
         TCon {name} -> QName.findit name g
+        -- TApp (TApp TCon{name} _) ty | name == TName{pack=pPreludeIO, base="Mutable"} 
         TApp a _    -> instTauSym a g
         _           -> Nothing
 --- qualified name
@@ -330,7 +330,13 @@ data QName =
         find (this@MName t s) g = case findit t g of
             Just sy | sy.{env?} = sy.env.lookupS s
             Just (SymA {typ}) = case instTSym typ g of
-                Just (sym::Symbol) -> find (MName sym.name s) g
+                Just sym 
+                    | Just r <- find (MName sym.name s) g = Just r
+                    | ForAll _ (RhoTau{tau=tau1}) <- typ,       -- look if its 
+                      [TCon{name}, _, tau2] <- tau1.flat,       -- type T = Mutable s X
+                      name == TName pPreludeIO "Mutable",       -- and look into X
+                      Just other <- instTauSym tau2 g = find (MName other.name s) g
+                    | otherwise = Nothing  
                 Nothing  -> Nothing
             _ -> Nothing
         --- like 'QName.find', but follow aliases
@@ -396,7 +402,7 @@ derive Enum SymState
 data Symbol =
         !SymT    {sid::Int, pos::Position, vis::Visibility, doc::Maybe String, name::QName,
                  kind::Kind, typ::Sigma, env::Symtab, nativ::Maybe String,
-                 product::Bool, enum::Bool, pur::Bool, newt::Bool}  --- data type
+                 product::Bool, enum::Bool, pur::Bool, newt::Bool, mutable::Bool}  --- data type
         | !SymL  {sid::Int, pos::Position, vis::Visibility, name::QName,
                  alias::QName}                                      --- alias name
         | !SymD  {sid::Int, pos::Position, vis::Visibility, doc::Maybe String, name::QName,
@@ -412,7 +418,8 @@ data Symbol =
                  typ::Sigma, expr::Maybe Expr, nativ::Maybe String,
                  pur::Bool, anno::Bool, exported::Bool, state::SymState,
                  strsig :: Strictness, depth :: Int, rkind :: RState,
-                 throwing :: [Tau] } --- variable or function
+                 throwing :: [Tau]  {-- list of exceptions thrown  -}
+                 over :: [QName ]   {-- list of overloaded members -} } --- variable or function
         | !SymA  {sid::Int, pos::Position, vis::Visibility, doc::Maybe String, name ::QName,
                  kind::Kind, typ::Sigma, vars::[Tau]}                           --- type alias
     where
@@ -598,7 +605,8 @@ type Sigma =  SigmaT QName
 {--
  * The type for modelling class assertions
  -}
-data ContextT s = Ctx {pos :: Position, cname :: s, tau :: TauT s, checked :: Bool }
+data ContextT s = Ctx {!pos :: Position, !cname :: s, !tau :: TauT s }
+                
 type Context    = ContextT QName
 type ContextS   = ContextT SName
 
@@ -652,13 +660,13 @@ instance Ord SName where
                                         (s2.ns.value, s2.ty.value, s2.id.value)
     s1 <=> s2 = (constructor s1).<=> (constructor s2)
 
-prelToken = Token CONID "Prelude" 1 1 0
-baseToken = Token CONID "PreludeBase" 1 1 0
-listToken = Token CONID "PreludeList" 1 1 0
-monadToken = Token CONID "PreludeMonad" 1 1 0
+prelToken = Token CONID "Prelude" 1 0 0 []
+baseToken = Token CONID "PreludeBase" 1 0 0 []
+listToken = Token CONID "PreludeList" 1 0 0 []
+monadToken = Token CONID "PreludeMonad" 1 0 0 []
 listSourceToList = With2 listToken listToken.{value="ListSource"} listToken.{tokid=VARID, value="toList"}
 emptyEmpty = With2 listToken listToken.{value="Empty"} listToken.{tokid=VARID, value="empty"}
-underlineToken = Token VARID "_" 1 1 0
+underlineToken = Token VARID "_" 1 0 0 []
 protoSimple = Simple underlineToken
 wellKnown :: Token -> String -> SName
 wellKnown t s = With1 baseToken t.{tokid=VARID, value=s}
@@ -722,7 +730,7 @@ javaLangNames = [
     "Thread", "ThreadGroup", "ThreadLocal", "Throwable",
     "Void"]
 
-
+type SigExs = (SigmaS, [TauS])
 {--
  * definitions
  -}
@@ -743,9 +751,8 @@ data DefinitionT =
                     clas::SName, typ::SigmaS,
                     doc::Maybe String}
     | AnnDcl    {pos::Position, vis::Visibility, name::String, typ::SigmaS, doc::Maybe String}
-    | NatDcl    {pos::Position, vis::Visibility, name::String, typ::SigmaS,
-                    meth::String, isPure::Bool, doc::Maybe String,
-                    throwing :: [TauS]}
+    | NatDcl    {pos::Position, vis::Visibility, name::String, txs::[SigExs],
+                    meth::String, isPure::Bool, doc::Maybe String}
     | FunDcl    {poss::[Position]            --- because of multiple clauses
                     vis::Visibility, name::String,
                     pats::[PatternS], expr::ExprS,
@@ -753,7 +760,7 @@ data DefinitionT =
     | DatDcl    {pos::Position, vis::Visibility, name::String,
                     vars::[TauS], ctrs::[DCon], defs::[DefinitionT],
                     doc::Maybe String}
-    | JavDcl    {pos::Position, vis::Visibility, name::String, isPure::Bool,
+    | JavDcl    {pos::Position, vis::Visibility, name::String, isPure::Bool, isMutable::Bool,
                     jclas::String, vars::[TauS], defs::[DefinitionT],
                     doc::Maybe String}
 

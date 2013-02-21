@@ -65,8 +65,7 @@ posLine (_,l) = l
 
 --- check that item is unqualified, flag syntax error otherwise
 unqualified tok
-    | #^\W+$# <- s  = stio tok
-    | #^\w+$# <- s  = stio tok
+    | [] <- Token.qual tok = stio tok
     | otherwise     = do
         error (Pos tok tok) (fill (break ("operator `" ++ s ++ "` must not be qualified here.")))
         stio tok
@@ -151,9 +150,12 @@ error n s = do
         ns  = if n.start == maxBound then packageEnd g else n
         is  = "E " ++ opt.source ++ ":" ++ show ns ++ ":"
         -- ef  = if ns == ">" then id else (1+)
-    if isOn g.options.flags IDE
-        then changeST Global.{sub <- SubSt.{messages <- (Msg {pos=ns, level=ERROR, text=pretty 40 s}:)}}
-        else doio (g.stderr.println (pretty 78 (text is <+> nest 4 s)))
+    if isOn g.options.flags OVERLOADING
+    then explain n s
+    else if isOn g.options.flags IDE
+    then changeST Global.{sub <- SubSt.{messages <- (Msg {pos=ns, level=ERROR, text=pretty 64 s}:)}}
+    else doio (g.stderr.println (pretty 78 (text is <+> nest 4 s)))
+    
     changeST Global.{sub <- SubSt.{errors <- (1+)}}
 
 {--
@@ -203,7 +205,9 @@ logmsg f n s = do
                     changeST Global.{sub <- SubSt.{messages <- (Msg {pos, level=HINT, text=pretty 40 s}:)}}
                     stio ()
                 _ -> stio ()
-            else logit f n s global
+            else if f == HINTS && isOn global.options.flags OVERLOADING 
+                then return ()          -- do not print hints during overloading resolution
+                else logit f n s global
 
 private logit :: Flag -> Position -> DOCUMENT -> Global -> StG ()
 private logit f n s global = do
@@ -565,7 +569,8 @@ nicectx xs g
     | [ctx] <- xs = single ctx ++ " => "
     | otherwise   = "(" ++ joined "," (map single xs) ++ ") => "
     where
-        single (Ctx pos name tau _) = nice (TApp (TCon {pos,name}) tau) g
+        single (Ctx pos name tau) = nice (TApp (TCon {pos,name}) tau) g
+        
 
 
 nicerctx :: (Nice t, QNameMatcher t) => [ContextT t] -> Global -> String
@@ -574,7 +579,8 @@ nicerctx xs g
     | [ctx] <- xs = single ctx ++ " => "
     | otherwise   = "(" ++ joined "," (map single xs) ++ ") => "
     where
-        single (Ctx pos name tau _) = nicer (TApp (TCon {pos,name}) tau) g
+        single (Ctx pos name tau) = nicer (TApp (TCon {pos,name}) tau) g
+        
 
 instance Nice (Nice t, QNameMatcher t) => TauT t where
     nicer t g = showt 2 (unAlias g t) -- if isOn g.options.flags IDE then showt 2 (unAlias g t) else nice t g
@@ -653,6 +659,7 @@ unAlias g tau = if isOn g.options.flags SPECIAL then fake tau else unAlias (fake
         -- fake (TFun a b)        = TFun (fake a) (fake b)
         fake (TApp a b)           = TApp (fake a) (fake b)
         fake TVar{pos,var,kind}   = TVar pos kind var
+        fake (Meta Rigid{hint})   = TVar Position.null KVar hint
         fake (Meta x)        = case x.bound.run g of
             (Just tau, _) -> fake tau
             otherwise     -> TVar Position.null KVar ("t" ++ show x.uid)
@@ -667,7 +674,8 @@ unAlias g tau = if isOn g.options.flags SPECIAL then fake tau else unAlias (fake
             where
 
                 aliased (tau1@TApp a b) (SymA{pos,name,typ}) = case rho of
-                        RhoTau [] tau2 -> case unify Nil tau2 tau1 of
+                        -- the expansion of the type alias must be more than a tvar 
+                        RhoTau [] tau2 | not (isTvApp tau2) -> case unify Nil tau2 tau1 of
                             Just subst -> Just (substTau env aApp)
                                 where env = Tree.map unAlias subst
                             Nothing    -> Nothing
@@ -1187,7 +1195,9 @@ substTau t (typ@Meta _)      = typ     -- Meta must be unbound
 substTau t (typ@TVar {var})  = case Tree.lookupS t var of
         Just tau -> tau
         Nothing  -> typ
-substCtx t (x@Ctx {tau}) = x.{tau <- substTau t}
+
+substCtx :: Tree String (TauT a) -> ContextT a -> ContextT a        
+substCtx t x  = x.{tau <- substTau t}
 
 {-
     We use this *only* to check if our premise, that no bound
@@ -1325,7 +1335,7 @@ vSym pos name = SymV {pos,
                     state=Unchecked,
                     strsig = Strictness.U, depth = 0, 
                     rkind = RState.empty,
-                    throwing = [] }
+                    throwing = [], over = [] }
 
 --- check how man lambdas are nested inside each other
 lambdaDepth (Lam {ex}) = 1 + lambdaDepth ex
@@ -1379,12 +1389,6 @@ validSigma1 outer (ForAll bound rho) = do
  -}
 -- validRho :: [String] -> RhoT Ord:a -> StG (RhoT a)
 validRho bound rho = do
-        {-
-        let ctxx = rhoContext rho
-            ctxs = Rho.context rho ++ ctxx
-            tree = Tree.fromList [(tv.var, tv) | Ctx _ _ tv _ <- ctxx] // .classes=[] see rhoContext
-        rho <- substRho tree rho    // replace TVar x [Class] with TVar x []
-        -}
         foreach (Rho.context rho) check
         case rho of
             RhoFun _ sig r -> do
@@ -1393,25 +1397,13 @@ validRho bound rho = do
                  stio rho.{sigma=sig, rho=r}
             _ -> stio rho
     where
-        check (Ctx pos qname tau checked) = do
+        check (Ctx pos qname tau) = do
             let vars = keys (freeTauTVars [] Nil tau)
                 bads = filter (`notElem` bound) vars
             unless (null bads) do
                 error pos (fill (break ("context must not name type variables " ++ joined "," bads)))
             stio ()
-            {-
-        rhoContext rho = [ Ctx p c (TVar {pos=p,var=t}) false |
-                            ((c,t),p) <- uniqBy (using fst)
-                                            (sortBy (comparing fst) (rhoCtx [] rho)) ]
-        rhoCtx acc (RhoTau _ tau) = tauCtx acc tau
-        rhoCtx acc (RhoFun _ (ForAll _ r) rho) = rhoCtx (rhoCtx acc r) rho
-        tauCtx acc (tv@TVar {pos}) = [ ((q,tv.var), tv.pos) | q <- tv.classes ] ++ acc
-        tauCtx acc (TFun a b)  = tauCtx (tauCtx acc a) b
-        tauCtx acc (TApp a b)  = tauCtx (tauCtx acc a) b
-        tauCtx acc (TCon {pos}) = acc
-        tauCtx acc (Meta _) = acc
-        -}
-
+        
 {--
  * check a sigma and translate it to 'QName' form.
  -}
@@ -1427,10 +1419,11 @@ transSigma sigma = do
 {--
  * transform a string context to q 'QName' context
  -}
-transCtx (Ctx pos name tau check) = do
+transCtx (Ctx pos name tau) = do
         name <- defaultXName pos (TName pPreludeBase "Eq") name
         tau  <- transTau tau
-        stio (Ctx pos name tau check)
+        stio (Ctx pos name tau)
+
 
 {--
  * check a rho and translate it to 'QName' form
@@ -2145,7 +2138,7 @@ allvars = do
  -}
 unusedName qn g
     | Nothing <- QName.find qn g = qn
-    | otherwise = head [ m | b <- allAsciiBinders, m = qn.qual (qn.base ++ b), isNothing (m.find g)]
+    | otherwise = head [ m | b <- allBinders, m = qn.qual (qn.base ++ b), isNothing (m.find g)]
 
 {--
  * convenience 'StIO' printing functions
@@ -2399,8 +2392,10 @@ tauToCtx tau
         tauCtx (TApp (TCon {pos=tpos, name}) tvapp)
             | isTvApp tvapp = do
                 let pos = tpos.merge (getpos tvapp)
-                stio [Ctx {pos, cname=name, tau = tvapp, checked = false}]
+                stio [Ctx {pos, cname=name, tau = tvapp}]
         tauCtx tau = bad tau
-        isTvApp (TVar {}) = true
-        isTvApp (TApp a b) = isTvApp a && isTvApp b
-        isTvApp _ = false
+
+--- true if and only if the 'Tau' type is a 'TVar' or an application of 'TVar's
+isTvApp (TVar {}) = true
+isTvApp (TApp a b) = isTvApp a && isTvApp b
+isTvApp _ = false

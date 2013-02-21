@@ -68,7 +68,7 @@ import frege.compiler.Data          as D
 import frege.compiler.Utilities     as U() 
 import frege.lib.PP()  -- (`<>`, `<+>`, `</>`, `<+/>`, `<~/>`, text, bracket)
 import frege.compiler.Transform     as T(patternStrictness)
-import frege.compiler.TCUtil        as TC(sameTau)
+import frege.compiler.TCUtil        as TC(sameTau, impliesG)
 import frege.compiler.Typecheck     as TY(mainSigma, tc, tauString)
 import frege.compiler.Javatypes     as JT(subTypeOf)
 
@@ -281,7 +281,7 @@ emitLazyN n constr syms base = do
      let cname        = lambdaName n constr base
          cltype       = Nativ cname []
          p0           = Position.null
-         contexts     = [ Ctx p0 q TVar{pos=p0, var="a", kind = KVar} true | q <- constr ]
+         contexts     = [ Ctx p0 q TVar{pos=p0, var="a", kind = KVar} | q <- constr ]
          indexargname = head GenJava7.argNames
          argNames     = tail GenJava7.argNames
          indexdef     = JMember { attr = attrFinal, 
@@ -476,8 +476,9 @@ pass = do
                                 ++ pPreludeBase.unpack g 
                                 ++ "._toList(argv)).<frege.runtime.Lambda>forced()));",
             "   final long t2 = java.lang.System.nanoTime();",
-            "   java.lang.System.err.println(",
+            "   frege.runtime.Runtime.stderr.println(",
             "     \"runtime \" + ((((t2 - t1) + 500000) / 1000000) / 1e3) + \" wallclock seconds.\");",
+            "   frege.runtime.Runtime.exit();",
             "}"
             ]
         haveMain = case (VName g.thisPack "main").findit g of
@@ -940,7 +941,7 @@ abstractFun symc (sym@SymV {sid}) = do
      g <- getST
      let classCtx = Ctx {pos=Position.null, 
                         cname = Symbol.name symc, 
-                        tau = Symbol.tau symc, checked = false }
+                        tau = Symbol.tau symc }
          ctxs = [ ctx | ctx <- sym.typ.rho.context,
                      not (TC.sameCtx ctx classCtx)]      -- filter out class context
  
@@ -1151,14 +1152,13 @@ workNameSI si = workName si.returnJT si.argJTs
     @makeConstraintDef (Ctx cname tau) "ctx3"@ = final Ccname<tau> ctx3
 -}
 makeConstraintDef g (Ctx {cname,tau}) s =
-         -- g    <- getST
-         -- itau <- tauJT tau
          JMember {
              attr = attrFinal,
              jtype = Ref (U.javaName g cname) [],
              name = s,
              init = Nothing}
- 
+
+  
 {--
     @makeConstraintArg (Ctx cname tau) "arg3"@ = (final,  Ccname<tau>, "ctx3")
   -}
@@ -1204,7 +1204,7 @@ cafCode (sym@SymV {depth = 0, expr = Just x}) binds = do
         rlazy = not g.toplevel && not sym.strsig.isStrict 
                  || not (RValue `member` sym.rkind)
         rsimple = RSimple `member` sym.rkind        
-        ctxs  = if null bnds then [] else filter  (not • Context.checked) sym.typ.rho.context
+        ctxs  = if null bnds then [] else sym.typ.rho.context
         cargs = map  (uncurry (makeConstraintArg g)) (zip ctxs ctxNames)
          -- constraints = map  (uncurry (makeConstraintDef g)) (zip ctxs ctxNames)
         jtype = sigmaJT g symtyp
@@ -1493,32 +1493,35 @@ niSpecial g ty
 {--
   * check native method
   -}
-methClass (sym@SymV {nativ = Just item, pur=true, typ, throwing})
-     | Just (_, tau) <- U.isIO rtau = do
+methClass (sym@SymV {nativ = Just item, pur=true, typ, throwing, over})
+    | not (null over) = return  []             -- do nothing for overloaded methode
+    | Just (_, tau) <- U.isIO rtau = do
          g <- getST
          U.error sym.pos (msgdoc ("contradictory declaration, " ++ nice sym.name g
              ++ " cannot be pure and have a return type of " ++ nicer (returnTau typ) g))
          stio []
-     | Just _ <- U.isUnit rtau = do
+    | Just _ <- U.isUnit rtau = do
          U.error sym.pos (msgdoc ("void " ++ item ++ "(...) cannot be a pure function"))
          stio []
-     | (_, [sig]) <- U.returnType typ.rho,
+    | (_, [sig]) <- U.returnType typ.rho,
        Just _ <- sigmaTau U.isUnit sig = do
          U.error sym.pos (msgdoc (item ++ "() cannot be a pure function"))
          stio []
-     | not (null throwing) = do
+    | not (null throwing) = do
         g <- getST
         U.error sym.pos (msgdoc ("pure native functions may not throw exceptions"))
         U.hint  sym.pos (msgdoc ("To catch exceptions in native functions use a return type like")
             <+> text (nicer eapp g))
         return []
-     where
+    where
         rtau = returnTau typ
         eith = TCon{pos=sym.pos, name=TName{pack=pPreludeBase, base="Either"}}
         mkE a b = TApp (TApp eith a) b
         eapp = mkE (foldl1 mkE throwing) rtau
-methClass (sym@SymV {nativ = Just item, pur=false, typ})
-     | Nothing <- U.isIO (returnTau typ) = do
+
+methClass (sym@SymV {nativ = Just item, pur=false, typ, over})
+     | not (null over) = return  []             -- do nothing for overloaded methode
+     | not (null args), Nothing <- U.isIO rtau = do
          g <- getST
          U.error sym.pos (msgdoc (nice sym.name g
              ++ " has an illegal return type for a method that is not pure,"
@@ -1526,6 +1529,9 @@ methClass (sym@SymV {nativ = Just item, pur=false, typ})
              ++ "  would work"))
          stio []
      where
+         xty = U.returnType typ.rho
+         rtau = fst xty
+         args = snd xty 
          sttyp tau
              | [s] <- keys (U.freeTauTVars [] Nil tau) = TApp (TApp st (tv s)) tau
              | otherwise = TApp (TApp st (tv "s")) tau
@@ -2221,11 +2227,10 @@ genLet _ ex binds = do
      U.fatal (getpos ex) (text("genLet: not a let  " ++ nice ex g))
  
  
-impliesG g (Ctx _ d t1 _) (Ctx _ c t2 _) = U.isSuper c g d && sameTau t1 t2
- 
 envCtxs g = [ ctx | s <- reverse (Global.genEnv g),
                                      not (null (Symbol.typ s).bound),
                                      ctx <- (Symbol.typ s).rho.context ]
+ 
  
 resolveConstraint pos (ctx@Ctx {cname, tau}) = do
          g <- getST
