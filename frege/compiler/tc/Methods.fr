@@ -1,0 +1,272 @@
+{- 
+
+    Copyright © 2011, Ingo Wechsung
+    All rights reserved.
+
+    Redistribution and use in source and binary forms, with or
+    without modification, are permitted provided that the following
+    conditions are met:
+
+        Redistributions of source code must retain the above copyright
+        notice, this list of conditions and the following disclaimer.
+
+        Redistributions in binary form must reproduce the above
+        copyright notice, this list of conditions and the following
+        disclaimer in the documentation and/or other materials provided
+        with the distribution. Neither the name of the copyright holder
+        nor the names of its contributors may be used to endorse or
+        promote products derived from this software without specific
+        prior written permission.
+
+    THIS SOFTWARE IS PROVIDED BY THE
+    COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR
+    IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+    WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+    PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER
+    OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+    SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+    LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
+    USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED
+    AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+    LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
+    IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
+    THE POSSIBILITY OF SUCH DAMAGE.
+
+                                                                     -}
+
+--- Check type sanity of native function declarations
+package frege.compiler.tc.Methods where
+
+
+import frege.compiler.Data
+import frege.compiler.Utilities as U()
+import frege.compiler.Nice (msgdoc, text)
+import frege.List (keys, Tree)
+
+
+--- enumeration constants for the native interface kind
+data NIKind = NIOp | NINew | NIMethod | NIMember | NICast | NINewArray | NIStatic
+derive Eq NIKind
+derive Show NIKind
+ 
+{--
+    determine kind of java expression to generate, based on the item information
+  -}
+niKind "new"      = NINew
+niKind #^\W+$#    = NIOp
+niKind #^\w+$#    = NIMethod
+niKind #^\.\w+$#  = NIMember
+niKind #^\(.+\)$# = NICast
+niKind #.+\[\]$#  = NINewArray
+niKind _          = NIStatic
+
+{--
+    Check the sanity of the type of a native method, whose symbol is passed.
+    
+    - overloaded methods are just placeholders, they are not checked
+    - The type of a native function must not have type class constraints.
+    - A pure native function must not have a return type of ('IO' a) or ('ST' s a)
+    - A pure native function may not return ()
+    - An impure function must have its return type wrapped in 'ST'
+    - Maybe () and [()] are forbidden
+    - Nesting order is ST s (X1|X2|Maybe (Mutable s r))
+    - A pure native function may not return mutable data.
+
+    -}
+sanity SymV{pos, name, typ, nativ = Just item, pur, throwing, over}
+    | not (null over) = return ()       -- 
+    | otherwise = do
+        unconstrained typ.rho
+        phantom <- validReturn rtau 
+        foreach args (validArg phantom)
+    where
+        (rtau, args) = U.returnType typ.rho
+
+        nki = niKind item
+
+        stiotyp phantom tau = TApp (TApp st phantom) tau
+        tv s = TVar {pos, var = s, kind = KType}
+        st   = TCon {pos, name = TName pPreludeBase "ST"}
+        mt   = TCon {pos, name = mutableName}
+                
+        sttyp tau
+            | [s] <- keys (U.freeTauTVars [] Nil tau) = stiotyp (tv s) tau
+            | otherwise = stiotyp (tv "s") tau
+        
+        mttyp phantom tau = (TApp (TApp mt phantom) tau)
+        
+        -- no constraints (except constraint of the class this is defined in)
+        unconstrained r = do
+            g <- getST
+            let ctxs = case name of 
+                    MName{tynm, base} 
+                        | Just SymC{} <- tynm.findit g 
+                        = filter ((!= tynm) . Context.cname) (Rho.context r)
+                    _   = r.context
+            case ctxs of
+                [] = return ()
+                _  = U.error pos ( msgdoc "Type of native function must not be constrained.")    
+        
+        validReturn tau
+            | Just (p, r) <- U.isIO tau = do
+                g <- getST
+                when pur do
+                    U.error pos $ msgdoc ("contradictory declaration, native function " 
+                        ++ nice name g
+                        ++ " cannot be pure and have a return type of " 
+                        ++ nicer tau g)
+                validEither (Just p) r
+                return (Just p)
+            | pur || null args = validEither Nothing tau >> return Nothing
+            | otherwise = do
+                g <- getST
+                U.error pos (msgdoc (nice name g
+                     ++ " has an illegal return type for a method that is not pure,"
+                     ++ " perhaps  " ++ nicer (sttyp tau) g
+                     ++ "  would work"))
+                return Nothing            
+        
+        validEither phantom tau
+            | Just (x, r) <- isEither tau = do
+                g <- getST
+                case checkException g x of
+                    [] -> return ()
+                    xs -> do
+                        let sxs = joined ", " (map (flip nicer g) xs)
+                        U.error pos (msgdoc (
+                            if length xs > 1 
+                                then "The following are not valid exceptions: " ++ sxs
+                                else sxs ++ " is not a valid exception"))
+                validMaybe phantom r
+            | otherwise = validMaybe phantom tau
+        
+        validMaybe phantom tau  
+            | Just r <- U.isMaybe tau = validEffective phantom true  r
+            | Just r <- U.isList  tau = validEffective phantom true  r
+            | otherwise               = validEffective phantom false tau
+        
+        validEffective :: Maybe Tau -> Bool -> Tau -> StG ()        
+        validEffective phantom mb tau
+            | or [ x tau | x <- [isJust . U.isIO, 
+                                isJust . isEither, 
+                                isJust . U.isMaybe, 
+                                isJust . U.isList]] = do
+                g <- getST
+                U. error (getpos tau) (msgdoc ("Illegal nesting of ST, Either, Maybe and [] in "
+                    ++ nicer rtau g)) 
+            | Just _ <- U.isUnit tau = 
+                if pur then do 
+                    U.error pos (msgdoc ("void " ++ item ++ "(...) cannot be a pure function"))
+                    U.hint  pos (msgdoc ("If you need a pure function that always returns (), consider const ()."))
+                else if null args then do
+                    U.error pos (msgdoc ("Only methods may be void."))
+                else if mb then do
+                    U.error pos (msgdoc ("The types Maybe () and [()] do not make sense in the native interface."))
+                else case nki of
+                    NIMethod  ->  return ()    
+                    NIStatic  ->  return ()            
+                    _         ->  U.error pos (msgdoc ("Only methods may be void."))
+            | otherwise = do
+                g <- getST
+                case  isMutable g tau of
+                    Just (p, r)
+                        | pur = U.error (getpos tau) (msgdoc(
+                                    "A pure native function may not return mutable data."))
+                        | Just ph <- phantom, !(ph `matches` p) = 
+                            if ph `matches` realWorld then
+                                U.error (getpos tau) (msgdoc("Type must read  "
+                                    ++ nicer (stiotyp realWorld r) g ++ "  instead of  "
+                                    ++ nicer tau g 
+                                    ))
+                            else if mutableOnly p then
+                                U.error (getpos tau) (msgdoc (
+                                    "A mutable only type is allowed in IO actions only."
+                                    ))
+                            else U.error (getpos tau) (msgdoc("Type must read  "
+                                    ++ nicer (stiotyp ph r) g ++ "  instead of  "
+                                    ++ nicer tau g 
+                                    ))
+                        | Just SymT{nativ = Just nt, pur = pureType} <- U.instTauSym r g = 
+                            if pureType 
+                            then U.error (getpos r) (msgdoc ("The type  "
+                                    ++ nicer tau g ++ "  is illegal, "
+                                    ++ "a pure native type must not be wrapped in Mutable.")) 
+                            else return ()
+                        | otherwise = U.error (getpos r) (msgdoc ("The type  "
+                                    ++ nicer tau g ++ "  is illegal, "
+                                    ++ nicer   r g ++ "  must be a native type."))
+                    Nothing -> case U.instTauSym tau g of
+                        Just SymT{nativ = Just nt, pur = pureType}
+                            | !pureType = case phantom of
+                                Just ph -> U.error (getpos tau) (msgdoc (
+                                            "Non pure native type  " ++ nicer tau g 
+                                            ++ "  must be  " ++ nicer (mttyp ph tau) g 
+                                            ++ "  in "
+                                            ++ (if ph `matches` realWorld
+                                                then "IO" else "ST")
+                                            ++ " actions."))
+                                Nothing | pur = return ()
+                                        | null args = return ()
+                                        | otherwise = U.fatal pos (msgdoc("Methods.sanity: phantom=Nothing, pur=false, some args"))  
+                            | nki == NINewArray = U.error (getpos tau) (msgdoc (
+                                "A new array is never immutable."))
+                            | nki == NINew, nt `elem` primitiveTypes = U.error (getpos tau)
+                                (msgdoc ("A class instance creation expression cannot return a primitive type.")) 
+                            | otherwise  = return () -- ok
+                            -- | otherwise = U.fatal (getpos tau) (msgdoc ("What is wrong with "
+                            --     ++ nicer tau g
+                            --     ++ ", pur=" ++ show pur
+                            --     ++ ", pureType=" ++ show pureType
+                            --     ++ ", native=" ++ nt
+                            --     ++ ", niKind " ++ item ++ " " ++ show nki))
+                        notnative
+                            | nki == NINewArray = U.error (getpos tau) (msgdoc 
+                                    ("A new array creation expresion must return a new array."))
+                            | nki == NINew = U.error (getpos tau)
+                                (msgdoc ("A class instance creation expression must return a native reference type."))
+                            | otherwise = return ()
+             
+                 
+        validArg phantom arg = return ()
+
+sanity sym = do
+    g <- getST
+    U.fatal sym.pos (msgdoc ("cannot check native function type sanity for " ++ nicer sym g))
+
+matches :: Tau -> Tau -> Bool
+matches (TApp a b) (TApp c d)      = (a `matches` c) && (b `matches` d)
+matches TCon{name=a} TCon{name=b}  = a == b
+matches TVar{var=a} TVar{var=b}    = a == b
+matches _ _ = false
+
+
+mutableName = TName pPreludeIO   "Mutable"
+eitherName  = TName pPreludeBase "Either"
+realWorld   = TCon{pos=Position.null.change MUTABLE "m", name = TName pPreludeBase "RealWorld"}
+
+--- was the 'RealWorld' originating form a mutable only type?
+mutableOnly tcon = tcon `matches` realWorld && tcon.pos.first.tokid == MUTABLE
+
+--- check if _tau_ is (Either a b) and return Just (a,b) if this is so.
+isEither t = case Tau.flat t of
+    [TCon{name}, a, b] | name == eitherName = Just (a, b)
+    _ -> Nothing
+
+--- check if _tau_ is (Mutable a b) and return Just (a,b) if this is so.
+isMutable g t = case Tau.flat t of
+    [TCon{name}, a, b] | name == mutableName = Just (a, b)
+    _ -> case U.instTauSym t g of
+        Just SymT{nativ = Just _, pur=false, mutable=true} = Just (realWorld, t) 
+        other -> Nothing        
+
+-- --- return the "real" type wrapped in a 'Mutable', or the type itself if not wrapped
+-- dropMutable t 
+--     | Just (_,x) <- isMutable t = x
+--     | otherwise                 = t
+
+--- returns the list of types occuring in an Either type that are not throwables
+checkException g t = filter (not . U.isThrowable g) (collect t) 
+    where
+        collect t = case isEither t of
+            Just (left, right) -> right : collect left 
+            _ -> [t]
