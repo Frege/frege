@@ -139,24 +139,15 @@ public class Runtime {
         return sr.toString();
     }
 
-	/***
-	 * This is an identity function that can be used to change phantom types, e.g.
-	 * 
-	 * <pre><code>
-	 * pure native freeze frege.runtime.Runtime.our :: Mutable s a -> a
-	 * </code></pre>
-	 * 
-	 * Often used to change a mutable value to an immutable one without copying,
-	 * this is safe if the mutable value cannot be accessed anymore, as in
-	 * the array fromList functions - here, a new mutable array is created locally and
-	 * filled with elements from a list, and then the same array object is returned
-	 * as immutable.mi-25-aug
-	 * 
-	 * 
-	 * @param o some value
-	 * @return the value passed as argument, but Frege thinks it is different.
-	 */
-    public final static<T> T our(final T o) { return o; }
+	/*
+     * <p> This is used to copy a mutable value. </p>
+     * <p> The returned value is of same type, but is considered immutable.
+     * Suitable for instances of classes that do implement {@link Cloneable}.</p> 
+     * <p> Remember that only a deep copy makes a really safe copy .</p> 
+     * @param o the value to copy
+     * @return a copy obtained by cloning of the argument value, followed by deserialization
+     */
+    // public final static<T extends Cloneable> T clone(final T o) { return o.clone(); }
 
     /**
      * <p> This is used to copy a mutable value. </p>

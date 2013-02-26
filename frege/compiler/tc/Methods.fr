@@ -78,7 +78,7 @@ sanity SymV{pos, name, typ, nativ = Just item, pur, throwing, over}
     | otherwise = do
         unconstrained typ.rho
         phantom <- validReturn rtau 
-        foreach args (validArg phantom)
+        validArgs phantom
     where
         (rtau, args) = U.returnType typ.rho
 
@@ -169,32 +169,7 @@ sanity SymV{pos, name, typ, nativ = Just item, pur, throwing, over}
             | otherwise = do
                 g <- getST
                 case  isMutable g tau of
-                    Just (p, r)
-                        | pur = U.error (getpos tau) (msgdoc(
-                                    "A pure native function may not return mutable data."))
-                        | Just ph <- phantom, !(ph `matches` p) = 
-                            if ph `matches` realWorld then
-                                U.error (getpos tau) (msgdoc("Type must read  "
-                                    ++ nicer (stiotyp realWorld r) g ++ "  instead of  "
-                                    ++ nicer tau g 
-                                    ))
-                            else if mutableOnly p then
-                                U.error (getpos tau) (msgdoc (
-                                    "A mutable only type is allowed in IO actions only."
-                                    ))
-                            else U.error (getpos tau) (msgdoc("Type must read  "
-                                    ++ nicer (stiotyp ph r) g ++ "  instead of  "
-                                    ++ nicer tau g 
-                                    ))
-                        | Just SymT{nativ = Just nt, pur = pureType} <- U.instTauSym r g = 
-                            if pureType 
-                            then U.error (getpos r) (msgdoc ("The type  "
-                                    ++ nicer tau g ++ "  is illegal, "
-                                    ++ "a pure native type must not be wrapped in Mutable.")) 
-                            else return ()
-                        | otherwise = U.error (getpos r) (msgdoc ("The type  "
-                                    ++ nicer tau g ++ "  is illegal, "
-                                    ++ nicer   r g ++ "  must be a native type."))
+                    Just (p, r) -> goodMutable g phantom p r tau >> return ()
                     Nothing -> case U.instTauSym tau g of
                         Just SymT{nativ = Just nt, pur = pureType}
                             | !pureType = case phantom of
@@ -227,7 +202,110 @@ sanity SymV{pos, name, typ, nativ = Just item, pur, throwing, over}
                             | otherwise = return ()
              
                  
-        validArg phantom arg = return ()
+        validArgs phantom = case args  of
+            []
+                | nki == NIStatic -> return ()
+                | otherwise -> U.error pos (msgdoc (item ++ "  must have function type")) 
+            (x:xs) -> validFirstArg phantom x >> mapM_ (validArg phantom) xs
+        
+        validFirstArg phantom arg = do 
+            g <- getST
+            case arg.rho of
+              RhoFun{} -> U.error (getpos arg) (msgdoc (
+                            "Higher rank polymorphic function"
+                            ++ " cannot appear as argument for a native function."))
+              RhoTau{tau} 
+                | Just _ <- U.isUnit tau
+                = if length args == 1 && (nki == NINew || nki == NIStatic) then return ()
+                  else U.error (getpos arg) (msgdoc (
+                            "() is only allowed for `new` or for static methods"
+                        ++  " to indicate an empty argument list."))
+                | Just r <- U.isMaybe tau
+                = case U.isUnit r of 
+                    Just _ -> U.error (getpos tau) (msgdoc (
+                            "The type  Maybe ()  does not make sense in the native interface."))
+                    _ -> if nki == NINew || nki == NIStatic 
+                            then validFirstArg phantom arg.{rho <- Rho.{tau = r}}
+                            else U.error (getpos tau) (msgdoc (
+                                    nicer tau g ++ " makes no sense for  " ++ item
+                                    ++ ", as `null` cannot be passed as first argument." ))
+                | Just _ <- U.isException g tau
+                = U.error (getpos tau) (msgdoc ("Exception catching types not allowed in arguments."))
+                | Just (p,r) <- isMutable g tau
+                = do
+                    goodMutable g phantom p r tau
+                    when (nki == NINewArray) do
+                        U.error (getpos tau) (msgdoc ("`Int` expected."))
+                    return () -- already in error, or ok
+                | otherwise = case U.instTauSym tau g of
+                    Just SymT{nativ = Just nt, pur = pureType}
+                        | !pureType = case phantom of
+                            Just ph -> U.error (getpos tau) (msgdoc (
+                                        "Non pure native type  " ++ nicer tau g 
+                                        ++ "  must be  " ++ nicer (mttyp ph tau) g 
+                                        ++ "  in "
+                                        ++ (if ph `matches` realWorld
+                                            then "IO" else "ST")
+                                        ++ " actions."))
+                            Nothing | pur = return ()
+                                    | otherwise = U.fatal pos (msgdoc("Methods.sanity.1stArg: phantom=Nothing, pur=false, !pureType"))  
+                        | nki == NINewArray = if nt == "int" 
+                            then return () 
+                            else U.error (getpos tau) (msgdoc ("`Int` expected."))
+                        | nki == NIMember || nki == NIMethod, 
+                          nt `elem` primitiveTypes = U.error (getpos tau)
+                            (msgdoc ("Instance method or getter must be applied to java reference type.")) 
+                        | otherwise  = return () -- ok
+                    notnative
+                        | nki == NINewArray = U.error (getpos tau) (msgdoc 
+                                ("`Int` expected."))
+                        | nki == NIMember || nki == NIMethod = case tau of
+                            TVar{} -> return ()
+                            _ -> U.error (getpos tau) (msgdoc (
+                                    "Instance method or getter must be applied to java reference type."))
+                        | otherwise = return ()
+                           
+                
+
+        validArg      phantom arg = return ()
+        goodMutable g phantom p r tau
+            | pur = do 
+                U.error (getpos tau) (msgdoc(
+                    "A pure native function may not consume or produce mutable data."))
+                return Nothing
+            | Just ph <- phantom, !(ph `matches` p) = do 
+                if ph `matches` realWorld then do
+                    U.error (getpos tau) (msgdoc("Type must read  "
+                        ++ nicer (mttyp realWorld r) g ++ "  instead of  "
+                        ++ nicer tau g 
+                        ))
+                    return Nothing
+                else if mutableOnly p then do
+                    U.error (getpos tau) (msgdoc (
+                        "A mutable only type is allowed in IO actions only."
+                        ))
+                    return Nothing
+                else do 
+                    U.error (getpos tau) (msgdoc("Type must read  "
+                            ++ nicer (stiotyp ph r) g ++ "  instead of  "
+                            ++ nicer tau g 
+                            ))
+                    return Nothing
+            | Just sym  <- U.instTauSym r g,
+              Just nt <- sym.nativ = do
+                if sym.pur 
+                then do
+                    U.error (getpos r) (msgdoc ("The type  "
+                        ++ nicer tau g ++ "  is illegal, "
+                        ++ "a pure native type must not be wrapped in Mutable."))
+                    return Nothing 
+                else return (Just r)
+            | otherwise = do
+                U.error (getpos r) (msgdoc ("The type  "
+                        ++ nicer tau g ++ "  is illegal, "
+                        ++ nicer   r g ++ "  must be a native type."))
+                return Nothing
+        
 
 sanity sym = do
     g <- getST
@@ -259,11 +337,8 @@ isMutable g t = case Tau.flat t of
         Just SymT{nativ = Just _, pur=false, mutable=true} = Just (realWorld, t) 
         other -> Nothing        
 
--- --- return the "real" type wrapped in a 'Mutable', or the type itself if not wrapped
--- dropMutable t 
---     | Just (_,x) <- isMutable t = x
---     | otherwise                 = t
 
+                    
 --- returns the list of types occuring in an Either type that are not throwables
 checkException g t = filter (not . U.isThrowable g) (collect t) 
     where
