@@ -79,10 +79,30 @@ sanity SymV{pos, name, typ, nativ = Just item, pur, throwing, over}
         unconstrained typ.rho
         phantom <- validReturn rtau 
         validArgs phantom
+        checkThrowing throwing
+        case nki  of
+            NIOp -> when (nargs < 1 || nargs > 2) do
+                U.error (getpos typ) (msgdoc ("Java operator must have 1 or 2 arguments."))
+            NINew -> when (nargs < 1) do
+                g <- getST
+                U.error (getpos typ) (msgdoc ("Java constructor must have function type"
+                    ++ " (did you mean  () -> "
+                    ++ nicer rtau g ++ "  ?)"))  
+            NIMember -> when (nargs != 1) do
+                U.error (getpos typ) (msgdoc ("Java getter must have one and only one argument - the receiver."))
+            NIMethod -> when (nargs < 1) do
+                U.error (getpos typ) (msgdoc ("Java method must have at least one argument - the receiver."))
+            NICast -> when (nargs != 1) do
+                U.error (getpos typ) (msgdoc ("Java cast must have one and only one argument."))
+            NINewArray -> when (nargs != 1) do
+                U.error (getpos typ) (msgdoc ("Java array creation must have one and only one argument of type `Int`."))
+            NIStatic -> return ()
+
     where
         (rtau, args) = U.returnType typ.rho
 
         nki = niKind item
+        nargs = length args
 
         stiotyp phantom tau = TApp (TApp st phantom) tau
         tv s = TVar {pos, var = s, kind = KType}
@@ -94,6 +114,7 @@ sanity SymV{pos, name, typ, nativ = Just item, pur, throwing, over}
             | otherwise = stiotyp (tv "s") tau
         
         mttyp phantom tau = (TApp (TApp mt phantom) tau)
+        
         
         -- no constraints (except constraint of the class this is defined in)
         unconstrained r = do
@@ -265,9 +286,31 @@ sanity SymV{pos, name, typ, nativ = Just item, pur, throwing, over}
                                     "Instance method or getter must be applied to java reference type."))
                         | otherwise = return ()
                            
-                
+        validArg  ::  (Maybe Tau) -> Sigma -> StG ()        
+        validArg  phantom arg = do
+            g <- getST
+            case arg.rho of
+              RhoFun{} -> U.error (getpos arg) (msgdoc (
+                            "Higher rank polymorphic function"
+                            ++ " cannot appear as argument for a native function."))
+              RhoTau{tau} 
+                | Just _ <- U.isUnit tau = U.error (getpos arg) (msgdoc (
+                        "() is not valid as argument, unless it is the first and only argument."))
+                | Just r <- U.isMaybe tau
+                = case U.isUnit r of 
+                    Just _ -> U.error (getpos tau) (msgdoc (
+                            "The type  Maybe ()  does not make sense in the native interface."))
+                    _ -> validArg phantom arg.{rho <- Rho.{tau = r}}
+                            
+                | Just _ <- U.isException g tau
+                = U.error (getpos tau) (msgdoc ("Exception catching types not allowed in arguments."))
+                | Just (p,r) <- isMutable g tau
+                = do
+                    goodMutable g phantom p r tau 
+                    return ()
+                | otherwise = return ()
 
-        validArg      phantom arg = return ()
+        
         goodMutable g phantom p r tau
             | pur = do 
                 U.error (getpos tau) (msgdoc(
@@ -307,6 +350,24 @@ sanity SymV{pos, name, typ, nativ = Just item, pur, throwing, over}
                 return Nothing
         
 
+        checkThrowing [] = return ()
+        checkThrowing xs 
+            | pur = U.error pos (msgdoc ("A pure function cannot have a throws clause."))
+            | nki == NIOp || nki == NIMember || nki == NICast || nki == NINewArray
+              || (nki == NIStatic && null args) 
+            = U.error pos (msgdoc "Only constructors and methods can throw exceptions.")
+            | otherwise = do
+                g <- getST
+                case filter (not . U.isThrowable g) xs of
+                    [] -> return ()
+                    ys -> do
+                        let sxs = joined ", " (map (flip nicer g) ys)
+                        U.error pos (msgdoc (
+                            if length ys > 1 
+                                then "The following are not valid exceptions: " ++ sxs
+                                else sxs ++ " is not a valid exception"))
+                 
+
 sanity sym = do
     g <- getST
     U.fatal sym.pos (msgdoc ("cannot check native function type sanity for " ++ nicer sym g))
@@ -321,6 +382,7 @@ matches _ _ = false
 mutableName = TName pPreludeIO   "Mutable"
 eitherName  = TName pPreludeBase "Either"
 realWorld   = TCon{pos=Position.null.change MUTABLE "m", name = TName pPreludeBase "RealWorld"}
+unitTau     = TCon{pos=Position.null, name = TName pPreludeBase "()"}
 
 --- was the 'RealWorld' originating form a mutable only type?
 mutableOnly tcon = tcon `matches` realWorld && tcon.pos.first.tokid == MUTABLE
