@@ -209,7 +209,7 @@ SOURCES  =      $(COMPS)/Scanner.fr   $(COMPS)/Classtools.fr \
 		$(COMPS)/Transform.fr \
 		$(COMPS)/tc/Methods.fr \
 		$(COMPS)/Typecheck.fr \
-		$(COMPS)/TCUtil.fr \
+		$(COMPS)/tc/Util.fr \
 		$(COMPS)/gen/Util.fr  $(COMPS)/gen/Const.fr \
 		$(COMPS)/gen/Bindings.fr $(COMPS)/gen/Match.fr \
 		$(COMPS)/GenMeta.fr   $(COMPS)/GenJava7.fr  \
@@ -222,7 +222,7 @@ CLASSES  =       $(COMPF1)/Scanner.class   $(COMPF1)/Classtools.class \
 		$(COMPF1)/GUtil.class	$(COMPF1)/Grammar.class \
 		$(COMPF1)/Fixdefs.class   $(COMPF1)/Import.class    $(COMPF1)/Enter.class \
 		$(COMPF1)/Javatypes.class $(COMPF1)/Kinds.class $(COMPF1)/Transdef.class \
-		$(COMPF1)/TCUtil.class   \
+		$(COMPF1)/tc/Util.class   \
 		$(COMPF1)/TAlias.class    $(COMPF1)/Classes.class \
 		$(COMPF1)/tc/Methods.class \
 		$(COMPF1)/Typecheck.class $(COMPF1)/Transform.class \
@@ -272,7 +272,7 @@ $(COMPF1)/Transdef.class: $(COMPS)/Transdef.fr
 	$(FREGEC0) $?
 $(COMPF1)/Javatypes.class: $(COMPS)/Javatypes.fr
 	$(FREGEC0) $?
-$(COMPF1)/TCUtil.class: $(COMPS)/TCUtil.fr
+$(COMPF1)/tc/Util.class: $(COMPS)/tc/Util.fr
 	$(FREGEC0) $?
 $(COMPF1)/TAlias.class: $(COMPS)/TAlias.fr
 	$(FREGEC0) $?

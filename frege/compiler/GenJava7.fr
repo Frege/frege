@@ -68,8 +68,9 @@ import frege.compiler.Data          as D
 import frege.compiler.Utilities     as U() 
 import frege.lib.PP()  -- (`<>`, `<+>`, `</>`, `<+/>`, `<~/>`, text, bracket)
 import frege.compiler.Transform     as T(patternStrictness)
-import frege.compiler.TCUtil        as TC(sameTau, impliesG)
+import frege.compiler.tc.Util        as TC(sameTau, impliesG)
 import frege.compiler.Typecheck     as TY(mainSigma, tc, tauString)
+import frege.compiler.tc.Methods (NIKind, niKind)
 import frege.compiler.Javatypes     as JT(subTypeOf)
 
 import frege.compiler.gen.Match     as GM
@@ -1464,21 +1465,6 @@ returnTau sigma = (fst • U.returnType) (Sigma.rho sigma)
 sigmaTau f (ForAll [] (RhoTau [] ty)) = f ty
 sigmaTau f (ForAll [] rhofun) = sigmaTau f (ForAll [] (U.tauRho rhofun))
 sigmaTau f _ = Nothing
--- 
---- enumeration constants for the native interface kind
-data NIKind = NIOp | NINew | NIMethod | NIMember | NICast | NINewArray | NIStatic
-derive Eq NIKind
- 
-{--
-    determine kind of java expression to generate, based on the item information
-  -}
-niKind "new"      = NINew
-niKind #^\W+$#    = NIOp
-niKind #^\w+$#    = NIMethod
-niKind #^\.\w+$#  = NIMember
-niKind #^\(.+\)$# = NICast
-niKind #.+\[\]$#  = NINewArray
-niKind _          = NIStatic
  
 niArr s = strhead s (length s - 2)
  
@@ -1490,182 +1476,11 @@ niSpecial g ty
      | Just x <- U.isList ty        = true
      | otherwise = false
  
-{--
-  * check native method
-  -}
-methClass (sym@SymV {nativ = Just item, pur=true, typ, throwing, over})
-    | not (null over) = return  []             -- do nothing for overloaded methode
-    | Just (_, tau) <- U.isIO rtau = do
-         g <- getST
-         U.error sym.pos (msgdoc ("contradictory declaration, " ++ nice sym.name g
-             ++ " cannot be pure and have a return type of " ++ nicer (returnTau typ) g))
-         stio []
-    | Just _ <- U.isUnit rtau = do
-         U.error sym.pos (msgdoc ("void " ++ item ++ "(...) cannot be a pure function"))
-         stio []
-    | (_, [sig]) <- U.returnType typ.rho,
-       Just _ <- sigmaTau U.isUnit sig = do
-         U.error sym.pos (msgdoc (item ++ "() cannot be a pure function"))
-         stio []
-    | not (null throwing) = do
-        g <- getST
-        U.error sym.pos (msgdoc ("pure native functions may not throw exceptions"))
-        U.hint  sym.pos (msgdoc ("To catch exceptions in native functions use a return type like")
-            <+> text (nicer eapp g))
-        return []
-    where
-        rtau = returnTau typ
-        eith = TCon{pos=sym.pos, name=TName{pack=pPreludeBase, base="Either"}}
-        mkE a b = TApp (TApp eith a) b
-        eapp = mkE (foldl1 mkE throwing) rtau
-
-methClass (sym@SymV {nativ = Just item, pur=false, typ, over})
-     | not (null over) = return  []             -- do nothing for overloaded methode
-     | not (null args), Nothing <- U.isIO rtau = do
-         g <- getST
-         U.error sym.pos (msgdoc (nice sym.name g
-             ++ " has an illegal return type for a method that is not pure,"
-             ++ " perhaps  " ++ nicer (sttyp (returnTau typ)) g
-             ++ "  would work"))
-         stio []
-     where
-         xty = U.returnType typ.rho
-         rtau = fst xty
-         args = snd xty 
-         sttyp tau
-             | [s] <- keys (U.freeTauTVars [] Nil tau) = TApp (TApp st (tv s)) tau
-             | otherwise = TApp (TApp st (tv "s")) tau
-             where
-                 st   = TCon {pos=sym.pos, name = TName pPreludeBase "ST"}
-                 tv s = TVar {pos=sym.pos, var = s, kind = KType}
  
 methClass (sym@SymV {nativ = Just item, pur, typ}) = do
-         let
-             nik = niKind item
-         ok1 <- argsOk nik atys
-         ok2 <- retOk  nik rty
          g <- getST
          si <- symInfo sym
-         if ok1 && ok2 then return (methCode g sym si) else stio []
-     where
-         (rty, atys) = U.returnType typ.rho
-         isMBU g tau | Just x <- U.isMaybe tau, Just _ <- U.isUnit x = true
-                     | Just (_, x) <- U.isException g tau = isMBU g x
-                     | Just (_, x) <- U.isIO tau = isMBU g x
-                     | otherwise             = false
-         validIOtype g tau | Just (_, x) <- U.isIO tau = case U.isUnit x of
-                                                         Just _ -> true
-                                                         _ -> validXtype g x
-                           | otherwise = validXtype g tau
-         validXtype g tau  | Just (_, x) <- U.isException g tau = case U.isUnit x of
-                                                         Just _ -> true
-                                                         _ -> validMBtype g x
-                           | otherwise = validMBtype g tau
-         validMBtype g tau | Just x <- U.isMaybe tau = not (niSpecial g x)
-                           | Just x <- U.isList  tau = not (niSpecial g x)
-                           | otherwise = not (niSpecial g tau)
-         validCaftype g tau | Just (_, x) <- U.isIO tau = validMBtype g x
-                            | otherwise = validMBtype g tau
-         validNIArg sigma | maybe true (const false) (sigmaTau Just sigma) = do
-             g <- getST
-             U.error sym.pos (msgdoc (nicer sigma g ++ " is not valid for native method arguments"))
-             stio false
-         validNIArg sigma = do
-             g <- getST
-             let tau = maybe undefined id (sigmaTau Just sigma)
-                 xio = isJust (U.isIO tau) || isJust (U.isException g tau)
-             if isMBU g tau || isJust (U.isUnit tau)
-                 then do
-                     U.error sym.pos (msgdoc ("type  " ++ nicer tau g
-                         ++ "  is illegal for a native function argument,"
-                         ++ " () may only appear to indicate an empty argument list."))
-                     stio false
-                 else if xio
-                     then do
-                         U.symWarning U.warn sym (msgdoc (nice sym g ++ "  has an argument of type  "
-                             ++ nice sigma g))
-                         U.symWarning U.hint sym (msgdoc ("Exception, ST and IO types have a special meaning"
-                             ++ " in the native interface. "
-                             ++ "Using them in argument position is most likely wrong."))
-                         stio true
-                     else stio true
-         retOk nik tau   = do
-            g <- getST
-            if (isMBU g tau) then do
-                U.error sym.pos (msgdoc "The construct  Maybe ()  makes no sense in a native return type.")
-                return false
-            else if not (validIOtype g tau) then do
-                U.error sym.pos (msgdoc "Illegal nesting of IO, ST, Exception, Maybe and () in the return type.")
-                return false
-            else if nik == NIStatic && null atys && not (validCaftype g tau) then do
-                U.error sym.pos (msgdoc "A static member may not be void and it certainly throws no exceptions.")
-                return false
-            else if nik == NIMember && not (validCaftype g tau) then do
-                U.error sym.pos (msgdoc "An instance member may not be void and it certainly throws no exceptions.")
-                return false
-            else return true
-         argsOk NIOp [x]   = validNIArg x
-         argsOk NIOp [x,y] = liftM2 (&&) (validNIArg x) (validNIArg y)
-         argsOk NIOp _ = do
-             g <- getST
-             U.error sym.pos (msgdoc ("Java operator " ++ nice sym.name g ++ " demands 1 or 2 operands."))
-             stio false
-         argsOk kind [] | kind `elem` [NINew, NIMethod, NICast] = do
-             g <- getST
-             U.error sym.pos (msgdoc ("Illegal type for " ++ nice sym.name g ++ ", must be function type"))
-             stio false
-         argsOk NICast [x]
-             | Nothing <- sigmaTau U.isUnit x = stio true
-         argsOk NICast _ = do
-             U.error sym.pos (msgdoc "A java type cast must have exactly one argument which may not be ()")
-             stio false
-         argsOk NIMember (this:xs)
-           | length xs > 0 = do
-                 U.error sym.pos (msgdoc ("Getter for " ++ item ++ " cannot have more than 1 argument."))
-                 stio false
-           | otherwise = do
-             g <- getST
-             let sjt = sigmaJT g this
-             let javatype = case sigmaTau Just this of
-                    Just tau | Nativ{} <- tauJT g tau = true
-                    _ -> false
-             if javatype
-                 then if maybe true (const false) (isPrimitive sjt)
-                     then stio true
-                     else do
-                         U.error sym.pos (msgdoc ("Cannot get instance member " ++ item
-                             ++ " from primitive"))
-                         stio false
-                 else do
-                     U.error sym.pos (msgdoc ("Cannot get instance member " ++ item
-                             ++ " from non-native object"))
-                     stio false
-         argsOk NIMethod (this:xs) = do
-             g <- getST
-             let sjt = sigmaJT g this
-             let javatype = case sigmaTau Just this of
-                    Just tau | Nativ{} <- tauJT g tau = true
-                    _ -> false
-             if javatype
-                 then if maybe true (const false) (isPrimitive sjt)
-                     then do
-                         oks <- mapSt validNIArg xs
-                         stio (and oks)
-                     else do
-                         U.error sym.pos (msgdoc ("Cannot invoke instance method " ++ item
-                             ++ " on primitive type"))
-                         stio false
-                 else do
-                     U.error sym.pos (msgdoc ("Cannot invoke instance method " ++ item
-                             ++ " on non native type"))
-                     stio false
-         argsOk NINewArray xs | length xs > 1 = do
-             U.error sym.pos (text "Array must have only one argument.")
-             stio false
-         argsOk kind [x] | kind != NIMethod, Just _ <- sigmaTau U.isUnit x  = stio true
-         argsOk _ xs = do
-             oks <- mapSt validNIArg xs
-             stio (and oks)
+         return (methCode g sym si)
 methClass _  = undefined
 
 
