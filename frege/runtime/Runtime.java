@@ -77,7 +77,7 @@ public class Runtime {
 	}
 	
 	/**
-	 * Provide UTF-8 encoded standard printer for stdout with autoflush
+	 * Provide UTF-8 encoded standard printer for stdout with automatic line flushing
 	 */
 	public static PrintWriter stdout = new PrintWriter(
 			new OutputStreamWriter(System.out, StandardCharsets.UTF_8),
@@ -193,7 +193,7 @@ public class Runtime {
    final public static String emptyString = "";
     
    /**
-    *  <p> Start a program to run in a fork/join task </p>
+    *  <p> Run a IO action as main program. </p>
     *    *
     *  <p> Called from the java <tt>main</tt> method of a frege program.
     *  This converts the argument String array to a list and passes this to
@@ -202,74 +202,125 @@ public class Runtime {
     *  The resulting {@link Lambda} then actually executes the frege code
     *  when evaluated.</p>
     *
-    *  <p>This method checks first if the system property <tt>frege.parallel</tt>
-    *  is set to a value that does not represent <tt>true</tt>.
-    *  If so, it just evaluates the argument.
-    *  Otherwise it submits its argument to a {@link java.util.concurrent.ForkJoinPool}
-    *  and waits for completion. This ensures that frege code sees itself executed
-    *  in a fork join pool and is able to fork further tasks.
-    *  </p>
-    *  <p>In frege code that is not executed in a fork join pool all library
-    *  functions for ad hoc parallelism shall perform semantically equivalent
-    *  sequential functions
-    *  with as little overhead as possible.
-    *  </p>
-    *
-    *  @param val a {@link Lambda} value to be evaluated in a fork/join context
     */
 	public static void runMain(final Object arg) {
-		final Lazy val = Delayed.delayed(arg);
-		java.util.concurrent.Callable<Object> action = new java.util.concurrent.Callable<Object>() {
-			public Object call() {
-				return val.<Object> forced();
-			}
-		};
-		// Check if parallel execution is prohibited
-		// This is the case when the VM was started with -Dfrege.parallel=x
-		// and x is not equal, ignoring case, to the string "true".
-		final String prop = System.getProperty("frege.parallel");
-		final boolean parallel = prop == null ? true : Boolean.valueOf(prop);
-		if (!parallel) {                             // comment out for java6
-			// execution outside fork/join pool
-			try {
-				action.call();
-			} catch (Exception ex) {
-				throw new Error(ex); // ex.printStackTrace();
-			}
-			finally {
-				stdout.close();
-				stderr.close();
-			}
-			return;
-		} 
-		// comment following block for java6
-		// run in fork/join pool
-		try { // comment try/catch blocks out for java6
-			new java.util.concurrent.ForkJoinPool(2 * java.lang.Runtime
-					.getRuntime().availableProcessors()).submit(action).get();
-		} catch (Exception ex) {
-			throw new Error(ex);
+		try {
+			Delayed.delayed(arg).call();
 		}
+//		catch (Exception ex) {
+//			throw new Error(ex); // ex.printStackTrace();
+//		}
 		finally {
-			stdout.flush();
 			stderr.flush();
+			stdout.flush();
 		}
 		return;
 	}
 	
 	final public static void exit() {
-		stdout.close();
-		stderr.close();
-		System.exit(exitCode);
+//		stdout.close();
+//		stderr.close();
 	}
 	
-	final public static boolean fork(Lambda it) {
-		Lazy a = it.apply(true).result();
+	/**
+	 * The fork/join pool for ad hoc parallelism used by Frege runtime system..
+	 * 
+	 * @see fork(), setFregeForkJoindPool()
+	 */
+	private static java.util.concurrent.ForkJoinPool fjpool = null;
+	
+	/**
+	 * <p>Set the {@link java.util.concurrent.ForkJoinPool} that should be used by the
+	 * Frege runtime.</p>
+	 * 
+	 * If the fork/join pool of the Frege runtime is not yet set, 
+	 * it will be initialized with the argument. If, however, Frege's
+	 * fork/join pool is already in use, it will not be given up.
+	 * 
+	 * This should be used by external code that maintains its own fork/join pool
+	 * <b>before</b> calling into Frege code
+	 * to prevent creation of another fork/join pool by the Frege runtime.
+	 * 
+	 * Note that it is not necessary to do this when Frege code is called from code 
+	 * that itself runs in a fork/join pool. But, in any case, it does no harm.  
+	 * 
+	 * @param pool - a fork/join pool to use
+	 * @return The fork/join pool the Frege runtime will actually use. 
+	 */
+	public static java.util.concurrent.ForkJoinPool
+			setFregeForkJoinPool(java.util.concurrent.ForkJoinPool pool) {
+		if (fjpool == null) {
+			fjpool = pool;
+		}
+		return fjpool;
+	}
+	
+	/**
+	 *  <p>Evaluate <code>e</code> in <code>const e</code> in parallel. 
+	 *  This is a helper function for the `par` operator.</p>
+	 *  
+	 *  <p>Applies some value to the argument (which must be a {@link Lambda} that ignores
+	 *  that argument), to abtain a  {@link Delayed} value.</p>
+	 *  
+	 *  <p>It then checks if we run in a {@link java.util.concurrent.ForkJoinPool}.
+	 *  If this is so, it {@link java.util.concurrent.ForkJoinTask#fork()}s, causing the 
+	 *  delayed value to be evaluated asynchronously.</p>
+	 *  
+	 *  <p>If we're not running in a {@link java.util.concurrent.ForkJoinPool}, 
+	 *  it checks if the pool 
+	 *  of the Frege runtime is already initialized. 
+	 *  If this is not the case, a new {@link java.util.concurrent.ForkJoinPool} 
+	 *  will be created.</p>
+	 *  
+	 *  <p>Finally, the delayed value will be submitted to the fork/join pool 
+	 *  for asynchronous execution.</p>
+	 *  
+	 *  <p>A {@link Delayed} has the property that it prevents itself from being evaluated
+	 *  more than once. It also blocks threads that attempt parallel execution. 
+	 *  Once evaluated, it remembers the result and subsequent invokactions of 
+	 *  {@link Delayed#call()} get the evaluated value immediatedly.</p>
+	 *  
+	 *  <p>The success of parallel evaluation therefore depends on the time between 
+	 *  construction of the delayed expression and the time 
+	 *  when the value will actually be used. Ideally, it takes some CPU ressources to 
+	 *  evaluate a parallel computation, and it so happens that the value is only needed
+	 *  after it has been evaluated, to avoid wait time in the main thread.</p>  
+
+     *  @param val a {@link Lambda} value to be evaluated in a fork/join context
+     *  @return true
+	 * 
+	 */
+	final public static boolean fork(Lambda val) {
+		Lazy a = val.apply(true).result();
 	    if (java.util.concurrent.ForkJoinTask.inForkJoinPool())
 	    	java.util.concurrent.ForkJoinTask.adapt(a).fork();
+	    else synchronized (emptyString) {		// make sure 2 threads can't do that
+	    	if (fjpool == null) {				// at the same time
+	    		fjpool = new java.util.concurrent.ForkJoinPool(
+	    					2 * java.lang.Runtime.getRuntime().availableProcessors());
+	    	}
+	    	fjpool.submit(a);
+	    }
 	    return true;
 	}
 	
+	final public static void waitFor(Object it) throws InterruptedException {
+		synchronized (it) {
+			it.wait();
+		}
+	}
+	
+	final public static void notifyOne(Object it) {
+		synchronized (it) {
+			it.notify();
+		}
+	}
+	
+	final public static void notifyAll(Object it) {
+		synchronized (it) {
+			it.notifyAll();
+		}
+	}
 	/**
 	 * set this if you need a different exit code
 	 */
