@@ -127,7 +127,7 @@ dist: fregec.jar
 
 
 fregec.jar: compiler $(DIR)/check1
-	$(FREGECC)  -make frege/StandardLibrary.fr
+	$(FREGECC)  -make  frege/StandardLibrary.fr
 	jar  -cf    fregec.jar -C build frege
 	jar  -uvfe  fregec.jar frege.compiler.Main
 	cp fregec.jar fallback.jar
@@ -153,7 +153,7 @@ $(DIR)/PreludeProperties.class:  frege/PreludeProperties.fr
 
 # 	$(TOOLSF)/Doc.class $(TOOLSF)/YYgen.class $(TOOLSF)/LexConvt.class
 tools: $(COMPF)/Main.class
-	$(FREGECC) -make frege/tools/*.fr
+	$(FREGECC) -make  frege/StandardTools.fr
 #
 # final compiler
 #
