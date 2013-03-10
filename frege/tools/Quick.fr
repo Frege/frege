@@ -8,7 +8,8 @@
 module frege.tools.Quick where
 
 import frege.java.lang.Reflect
-import frege.lib.QuickCheck (check, quick, verbose)
+import frege.lib.QuickCheck QC(quick, verbose, Property, Config, Testable, Gen, Result)
+import frege.lib.Random (StdGen, newStdGen)
 
 --- functionality relies on the absolute name of type 'QuickCheck.Property'
 propName = TName{pack=Pack.new "frege.lib.QuickCheck", base="Property"}
@@ -17,6 +18,7 @@ import frege.compiler.Main (standardOptions)
 import frege.compiler.Import (importClass)
 import frege.compiler.Data hiding (Options)
 import frege.List (values)
+import Data.List as DL
 
 data Options = Opt { verbose :: Bool, ntimes :: Int }
 
@@ -67,13 +69,101 @@ getProps pack = do
                 TCon{name} <- Just tau,
                 name == propName 
             ]
-    
-
 
 checkModule :: Options -> String -> IO Bool 
 checkModule opts pack = do
     g <- standardOptions
     let (res, newg)  = State.run (getProps pack) g
-    println ("Package " ++ pack ++ " has the following quickcheck properties: "
-        ++ joined ", " res)
-    return true
+    -- println ("Package " ++ pack ++ " has the following quickcheck properties: "
+    --     ++ joined ", " res)
+    if newg.errors == 0 
+        then checkProps opts pack res
+        else return false
+
+    
+            
+checkProps :: Options -> String -> [String] -> IO Bool
+checkProps opts modul props = do
+        ec <- Class.forName modul
+        case ec of
+            Left notfound -> do
+                stderr.println (notfound.show)
+                return false  
+            Right cl -> do
+                results <- mapM (checkField opts modul cl) props
+                return (and results)
+    `catch` errors
+  where
+    errors :: ExceptionInInitializerError -> IO Bool
+    errors exc = do
+        stderr.println ("Couldn't initialize module " ++ modul)
+        stderr.println exc.show
+        return false
+
+native toLambda "(frege.runtime.Lambda)" :: Object -> IO Property
+
+checkField :: Options -> String -> Class a -> String -> IO Bool    
+checkField opts modul clas prop = do
+        fld <- clas.getDeclaredField prop
+        obj <- fld.get Nothing
+        p   <- toLambda obj
+        -- println (modul ++ "." ++ prop ++ ": ")
+        (r, ss) <- check quick.{configMaxTest=opts.ntimes} p
+        when (not r || opts.verbose) do
+            println (chomp  (modul ++ "." ++ prop ++ ": " ++ unlines ss))
+        return r
+    `catch` exceptions
+    -- ExceptionInInitializerError is passed to caller, so as to avoid getting it multiple times
+  where
+    exceptions :: Exception -> IO Bool
+    exceptions exc = do
+        stderr.println (exc.show ++ " while trying to get field " ++ modul ++ "." ++ prop)
+        return false
+
+check :: Testable a => Config -> a -> IO (Bool, [String])
+check config a =
+  do rnd <- newStdGen
+     return (tests config (QC.evaluate a) rnd 0 0 [])
+
+tests :: Config -> Gen Result -> StdGen -> Int -> Int -> [[String]] -> (Bool, [String])
+tests config gen rnd0 ntest nfail stamps
+    | ntest == config.configMaxTest = (true, done "passed" ntest stamps)
+    | nfail == config.configMaxFail = (true, done "arguments exhausted after" ntest stamps)
+    | otherwise                     = case Result.ok result of
+           Nothing    ->
+             tests config gen rnd1 ntest (nfail+1) stamps
+           Just true  ->
+             tests config gen rnd1 (ntest+1) nfail (Result.stamp result:stamps)
+           Just false ->  
+              (false, lines ( "falsifiable, after "
+                       ++ show ntest
+                       ++ " tests:" ++ QC.lnsep
+                       ++ (unlines . map ("    " ++)) (Result.arguments result)
+                        )) 
+    where
+        result      = QC.generate (Config.configSize config ntest) rnd2 gen
+        (rnd1,rnd2) = Random.split rnd0
+
+done :: String -> Int -> [[String]] -> [String]
+done mesg ntest stamps = lines ( mesg ++ " " ++ show ntest ++ " tests" ++ table stamps)
+    where
+        table = display
+            • map entry
+            • reverse
+            • sort
+            • map pairLength
+            • group
+            • sort
+            • filter (not • null)
+
+        display []  = "."
+        display [x] = " (" ++ x ++ ")."
+        display xs  = "." ++ QC.lnsep ++ "    " ++  joined (QC.lnsep ++ "    ") (map (++ ".") xs)
+        
+        pairLength xss        = (length xss, head xss)
+        entry (n, xs)         = percentage n ntest
+                               ++ " "
+                               ++ joined ", " xs
+        
+        percentage n m        = show ((100 * n) `div` m) ++ "%"
+                  

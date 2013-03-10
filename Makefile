@@ -74,6 +74,7 @@ GENDOC   = $(FREGE) frege.tools.Doc -d doc
 #	shadow Prelude files in the order they must be compiled
 SPRELUDE  =  shadow/frege/prelude/PreludeBase.fr shadow/frege/prelude/PreludeNative.fr \
 		shadow/frege/prelude/PreludeList.fr shadow/frege/prelude/PreludeMonad.fr \
+		shadow/frege/prelude/Maybe.fr \
 		shadow/frege/prelude/PreludeIO.fr \
 		shadow/frege/java/Lang.fr \
 		shadow/frege/prelude/PreludeText.fr \
@@ -82,6 +83,7 @@ SPRELUDE  =  shadow/frege/prelude/PreludeBase.fr shadow/frege/prelude/PreludeNat
 #	Prelude files in the order they must be compiled
 PRELUDE  =  frege/prelude/PreludeBase.fr frege/prelude/PreludeNative.fr \
 		frege/prelude/PreludeList.fr frege/prelude/PreludeMonad.fr \
+		frege/prelude/Maybe.fr \
 		frege/prelude/PreludeIO.fr \
 		frege/java/Lang.fr \
 		frege/prelude/PreludeText.fr \
