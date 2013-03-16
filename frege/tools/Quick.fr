@@ -1,8 +1,34 @@
 {--
-    [usgae] java -cp fregec.jar frege.tools.Quick [-v] [-n ddd] module ...
     
-    Looks up quick check predicates in the given modules and runs the tests,
-    each test repeats ddd times.
+    Looks up quick check predicates in the given modules and tests them.
+
+    [Usage:] java -cp fregec.jar frege.tools.Quick [ option ... ] modulespec ...
+    
+    Options:
+    
+    -    -v      print a line for each pedicate that passed
+    -    -n num  run _num_ tests per predicate, default is 100
+    -    -p pred1,pred2,... only test the given predicates
+    -    -x pred1,pred2,... do not test the given predicates
+    -    -l  just print the names of the predicates available.
+    
+    Ways to specify modules:
+    
+    - module  the module name (e.g. my.great.Module), will be lookup up in
+              the current class path.
+    - dir/    A directory path. The directory is searched for class files,
+              and for each class files an attempt is made to load it as if
+              the given directory was in the class path.
+    - path-to.jar A jar or zip file is searched for class files, and for each
+              class file found an attempt is made to load it as if the
+              jar was in the class path.
+    
+     The number of passed/failed tests is reported. If any test failed or other
+     errors occured, the exit code will be non zero.
+     
+     The code will try to heat up your CPU by running tests on all available cores.
+     This should be faster on multi-core computers than running the tests
+     sequentially. It makes it feasable to run more tests per predicate.   
 -}
 
 module frege.tools.Quick where
@@ -16,9 +42,13 @@ propName = TName{pack=Pack.new "frege.lib.QuickCheck", base="Property"}
 
 import frege.compiler.Main (standardOptions)
 import frege.compiler.Import (importClass)
-import frege.compiler.Data hiding (Options)
+-- import frege.compiler.BaseTypes
+import frege.compiler.Data hiding (Options, GenSt)
+import frege.compiler.Utilities (theClassLoader)
 import frege.List (values)
 import Data.List as DL
+--  import Data.Bits (BitSet.unionE)
+
 
 data Options = Opt { verbose :: Bool, ntimes :: Int }
 
@@ -36,7 +66,7 @@ main [] = do
     
 main args = do
     (options, modules) <- getOpt defaultOptions args
-    results <- mapM (checkModule options) modules
+    results <- mapM (checkThing options) modules
     unless (and results) (System.exit 1) 
 
 getOpt :: Options -> [String] -> IO (Options, [String])
@@ -55,6 +85,57 @@ getOpt options (xss@´^-´ : xs) = do
     getOpt options xs
 getOpt options xs = return (options, xs) 
 
+checkThing :: Options -> String -> IO Bool
+checkThing opts arg = do
+    f <- File.new arg
+    directory <- f.isDirectory
+    regular   <- f.isFile
+    g <- standardOptions
+    if directory
+        then do
+            let gpath = g.{options <- Data.Options.{path  =  [arg], 
+                                                    flags <- flip BitSet.differenceE WITHCP}}
+            loader <- theClassLoader gpath.options  
+            let    gldr  = gpath.{sub <- Data.SubSt.{loader}} 
+            checkDir opts gldr f []
+            -- return true
+        else checkModule opts arg g
+
+checkDir :: Options -> Global -> MutableIO File -> [String] -> IO Bool
+checkDir opts g f pcs = do
+    mbcontent <- f.list
+    case mbcontent of
+        Nothing -> return true      -- empty directory
+        Just arr -> do
+            list <- readonly StringArr.toList arr
+            es <- mapM (checkDirEntry opts g f pcs) list
+            return (and es)
+    return false
+
+checkDirEntry :: Options -> Global -> MutableIO File -> [String] -> String -> IO Bool
+checkDirEntry opts g f pcs ent = do
+    f <- File.new f ent
+    directory <- f.isDirectory
+    regular   <- f.isFile
+    if directory then checkDir opts g f (ent:pcs)
+    else if regular then do
+        if ent ~ ´\.class$´ && ent !~ ´\$´          --
+        then do
+            let base = strhead ent (ent.length - ".class".length)
+                pack = joined "." (reverse (base:pcs))
+            checkModule opts pack g
+        else return true        -- not a class file or not a valid package name
+    else return true            -- do not follow symlinks
+
+checkModule :: Options -> String -> Global -> IO Bool 
+checkModule opts pack g = do
+    stderr.println ("checkModule: " ++ pack)
+    let (res, newg)  = State.run (getProps pack) g
+    println ("Package " ++ pack ++ " has the following quickcheck properties: "
+         ++ joined ", " res)
+    if newg.errors == 0 
+        then checkProps opts pack res
+        else return false
 
 --- import a package and extract all toplevel properties
 getProps pack = do
@@ -70,17 +151,6 @@ getProps pack = do
                 name == propName 
             ]
 
-checkModule :: Options -> String -> IO Bool 
-checkModule opts pack = do
-    g <- standardOptions
-    let (res, newg)  = State.run (getProps pack) g
-    -- println ("Package " ++ pack ++ " has the following quickcheck properties: "
-    --     ++ joined ", " res)
-    if newg.errors == 0 
-        then checkProps opts pack res
-        else return false
-
-    
             
 checkProps :: Options -> String -> [String] -> IO Bool
 checkProps opts modul props = do
@@ -117,7 +187,7 @@ checkField opts modul clas prop = do
   where
     exceptions :: Exception -> IO Bool
     exceptions exc = do
-        stderr.println (exc.show ++ " while trying to get field " ++ modul ++ "." ++ prop)
+        stderr.println (exc.show ++ " while trying to check property " ++ modul ++ "." ++ prop)
         return false
 
 check :: Testable a => Config -> a -> IO (Bool, [String])
