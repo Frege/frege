@@ -67,7 +67,7 @@ public class WrappedCheckedException extends Undefined {
 				return handler.apply(exc).apply(0).result().<Object> forced();
 			}
 			throw e;	// go to next catch, if any
-		} catch (Exception exc) {
+		} catch (Throwable exc) {
 			// System.out.println("entering catch for " + exc.getClass().getName());
 			if (cls.isInstance(exc)) {
 				return handler.apply(exc).apply(0).result().<Object> forced();
