@@ -65,7 +65,7 @@ FREGEC0  = $(FREGECJ) -prefix a -sp shadow;.
 FREGEC1  = $(FREGE) afrege.compiler.Main -d build -hints -inline -prefix b
 
 #	compile final compiler with compiler2
-FREGEC2  = $(FREGE) bfrege.compiler.Main -d build -hints
+FREGEC2  = $(FREGE) bfrege.compiler.Main -d build -hints -inline
 
 #	final compiler
 FREGECC  = $(FREGE) frege.compiler.Main  -d build -hints -inline
