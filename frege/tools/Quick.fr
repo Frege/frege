@@ -49,7 +49,8 @@ import frege.compiler.Javatypes (forName)
 import frege.List (values)
 import Data.List as DL
 import Data.Monoid
---  import Data.Bits (BitSet.unionE)
+import Java.Util
+import Java.util.Zip
 
 
 data Options = Opt { list, verbose, excluded :: Bool, ntimes :: Int, props :: [String] }
@@ -72,7 +73,7 @@ counterMconcat = property (Counter.mempty == mconcat (replicate 1_000_000 mempty
 testFailed = Counter {passed = 0, failed = 1, aborted = false}
 testPassed = Counter {passed = 1, failed = 0, aborted = false}
 testAborted =  Counter.mempty.{aborted = true} 
-addcounters = fold mappend mempty
+
 
 main [] = do
     mapM_ stderr.println [
@@ -106,6 +107,7 @@ main args = do
 getOpt :: Options -> [String] -> IO (Options, [String])
 getOpt options [] = return (options, [])   
 getOpt options ("-v":xs) = getOpt options.{verbose=true} xs
+getOpt options ("-l":xs) = getOpt options.{list=true}    xs
 getOpt options ("-n":num:xs) = 
     case num.int of
         Left _ -> do
@@ -113,6 +115,8 @@ getOpt options ("-n":num:xs) =
             stderr.println("number expected instead of `" ++ num ++ "`")
             getOpt options xs
         Right n -> getOpt options.{ntimes = n} xs
+getOpt options ("-p":ps:xs) = getOpt options.{excluded=false, props=´,\s*´.splitted ps} xs
+getOpt options ("-x":ps:xs) = getOpt options.{excluded=true, props=´,\s*´.splitted ps} xs
 getOpt options (xss@´^-´ : xs) = do
     main []
     stderr.println("unknown flag `" ++ head xss ++ "`, ignored.")
@@ -125,18 +129,50 @@ checkThing opts arg = do
     directory <- f.isDirectory
     regular   <- f.isFile
     g <- standardOptions
-    if directory
+    if directory || regular
         then do
             let silent = g.{options <- Data.Options.{flags <- flip BitSet.unionE IDE}}
             let gpath = silent.{options <- Data.Options.{path  =  [arg], 
                                                     flags <- flip BitSet.differenceE WITHCP}}
             loader <- theClassLoader gpath.options  
             let    gldr  = gpath.{sub <- Data.SubSt.{loader}} 
-            checkDir opts gldr f []
+            if directory then checkDir opts gldr f [] 
+                         else checkArch opts gldr f
             -- return true
         else do
-            checkModule opts arg g
-            
+            checkModule opts g arg
+
+checkArch :: Options -> Global -> MutableIO File ->  IO Counter
+checkArch opts g f = do
+        j <- ZipFile.new f 
+        ns <- j.entries
+            >>= Enumeration.toList
+            >>= mapM ZipEntry.getName 
+            `finally` j.close
+        let mods = (map ftom . filter classes) ns
+        cs <- mapM (checkModule opts g) mods
+        return (mconcat cs)
+    `catch` zipex
+    `catch` ioex
+  where
+    -- predicate to filter class files of top level classes
+    classes name = name ~ ´\.class$´ && name !~ ´\$´
+    -- make module name from path name
+    ftom path = mod 
+        where
+            mod          = (´\\|/´.matcher withoutClass).replaceAll "."
+            withoutClass = (´\.class$´.matcher path).replaceFirst ""
+    zipex :: ZipException -> IO Counter
+    zipex zex = do
+        path <- f.getName
+        stderr.println zex.show
+        stderr.println ("(is " ++ path ++ " not a valid ZIP or JAR file?)")
+        return testAborted
+    ioex  :: IOException  -> IO Counter
+    ioex iox = do
+        stderr.println iox.show
+        return testAborted
+    
 
 checkDir :: Options -> Global -> MutableIO File -> [String] -> IO Counter
 checkDir opts g f pcs = do
@@ -160,14 +196,14 @@ checkDirEntry opts g f pcs ent = do
         then do
             let base = strhead ent (ent.length - ".class".length)
                 pack = joined "." (reverse (base:pcs))
-            result <- checkModule opts pack g
+            result <- checkModule opts g pack
             -- don't count it as error if module could not be loaded 
             if result == testAborted then return mempty else return result
         else return mempty  -- not a class file or not a valid package name
     else return mempty            -- do not follow symlinks
 
-checkModule :: Options -> String -> Global -> IO Counter 
-checkModule opts pack g = do
+checkModule :: Options -> Global -> String -> IO Counter 
+checkModule opts g pack = do
     -- stderr.println ("checkModule: " ++ pack)
     let (res, newg)  = State.run (getProps pack) g
     
@@ -223,7 +259,11 @@ checkProps opts modul loader props = do
 -}
 native toLambda "(frege.runtime.Lambda)" :: Object -> IO Property
 
-checkField :: Options -> String -> Class a -> String -> IO Counter    
+checkField :: Options -> String -> Class a -> String -> IO Counter
+checkField Opt{excluded=true, props} _ _ prop | prop `elem` props = return mempty
+checkField Opt{excluded=false,props} _ _ prop | not (null props), 
+                                                prop `notElem` props = return mempty
+-- either not excluded, or included, or no props given at all    
 checkField opts modul clas prop = do
         fld <- clas.getDeclaredField prop
         obj <- fld.get Nothing
