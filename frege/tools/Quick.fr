@@ -51,12 +51,15 @@ import Data.List as DL
 import Data.Monoid
 import Java.Util
 import Java.util.Zip
+import frege.control.Concurrent
 
 
-data Options = Opt { list, verbose, excluded :: Bool, ntimes :: Int, props :: [String] }
+data Options = Opt {    list, verbose, excluded :: Bool, 
+                        ntimes :: Int, props :: [String],
+                        global :: Global }
 
 defaultOptions = Opt { verbose = false, list = false, excluded = false, 
-                        props = [], ntimes = 100 }
+                        props = [], ntimes = 100, global = undefined }
 
 data Counter = !Counter { passed, failed :: Int, aborted :: Bool }
 
@@ -72,37 +75,47 @@ counterMconcat = property (Counter.mempty == mconcat (replicate 1_000_000 mempty
 
 testFailed = Counter {passed = 0, failed = 1, aborted = false}
 testPassed = Counter {passed = 1, failed = 0, aborted = false}
-testAborted =  Counter.mempty.{aborted = true} 
+testAborted =  Counter.mempty.{aborted = true}
+unAborted c
+    | Counter.aborted c = mempty
+    | otherwise         = c 
 
 
 main [] = do
     mapM_ stderr.println [
-        "usage: java -cp fregec.jar frege.tools.Quick [-v] [-n num] modules ...",
+        "usage: java -cp fregec.jar frege.tools.Quick [ options ] modules ...",
         "",
+        "    Options:",
         "       -v      verbose checks",
         "       -n num  each check will be running num times, default 100",
         "       -p pred1,pred2,...      only check the named predicates",
         "       -x pred1,pred2,...      do not check the predicates listed",
         "       -l      list predicates available, do not check them",
         "",
-        "Modules can be specified in three ways:",
-        "   modulename      the Java class for this module must be on the class path.",
-        "   directory/      all modules that could be loaded if the given directory was",
-        "                   on the class path.",
-        "   path.jar        all modules in the specified JAR file",
+        "    Modules can be specified in three ways:",
+        "      modulename      the Java class for this module must be on the class path.",
+        "      directory/      all modules that could be loaded if the given directory was",
+        "                      on the class path.",
+        "      path.jar        all modules in the specified JAR file",
         ""
         ]
     
     
 main args = do
     (options, modules) <- getOpt defaultOptions args
-    results <- mapM (checkThing options) modules
+    g <- standardOptions
+    mvars   <- mapM (thread options.{global=g}) modules
+    results <- mapM MVar.take mvars
     let result = mconcat results
     println ("Properties passed: " ++ show result.passed
         ++ ", failed: " ++ show result.failed)
     if (result.failed > 0 || result.aborted) 
         then System.exit 1
-        else System.exit 0 
+        else System.exit 0
+  where
+    thread o m = asyncCounter forkIO (checkThing o m) 
+
+
 
 getOpt :: Options -> [String] -> IO (Options, [String])
 getOpt options [] = return (options, [])   
@@ -128,30 +141,32 @@ checkThing opts arg = do
     f <- File.new arg
     directory <- f.isDirectory
     regular   <- f.isFile
-    g <- standardOptions
+    
     if directory || regular
         then do
-            let silent = g.{options <- Data.Options.{flags <- flip BitSet.unionE IDE}}
+            let silent = opts.global.{options <- Data.Options.{flags <- flip BitSet.unionE IDE}}
             let gpath = silent.{options <- Data.Options.{path  =  [arg], 
                                                     flags <- flip BitSet.differenceE WITHCP}}
             loader <- theClassLoader gpath.options  
-            let    gldr  = gpath.{sub <- Data.SubSt.{loader}} 
-            if directory then checkDir opts gldr f [] 
-                         else checkArch opts gldr f
+            let gldr  = gpath.{sub <- Data.SubSt.{loader}}
+                gopts = opts.{global=gldr} 
+            if directory then checkDir  gopts  f [] 
+                         else checkArch gopts  f
             -- return true
         else do
-            checkModule opts g arg
+            checkModule opts arg
 
-checkArch :: Options -> Global -> MutableIO File ->  IO Counter
-checkArch opts g f = do
+checkArch :: Options -> MutableIO File ->  IO Counter
+checkArch opts f = do
         j <- ZipFile.new f 
         ns <- j.entries
             >>= Enumeration.toList
             >>= mapM ZipEntry.getName 
             `finally` j.close
         let mods = (map ftom . filter classes) ns
-        cs <- mapM (checkModule opts g) mods
-        return (mconcat cs)
+        mvars <- mapM (asyncCheckModule opts) mods
+        cs    <- mapM MVar.take mvars
+        (return . mconcat . map unAborted) cs
     `catch` zipex
     `catch` ioex
   where
@@ -174,44 +189,45 @@ checkArch opts g f = do
         return testAborted
     
 
-checkDir :: Options -> Global -> MutableIO File -> [String] -> IO Counter
-checkDir opts g f pcs = do
+checkDir :: Options -> MutableIO File -> [String] -> IO Counter
+checkDir opts f pcs = do
     mbcontent <- f.list
     case mbcontent of
         Nothing -> return mempty      -- empty directory
         Just arr -> do
             list <- readonly StringArr.toList arr
-            es <- mapM (checkDirEntry opts g f pcs) list
-            return (mconcat es)
+            mvars <- mapM (checkDirEntry opts f pcs) list
+            es    <- mapM (MVar.take) mvars
+            (return . mconcat . map unAborted) es
     
 
-checkDirEntry :: Options -> Global -> MutableIO File -> [String] -> String -> IO Counter
-checkDirEntry opts g f pcs ent = do
+checkDirEntry :: Options -> MutableIO File -> [String] -> String -> IO (MVar Counter)
+checkDirEntry opts f pcs ent = do
     f <- File.new f ent
     directory <- f.isDirectory
     regular   <- f.isFile
-    if directory then checkDir opts g f (ent:pcs)
+    if directory then do
+        r <- checkDir opts f (ent:pcs)
+        MVar.new r
     else if regular then do
         if ent ~ ´\.class$´ && ent !~ ´\$´          --
         then do
             let base = strhead ent (ent.length - ".class".length)
                 pack = joined "." (reverse (base:pcs))
-            result <- checkModule opts g pack
-            -- don't count it as error if module could not be loaded 
-            if result == testAborted then return mempty else return result
-        else return mempty  -- not a class file or not a valid package name
-    else return mempty            -- do not follow symlinks
+            asyncCheckModule opts pack
+        else MVar.new mempty  -- not a class file or not a valid package name
+    else MVar.new mempty            -- do not follow symlinks
 
-checkModule :: Options -> Global -> String -> IO Counter 
-checkModule opts g pack = do
+checkModule :: Options -> String -> IO Counter 
+checkModule opts pack = do
     -- stderr.println ("checkModule: " ++ pack)
-    let (res, newg)  = State.run (getProps pack) g
+    let (res, newg)  = State.run (getProps pack) opts.global
     
     if newg.errors == 0 
     then if opts.list then do
             println (pack ++ ": " ++ joined ", " res)
             return mempty
-        else checkProps opts pack g.sub.loader res
+        else checkProps opts pack res
     else return testAborted
 
 --- import a package and extract all toplevel properties
@@ -229,9 +245,9 @@ getProps pack = do
             ]
 
             
-checkProps :: Options -> String -> ClassLoader -> [String] -> IO Counter
-checkProps opts modul loader props = do
-        ec <- forName modul true loader
+checkProps :: Options -> String -> [String] -> IO Counter
+checkProps opts modul props = do
+        ec <- forName modul true opts.global.sub.loader
         case ec of
             Left notfound -> do
                 stderr.println (notfound.show)
@@ -281,6 +297,28 @@ checkField opts modul clas prop = do
         stderr.println (exc.show ++ " while trying to check property " ++ modul ++ "." ++ prop)
         return testFailed
 
+-- Asynchronous stuff
+async :: (IO () -> IO ()) -> IO a -> IO (MVar (Throwable|a))
+async fork action = do
+    m <- newEmptyMVar
+    fork do
+            x <- catchAll action
+            m.put x
+    return m
+
+asyncCounter fork action = do
+    m <- newEmptyMVar
+    fork do
+        x <- catchAll action
+        case x of
+            Left exc -> do
+                stderr.println ("Async error: " ++ exc.show)
+                m.put testAborted
+            Right v -> m.put v
+    return m
+
+asyncCheckModule o m    = asyncCounter forkIO (checkModule o m)
+asyncCheckField o m c p = asyncCounter forkIO (checkField o m c p)                    
 
 -- The rest is a rewrite of 3 quickcheck functions to get a silent check.
 
