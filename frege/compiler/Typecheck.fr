@@ -667,6 +667,10 @@ rhoRegex    = RhoTau [] (TCon {pos=Position.null,name=TName pPreludeNative "Rege
 rhoMatcher  = RhoTau [] (TCon {pos=Position.null,name=TName pPreludeNative "Matcher"})
 rhoInteger  = rhoFor "Integer"
 tauString   = TApp (tc "StringJ") (tc "Char")
+numVar      = ForAll [("int", KType)] 
+                     RhoTau{context=[Ctx{pos, cname=TName pPreludeBase "Num", tau}], tau}
+                where tau = TVar{pos, kind=KType, var="int"}
+                      pos = Position.null
 
 instance Nice Nice z => Maybe z where
     nicer (Just x) g = x.nicer g
@@ -677,15 +681,18 @@ instance Nice Nice z => Maybe z where
 tcRho' :: Expr -> Expected Rho -> StG Expr
 
 tcRho' (x@Lit {pos,kind})  ety = case kind of
-    LBool   -> instRho x (rhoBool) ety
-    LChar   -> instRho x (rhoChar) ety
-    LString -> instRho x (rhoString) ety
-    LInt    -> instRho x (rhoInt)  ety
-    LLong   -> instRho x (rhoLong)  ety
-    LBig    -> instRho x (rhoInteger)  ety
-    LDouble -> instRho x (rhoDouble)  ety
-    LFloat  -> instRho x (rhoFloat)  ety
-    LRegex  -> instRho x (rhoRegex)  ety
+    LBool   ->  instRho x (rhoBool) ety
+    LChar   ->  instRho x (rhoChar) ety
+    LString ->  instRho x (rhoString) ety
+    LInt    ->  do
+                r <- instantiate numVar
+                let t = maybe r Sigma.rho x.typ
+                instRho x  t  ety
+    LLong   ->  instRho x (rhoLong)  ety
+    LBig    ->  instRho x (rhoInteger)  ety
+    LDouble ->  instRho x (rhoDouble)  ety
+    LFloat  ->  instRho x (rhoFloat)  ety
+    LRegex  ->  instRho x (rhoRegex)  ety
 
 
 tcRho' (x@Vbl {name})  ety = do
@@ -934,9 +941,35 @@ tcPat' p _ = do
     g <- getST
     U.fatal (getpos p) (text ("can't tcPat:  " ++ p.nice g))
 
+
+--- Type the literals
+literalType (lit@Lit{pos, kind=LInt, value, typ=Just sigma})
+    | RhoTau _ tau <- sigma.rho = do
+            tau <- reduced tau
+            case tau of
+                TCon{pos, name}
+                    | name == rhoInt.tau.name     = return (Right lit)
+                    | name == rhoLong.tau.name    = return (Right lit.{kind=LLong, value <- (++"L")})
+                    | name == rhoInteger.tau.name = return (Right lit.{kind=LBig})
+                    | name == rhoFloat.tau.name   = return (Right lit.{kind=LFloat, value <- (++"F")})
+                    | name == rhoDouble.tau.name  = return (Right lit.{kind=LFloat, value <- (++"D")})
+                Meta Rigid{} -> do
+                    let frmIntlit = nApp frmInt lit.{typ=Just sigInt}
+                        frmInt = Vbl{pos, name=MName{tynm=num, base="fromInt"}, typ=Nothing}
+                        num = TName{pack=pPreludeBase, base="Num"} 
+                    x <- checkRho frmIntlit sigma.rho
+                    return (Right x)
+                _ -> do
+                    x <- checkRho lit rhoInt        -- fix unresolved to Int
+                    return (Right x)                -- or force type error
+    | otherwise = checkRho lit rhoInt >>= return . Right   -- type error ?!
+literalType x = return (Left x)
+
+
+
 --- Resolve the x.m finally
 --- Resolve overloaded methods
-resolveHas = mapEx true rHas
+resolveHas expr = mapEx true literalType expr >>= mapEx true rHas
     where
         rHas (x@Mem{ex, member, typ = Just sigma}) = do
             app <- checkRho x.{typ = Nothing} sigma.rho -- now type of ex should be known
