@@ -30,7 +30,7 @@ See the [Getting Started](https://github.com/Frege/frege/wiki/Getting-Started) p
 getting started at the command-line or read the [Eclipse plugin](https://github.com/Frege/eclipse-plugin) page.
 
 There is also an [interpreter (REPL)](https://github.com/Frege/frege-repl). 
-An online version of the REPL is running on [Google App Engine](http://tryfrege.appspot.com/).
+An online version of the REPL is available [here](http://try.frege-lang.org/).
 
 Contributions
 -------------
