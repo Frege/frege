@@ -84,6 +84,7 @@ import frege.compiler.Kinds         as K()
 import frege.compiler.tc.Util
 import frege.compiler.Javatypes
 import frege.compiler.tc.Methods    as M()
+import frege.compiler.tc.Patterns
 
 
 post = stio true
@@ -680,14 +681,15 @@ instance Nice Nice z => Maybe z where
 
 tcRho' :: Expr -> Expected Rho -> StG Expr
 
-tcRho' (x@Lit {pos,kind})  ety = case kind of
+tcRho' (x@Lit {pos,kind, value})  ety = case kind of
     LBool   ->  instRho x (rhoBool) ety
     LChar   ->  instRho x (rhoChar) ety
     LString ->  instRho x (rhoString) ety
-    LInt    ->  do
-                r <- instantiate numVar
-                let t = maybe r Sigma.rho x.typ
-                instRho x  t  ety
+    LInt    ->  if isDWIM LInt value then do
+                    r <- instantiate numVar
+                    let t = maybe r Sigma.rho x.typ
+                    instRho x  t  ety
+                else instRho x (rhoInt) ety
     LLong   ->  instRho x (rhoLong)  ety
     LBig    ->  instRho x (rhoInteger)  ety
     LDouble ->  instRho x (rhoDouble)  ety
@@ -740,13 +742,15 @@ tcRho' (x@Case {ex,alts}) ety
         instSigma x.{ex, alts} asig ety
     where
         checkAlt rho ety (alt@CAlt {ex,pat})  = do
+            (pat,ex) <- dwimPatEx pat ex
             checkPat pat (ForAll [] rho)
             ex <- tcRho ex ety
-            stio alt.{ex}
+            stio alt.{pat,ex}
         tcAlt rho (alt@CAlt {ex,pat}) = do
+            (pat,ex) <- dwimPatEx pat ex
             checkPat pat (ForAll [] rho)
             (rho, ex) <- inferRho ex
-            stio (rho, alt.{ex})
+            stio (rho, alt.{pat, ex})
 
 tcRho' (x@Let {env,ex}) ety = do
     g <- getST
@@ -754,12 +758,16 @@ tcRho' (x@Let {env,ex}) ety = do
     ex <- tcRho ex ety
     instSigma x.{env, ex} (unJust ex.typ) ety
 
-tcRho' (x@Lam {pat,ex}) (ety@Check rho) = do
+tcRho' (lam@Lam {pat,ex}) (ety@Check rho) = do
+        (pat, ex) <- dwimPatEx pat ex
+        let x = lam.{pat, ex}
         (asig, brho) <- unifyFun x rho
         checkPat pat asig
         ex <- checkRho ex brho
         instRho x.{ex} (RhoFun [] asig (unJust ex.typ).rho) ety
-tcRho' (x@Lam {}) ety = do
+tcRho' (lam@Lam {}) ety = do
+    (pat, ex) <- dwimPatEx lam.pat lam.ex
+    let x = lam.{pat, ex}
     sigma     <- inferPat x.pat
     (rho, ex) <- inferRho x.ex
     instRho (x.{ex}) (RhoFun [] sigma rho) ety
@@ -944,7 +952,7 @@ tcPat' p _ = do
 
 --- Type the literals
 literalType (lit@Lit{pos, kind=LInt, value, typ=Just sigma})
-    | RhoTau _ tau <- sigma.rho = do
+    | isDWIM LInt value, RhoTau _ tau <- sigma.rho = do
             tau <- reduced tau
             case tau of
                 TCon{pos, name}
@@ -953,17 +961,21 @@ literalType (lit@Lit{pos, kind=LInt, value, typ=Just sigma})
                     | name == rhoInteger.tau.name = return (Right lit.{kind=LBig})
                     | name == rhoFloat.tau.name   = return (Right lit.{kind=LFloat, value <- (++"F")})
                     | name == rhoDouble.tau.name  = return (Right lit.{kind=LDouble, value <- (++"D")})
-                Meta Rigid{} -> do
-                    let frmIntlit = nApp frmInt lit.{typ=Just sigInt}
-                        frmInt = Vbl{pos = pos.change VARID "fromInt", 
-                                    name=MName{tynm=num, base="fromInt"}, typ=Nothing}
-                        num = TName{pack=pPreludeBase, base="Num"} 
+                    | otherwise = do
+                        x <- checkRho frmIntlit sigma.rho
+                        return (Right x)
+                Meta Rigid{} -> do 
                     x <- checkRho frmIntlit sigma.rho
                     return (Right x)
                 _ -> do
                     x <- checkRho lit rhoInt        -- fix unresolved to Int
                     return (Right x)                -- or force type error
     | otherwise = checkRho lit rhoInt >>= return . Right   -- type error ?!
+    where
+        frmIntlit = nApp frmInt lit.{typ=Just sigInt}
+        frmInt = Vbl{pos  = pos.change VARID "fromInt", 
+                     name = MName{tynm=num, base="fromInt"}, typ=Nothing}
+        num = TName{pack=pPreludeBase, base="Num"}
 literalType x = return (Left x)
 
 

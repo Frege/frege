@@ -209,7 +209,7 @@ SOURCES  =      $(COMPS)/Scanner.fr   $(COMPS)/Classtools.fr \
 		$(COMPS)/Javatypes.fr $(COMPS)/Kinds.fr \
 		$(COMPS)/Transdef.fr  $(COMPS)/Classes.fr \
 		$(COMPS)/Transform.fr \
-		$(COMPS)/tc/Methods.fr \
+		$(COMPS)/tc/Methods.fr $(COMPS)/tc/Patterns.fr \
 		$(COMPS)/Typecheck.fr \
 		$(COMPS)/tc/Util.fr \
 		$(COMPS)/gen/Util.fr  $(COMPS)/gen/Const.fr \
@@ -226,7 +226,7 @@ CLASSES  =       $(COMPF1)/Scanner.class   $(COMPF1)/Classtools.class \
 		$(COMPF1)/Javatypes.class $(COMPF1)/Kinds.class $(COMPF1)/Transdef.class \
 		$(COMPF1)/tc/Util.class   \
 		$(COMPF1)/TAlias.class    $(COMPF1)/Classes.class \
-		$(COMPF1)/tc/Methods.class \
+		$(COMPF1)/tc/Methods.class $(COMPF1)/tc/Patterns.class \
 		$(COMPF1)/Typecheck.class $(COMPF1)/Transform.class \
 		$(COMPF1)/gen/Util.class  $(COMPF1)/gen/Const.class \
 		$(COMPF1)/gen/Bindings.class $(COMPF1)/gen/Match.class \
@@ -248,6 +248,8 @@ $(DIR1)/List.class: frege/List.fr
 	$(FREGEC0) $?
 $(CONTROL1)/Monoid.class: frege/control/Monoid.fr
 	$(FREGEC0) $?
+$(COMPF1)/tc/Patterns.class: frege/compiler/tc/Patterns.fr
+	$(FREGEC0) -make $?
 $(COMPF1)/tc/Methods.class: frege/compiler/tc/Methods.fr
 	$(FREGEC0) -make $?
 $(COMPF1)/Classtools.class: frege/compiler/Classtools.fr

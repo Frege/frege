@@ -1,0 +1,81 @@
+--- Work with DWIM patterns
+module frege.compiler.tc.Patterns where
+
+import frege.compiler.Data
+import frege.compiler.Utilities as U()
+
+{--
+    Check if literal is a "do what I mean" literal, i.e. one that could
+    have a flexible type:
+    
+    - 'Int' literals in decimal without any suffix
+    - 'Double' literals without suffix
+-}
+isDWIM LInt    ´^[1-9]\d*$´ = true
+isDWIM LInt    "0"          = true
+isDWIM LDouble ´\d$´        = true
+isDWIM _        _           = false
+
+eq = Vbl{pos  = Position.null, 
+         name = MName{tynm=TName{pack=pPreludeBase, base="Eq"}, base="=="}, 
+         typ=Nothing}
+
+{--
+    Replace certain numeric literals in 'Pattern's and with variables
+    and return a list of expressions of the form
+    
+    > v == 123
+    
+    The patterns that qualify for replacement are determinded by 'isDWIM'.
+    The idea is to have
+    
+    > foo 123 = x
+    
+    changed to
+    
+    > foo dwim | 123 == dwim = x
+    
+-}
+replDWIM :: Pattern -> StG (Pattern, [Expr])
+replDWIM p = case p of
+    PLit{pos, kind, value}     -> do -- undefined    -- TODO: complete code
+        if isDWIM kind value then do
+            uid <- U.uniqid
+            let pvar = PVar{pos, uid, var = "dwim" ++ show uid}
+                xvar = Vbl{pos, name = Local{uid, base="dwim"}, typ = Nothing}
+                xlit = Lit{pos, kind, value, typ=Nothing}
+            U.enter (U.patLocal pos uid pvar.var)
+            return (PUser{pat = pvar, lazy = false}, [eq `nApp` xlit `nApp` xvar])
+        else return (p, [])
+    PVar{pos, uid, var}        -> return (p, [])
+    PMat{pos, uid, var, value} -> return (p, [])
+    PCon{pos, qname, pats}     -> do
+        pxs <- mapM replDWIM pats
+        return (p.{pats=map fst pxs}, fold (++) [] (map snd pxs))
+    -- PConFS{pos, qname, fields} -> undefined    -- handled below
+    _ | p.{pat?} =  do 
+        (pat, xs) <- replDWIM p.pat
+        return (p.{pat}; xs)
+      | otherwise = error "illegal pattern"
+
+{--
+    Transform 
+    
+    > pat -> ex
+    
+    to 
+    
+    > pat | lit == dwim = ex
+    
+    This works for lambdas and case alternatives alike.
+-}    
+dwimPatEx pat ex = do
+    (p, xs) <- replDWIM pat
+    case xs of
+        [] -> return (pat, ex)
+        _ -> return (p, newex) where
+            newex = foldr casewhen ex xs
+            casewhen cond ex = Case{ckind=CWhen, ex=cond, alts=[alt], typ=Nothing} where
+                alt = CAlt{pat = PLit{pos=getpos cond, kind=LBool, value="true"}, ex}
+
+
