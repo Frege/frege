@@ -15,7 +15,9 @@ Motivation
 
 There have been attempts to [port Haskell to the JVM](http://www.haskell.org/haskellwiki/GHC/FAQ#Why_isn.27t_GHC_available_for_.NET_or_on_the_JVM.3F), though said projects seem failed or stuck. The common wisdom suggests that it is not easily possible.
 
-Frege is thought as a substitute for this missing GHC port. While not derived from any existing Haskell implementation, it is more or less equivalent to Haskell 2010. Please see the wiki page that details the differences.
+Frege is thought as a substitute for this missing GHC port. 
+While not derived from any existing Haskell implementation, it is more or less equivalent to Haskell 2010. 
+Please see the [wiki page that details the differences](https://github.com/Frege/frege/wiki/Differences-between-Frege-and-Haskell).
 
 Project State
 -------------
