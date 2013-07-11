@@ -949,11 +949,14 @@ tcPat' p _ = do
     g <- getST
     U.fatal (getpos p) (text ("can't tcPat:  " ++ p.nice g))
 
+private real = TName{pack=pPreludeBase, base="Real"}
 
 --- Type the literals
-literalType (lit@Lit{pos, kind=LInt, value, typ=Just sigma})
+literalType ctxs (lit@Lit{pos, kind=LInt, value, typ=Just sigma})
     | isDWIM LInt value, RhoTau _ tau <- sigma.rho = do
+            g <- getST
             tau <- reduced tau
+            rctxs <- reducedCtxs ctxs
             case tau of
                 TCon{pos, name}
                     | name == rhoInt.tau.name     = return (Right lit)
@@ -961,12 +964,15 @@ literalType (lit@Lit{pos, kind=LInt, value, typ=Just sigma})
                     | name == rhoInteger.tau.name = return (Right lit.{kind=LBig})
                     | name == rhoFloat.tau.name   = return (Right lit.{kind=LFloat, value <- (++"F")})
                     | name == rhoDouble.tau.name  = return (Right lit.{kind=LDouble, value <- (++"D")})
-                    | otherwise = do
-                        x <- checkRho frmIntlit sigma.rho
-                        return (Right x)
-                Meta Rigid{} -> do 
-                    x <- checkRho frmIntlit sigma.rho
-                    return (Right x)
+                    | otherwise = fromInt
+                Meta Flexi{uid, ref, hint, kind}    -- unbound, because already reduced
+                    | qns <- [ cname | Ctx{pos, cname, tau = Meta Flexi{uid=id}} <- rctxs, uid == id ],
+                      real `elem` qns
+                        ||  TName{pack=pPreludeMath, base="PrimitiveFloating"} `elem` qns
+                        ||  any (U.isSuper real g) qns
+                    = instRho lit.{kind=LDouble, value <- (++"D")} sigma.rho (Check rhoDouble) >>= return . Right       -- infer Double
+                Meta Rigid{} -> fromInt
+                TApp _ _     -> fromInt             -- force type error unless Num             
                 _ -> do
                     x <- checkRho lit rhoInt        -- fix unresolved to Int
                     return (Right x)                -- or force type error
@@ -976,13 +982,16 @@ literalType (lit@Lit{pos, kind=LInt, value, typ=Just sigma})
         frmInt = Vbl{pos  = pos.change VARID "fromInt", 
                      name = MName{tynm=num, base="fromInt"}, typ=Nothing}
         num = TName{pack=pPreludeBase, base="Num"}
-literalType x = return (Left x)
+        fromInt = checkRho frmIntlit sigma.rho >>= return . Right
+literalType _ x = return (Left x)
 
 
 
 --- Resolve the x.m finally
 --- Resolve overloaded methods
-resolveHas expr = mapEx true literalType expr >>= mapEx true rHas
+resolveHas expr = do
+        ctxs <- collectConstrs expr
+        mapEx true (literalType ctxs) expr >>= mapEx true rHas
     where
         rHas (x@Mem{ex, member, typ = Just sigma}) = do
             app <- checkRho x.{typ = Nothing} sigma.rho -- now type of ex should be known
