@@ -73,6 +73,7 @@
 
 package frege.compiler.Typecheck where
 
+import frege.Prelude hiding(<+>)
 import frege.List (Tree, values, lookup, insertkv, insert, update, keys, including, union, contains)
 
 import frege.compiler.Data
@@ -84,6 +85,7 @@ import frege.compiler.Kinds         as K()
 import frege.compiler.tc.Util
 import frege.compiler.Javatypes
 import frege.compiler.tc.Methods    as M()
+import frege.compiler.tc.Patterns
 
 
 post = stio true
@@ -667,6 +669,15 @@ rhoRegex    = RhoTau [] (TCon {pos=Position.null,name=TName pPreludeNative "Rege
 rhoMatcher  = RhoTau [] (TCon {pos=Position.null,name=TName pPreludeNative "Matcher"})
 rhoInteger  = rhoFor "Integer"
 tauString   = TApp (tc "StringJ") (tc "Char")
+numVar      = ForAll [("int", KType)] 
+                     RhoTau{context=[Ctx{pos, cname=TName pPreludeBase "Num", tau}], tau}
+                where tau = TVar{pos, kind=KType, var="int"}
+                      pos = Position.null
+realVar     = ForAll [("int", KType)] 
+                     RhoTau{context=[Ctx{pos, cname=TName pPreludeBase "Real", tau}], tau}
+                where tau = TVar{pos, kind=KType, var="int"}
+                      pos = Position.null
+
 
 instance Nice Nice z => Maybe z where
     nicer (Just x) g = x.nicer g
@@ -676,16 +687,24 @@ instance Nice Nice z => Maybe z where
 
 tcRho' :: Expr -> Expected Rho -> StG Expr
 
-tcRho' (x@Lit {pos,kind})  ety = case kind of
-    LBool   -> instRho x (rhoBool) ety
-    LChar   -> instRho x (rhoChar) ety
-    LString -> instRho x (rhoString) ety
-    LInt    -> instRho x (rhoInt)  ety
-    LLong   -> instRho x (rhoLong)  ety
-    LBig    -> instRho x (rhoInteger)  ety
-    LDouble -> instRho x (rhoDouble)  ety
-    LFloat  -> instRho x (rhoFloat)  ety
-    LRegex  -> instRho x (rhoRegex)  ety
+tcRho' (x@Lit {pos,kind, value})  ety = case kind of
+    LBool   ->  instRho x (rhoBool) ety
+    LChar   ->  instRho x (rhoChar) ety
+    LString ->  instRho x (rhoString) ety
+    LInt    ->  if isDWIM LInt value then do
+                    r <- instantiate numVar
+                    let t = maybe r Sigma.rho x.typ
+                    instRho x  t  ety
+                else instRho x (rhoInt) ety
+    LLong   ->  instRho x (rhoLong)  ety
+    LBig    ->  instRho x (rhoInteger)  ety
+    LDouble ->  if isDWIM LDouble value then do
+                    r <- instantiate realVar
+                    let t = maybe r Sigma.rho x.typ
+                    instRho x t ety
+                else instRho x (rhoDouble)  ety
+    LFloat  ->  instRho x (rhoFloat)  ety
+    LRegex  ->  instRho x (rhoRegex)  ety
 
 
 tcRho' (x@Vbl {name})  ety = do
@@ -733,13 +752,15 @@ tcRho' (x@Case {ex,alts}) ety
         instSigma x.{ex, alts} asig ety
     where
         checkAlt rho ety (alt@CAlt {ex,pat})  = do
+            (pat,ex) <- dwimPatEx pat ex
             checkPat pat (ForAll [] rho)
             ex <- tcRho ex ety
-            stio alt.{ex}
+            stio alt.{pat,ex}
         tcAlt rho (alt@CAlt {ex,pat}) = do
+            (pat,ex) <- dwimPatEx pat ex
             checkPat pat (ForAll [] rho)
             (rho, ex) <- inferRho ex
-            stio (rho, alt.{ex})
+            stio (rho, alt.{pat, ex})
 
 tcRho' (x@Let {env,ex}) ety = do
     g <- getST
@@ -747,12 +768,16 @@ tcRho' (x@Let {env,ex}) ety = do
     ex <- tcRho ex ety
     instSigma x.{env, ex} (unJust ex.typ) ety
 
-tcRho' (x@Lam {pat,ex}) (ety@Check rho) = do
+tcRho' (lam@Lam {pat,ex}) (ety@Check rho) = do
+        (pat, ex) <- dwimPatEx pat ex
+        let x = lam.{pat, ex}
         (asig, brho) <- unifyFun x rho
         checkPat pat asig
         ex <- checkRho ex brho
         instRho x.{ex} (RhoFun [] asig (unJust ex.typ).rho) ety
-tcRho' (x@Lam {}) ety = do
+tcRho' (lam@Lam {}) ety = do
+    (pat, ex) <- dwimPatEx lam.pat lam.ex
+    let x = lam.{pat, ex}
     sigma     <- inferPat x.pat
     (rho, ex) <- inferRho x.ex
     instRho (x.{ex}) (RhoFun [] sigma rho) ety
@@ -934,9 +959,76 @@ tcPat' p _ = do
     g <- getST
     U.fatal (getpos p) (text ("can't tcPat:  " ++ p.nice g))
 
+private real = TName{pack=pPreludeBase, base="Real"}
+private num  = TName{pack=pPreludeBase, base="Num"}
+
+--- Type the literals
+literalType ctxs (lit@Lit{pos, kind, value, typ=Just sigma})
+    | kind != LInt, kind != LDouble = return (Left lit)
+    | kind == LInt, isDWIM LInt value, RhoTau _ tau <- sigma.rho = do
+            
+            tau <- reduced tau
+            
+            case tau of
+                TCon{pos, name}
+                    | name == rhoInt.tau.name     = return (Right lit)
+                    | name == rhoLong.tau.name    = return (Right lit.{kind=LLong, value <- (++"L")})
+                    | name == rhoInteger.tau.name = return (Right lit.{kind=LBig})
+                    | name == rhoFloat.tau.name   = return (Right lit.{kind=LFloat, value <- (++"F")})
+                    | name == rhoDouble.tau.name  = return (Right lit.{kind=LDouble, value <- (++"D")})
+                    | otherwise = fromInt
+                Meta Flexi{uid, ref, hint, kind}  = do  -- unbound, because already reduced
+                        g <- getST
+                        rctxs <- reducedCtxs ctxs
+                        let qns = [ cname | 
+                                    Ctx{pos, cname, tau = Meta Flexi{uid=id}} <- rctxs, 
+                                    uid == id ] 
+                        if (real `elem` qns
+                            ||  TName{pack=pPreludeMath, base="PrimitiveFloating"} `elem` qns
+                            ||  any (U.isSuper real g) qns)
+                        then instRho lit.{kind=LDouble, value <- (++"D")} sigma.rho (Check rhoDouble)
+                                >>= return . Right       -- infer Double
+                        else checkRho lit rhoInt
+                                >>= return . Right       -- infer Int
+                Meta Rigid{} -> fromInt
+                TApp _ _     -> fromInt             -- force type error unless Num             
+                default -> do
+                    x <- checkRho lit rhoInt        -- fix unresolved to Int
+                    return (Right x)                -- or force type error
+    | kind == LDouble, isDWIM LDouble value, RhoTau _ tau <- sigma.rho = do
+            g <- getST
+            tau <- reduced tau
+            
+            case tau of
+                TCon{pos, name}
+                    | name == rhoFloat.tau.name   = return (Right lit.{kind=LFloat, value <- (++"F")})
+                    | name == rhoDouble.tau.name  = return (Right lit.{kind=LDouble, value <- (++"D")})
+                    | otherwise = fromDouble
+                Meta Rigid{} -> fromDouble
+                TApp _ _     -> fromDouble          -- force type error unless Real             
+                default -> do
+                    x <- checkRho lit rhoDouble     -- fix unresolved to Double
+                    return (Right x)                -- or force type error
+    | kind == LDouble = checkRho lit rhoDouble >>= return . Right   -- no DWIM
+    | otherwise       = checkRho lit rhoInt    >>= return . Right   -- no DWIM
+    where
+        frmIntlit = nApp frmInt lit.{typ=Just sigInt}
+        frmDbllit = nApp frmDbl lit.{typ=Just sigDouble}
+        frmInt = Vbl{pos = pos.change VARID "fromInt", 
+                     name = MName{tynm=num, base="fromInt"}, typ=Nothing}
+        frmDbl = Vbl{pos= pos.change VARID "fromDouble",
+                     name = MName{tynm=real, base="fromDouble"}, typ=Nothing}
+        fromInt    = checkRho frmIntlit sigma.rho >>= return . Right
+        fromDouble = checkRho frmDbllit sigma.rho >>= return . Right
+literalType _ x = return (Left x)
+
+
+
 --- Resolve the x.m finally
 --- Resolve overloaded methods
-resolveHas = mapEx true rHas
+resolveHas expr = do
+        ctxs <- collectConstrs expr
+        mapEx true (literalType ctxs) expr >>= mapEx true rHas
     where
         rHas (x@Mem{ex, member, typ = Just sigma}) = do
             app <- checkRho x.{typ = Nothing} sigma.rho -- now type of ex should be known

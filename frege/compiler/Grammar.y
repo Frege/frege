@@ -36,7 +36,7 @@
     «•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•» */
 
 /**
-*   This is the grammar for the Frege language ($Revision$).
+*   This is the grammar for the Frege language.
 */
 package frege.compiler.Grammar where
 
@@ -44,6 +44,7 @@ package frege.compiler.Grammar where
      * !!! DO NOT CHANGE FILE Grammar.fr, IT HAS BEEN CREATED AUTOMATICALLY !!!
      */
 
+import frege.Prelude hiding(<+>)
 
 import frege.List(Tree, keyvalues, keys, insertkv)
 import Data.List as DL(elemBy)
