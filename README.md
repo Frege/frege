@@ -40,7 +40,6 @@ Contributions
 If you are interested in contributing, here are some hot topics:
 
 * write Frege code to support more of the Java API
-* create a nicer logo
 * port Haskell libraries or tools
 * open issues on the Issues page if you find bugs, errors in documentation, etc.
 * help make Frege popular by writing code for projects like Rosetta Stone or Computer Language Shootout.
