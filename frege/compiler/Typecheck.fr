@@ -296,7 +296,7 @@ removeCheckedCtx sym sigma
 
 resolveConstraints :: Symbol -> StG ()
 resolveConstraints sym
-    | SymV{typ, expr=Just x, anno=false} <- sym = do
+    | SymV{typ, expr=Just x, anno=false, state} <- sym, state != Recursive = do
         x   <- resolveHas x
         cxs <- collectConstrs x
         rho <- simplify sym.pos typ.rho.{context=cxs}
@@ -394,16 +394,18 @@ checkName nm = do
             SymV {expr = Just x, typ = t}
                 | U.isPSigma t,
                   sym.state `elem` [Unchecked, Typechecking, Recursive] = do
-                    rho <- approxRho x
-                    U.changeSym sym.{state=Typechecking, typ = ForAll [] rho}
-                    -- (rho, ex) <- inferRho x
-                    ex  <- checkRho x rho
-                    rho <- maybe (error "untyped after checkRho") (zonkRho • Sigma.rho) ex.typ
+                    rho0 <- approxRho x
+                    ex <- case rho0 of
+                        RhoTau{} -> do
+                            U.changeSym sym.{state=Typechecking}
+                            (rho, ex) <- inferRho x  -- CAF ?
+                            return ex
+                        RhoFun{} -> do
+                            U.changeSym sym.{state=Typechecking, typ = ForAll [] rho0}
+                            checkRho x rho0
                     sym <- findV sym.name       -- refresh, might be updated meanwhile
                     let newstate = if sym.state != Recursive then Typechecked else Recursive
-                        newsig   = if newstate == Recursive
-                                        then ForAll [] rho -- why? .{context=[]}
-                                        else ForAll [] rho
+                    newsig <- maybe (error "untyped after checkRho") zonkSigma ex.typ
                     U.changeSym sym.{typ = newsig, expr=Just ex, state = newstate}
                     stio newsig
             SymV {expr = Just x, typ = t, state, anno}
@@ -553,8 +555,10 @@ approximate x = do
     rho <- approxRho x
     stio (ForAll [] rho)
 approxRho :: Expr -> StG Rho
-approxRho (Lam {ex}) = do
-    sig <- newSigmaTyVar ("arg", KType)
+approxRho (Lam {ex,pat}) = do
+    sig <- case pat of
+        PAnn{pat, typ} -> return typ
+        sonst          -> newSigmaTyVar ("arg", KType)
     rho <- approxRho ex
     stio (RhoFun [] sig rho)
 approxRho _ = newRhoTyVar ("res", KType)
