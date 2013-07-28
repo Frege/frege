@@ -2270,6 +2270,34 @@ instSymDirect pos sym sigma = do
         other -> U.fatal pos (text ("Can't instSymDirect " ++ nice sym g))
 -- 
 {--
+    Instantiate a pattern bound symbol at a given type.
+    This is interesting only for polymorphic functions that have a @forall@
+    type and constraints, like
+    
+    > f :: forall e.Num e => [e] -> [e] @@ Num a => [a] -> [a]
+
+    Here, we need to apply the 'Num' constraint to @f@
+    -}
+instPatternBound :: Position -> Binding -> Sigma -> StG Binding
+instPatternBound pos bind sigma = do
+    g <- getST
+    U.logmsg TRACEG pos (text ("instPatternBound: "
+                             ++ show bind 
+                             ++ " @@ " ++ nice sigma g))
+    let inst  = U.sigmaInst g bind.ftype sigma
+        strho = U.substRho (U.unifySigma g bind.ftype sigma) bind.ftype.rho
+    U.logmsg TRACEG pos (text ("instPatternBound: gargs = " ++ show (map (flip nice g) inst)))
+    U.logmsg TRACEG pos (text ("instPatternBound: strho = " ++ nice strho g))
+    contexts <- mapSt  TC.reducedCtx  strho.context
+    ctxs     <- mapSt (resolveConstraint pos) contexts
+    
+    let result = fold app bind ctxs
+        app (b::Binding) x = b.{jex <- JX.invoke [x] . JX.xmem "apply", jtype = Applicable}
+
+    return (adapt result.{ftype <- Sigma.{rho <- Rho.{context=[]}},
+                   stype =  nice strho.{context=[]} g } bind.jtype)
+
+{--
   * instantiate a symbol at a given type
   -}
 instSym :: Position -> Symbol -> Sigma -> StG Binding
@@ -2277,9 +2305,10 @@ instSym pos sym sigma = do
     g <- getST
     U.logmsg TRACEG pos (text ("instSym: "
                              ++ nice sym g ++ "::" ++ nice sym.typ g
-                             ++ " at " ++ nice sigma g))
+                             ++ " @@ " ++ nice sigma g))
  
-    let inst = U.sigmaInst g sym.typ sigma
+    let inst  = U.sigmaInst g sym.typ sigma
+        
  
  
     -- let gargs = map (tauJT g) inst
@@ -2364,27 +2393,131 @@ genExpression ret stri x binds = do
     g <- getST
     let nt = sigmaJT g (unJust x.typ) 
     genExpr ret (stri nt) x binds
+
+{--
+    Before we proceed to generating simple expressions with 'genSimple',
+    we have to check if there appears an unknown constraint with rigid meta type variables
+    in the type, like for example: 
+    
+    > map (Num.* (Num.fromInt 2))  ::  Num t3244#e => [t3244#e] -> [t3244#e]
+    
+    This signals that the application @map (2*)@ gets passed to a higher ranked
+    function who expects a function of type
+    
+    > forall e.Num e => [e] -> [e]
+    
+    The code that must be generated for this should look like:
+    
+    > new Lambda1() {
+    >     public Lazy eval(Object num) {
+    >         return work((CNum) num));
+    >     }
+    >     public T work (CNum ctx$n) {
+    >       return [[genExpr true (strict JType) expr]] 
+    >     }
+    > }
+    
+    Note that we will hit the same expression inside the @work@ method, but since we pretend
+    that we are compiling a symbol with  constraint @Num t3244#@, it will find it and 
+    use it in instantiating @Num.*@ and @Num.fromInt@ later.
+    
+-}        
+genExpr rflag rjtype expr binds | Just sigma <- expr.typ = do
+        g     <- getST
+        let ectxs = envCtxs g
+            ctxTvs ctx = fst ((TC.ctxTvs ctx).run g)
+            tctxs = filter  rigidContext sigma.rho.context
+            rigidContext :: Context -> Bool
+            rigidContext = (any (not . MetaTv.isFlexi) . ctxTvs)
+        case tctxs of
+            (_:_) | null [ ctx | ctx <- ectxs, tctx <- tctxs, impliesG g ctx tctx ] = do
+                case expr of
+                    Vbl{name = Local{}} |
+                        Just sym  <- expr.name.findit g,
+                        Just bind <- lookup binds sym,
+                        Nothing <- sym.expr,              -- pattern bound
+                        not bind.ftype.bound.null,        -- forall a. ....
+                        -- make sure the contexts are in the right order
+                        -- we can't pass forall a b. (Num a, Num b) =>
+                        -- when (Num b, Num a) is expected
+                        uni <- U.substRho (U.unifySigma g bind.ftype sigma) bind.ftype.rho,
+                        and (zipWith TC.sameCtx uni.context sigma.rho.context)
+                            = do
+                                U.logmsg TRACEG (getpos expr) (text(
+                                    "genExpr: passing on "
+                                    ++ nice expr g
+                                    ++ " :: " ++ nice bind.ftype g
+                                    ++ " @@ " ++ nice sigma g
+                                    ))
+                                return (adapt bind rjtype)             -- just pass on function 
+                    _       =  wrapHigher tctxs ectxs sigma
+            _ -> genSimple rflag rjtype expr binds
+    where
+        -- wrap expressions used as arguments for polymorphic thngs in 
+        -- higher rank functions.
+        wrapHigher :: [Context] -> [Context] -> Sigma -> StG Binding
+        wrapHigher tctxs ectxs sigma = do
+            g <- getST
+            let depth    = length tctxs
+                ctxNames = take depth (drop (length ectxs) GenJava7.ctxNames)
+                ctxTypes = [ Ref{jname=U.javaName g cname, typeargs=[]} |
+                                Ctx{cname} <- tctxs ]
+                ctxexs   = zipWith JCast ctxTypes (map JAtom ctxNames)
+                workarg jty name = (attrFinal, TY.sigInt, jty, name) 
+                jtype    = jtFunc depth
+                eval     = JMethod{attr=attrs [JPublic, JFinal], gargs=[], jtype=lazy rjtype, 
+                                    name = "eval", 
+                                    args = evalArgDef attrFinal (repeat sigma) ctxNames, 
+                                    body = JBlock [
+                                        JReturn (JInvoke (JAtom "work") ctxexs)
+                            ]}
+                faketype = ForAll [("ranks", KType)] (RhoFun{context=tctxs, sigma=TY.sigInt, rho=TY.rhoInt})
+                fakesym  = (U.patLocal (getpos expr) 0 "\\rankN").{depth = 0, typ = faketype}
+            U.logmsg TRACEG (getpos expr) (text("genExpr: wrapping " 
+                ++ nice expr g
+                ++ " :: " ++ nice sigma g
+                ++ " :: " ++ nice faketype g))
+            U.logmsg TRACEG (getpos expr) (text("genExpr: in environment " 
+                ++ nice faketype.rho.{context = ectxs} g))
+            body <- compiling fakesym (genStmts (strict rjtype) expr binds)
+            let newclass = JNewClass jtype  []  decls
+                decls    = unCommentG g [eval, work]
+                work     = JMethod{attr=attrFinal, gargs=[], jtype=strict rjtype, 
+                                    name = "work", 
+                                    args = zipWith workarg ctxTypes ctxNames, 
+                                    body = JBlock body} 
+            return (newBind g faketype newclass) 
+genExpr rflag rjtype expr binds = genSimple rflag rjtype expr binds      
  
 {--
-  * [usage] @genExpr rflag rmode expression binds@
-  * [return] a binding that computes the frege expression in the desired 'RMode'
-  * If the @rflag@ is true, special handling occurs for lazy calls: The arguments
+  * [usage] @genSimple rflag rtype expression binds@
+  * [return] a binding that computes the simple frege expression at the desired 'JType'
+  
+  * If the @rflag@ is true, this signals a return expression.
+  
+  * Special handling occurs for lazy applications in return expressions: The arguments
   * of that tailcall are computed according to the strictness information of the
   * called function instead of all lazy. This is an optimization appropriate for
   * tail calls.
   -}
-genExpr :: Bool -> JType -> Expr -> Tree Symbol Binding -> StG Binding
-genExpr _ rm (Vbl {pos, name, typ = Just sigma}) binds
+genSimple, genExpr :: Bool -> JType -> Expr -> Tree Symbol Binding -> StG Binding
+genSimple _ rm (Vbl {pos, name, typ = Just sigma}) binds
      | Local{} <- name = do
         g <- getST
         sym <- U.findV name
+        U.logmsg TRACEG pos (text ("genSimple Vbl: " ++ nice sym g 
+            ++ " :: " ++ nice sym.typ g
+            ++ " @@ " ++ nice sigma g))
         case lookup binds sym of
-             Just b = stio (adapt b rm)
-             -- Nothing | Just _ <- sym.expr 
-             --     = instSym pos sym sigma
+             Just b 
+                | Nothing <- sym.expr,           -- pattern bound
+                  not b.ftype.bound.null,        -- forall a. ....
+                  not b.ftype.rho.context.null   -- forall a.C a => 
+                            = instPatternBound pos b sigma
+                | otherwise = stio (adapt b rm)
              Nothing -> do
                  g <- getST
-                 U.error pos (msgdoc ("genExpr: local " ++ nicer sym g ++ " not bound"))
+                 U.error pos (msgdoc ("genSimple: local " ++ nicer sym g ++ " not bound"))
                  -- let sjt = sigmaJT g sigma
                  stio (newBind g sym.typ (JAtom ("UNBOUND." ++ name.base)))
      | otherwise = do
@@ -2392,17 +2525,18 @@ genExpr _ rm (Vbl {pos, name, typ = Just sigma}) binds
         sym <- U.findV name
         bind <- instSym pos sym sigma
         let mbind = adapt bind rm
-        U.logmsg TRACEG pos (msgdoc ("genExpr: got=" 
-            ++ show bind
-            ++ ", mode=" ++ show rm
-            ++ ", return=" ++ show mbind)) 
+        -- U.logmsg TRACEG pos (msgdoc ("genSimple: got=" 
+        --     ++ show bind
+        --     ++ ", mode=" ++ show rm
+        --     ++ ", return=" ++ show mbind)) 
         stio mbind
  
-genExpr rflg rm (app@App a b (Just sigma)) binds = do
+genSimple rflg rm (app@App a b (Just sigma)) binds = do
         g <- getST
         let flat  = map fst (U.flatx app)
             fun   = head flat
             args  = tail flat
+        U.logmsg TRACEG (getpos app) (text ("genApp:  " ++ nice app g ++ "  ::  " ++ nice sigma g)) 
         genApp fun args
     where
         pos = getpos app
@@ -2593,13 +2727,13 @@ genExpr rflg rm (app@App a b (Just sigma)) binds = do
             let raw    = appl.{ftype=sigma}
             stio (coerce g rm raw)
 
-genExpr _ rm (Con {pos, name, typ = Just sigma}) binds = do
+genSimple _ rm (Con {pos, name, typ = Just sigma}) binds = do
     g    <- getST
     sym  <- U.findD name
     bind <- instSym pos sym sigma
     stio (adapt bind rm)
  
-genExpr _ _ (Lit {kind, value, typ = Just sigma}) binds
+genSimple _ _ (Lit {kind, value, typ = Just sigma}) binds
     | kind != LRegex && kind != LBig = do
             g <- getST
             -- let jt = sigmaJT g sigma
@@ -2608,7 +2742,7 @@ genExpr _ _ (Lit {kind, value, typ = Just sigma}) binds
                     | otherwise = value
             stio (newBind g sigma  (JAtom v))
 
-genExpr _ rm (x@Lit {kind,value,typ=Just sigma}) binds = do
+genSimple _ rm (x@Lit {kind,value,typ=Just sigma}) binds = do
         jname <- findConst x
         g <- getST
         -- let jt = sigmaJT g sigma
@@ -2616,7 +2750,7 @@ genExpr _ rm (x@Lit {kind,value,typ=Just sigma}) binds = do
         stio bind
 
 
-genExpr rflg target (ifte@Ifte c t e (Just sigma)) binds 
+genSimple rflg target (ifte@Ifte c t e (Just sigma)) binds 
     | not (isStrictJT target) = do
         g     <- getST
         -- let jt = sigmaJT g sigma
@@ -2633,21 +2767,21 @@ genExpr rflg target (ifte@Ifte c t e (Just sigma)) binds
                             (map Binding.jex [cbind, tbind, ebind])
         stio (adapt (newBind g sigma jex).{jtype=rjt} target)
  
-genExpr _ target (ifte@Ifte c t e (Just sigma)) binds = do
+genSimple rflg target (ifte@Ifte c t e (Just sigma)) binds = do
      g <- getST
      cbind <- genExpr false Nativ{typ="boolean", typeargs=[]} c binds
-     tbind <- genExpr false target      t binds
-     ebind <- genExpr false target      e binds
+     tbind <- genExpr rflg target      t binds
+     ebind <- genExpr rflg target      e binds
      stio (adapt (newBind g sigma  
                             (JQC cbind.jex tbind.jex ebind.jex)) target)
  
-genExpr _ rm (lam@Lam{}) binds = do
+genSimple _ rm (lam@Lam{}) binds = do
     g <- getST
     bind <- lambdaEx lam binds
     stio (adapt bind rm)
  
-genExpr rflg rm ex binds = do
+genSimple rflg rm ex binds = do
     g <- getST
     let ft = unJust (Expr.typ ex)
-    U.error (getpos ex) (text ("Cannot genExpr: " ++ nicer ex g ++ " :: " ++ nicer ft g))
+    U.error (getpos ex) (text ("Cannot genSimple: " ++ nicer ex g ++ " :: " ++ nicer ft g))
     return (newBind g TY.sigBool (JAtom "cannotgenexpression"))
