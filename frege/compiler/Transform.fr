@@ -1362,22 +1362,42 @@ unLet (xlet@Let {env=letenv,ex=letex,typ=lettyp})
                 U.changeSym sym.{expr = Just (Lam {pat,ex,typ})}
                 letex <- U.mapEx true unLet letex
                 stio (Right (Let {env=letenv,ex=letex,typ=lettyp,defs=[]}))
+        -- a local non function stays local only if it uses other local symbols
+        -- if used only once and is non recursive, it will get inlined
         Just cx = do
             e <- isSimple cx
-            if e then do
-                self <- references [sym.sid] cx
-                down <- references [sym.sid] letex
-                if self == 0 && down == 1       -- used exactly once, note that use
-                                            -- in a local function counts twice.
-                    
-                then do
-                    let inline = if U.isPSigma sym.typ then cx
-                                    else Ann {ex = cx, typ = Just sym.typ}
-                    ex <- replSid sym.sid inline letex
-                    g <- getST
-                    U.logmsg TRACE7 sym.pos (text ("let " ++ nice x g ++ " = " ++ nice inline g ++ " in ... replaced with " ++ nice ex g))
-                    unLet ex
-                else stio (Left xlet)
+            self <- references [sym.sid] cx
+            down <- references [sym.sid] letex
+            -- used <- U.localSyms cx
+            -- inner <- innerSids cx
+            if e && self == 0 && down == 1       -- used exactly once, note that use
+                                                 -- in a local function counts twice.                    
+            then do
+                -- inline that
+                let inline = if U.isPSigma sym.typ then cx
+                                else Ann {ex = cx, typ = Just sym.typ}
+                ex <- replSid sym.sid inline letex
+                g <- getST
+                U.logmsg TRACE7 sym.pos (text ("let " ++ nice x g ++ " = " ++ nice inline g ++ " in ... replaced with " ++ nice ex g))
+                unLet ex
+            --
+            --  don't globalize CAFs
+            --
+            -- else if all ((inner `including` sym.sid)  `contains`) (keys used)
+            -- then do
+            --     g <- getST
+            --     let name = U.unusedName (VName g.thisPack x.base)  g
+            --     ex <- replName sym.sid name cx  -- no reference to x anymore
+            --     letex2 <- replName sym.sid name letex  -- in the inner of the lambda or the let ex
+            --     let vks  = map Tau.varkind (U.freeTVars [] sym.typ.rho)
+            --     let typ  = ForAll vks sym.typ.rho
+            --     U.enter sym.{sid = 0, name, expr = Just ex, vis = Private, typ}
+            --     changeST Global.{sub <- SubSt.{
+            --                     idKind <- insertkv (KeyTk sym.pos.first) (Right name)}}
+            --     U.logmsg TRACE7 sym.pos (text ("let " ++ nice x g ++ " = " ++ nice cx g ++ " in ... replaced with " ++ nice letex2 g))
+            --     U.logmsg TRACE7 sym.pos (text ("new name is " ++ name.nice g))
+            --     U.hint sym.pos (text("let definition is a constant: " ++ name.nice g))
+            --     unLet letex2       -- other opportunities possible here
             else stio (Left xlet)
         other -> stio (Left xlet)
 unLet x = stio (Left x)
@@ -1450,8 +1470,11 @@ closedLambda (lam@Lam {pat,ex,typ = Just sigma}) = do
         ex    <- U.mapEx true closedLambda ex   -- recurse
         used  <- U.localSyms ex                 -- find local vars used
         inner <- innerSids ex
+        tvs   <- TCU.sigmaTvs sigma
         let thisSids = fold including inner  [ uid | PVar {uid} <- U.patVars pat ]
         if all (thisSids `contains`) (keys used)
+            && (null sigma.rho.context                            -- no constraints or
+                || null (filter (not . MetaTv.isFlexi) tvs))      -- no rigid tvs!
             then do
                 g <- getST
                 -- u <- U.uniqid
