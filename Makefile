@@ -9,7 +9,7 @@
 #   - put the JDK7 in your PATH after other JDKs, and make java7 a symbolic link to
 #     the JDK7 java binary. (On Windows, just copy java.exe to java7.exe)
 #   - For UNIX users: make the follwoing alias:
-#         alias fmake='make JAVA="/path/to/jdk7/java -XX:+TieredCompilation" -f frege.mk '
+#         alias fmake='make JAVA="/path/to/jdk7/java" -f frege.mk '
 #
 # YACC should be a BSD compatible yacc. This can be obtained from the net at various places.
 # Windows users look for pbyacc.exe, Ubuntu users use
@@ -22,7 +22,8 @@
 JAVAC = javac -encoding UTF-8
 YACC = pbyacc
 # JAVA = java7 -XX:+TieredCompilation "-Dfrege.javac=javac -J-Xmx512m"
-JAVA = java7 -XX:+TieredCompilation -Dfrege.javac=internal
+# JAVA = java7 -XX:+TieredCompilation -Dfrege.javac=internal
+JAVA = java7 -Dfrege.javac=internal
 
 
 
@@ -65,10 +66,10 @@ FREGEC0  = $(FREGECJ) -prefix a -sp shadow;.
 FREGEC1  = $(FREGE) afrege.compiler.Main -d build -hints -inline -prefix b
 
 #	compile final compiler with compiler2
-FREGEC2  = $(FREGE) bfrege.compiler.Main -d build -hints -inline
+FREGEC2  = $(FREGE) bfrege.compiler.Main -d build -hints -O
 
 #	final compiler
-FREGECC  = $(FREGE) frege.compiler.Main  -d build -hints -inline
+FREGECC  = $(FREGE) frege.compiler.Main  -d build -hints -O
 GENDOC   = $(FREGE) frege.tools.Doc -d doc
 
 #	shadow Prelude files in the order they must be compiled
