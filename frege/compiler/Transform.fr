@@ -166,12 +166,26 @@ pass9 = do
 
 easySym (vsym@SymV {pos})
     | Just x <- vsym.expr = do
+        g <- getST
         nx <- easyExpression x
-        U.changeSym vsym.{expr = Just nx}
+        if U.isOn g.options.flags INLINE then do
+            ux <- inlined nx >>= easyExpression
+            U.changeSym vsym.{expr = Just ux}
+        else U.changeSym vsym.{expr = Just nx}
     | otherwise = stio ()
 easySym sym = do
     g <- getST
     U.fatal sym.pos (text ("easySym no SymV : " ++ sym.nice g))
+
+simpleSym (vsym@SymV {pos})
+    | Just x <- vsym.expr = do
+        nx <- mkSimple x
+        U.changeSym vsym.{expr = Just nx}
+    | otherwise = stio ()
+simpleSym sym = do
+    g <- getST
+    U.fatal sym.pos (text ("simpleSym no SymV : " ++ sym.nice g))
+
 
 {--
     All default class methods must be exported, so instances can derive their own version.
@@ -855,22 +869,44 @@ mkSimple x = do
         is <- isSimple x
         if is then return x
         else mkS x 
-    where
-        -- any expression can be made simple through (\_ -> easy x) ()
-        mkS x = do
-            e <- mkEasy 0 x
-            let lam = Lam {pat = PCon {pos, qname=unitName, pats=[]}, 
-                           ex = e,
-                           typ = Just (
-                                ForAll [] (
-                                    RhoFun [] (TC.sigFor "()")
-                                           (unJust e.typ).rho))}
-                pos = Position.null                                           
-                unitName = MName (TC.tc "()").name "()"
-                uni = Vbl {pos, name=unitName, typ = Just (TC.sigFor "()")}
-            g <- getST
-            U.hint (getpos e) (text("extra class file needed for complicated expression " ++ nicer e g))                                           
-            return (App lam uni e.typ)
+
+{--
+    @mkCaseApp ex f@ creates 
+    
+    > case ex of p -> ux
+    
+    where @ux@ is the result of @f@ applied to the fresh pattern @p@
+    -}
+mkCase ex f = do
+    simple <- mkSimple ex
+    uid    <- U.uniqid
+    let pos = getpos simple
+        sym = U.patLocal pos uid pat.var
+        pat = PVar{pos, uid, var="mkCase"}
+        var = Vbl{pos, name=Local{uid, base=pat.var}, typ=ex.typ} 
+    U.enter sym.{typ = maybe U.pSigma id ex.typ}
+    altex <- mkEasy 0 (f var)
+    return $! Case {ckind=CNormal, 
+                    ex=simple, 
+                    alts=[CAlt{pat, ex=altex}], 
+                    typ=altex.typ}
+
+--- any expression x can be made simple through (\_ -> easy x) ()
+mkS x = do
+    e <- mkEasy 0 x
+    let lam = Lam {pat = PCon {pos, qname=unitName, pats=[]}, 
+                   ex = e,
+                   typ = fmap utyp e.typ}
+        utyp (ForAll bound rho) = 
+                        ForAll bound (
+                            RhoFun [] (TC.sigFor "()") rho
+                        )
+        pos = getpos e                                           
+        unitName = MName (TC.tc "()").name "()"
+        uni = Con {pos, name=unitName, typ = Just (TC.sigFor "()")}
+    g <- getST
+    U.hint (getpos e) (text("extra class file needed for complicated expression " ++ nicer e g))                                           
+    return (App lam uni e.typ)
 {--
  * [returns] *@true@* if expression is easy. See 'pass9' for more information.
  *
@@ -928,7 +964,49 @@ easyExpression x = do
         exeq (a@Ifte{}) (b@Ifte{}) = a.cnd `exeq`  b.cnd && a.els `exeq`  b.els && a.thn `exeq`  b.thn
         exeq (a@Case{}) (b@Case{}) = a.ex  `exeq`  b.ex  && and (zipWith exeq (map CAlt.ex a.alts) (map CAlt.ex b.alts))
         exeq _          _          = false 
-         
+
+{--
+    Items that can be inlined even if 1 arguments are missing.
+    
+     > f . g = \u -> f (g u)
+     > flip f a = \b -> f b a
+     
+      --} 
+superOpt = [VName pPreludeBase "•",
+        -- VName pPreludeBase "flip" 
+    ]
+{--
+    inline all functions appropriate for inlining
+    -}
+inlined = U.mapEx true inline
+    where
+        inline (app@App{})
+          | (fun,t):rest <- U.flatx app,
+            Vbl {name, typ = Just sig} <- fun,
+            not name.isLocal = do
+                g   <- getST
+                sym <- U.findV name
+                -- U.logmsg TRACE9 (getpos v) (text ("can we inline " ++ nicer sym g ++ "?"))
+                case sym.expr of 
+                    Just x 
+                    -- we can't inline any class methods
+                    -- because, for example 
+                    -- (display x) would be replaced by (show x)
+                    -- Hence the instance specific functionality was lost
+                    -- e.g. display "foo" = "foo"  
+                    -- and  show    "foo" = "\"foo\""
+                        | MName tname _ <- name,
+                          Just SymC{} <- tname.findit g = return (Left app)  
+                        | sym.exported, d <- length rest, 
+                          d >= sym.depth ||
+                            d >= sym.depth-1 && sym.name `elem` superOpt = do
+                                U.logmsg TRACE9 (getpos fun) (text ("replace " 
+                                    ++ nice fun g  ++ " :: " ++ nicer sig g))
+                                x <- recycle x sig.rho
+                                return . Left . U.unflatx $ (x,t):rest
+                    _ -> return (Left app)
+        inline x = return (Left x)        -- everything else    
+                    
 {--
     Perform program transformations that ensure an easy expression.
     This may imply making some sub expression simple, which, in turn,
@@ -957,32 +1035,6 @@ easyExpression x = do
     -}
 mkEasy :: Int -> Expr -> StG Expr    
 mkEasy !d  (x@Lit{})    = return x
-mkEasy !d (v@Vbl {name, typ = Just sig}) | not name.isLocal = do
-            g <- getST
-            if U.isOn g.options.flags INLINE 
-                then do
-                    sym <- U.findV v.name
-                    -- U.logmsg TRACE9 (getpos v) (text ("can we inline " ++ nicer sym g ++ "?"))
-                    case sym.expr of 
-                        Just x 
-                            -- we can't inline any class methods
-                            -- because, for example 
-                            -- (display x) would be replaced by (show x)
-                            -- Hence the instance specific functionality was lost
-                            -- e.g. display "foo" = "foo"  
-                            -- and  show    "foo" = "\"foo\""
-                            | MName tname _ <- v.name,
-                              Just SymC{} <- tname.findit g = return v  
-                            | sym.exported, 
-                              if U.isOn g.options.flags OPTIMIZE 
-                                then d > 0 && sym.depth > 0
-                                else d >= sym.depth = do
-                                    U.logmsg TRACE9 (getpos v) (text ("replace " 
-                                        ++ nice v g  ++ " :: " ++ nicer sig g))
-                                    x <- recycle x sig.rho
-                                    mkEasy d x
-                        _ -> return v
-                else return v    
 mkEasy !d  (x@Vbl{})    = return x
 mkEasy !d  (x@Con{})    = return x
 mkEasy !d  (ann@Ann {ex})
@@ -1002,16 +1054,17 @@ mkEasy !d  (x@App f arg t) = do
         -- f (case a of {p1->x;p2->y}) ==> case a of {p1->f x;p2->f y}
         -- f (if a then b else c) ==> if a then f b else f c
         -- f (let a = b in c) ==> let a = b in f c  
-        ea     <- mkEasy 0 arg
+        ea     <- easyExpression arg
         simple <- isSimple ea
         case ea of
-            Let{} -> mkEasy 0 ea.{ex = App f ea.ex t, typ = t}
+            Let{} -> easyExpression ea.{ex = App f ea.ex t, typ = t}
             Ifte a b c _ | not simple = do
-                f' <- recyclex f
-                mkEasy 0 ea.{thn = App f b t, els = App f' c t, typ=t}
+                f'  <- recyclex f
+                f'' <- recyclex f
+                easyExpression ea.{thn = App f' b t, els = App f'' c t, typ=t}
             Case{} = do
                     alts <- mapSt adapt ea.alts
-                    mkEasy 0 ea.{alts, typ=t}
+                    easyExpression ea.{alts, typ=t}
                 where
                     adapt :: CAlt -> StG CAlt
                     adapt calt = do
@@ -1021,19 +1074,22 @@ mkEasy !d  (x@App f arg t) = do
                 arg <- if simple then return ea else mkSimple ea
                 -- handle function with easy arg
                 -- (let a = b in c) r => let a = b in c r
-                -- (if a then b else c) r => if a then b r else c r
+                -- (if a then b else c) r => case r of p -> if a then b p else c p
                 -- (case a of {p1->b;p2->c}) r => case a of {p1->b r;p2->c r}
                 -- (\p -> a) r => case r of \p -> a
                 ef <- mkEasy (d+1) f
                 -- simple <- isSimple ef
                 case ef of
-                    Let{} -> mkEasy 0 ef.{ex = App ef.ex arg t, typ = t}
+                    Let{} -> easyExpression ef.{ex = App ef.ex arg t, typ = t}
                     Ifte{} -> do
-                        r' <- recyclex arg
-                        mkEasy 0 ef.{thn = App ef.thn arg t, els = App ef.els r' t, typ = t}
+                        r'  <- recyclex arg
+                        r'' <- recyclex arg
+                        easyExpression ef.{thn = App ef.thn r' t, els = App ef.els r'' t, typ = t}
+                        -- let mk x = ef.{thn = App ef.thn x t, els = App ef.els x t, typ = t}
+                        -- mkCase arg mk
                     Case{} -> do
                             alts <- mapSt adapt ef.alts
-                            mkEasy 0 ef.{alts, typ=t}
+                            easyExpression ef.{alts, typ=t}
                         where
                             adapt :: CAlt -> StG CAlt
                             adapt calt = do
@@ -1041,10 +1097,14 @@ mkEasy !d  (x@App f arg t) = do
                                 return calt.{ex = App calt.ex r' t}
                     Lam{} -> do 
                         let cas = Case CNormal arg [CAlt{pat=ef.pat, ex=ef.ex}] t
-                        mkEasy 0 cas
+                        easyExpression cas
                     _ -> do
                         sf <- mkSimple ef
-                        return (App sf arg t)
+                        g  <- getST
+                        case sf of
+                            -- Don't! Transformed code must stay type correct!
+                            -- Con{name} | newtypeCon name g -> return arg
+                            _ -> return (App sf arg t)
 
             
 mkEasy !d (x@Let{env,ex}) = do             -- TODO: handle non-recursive let/case/if
@@ -1083,7 +1143,7 @@ mkEasy !d (outer@Case{}) = do
         -- case if a then b else c of {p1->x;p2->y}
         -- if a then case b of {p1->x;p2->y} else case c of {p1->x;p2->y}
         Ifte{} | not simple -> do
-            let thn = outer.{ex = ea.thn}
+            thn <- recyclex outer.{ex = ea.thn}
             els <- recyclex outer.{ex = ea.els}
             mkEasy 0 ea.{thn,els,typ=outer.typ}
         -- case case a of {b -> c; d -> e} of {f -> g; h -> i}
@@ -1444,14 +1504,17 @@ isPVarOrPLit  _             = false
     This is used in case elimination.
     Note that strict patterns are not matched.  
     -}
-sMatch g PVar{uid}        x               tree = Just (tree.insert uid x)
+sMatch g PVar{uid}        x               tree = Just (Tree.insert tree uid x)
 sMatch g PLit{value=pval} Lit{value=xval} tree = if xval == pval then Just tree else Nothing
 sMatch g PCon{qname,pats} x               tree
     | Con{name}:xs <- map fst (U.flatx x),
       name == qname, 
-      length pats == length xs = fold (>>=) (Just tree) (zipWith (sMatch g) pats xs)
-      -- all isPVarOrPLit pats = fold (>>=) (Just tree) (zipWith (sMatch g) pats xs)
-    -- productCon qname g, all isPVar pats = Just Nil  
+      length pats == length xs = fold collect (Just tree) (zipWith (sMatch g) pats xs)
+    -- newtypeCon qname g = sMatch g ((unStrict . head) pats) x tree
+    where -- unStrict PUser{pat} = pat
+          -- unStrict pat        = pat  
+          collect (Just t) f  = f t
+          collect Nothing  _  = Nothing
 sMatch g p x t = Nothing    
 
 {-
@@ -1600,7 +1663,7 @@ productCon _ _ = false
 newtypeCon (qname@MName tname _) g = case qname.findit g of
     Just SymD{} -> case tname.findit g of
         Just (SymT {newt}) -> newt
-        other -> error ("productCon " ++ tname.nice g ++ " is not a type")
+        other -> error ("newtypeCon " ++ tname.nice g ++ " is not a type")
     sonst -> false
 newtypeCon _ _ = false
 
