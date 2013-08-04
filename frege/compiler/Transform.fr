@@ -808,9 +808,9 @@ unrollLet x = stio (Left x)
 
 
 --- copy expr and re-establish type
-recycle expr rho = do
+recycle newpos expr rho = do
         g <- getST
-        expr <- U.copyExpr Nil expr
+        expr <- U.copyExpr (Just newpos) Nil expr
         expr <- U.untypeExpr expr
         let freevars =  U.freeTVars [] rho
         (metas, rho) <- TCU.instantiateTvs (ForAll (map Tau.varkind freevars) rho)
@@ -818,7 +818,7 @@ recycle expr rho = do
         foreach (zip metas freevars) (uncurry unInst)
         x <- zonkExpr x
         x <- U.mapEx true substInst x
-        U.logmsg TRACE9 (getpos expr) (text ("recycled  " ++ nice x g))
+        U.logmsg TRACE9 (newpos) (text ("recycled  " ++ nice x g))
         stio x
     where
         -- restore old type variables
@@ -833,7 +833,7 @@ recycle expr rho = do
         unInst _ _ = return ()  
 
 recyclex :: Expr -> StG Expr
-recyclex expr = U.copyExpr Nil expr {- case expr.typ of
+recyclex expr = U.copyExpr Nothing Nil expr {- case expr.typ of
     Just sigma -> recycle expr sigma
     _ -> do
         g <- getST
@@ -906,7 +906,11 @@ mkS x = do
         uni = Con {pos, name=unitName, typ = Just (TC.sigFor "()")}
     g <- getST
     U.hint (getpos e) (text("extra class file needed for complicated expression " ++ nicer e g))                                           
-    return (App lam uni e.typ)
+    let !trans = App lam uni e.typ
+    U.logmsg TRACE9 (getpos x) (text ("mkEasy LAM INTRO before: " ++ nice x g))
+    U.logmsg TRACE9 (getpos x) (text ("mkEasy LAM INTRO after:  " ++ nice trans g))
+    return trans
+
 {--
  * [returns] *@true@* if expression is easy. See 'pass9' for more information.
  *
@@ -982,7 +986,7 @@ inlined = U.mapEx true inline
     where
         inline (app@App{})
           | (fun,t):rest <- U.flatx app,
-            Vbl {name, typ = Just sig} <- fun,
+            Vbl {pos = newpos, name, typ = Just sig} <- fun,
             not name.isLocal = do
                 g   <- getST
                 sym <- U.findV name
@@ -1002,7 +1006,7 @@ inlined = U.mapEx true inline
                             d >= sym.depth-1 && sym.name `elem` superOpt = do
                                 U.logmsg TRACE9 (getpos fun) (text ("replace " 
                                     ++ nice fun g  ++ " :: " ++ nicer sig g))
-                                x <- recycle x sig.rho
+                                x <- recycle newpos x sig.rho
                                 return . Left . U.unflatx $ (x,t):rest
                     _ -> return (Left app)
         inline x = return (Left x)        -- everything else    
@@ -1057,17 +1061,29 @@ mkEasy (x@App f arg t) = do
         -- f (case a of {p1->x;p2->y}) ==> case a of {p1->f x;p2->f y}
         -- f (if a then b else c) ==> if a then f b else f c
         -- f (let a = b in c) ==> let a = b in f c  
-        ea     <- easyExpression arg
+        ea     <- mkEasy arg
         simple <- isSimple ea
+        g <- getST
+        let !before = App f ea t
         case ea of
-            Let{} -> easyExpression ea.{ex = App f ea.ex t, typ = t}
+            Let{} -> do
+                let !trans = ea.{ex = App f ea.ex t, typ = t}
+                U.logmsg TRACE9 (getpos x) (text ("mkEasy LETARG before: " ++ nice before g))
+                U.logmsg TRACE9 (getpos x) (text ("mkEasy LETARG after:  " ++ nice trans g))
+                mkEasy trans
             Ifte a b c _ | not simple = do
                 f'  <- recyclex f
                 f'' <- recyclex f
-                easyExpression ea.{thn = App f' b t, els = App f'' c t, typ=t}
+                let !trans = ea.{thn = App f' b t, els = App f'' c t, typ=t}
+                U.logmsg TRACE9 (getpos x) (text ("mkEasy IFARG before: " ++ nice before g))
+                U.logmsg TRACE9 (getpos x) (text ("mkEasy IFARG after:  " ++ nice trans g))
+                mkEasy trans
             Case{} = do
                     alts <- mapSt adapt ea.alts
-                    easyExpression ea.{alts, typ=t}
+                    let !trans = ea.{alts, typ=t}
+                    U.logmsg TRACE9 (getpos x) (text ("mkEasy CASEARG before: " ++ nice before g))
+                    U.logmsg TRACE9 (getpos x) (text ("mkEasy CASEARG after:  " ++ nice trans g))
+                    mkEasy trans
                 where
                     adapt :: CAlt -> StG CAlt
                     adapt calt = do
@@ -1075,39 +1091,54 @@ mkEasy (x@App f arg t) = do
                         return calt.{ex = App f' calt.ex t}
             _ -> do
                 arg <- if simple then return ea else mkSimple ea
-                -- handle function with easy arg
+                -- handle function with simple arg
                 -- (let a = b in c) r => let a = b in c r
                 -- (if a then b else c) r => case r of p -> if a then b p else c p
                 -- (case a of {p1->b;p2->c}) r => case a of {p1->b r;p2->c r}
                 -- (\p -> a) r => case r of \p -> a
                 ef <- mkEasy f
-                -- simple <- isSimple ef
+                let !before = App ef arg t
                 case ef of
-                    Let{} -> easyExpression ef.{ex = App ef.ex arg t, typ = t}
+                    Let{} -> do
+                        let !trans = ef.{ex = App ef.ex arg t, typ = t}
+                        U.logmsg TRACE9 (getpos x) (text ("mkEasy LETAPP before: " ++ nice before g))
+                        U.logmsg TRACE9 (getpos x) (text ("mkEasy LETAPP after:  " ++ nice trans g))
+                        mkEasy trans
                     Ifte{} -> do
                         r'  <- recyclex arg
                         r'' <- recyclex arg
-                        easyExpression ef.{thn = App ef.thn r' t, els = App ef.els r'' t, typ = t}
+                        let !trans = ef.{thn = App ef.thn r' t, els = App ef.els r'' t, typ = t}
+                        U.logmsg TRACE9 (getpos x) (text ("mkEasy IFAPP before: " ++ nice before g))
+                        U.logmsg TRACE9 (getpos x) (text ("mkEasy IFAPP after:  " ++ nice trans g))
+                        mkEasy trans
                         -- let mk x = ef.{thn = App ef.thn x t, els = App ef.els x t, typ = t}
                         -- mkCase arg mk
                     Case{} -> do
-                            alts <- mapSt adapt ef.alts
-                            easyExpression ef.{alts, typ=t}
-                        where
+                        alts <- mapSt adapt ef.alts
+                        let !trans = ef.{alts, typ=t}
+                        U.logmsg TRACE9 (getpos x) (text ("mkEasy CASEAPP before: " ++ nice before g))
+                        U.logmsg TRACE9 (getpos x) (text ("mkEasy CASEAPP after:  " ++ nice trans g))
+                        mkEasy trans
+                      where
                             adapt :: CAlt -> StG CAlt
                             adapt calt = do
                                 r' <- recyclex arg
                                 return calt.{ex = App calt.ex r' t}
                     Lam{} -> do 
-                        let cas = Case CNormal arg [CAlt{pat=ef.pat, ex=ef.ex}] t
-                        easyExpression cas
+                        let !trans = Case CNormal arg [CAlt{pat=ef.pat, ex=ef.ex}] t
+                        U.logmsg TRACE9 (getpos x) (text ("mkEasy BETA before: " ++ nice before g))
+                        U.logmsg TRACE9 (getpos x) (text ("mkEasy BETA after:  " ++ nice trans g))
+                        mkEasy trans
                     _ -> do
                         sf <- mkSimple ef
-                        g  <- getST
-                        case sf of
-                            -- Don't! Transformed code must stay type correct!
-                            -- Con{name} | newtypeCon name g -> return arg
-                            _ -> return (App sf arg t)
+                        let !trans = App sf arg t 
+                        U.logmsg TRACE9 (getpos x) (text ("mkEasy SIMPLE before: " ++ nice before g))
+                        U.logmsg TRACE9 (getpos x) (text ("mkEasy SIMPLE after:  " ++ nice trans g))
+                        return trans
+                        -- case sf of
+                        --     -- Don't! Transformed code must stay type correct!
+                        --     -- Con{name} | newtypeCon name g -> return arg
+                        --     _ -> return (App sf arg t)
 
             
 mkEasy (x@Let{env,ex}) = do             -- TODO: handle non-recursive let/case/if
@@ -1137,31 +1168,43 @@ mkEasy (x@Let{env,ex}) = do             -- TODO: handle non-recursive let/case/i
 mkEasy  (outer@Case{}) = do
     ea     <- mkEasy outer.ex
     simple <- isSimple ea
+    g      <- getST
+    
+    let !before = outer.{ex = ea}
     
     case ea of
         -- case let a = b in c of {p1->x;p2->y}
         -- let a = b in case c of {p1->x;p2->y}
-        Let{} -> mkEasy (Let {env = ea.env, defs = [], typ = outer.typ,
-                    ex = outer.{ex = ea.ex}})
+        Let{} -> do
+            let !trans = Let {env = ea.env, defs = [], typ = outer.typ,
+                                ex = outer.{ex = ea.ex}}
+            U.logmsg TRACE9 (getpos outer) (text ("mkEasy CASE LET before: " ++ nice before g))
+            U.logmsg TRACE9 (getpos outer) (text ("mkEasy CASE LET after:  " ++ nice trans g))
+            mkEasy trans
         -- case if a then b else c of {p1->x;p2->y}
         -- if a then case b of {p1->x;p2->y} else case c of {p1->x;p2->y}
         Ifte{} | not simple -> do
             thn <- recyclex outer.{ex = ea.thn}
             els <- recyclex outer.{ex = ea.els}
-            mkEasy ea.{thn,els,typ=outer.typ}
+            let !trans = ea.{thn,els,typ=outer.typ}
+            U.logmsg TRACE9 (getpos outer) (text ("mkEasy CASE IF before: " ++ nice before g))
+            U.logmsg TRACE9 (getpos outer) (text ("mkEasy CASE IF after:  " ++ nice trans g))
+            mkEasy trans
         -- case case a of {b -> c; d -> e} of {f -> g; h -> i}
         -- case a of {b -> case c of {f -> g; h -> i}; d -> case e of {f' -> g; h' -> i}}
         Case{} -> do
                 alts <- mapSt adapt ea.alts
-                mkEasy ea.{alts, typ=outer.typ, 
-                    ckind = if outer.ckind == CWhen then CWhen else ea.ckind}
+                let !trans = ea.{alts, typ=outer.typ, 
+                                    ckind = if outer.ckind == CWhen then CWhen else ea.ckind}
+                U.logmsg TRACE9 (getpos outer) (text ("mkEasy CASE CASE before: " ++ nice before g))
+                U.logmsg TRACE9 (getpos outer) (text ("mkEasy CASE CASE after:  " ++ nice trans g))
+                mkEasy trans                
             where
                 adapt :: CAlt -> StG CAlt
                 adapt calt = do
                     ex <- recyclex outer.{ex = calt.ex}
                     return calt.{ex}
         _ -> do
-                g      <- getST
                 -- case elimination possible?
                 let alt1 = head outer.alts
                     match = sMatch g alt1.pat ea Nil
@@ -1171,12 +1214,21 @@ mkEasy  (outer@Case{}) = do
                     Just tree | and substOk,
                                 length outer.alts == 1 = do
                         ex <- foldM doSubst alt1.ex sxs
+                        U.logmsg TRACE9 (getpos outer) (text ("mkEasy CASEELIM before: " ++ nice before g))
+                        U.logmsg TRACE9 (getpos outer) (text ("mkEasy CASEELIM after:  " ++ nice ex g))
+                        foreach sxs logrep
                         mkEasy ex
-                    _ = do
+                    nothing = do
                         sa  <- if simple then return ea else mkSimple ea
                         alts <- mapSt easyAlt outer.alts
-                        return outer.{ex=sa, alts}
+                        let !trans = outer.{ex=sa, alts}
+                        U.logmsg TRACE9 (getpos outer) (text ("mkEasy CASE SIMPLE before: " ++ nice before g))
+                        U.logmsg TRACE9 (getpos outer) (text ("mkEasy CASE SIMPLE after:  " ++ nice trans g))
+                        return trans
             where
+                logrep (uid, ex) = U.logmsg TRACE9 (getpos outer) (text("mkEasy CASEELIM subst: " 
+                                        ++ show uid
+                                        ++ nicer ex g))
                 easyAlt calt = do
                     ex <- mkEasy (CAlt.ex calt)
                     return calt.{ex}
@@ -1192,24 +1244,42 @@ mkEasy  (outer@Case{}) = do
 mkEasy  (Ifte a x y t) = do
     ea     <- mkEasy a
     simple <- isSimple ea
+    g      <- getST
+    
+    let !before = Ifte ea x y t
+    
     case ea of
         -- if let a = b in c then x else y
         -- let a = b in if c then y else y
-        Let{} -> mkEasy (Let {env=ea.env,defs=[],typ=t,
-                    ex = Ifte ea.ex x y t})
+        Let{} -> do
+            let !trans = Let {env=ea.env,defs=[],typ=t,
+                            ex = Ifte ea.ex x y t}
+            U.logmsg TRACE9 (getpos before) (text ("mkEasy IF LET before: " ++ nice before g))
+            U.logmsg TRACE9 (getpos before) (text ("mkEasy IF LET after:  " ++ nice trans g))
+            mkEasy trans
+        
         -- if (if a then b else c) then x else y
         -- if a then (if b then x else y) else (if c then x' else y')
         Ifte a b c _ | not simple -> do
-            let thn = Ifte b x y t
-            x' <- recyclex x
-            y' <- recyclex y
+            x'  <- recyclex x
+            y'  <- recyclex y
+            x'' <- recyclex x
+            y'' <- recyclex y
             let els = Ifte c x' y' t
-            mkEasy (Ifte a thn els t)
+                thn = Ifte b x'' y'' t
+                !trans = (Ifte a thn els t)
+            U.logmsg TRACE9 (getpos before) (text ("mkEasy IF IF before: " ++ nice before g))
+            U.logmsg TRACE9 (getpos before) (text ("mkEasy IF IF after:  " ++ nice trans g))
+            mkEasy trans
+            
         -- if (case a of p1 -> b; p2 -> c ...) then x else y
         -- case a of p1 -> if b then x else y; p2 -> if c then x else y   
         Case{ckind,ex=a,alts} -> do
                 alts <- mapSt adapt alts
-                mkEasy Case{ckind,ex=a,typ=t,alts} 
+                let !trans = Case{ckind,ex=a,typ=t,alts}
+                U.logmsg TRACE9 (getpos before) (text ("mkEasy IF CASE before: " ++ nice before g))
+                U.logmsg TRACE9 (getpos before) (text ("mkEasy IF CASE after:  " ++ nice trans g))
+                mkEasy trans 
             where
                 adapt :: CAlt -> StG CAlt
                 adapt calt = do
@@ -1219,7 +1289,11 @@ mkEasy  (Ifte a x y t) = do
             sa  <- if simple then return ea else mkSimple ea
             ex  <- mkEasy x
             ey  <- mkEasy y
-            return (Ifte sa ex ey t)
+            let !trans = Ifte sa ex ey t
+            U.logmsg TRACE9 (getpos before) (text ("mkEasy IF SIMPLE before: " ++ nice before g))
+            U.logmsg TRACE9 (getpos before) (text ("mkEasy IF SIMPLE after:  " ++ nice trans g))
+            mkEasy trans
+
 -- should not happen
 mkEasy  (x@ConFS{})  = return x
 mkEasy  (x@Mem{})    = return x

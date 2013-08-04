@@ -390,6 +390,9 @@ reproduce pos g = joined "" (loop list)
 showexM x = getST >>= return . (showex false x)
 showex nicest x global = showprec 17 x where
     optree = Global.optab global
+    pnice pat 
+       | nicest    = Pattern.nicer pat global
+       | otherwise = Pattern.nice pat global 
     -- showprec :: Int -> ExprT Nice:q -> String
     -- showprec   n (Vbl {pos, name=Local uid v}) | lambdachar=="\\" = v ++ "§" ++ show uid
     showprec   n (Vbl {pos, name})
@@ -471,10 +474,11 @@ showex nicest x global = showprec 17 x where
                 }-}
     showprec 17 (Case _ e (a:as) _) = "case " ++ showprec 17 e
                                         ++ " of {"
-                                        ++ PatternT.nice a.pat global ++ "->"
+                                        ++ pnice a.pat ++ "->"
                                         ++ showprec 17 a.ex ++ rest where
              rest | null as = "}"
                   | otherwise = "; ...}"
+             
     showprec 17 (Let kt _ e _)
         | length kt >  1  = "let " ++ dspl kt ++ " in " ++ showprec 17 e
         | nicest = "let " ++ QName.base (head kt) ++ "=" ++ sv vt ++ " in ..."
@@ -496,7 +500,7 @@ showex nicest x global = showprec 17 x where
             dspl [x] = QName.base x
             dspl (x:xs) = QName.base x ++ ", " ++ dspl xs
 
-    showprec 17 (Lam p e _)  = "λ" ++ PatternT.nice p global        -- avoids \u which irritates javac
+    showprec 17 (Lam p e _)  = "λ" ++ pnice p        -- avoids \u which irritates javac
                                         ++ " -> " ++ showprec 17 e
     showprec n (Ann x (Just t)) = "(" ++ showprec 17 x ++ "::" ++ t.nicer global ++ ")"
     showprec n (Ann x Nothing)  = "(" ++ showprec 17 x ++ "::" ++ "Nothing?" ++ ")"
@@ -1280,6 +1284,22 @@ numbers = iterate (1+) 0
 envConstructors :: Symtab -> [Symbol]
 envConstructors env = sortBy (comparing Symbol.cid) [ sy | (sy::Symbol) <- values env, sy.{cid?} ]
 
+--- provide a new Position for a Pattern
+pPos newp (p@PCon{}) = do
+    pats <- mapSt (pPos newp) p.pats
+    return p.{pats}
+pPos newp (p@PConFS{}) = do
+    let ret (nm, pat) = do p <- pPos newp pat; return (nm, p)
+    fields <- mapSt ret p.fields
+    return p.{fields}
+pPos newp p
+    | p.{pat?} = pPos newp p.pat >>= return .  p.{pat=}
+    | p.{pos?} = return p.{pos=newp}
+    | otherwise = do
+        g <- getST
+        error newp (text ("pPos: strange pattern: " ++ nice p g)) 
+        return p   
+    
 --- provide (a new) uid for a Pattern
 pReturn (p@PCon{}) = do
     pats <- mapSt pReturn p.pats
@@ -2021,19 +2041,20 @@ replUids t = mapEx true rep where
     Copy an expression, all patterns will be refreshed and references
     renamed accordingly. The new expression will have the same type as the old one.
     -}
-copyExpr t x = mapEx false (copy t) x where
+copyExpr mbp t x = mapEx false (copy t) x where
     ins t (k,v) = insert t k v
     copy tree (Lam{pat,ex,typ}) = do
         let qnames  = patNames pat
             olduids = map QName.uid qnames
         pat <- pReturn pat
+        pat <- maybe (return pat) (flip pPos pat) mbp
         let newuids = map QName.uid (patNames pat)
             ntree   = fold ins tree (zip olduids newuids)
-        ex <- copyExpr ntree ex
-        mapM_ (copySym ntree) qnames
+        ex <- copyExpr mbp ntree ex
+        mapM_ (copySym mbp ntree) qnames
         stio (Right Lam{pat,ex,typ})
     copy tree (Case ckind x alts typ) = do
-        x    <- copyExpr tree x
+        x    <- copyExpr mbp tree x
         alts <- mapSt copyAlt alts
         stio (Right (Case ckind x alts typ))
       where
@@ -2041,33 +2062,34 @@ copyExpr t x = mapEx false (copy t) x where
             let qnames  = patNames pat
                 olduids = map QName.uid qnames
             pat <- pReturn pat
+            pat <- maybe (return pat) (flip pPos pat) mbp
             let newuids = map QName.uid (patNames pat)
                 ntree   = fold ins tree (zip olduids newuids)
-            ex <- copyExpr ntree ex
-            mapM_ (copySym ntree) qnames
+            ex <- copyExpr mbp ntree ex
+            mapM_ (copySym mbp ntree) qnames
             stio CAlt{pat,ex}
     copy tree (Let{env,ex,typ}) = do
         let olduids = map QName.uid env
         newuids <- sequence (map (const uniqid) olduids)
         let ntree = fold ins tree (zip olduids newuids)
-        nenv <- mapSt (copySym ntree) env
-        ex   <- copyExpr ntree ex
+        nenv <- mapSt (copySym mbp ntree) env
+        ex   <- copyExpr mbp ntree ex
         stio (Right Let{env=nenv,ex,typ,defs=[]})
     copy tree (v@Vbl{name=Local{uid}}) = case lookup tree uid of
-        Just nid -> stio (Right v.{name <- QName.{uid=nid}})
-        Nothing  -> stio (Right v)
+        Just nid -> stio (Right v.{pos <- flip fromMaybe mbp, name <- QName.{uid=nid}})
+        Nothing  -> stio (Right v.{pos <- flip fromMaybe mbp})
     copy _ (x@Ann{}) = stio (Left x)        -- keep annotations!
     copy _ x = stio (Left x)
 
 --- copy a local symbol
-copySym tree qname = do
+copySym mbp tree qname = do
     sym <- findV qname
     case lookup tree (Symbol.sid sym) of
         Just nuid ->  do
-                mbx <- maybeST sym.expr (copyExpr tree)
+                mbx <- maybeST sym.expr (copyExpr mbp tree)
                 let name = sym.name.{uid=nuid}
                     -- nsig = if sym.anno || isNothing sym.expr then sym.typ else pSigma
-                    nsym = sym.{name, expr = mbx, sid = nuid}
+                    nsym = sym.{pos <- flip fromMaybe mbp, name, expr = mbx, sid = nuid}
                 enter nsym
                 stio name
         Nothing -> Prelude.error ("Can't find sid " ++ show sym.sid ++ " for name " ++ show sym.name)
