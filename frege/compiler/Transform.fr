@@ -860,7 +860,7 @@ mkSimple (x@Lit {pos})     = return x
 mkSimple (x@Con {pos})     = return x
 --- @p -> x@ is simple if @x@ is easy
 mkSimple (x@Lam {ex})      = do
-    ex <- mkEasy 0 ex
+    ex <- mkEasy ex
     return x.{ex}
 mkSimple (x@Ann {ex}) = do
     ex <- mkSimple ex
@@ -885,7 +885,7 @@ mkCase ex f = do
         pat = PVar{pos, uid, var="mkCase"}
         var = Vbl{pos, name=Local{uid, base=pat.var}, typ=ex.typ} 
     U.enter sym.{typ = maybe U.pSigma id ex.typ}
-    altex <- mkEasy 0 (f var)
+    altex <- mkEasy (f var)
     return $! Case {ckind=CNormal, 
                     ex=simple, 
                     alts=[CAlt{pat, ex=altex}], 
@@ -893,7 +893,7 @@ mkCase ex f = do
 
 --- any expression x can be made simple through (\_ -> easy x) ()
 mkS x = do
-    e <- mkEasy 0 x
+    e <- mkEasy x
     let lam = Lam {pat = PCon {pos, qname=unitName, pats=[]}, 
                    ex = e,
                    typ = fmap utyp e.typ}
@@ -942,13 +942,13 @@ easyExpression x = do
         g <- getST
         if (U.isOn g.options.flags TRACE9)
         then do
-            r <- mkEasy 0 x
+            r <- mkEasy x
             unless (r `exeq` x) do
                 U.logmsg TRACE9 (getpos x) (text("mkEasy before: " ++ nice x g))
                 U.logmsg TRACE9 (getpos r) (text("mkEasy after:  " ++ nice r g))
             easier r x
         else do
-            r <- mkEasy 0 x
+            r <- mkEasy x
             easier r x
     where
         easier r x = if r `exeq` x then return r else easyExpression r
@@ -1033,23 +1033,26 @@ inlined = U.mapEx true inline
     5. Function application removes @let@, @case@ and @if@ from both function and 
        argument. 
     -}
-mkEasy :: Int -> Expr -> StG Expr    
-mkEasy !d  (x@Lit{})    = return x
-mkEasy !d  (x@Vbl{})    = return x
-mkEasy !d  (x@Con{})    = return x
-mkEasy !d  (ann@Ann {ex})
-    | Let{}  <- ex = mkEasy 0 ex.{ex <- ann.{ex=}}
-    | Ifte{} <- ex = mkEasy 0 ex.{thn <- ann.{ex=}, els <- ann.{ex=}}
-    | Case{} <- ex = mkEasy 0 ex.{alts <- map substAlt}
+mkEasy :: Expr -> StG Expr    
+mkEasy (x@Lit{})    = return x
+mkEasy (x@Vbl{})    = return x
+mkEasy (x@Con{})    = return x
+mkEasy (ann@Ann {ex})
+    | Let{}  <- ex = mkEasy ex.{ex <- ann.{ex=}}
+    | Ifte{} <- ex = mkEasy ex.{thn <- ann.{ex=}, els <- ann.{ex=}}
+    | Case{} <- ex = mkEasy ex.{alts <- map substAlt}
     | otherwise = do
-        ex <- mkEasy 0 ex
+        ex <- mkEasy ex
         return ann.{ex}
     where substAlt :: CAlt -> CAlt
           substAlt calt = calt.{ex <- ann.{ex=}}
-mkEasy !d  (x@Lam {ex}) = do
-    ex <- mkEasy 0 ex
+mkEasy (x@Lam {ex}) = do
+    ex <- mkEasy ex
     return x.{ex}
-mkEasy !d  (x@App f arg t) = do
+
+--- @f a@ is easy if @f@ is simple and @a@ is simple
+
+mkEasy (x@App f arg t) = do
         -- handle argument first
         -- f (case a of {p1->x;p2->y}) ==> case a of {p1->f x;p2->f y}
         -- f (if a then b else c) ==> if a then f b else f c
@@ -1077,7 +1080,7 @@ mkEasy !d  (x@App f arg t) = do
                 -- (if a then b else c) r => case r of p -> if a then b p else c p
                 -- (case a of {p1->b;p2->c}) r => case a of {p1->b r;p2->c r}
                 -- (\p -> a) r => case r of \p -> a
-                ef <- mkEasy (d+1) f
+                ef <- mkEasy f
                 -- simple <- isSimple ef
                 case ef of
                     Let{} -> easyExpression ef.{ex = App ef.ex arg t, typ = t}
@@ -1107,7 +1110,7 @@ mkEasy !d  (x@App f arg t) = do
                             _ -> return (App sf arg t)
 
             
-mkEasy !d (x@Let{env,ex}) = do             -- TODO: handle non-recursive let/case/if
+mkEasy (x@Let{env,ex}) = do             -- TODO: handle non-recursive let/case/if
         syms <- mapSt U.findV env
         mkEasyLet x syms
     where
@@ -1124,33 +1127,33 @@ mkEasy !d (x@Let{env,ex}) = do             -- TODO: handle non-recursive let/cas
                      | otherwise = cas.ckind
                 let neu = cas.{alts=[alt.{ex}], ckind = ck}
                 U.logmsg TRACE9 (getpos x) (text("mkEasyLet after:  " ++ nice neu g))
-                mkEasy 0 neu  
+                mkEasy neu  
         mkEasyLet (x@Let{env,ex}) syms = do
             foreach syms easySym 
-            ex <- mkEasy 0 ex
+            ex <- mkEasy ex
             return x.{ex}
         mkEasyLet _ _ = undefined
             
-mkEasy !d (outer@Case{}) = do
-    ea     <- mkEasy 0 outer.ex
+mkEasy  (outer@Case{}) = do
+    ea     <- mkEasy outer.ex
     simple <- isSimple ea
     
     case ea of
         -- case let a = b in c of {p1->x;p2->y}
         -- let a = b in case c of {p1->x;p2->y}
-        Let{} -> mkEasy 0 (Let {env = ea.env, defs = [], typ = outer.typ,
+        Let{} -> mkEasy (Let {env = ea.env, defs = [], typ = outer.typ,
                     ex = outer.{ex = ea.ex}})
         -- case if a then b else c of {p1->x;p2->y}
         -- if a then case b of {p1->x;p2->y} else case c of {p1->x;p2->y}
         Ifte{} | not simple -> do
             thn <- recyclex outer.{ex = ea.thn}
             els <- recyclex outer.{ex = ea.els}
-            mkEasy 0 ea.{thn,els,typ=outer.typ}
+            mkEasy ea.{thn,els,typ=outer.typ}
         -- case case a of {b -> c; d -> e} of {f -> g; h -> i}
         -- case a of {b -> case c of {f -> g; h -> i}; d -> case e of {f' -> g; h' -> i}}
         Case{} -> do
                 alts <- mapSt adapt ea.alts
-                mkEasy 0 ea.{alts, typ=outer.typ, 
+                mkEasy ea.{alts, typ=outer.typ, 
                     ckind = if outer.ckind == CWhen then CWhen else ea.ckind}
             where
                 adapt :: CAlt -> StG CAlt
@@ -1168,14 +1171,14 @@ mkEasy !d (outer@Case{}) = do
                     Just tree | and substOk,
                                 length outer.alts == 1 = do
                         ex <- foldM doSubst alt1.ex sxs
-                        mkEasy 0 ex
+                        mkEasy ex
                     _ = do
                         sa  <- if simple then return ea else mkSimple ea
                         alts <- mapSt easyAlt outer.alts
                         return outer.{ex=sa, alts}
             where
                 easyAlt calt = do
-                    ex <- mkEasy 0 (CAlt.ex calt)
+                    ex <- mkEasy (CAlt.ex calt)
                     return calt.{ex}
                 checkSubst ex (uid, x) 
                     | isAtomic x = return true
@@ -1186,13 +1189,13 @@ mkEasy !d (outer@Case{}) = do
                 
                     
         
-mkEasy !d  (Ifte a x y t) = do
-    ea     <- mkEasy 0 a
+mkEasy  (Ifte a x y t) = do
+    ea     <- mkEasy a
     simple <- isSimple ea
     case ea of
         -- if let a = b in c then x else y
         -- let a = b in if c then y else y
-        Let{} -> mkEasy 0 (Let {env=ea.env,defs=[],typ=t,
+        Let{} -> mkEasy (Let {env=ea.env,defs=[],typ=t,
                     ex = Ifte ea.ex x y t})
         -- if (if a then b else c) then x else y
         -- if a then (if b then x else y) else (if c then x' else y')
@@ -1201,12 +1204,12 @@ mkEasy !d  (Ifte a x y t) = do
             x' <- recyclex x
             y' <- recyclex y
             let els = Ifte c x' y' t
-            mkEasy 0 (Ifte a thn els t)
+            mkEasy (Ifte a thn els t)
         -- if (case a of p1 -> b; p2 -> c ...) then x else y
         -- case a of p1 -> if b then x else y; p2 -> if c then x else y   
         Case{ckind,ex=a,alts} -> do
                 alts <- mapSt adapt alts
-                mkEasy 0 Case{ckind,ex=a,typ=t,alts} 
+                mkEasy Case{ckind,ex=a,typ=t,alts} 
             where
                 adapt :: CAlt -> StG CAlt
                 adapt calt = do
@@ -1214,12 +1217,12 @@ mkEasy !d  (Ifte a x y t) = do
                     return calt.{ex}
         _ -> do
             sa  <- if simple then return ea else mkSimple ea
-            ex  <- mkEasy 0 x
-            ey  <- mkEasy 0 y
+            ex  <- mkEasy x
+            ey  <- mkEasy y
             return (Ifte sa ex ey t)
 -- should not happen
-mkEasy !d  (x@ConFS{})  = return x
-mkEasy !d  (x@Mem{})    = return x
+mkEasy  (x@ConFS{})  = return x
+mkEasy  (x@Mem{})    = return x
             
     
 --- return the symbol ids of all local variables introduced in this expression and its subexpression
@@ -1510,7 +1513,6 @@ sMatch g PCon{qname,pats} x               tree
     | Con{name}:xs <- map fst (U.flatx x),
       name == qname, 
       length pats == length xs = fold collect (Just tree) (zipWith (sMatch g) pats xs)
-    -- newtypeCon qname g = sMatch g ((unStrict . head) pats) x tree
     where -- unStrict PUser{pat} = pat
           -- unStrict pat        = pat  
           collect (Just t) f  = f t
