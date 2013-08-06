@@ -230,10 +230,73 @@ annosLast defs = nannos ++ annos where
     -}
 enter fname defs = foreach (annosLast defs) (enter1 fname)
 
+{--
+    Give the name of the symbol back, this is either the field 'FunDcl'.name,
+    'AnnDcl'.name or the name of the pattern variable for strict/lazy vars.
+    -}
+defname FunDcl{name=´^(strict|lazy)\$\d+$´, pats=[PVar{var}]} = var
+defname FunDcl{name} = name
+defname AnnDcl{name} = name
+defname x = error ("defname: no FunDcl: " ++ show (constructor x)) 
+
+
 {-- create provisional symbol for 1 definition in the symbol table -}
 enter1 :: (String -> QName) -> DefinitionS -> StG ()
-enter1 fname (ImpDcl {pos})   = stio ()
-enter1 fname (FixDcl {pos})   = stio ()
+enter1 fname (d@FunDcl {poss}) = case d.name of
+        m~´^(strict|lazy)\$\d+$´ | Just how <- m.group 1, [PVar{var}] <- d.pats -> do
+            let qname = fname var
+            foreach poss (register qname)
+            U.enter (vSym (head poss) qname).{vis=d.vis, doc=d.doc, 
+                strsig = if how == "strict" then S[] else U}
+        sonst -> do
+            let !qname = fname d.name
+            foreach poss (register qname)
+            U.enter (vSym (head poss) qname).{vis=d.vis, doc=d.doc}
+    where
+        register :: QName -> Position -> StG ()
+        register qname pos =  
+                         changeST Global.{
+                            sub <- SubSt.{
+                            idKind <- insertkv (KeyTk pos.first) (Right qname)}}
+        
+enter1 fname (d@NatDcl {pos}) = do
+        let !qname = fname d.name
+        changeST Global.{
+          sub <- SubSt.{
+          idKind <- insertkv (KeyTk pos.first) (Right qname)}}
+        U.enter (vSym pos qname).{vis=d.vis, doc=d.doc,
+                                                nativ=Just d.meth, pur=d.isPure}
+enter1 fname (d@AnnDcl {pos}) = do
+        g <- getST
+        let qname = fname d.name
+            merge Nothing _ b _ = b
+            merge a _ Nothing _ = a
+            merge (Just a) apos (Just b) bpos = if Position.start apos < Position.start bpos
+                then Just (a ++ "\n\n" ++ b)
+                else Just (b ++ "\n\n" ++ a)
+        case QName.findit qname g of
+            Just (sym@SymV {nativ = Nothing, anno = false}) -> do
+                when (sym.vis != d.vis) do
+                    U.error pos (msgdoc ("Visibility of annotation and implementation must match,"
+                        ++ " implementation was announced as " ++ show sym.vis
+                        ++ " at line " ++ show sym.pos))
+                U.changeSym sym.{pos <- d.pos.merge,
+                                 doc = merge sym.doc sym.pos d.doc d.pos,
+                                 anno = true}
+                changeST Global.{
+                    sub <- SubSt.{
+                        idKind <- insertkv (KeyTk pos.first) (Right sym.name)}}
+            Just (sym@SymV {anno = true}) ->
+                U.error pos (msgdoc ("cannot annotate " ++ sym.nice g ++ " again"))
+            Just sym ->
+                U.error pos (msgdoc ("cannot annotate " ++ sym.nice g))
+            Nothing -> do -- either class method or implementation missing.
+                U.enter (vSym d.pos qname).{vis=d.vis, doc=d.doc, anno = true}
+                changeST Global.{
+                    sub <- SubSt.{
+                        idKind <- insertkv (KeyTk pos.first) (Right qname)}}
+
+
 enter1 fname (d@ClaDcl {pos}) = do
         g <- getST
         let tname = TName g.thisPack d.name
@@ -306,83 +369,6 @@ enter1 !fname (!d@InsDcl {pos=!pos}) = do
                 Nothing  -> U.fatal d.pos (text ("FATAL, can't find " ++ mem.nice g ++ " again"))
 
 enter1 fname (d@DrvDcl {pos}) = U.fatal pos (text "FATAL: cannot enter a derive definition")
-
-{-
-enter1 fname (d@FunDcl {poss, name=´^let\$´}) = do
-        g <- getST
-        U.logmsg TRACE3 (head poss) (text ("enter: let "
-            ++ show (map (flip PatternT.nice g) d.pats) ++ " = "
-            ++ d.expr.nice g))
-        when (length d.pats != 1)  do
-            U.fatal (head poss) (text "illegal pattern bindings, turn on -x3")
-        foreach (U.patVars (head d.pats)) enterpvar
-    where
-        enterpvar :: PatternT a -> StG ()           -- actually, PVar only
-        enterpvar (pvar@PVar{pos,var,uid}) = do
-            let !qname = fname var
-            case qname of 
-                Local{} -> do
-                    pat <- U.pReturn pvar
-                    let qname = Local pat.uid pat.var
-                    changeST Global.{   
-                        sub <- SubSt.{
-                        idKind <- insertkv (KeyTk (Position.first pos)) (Right qname)}}
-                    U.enter (U.patLocal pos uid var)
-                other -> do
-                    changeST Global.{   
-                        sub <- SubSt.{
-                        idKind <- insertkv (KeyTk (Position.first pos)) (Right qname)}}
-                    U.enter (vSym pos qname).{vis=d.vis, doc=d.doc}
--}
-
-enter1 fname (d@FunDcl {poss}) = do
-        let !qname = fname d.name
-        foreach poss (register qname)
-        U.enter (vSym (head poss) qname).{vis=d.vis, doc=d.doc}
-    where
-        register :: QName -> Position -> StG ()
-        register qname pos =  
-                         changeST Global.{
-                            sub <- SubSt.{
-                            idKind <- insertkv (KeyTk pos.first) (Right qname)}}
-        
-enter1 fname (d@NatDcl {pos}) = do
-        let !qname = fname d.name
-        changeST Global.{
-          sub <- SubSt.{
-          idKind <- insertkv (KeyTk pos.first) (Right qname)}}
-        U.enter (vSym pos qname).{vis=d.vis, doc=d.doc,
-                                                nativ=Just d.meth, pur=d.isPure}
-enter1 fname (d@AnnDcl {pos}) = do
-        g <- getST
-        let qname = fname d.name
-            merge Nothing _ b _ = b
-            merge a _ Nothing _ = a
-            merge (Just a) apos (Just b) bpos = if Position.start apos < Position.start bpos
-                then Just (a ++ "\n\n" ++ b)
-                else Just (b ++ "\n\n" ++ a)
-        case QName.findit qname g of
-            Just (sym@SymV {nativ = Nothing, anno = false}) -> do
-                when (sym.vis != d.vis) do
-                    U.error pos (msgdoc ("Visibility of annotation and implementation must match,"
-                        ++ " implementation was announced as " ++ show sym.vis
-                        ++ " at line " ++ show sym.pos))
-                U.changeSym sym.{pos <- d.pos.merge,
-                                 doc = merge sym.doc sym.pos d.doc d.pos,
-                                 anno = true}
-                changeST Global.{
-                    sub <- SubSt.{
-                        idKind <- insertkv (KeyTk pos.first) (Right sym.name)}}
-            Just (sym@SymV {anno = true}) ->
-                U.error pos (msgdoc ("cannot annotate " ++ sym.nice g ++ " again"))
-            Just sym ->
-                U.error pos (msgdoc ("cannot annotate " ++ sym.nice g))
-            Nothing -> do -- either class method or implementation missing.
-                U.enter (vSym d.pos qname).{vis=d.vis, doc=d.doc, anno = true}
-                changeST Global.{
-                    sub <- SubSt.{
-                        idKind <- insertkv (KeyTk pos.first) (Right qname)}}
-
 
 enter1 fname (d@DatDcl {pos}) = do
         g <- getST
@@ -469,7 +455,11 @@ enter1 fname (d@TypDcl {pos}) = do
                        vars = map transTVar d.vars})
 
 
-enter1 fname d = U.error d.pos (text ("Can't enter dcl constructor " ++ show (constructor d)))
+enter1 fname (ImpDcl {pos})   = stio ()
+enter1 fname (FixDcl {pos})   = stio ()
+enter1 fname (DocDcl {pos})   = stio ()
+
+-- enter1 fname d = U.error d.pos (text ("Can't enter dcl constructor " ++ show (constructor d)))
 
 --- make an instance definition from a derive definition, identity for instance definitions
 deriveInst :: DefinitionS -> StG DefinitionS

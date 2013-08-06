@@ -412,7 +412,7 @@ returnKind syms (sym@SymV {expr = Just x, depth = 0}) = do
         rec    <- references syms x             -- is it recursive
         (_, deps) <- U.fundep sym
         let local = sym.name.isLocal                            -- is this a local item?
-        sx        <- if local then isSimple x else return (isAtomic x)
+        sx        <- isMeager x 
         let fwrefs
                 | local                = self > 0
                 | MName{}  <- sym.name = not (null deps)        -- possible forward references?
@@ -846,14 +846,16 @@ recyclex expr = U.copyExpr Nothing Nil expr {- case expr.typ of
  * A simple expression can be translated to a java expression and will not need
  * blocks, if-then-else constructs, auxiliary declarations etc.
  -}
-isSimple (App a b _)     = liftM2 (&&) (isSimple a) (isSimple b)
-isSimple (Ifte a b c _)  = liftM2 (&&) (isSimple a)
-                            (liftM2 (&&) (isSimple b) (isSimple c))
+isSimple :: Expr -> StG Bool
+
+isSimple (App a b _)     = mapM isSimple [a,b]     >>= return . and
+isSimple (Ifte a b c _)  = mapM isSimple [a,b,c]   >>= return . and
 isSimple (Ann {ex})      = isSimple ex
 isSimple (Vbl {pos})     = return true
 isSimple (Lit {pos})     = return true
 isSimple (Con {pos})     = return true
 isSimple (Lam {ex})      = isEasy ex
+isSimple Mem{ex}         = isSimple ex
 isSimple _               = return false
 
 --- a bit simpler than isSimple, as code duplication is avoided (no lambdas)
@@ -1542,19 +1544,28 @@ unLet (xlet@Let {env=letenv,ex=letex,typ=lettyp})
         -- a local non function stays local only if it uses other local symbols
         -- if used only once and is non recursive, it will get inlined
         Just cx = do
-            e <- isSimple cx
+            g    <- getST
+            ulet <- U.mapEx true unLet letex
+            cx   <- U.mapEx true unLet cx
+            e    <- isSimple cx
+            U.changeSym sym.{expr = Just cx}
             self <- references [sym.sid] cx
-            down <- references [sym.sid] letex
+            down <- references [sym.sid] ulet
+            -- U.logmsg TRACE7 sym.pos (text ("UNLET: " ++ nice x g
+            --     ++ "  anno: " ++ show sym.anno
+            --     ++ ", simple: " ++ show e
+            --     ++ ", self: " ++ show self
+            --     ++ ", down: " ++ show down))
             if !sym.anno && e && self == 0 && down == 1       -- used exactly once, note that use
-                                                 -- in a local function counts twice.                    
+                                                              -- in a local function counts twice.
+                    && not sym.strsig.isStrict                -- do not inline strict names                    
             then do
                 -- inline that
                 let inline = if U.isPSigma sym.typ then cx
                                 else Ann {ex = cx, typ = Just sym.typ}
-                ex <- replSid sym.sid inline letex
-                g <- getST
+                ex <- replSid sym.sid inline ulet
                 U.logmsg TRACE7 sym.pos (text ("let " ++ nice x g ++ " = " ++ nice inline g ++ " in ... replaced with " ++ nice ex g))
-                unLet ex
+                return (Right ex)
             --
             --  globalize annotated CAFs, if possible
             --
@@ -1566,7 +1577,7 @@ unLet (xlet@Let {env=letenv,ex=letex,typ=lettyp})
                      g <- getST
                      let name = U.unusedName (VName g.thisPack x.base)  g
                      ex <- replName sym.sid name cx  -- no reference to x anymore
-                     letex2 <- replName sym.sid name letex  -- in the inner of the lambda or the let ex
+                     letex2 <- replName sym.sid name ulet  -- in the inner of the lambda or the let ex
                      let vks  = map Tau.varkind (U.freeTVars [] sym.typ.rho)
                      let typ  = ForAll vks sym.typ.rho
                      U.enter sym.{sid = 0, name, expr = Just ex, vis = Private, typ}
@@ -1575,9 +1586,9 @@ unLet (xlet@Let {env=letenv,ex=letex,typ=lettyp})
                      U.logmsg TRACE7 sym.pos (text ("let " ++ nice x g ++ " = " ++ nice cx g ++ " in ... replaced with " ++ nice letex2 g))
                      U.logmsg TRACE7 sym.pos (text ("new name is " ++ name.nice g))
                      U.hint sym.pos (text("let definition is a constant: " ++ name.nice g))
-                     unLet letex2       -- other opportunities possible here
-                else stio (Left xlet)
-            else stio (Left xlet)
+                     return (Right letex2)       -- no other opportunities possible here
+                else stio (Right xlet.{ex = ulet})
+            else stio (Right xlet.{ex = ulet})
         other -> stio (Left xlet)
 unLet x = stio (Left x)
 
@@ -1806,14 +1817,15 @@ strictName sids nm = do
                                     ++ joined ", " (map (flip nice g • Symbol.name) syms)))
             U.changeSym v.{expr = Just x, strsig = S s, state = StrictChecked}
             stio syms
-        SymV {expr = Just x} | ari >= 0 = do
+        SymV {expr = Just x} | ari > 0 = do
                 y <- eta ari x
                 (y, syms) <- strictness (v.sid:sids) y
                 s <- lambdaStrictness y
-                let x = uneta ari y
+                let x  = uneta ari y
+                    rs = if null s then v.strsig else S s
                 U.logmsg TRACES v.pos (text ("strictness for " ++ v.name.nice g ++ " is "
-                                    ++ show (if null s then U else S s)))
-                U.changeSym v.{expr = Just x, strsig = if null s then U else S s, state = StrictChecked}
+                                    ++ show rs))
+                U.changeSym v.{expr = Just x, strsig = rs, state = StrictChecked}
                 stio syms
             where
                 eta 0 x = stio x
@@ -1840,7 +1852,7 @@ strictName sids nm = do
                           unapp _ _ = error "unapp: no App"
 
         SymV {state} -> do              -- pointless style or just var
-            let strsig = if ari == 0 then U else S (take ari allLazy)
+            let strsig = if ari == 0 then v.strsig else S (take ari allLazy)
             U.logmsg TRACES v.pos (text ("strictness for " ++ v.name.nice g ++ " is "
                                     ++ show strsig))
             U.changeSym v.{strsig, state = StrictChecked}
