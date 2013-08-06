@@ -22,7 +22,7 @@ Please see the [wiki page that details the differences](https://github.com/Frege
 Project State
 -------------
 
-The compiler, an Eclipse plugin and a provisional version of the documentation can be [downloaded](http://code.google.com/p/frege/downloads/list). 
+The compiler, an Eclipse plugin and a provisional version of the documentation can be [downloaded](https://github.com/Frege/frege/releases). 
 Note that Frege requires JDK 7 to compile and run programs.
 
 The compiler and the documentation tool are quite stable, the documentation provisional and the library is evolving. 
