@@ -132,7 +132,7 @@ lazyMethod symv | symv.{flds?} || symv.{rkind?} = do
         let ctxs = map JAtom (take (length sym.typ.rho.context) ctxNames)
  
         let args        = argdefs
-            rkind       = if sym.{rkind?} then sym.rkind else RState.singleton RValue
+            !rkind       = if sym.{rkind?} then sym.rkind else RState.singleton RValue
             -- rm       = wmode  rkind
             jtype       = autoboxed (returnType rkind jrty)                 
             
@@ -290,9 +290,9 @@ emitLazyN n constr syms base = do
                                  name  = "index",
                                  init = Nothing
                              }
-         constraints  = map  (uncurry (makeConstraintDef g)) (zip contexts ctxNames)
+         constraints  = zipWith (makeConstraintDef g)  contexts  ctxNames
          indexarg     = (attrFinal, TY.sigInt, strict jtInt, indexargname) 
-         constrargs   = map  (uncurry (makeConstraintArg g)) (zip contexts argNames)
+         constrargs   = zipWith (makeConstraintArg g)  contexts  argNames
          initindex    = JAssign (JAtom indexdef.name) (JAtom indexargname)
          initctx      = take (length constraints)
                              (zipWith JAssign (map JAtom ctxNames) (map JAtom argNames))
@@ -387,7 +387,7 @@ genAnonLams = do
                                              ]
      
          let jnames = map (extFname g) collectedvars
-         mapSt (uncurry lazyDecl) (zip collectedvars jnames)
+         sequence (zipWith lazyDecl collectedvars jnames)
          
  
  
@@ -896,8 +896,8 @@ symCode binds (sym@SymI {sid}) = do             -- instance definition
      instImpls <- mapSt (symCode binds) vals
      lazyImpls <- lazyDeclarations vals
      -- let symjt    = sigmaJT g sym.typ
-     let constraints = map  (uncurry (makeConstraintDef g)) (zip sym.typ.rho.context ctxNames)
-         constrargs  = map  (uncurry (makeConstraintArg g)) (zip sym.typ.rho.context argNames)
+     let constraints = zipWith (makeConstraintDef g)  sym.typ.rho.context ctxNames
+         constrargs  = zipWith (makeConstraintArg g)  sym.typ.rho.context argNames
  
  
      let jtype = Ref (U.javaName g sym.name) []          -- jtargs
@@ -954,7 +954,7 @@ abstractFun symc (sym@SymV {sid}) = do
          !ctxs = filter (not . TC.sameCtx classCtx) sym.typ.rho.context
                      
  
-     let constrformal = map (uncurry (makeConstraintArg g)) (zip ctxs ctxNames)
+     let constrformal = zipWith (makeConstraintArg g)  ctxs  ctxNames
          !cafMeth = sym.depth == 0
      let !result = JMethod {attr = attrs [JPublic],
                              gargs = [],       -- map targ (filter (!=tauvar) bnds),
@@ -1052,7 +1052,7 @@ instFun symc symt mname = do
      mhbind <- compiling csym (instSym sym.pos cmeth sym.typ)
  
  
-     let constrformal = map (uncurry (makeConstraintArg g)) (zip ctxs ourCtxNms)
+     let constrformal = zipWith (makeConstraintArg g)  ctxs ourCtxNms
          sjt          = if isCAF 
                             then (lazy . tauJT g . fst . U.returnType) sym.typ.rho 
                             else Lambda
@@ -1204,70 +1204,66 @@ instArg g a = adaptSigma g (arg2Bind g a)
       it will be wrapped in a @class Let$1234 { ... }@
         
 -}
-innerCaf (sym@SymV {depth = 0, expr = Just x}) binds mutual = do
+innerCaf (sym@SymV {depth = 0, expr = Just x}) binds !mutual = do
     g <- getST
-    let rtyp    = fst (U.returnTypeN 0 sym.typ.rho)
-        rlazy   = not sym.strsig.isStrict || not (RValue `member` sym.rkind)
-        rsimple = RSimple `member` sym.rkind
-        jtype   = rhoJT g rtyp
-        rtype   = returnType sym.rkind jtype
-        -- comp    =
-    escode <- 
-         if rsimple && not mutual
-         then do
-             ecode <- compiling sym (genExpr false rtype x binds)
-             stio (Left ecode)
-         else do
-             let badguard = T.openCaseWhen g x
-                 jthrow = [JThrow (JNew (Ref (JName "frege.runtime" "GuardFailed") []) [
-                                                     JAtom (show (nicer sym g)),
-                                                     JAtom (show sym.pos)])]
-             code <- compiling sym (genStmts (autoboxed rtype) x binds)
-             case badguard of
-                 Just (Left x) -> do
-                     U.warn (getpos x) (msgdoc ("guard (" ++ nicer x g ++ ") may evaluate to false."))
-                     stio (Right (code ++ jthrow))
-                 Just (Right p) -> do
-                     U.warn (getpos p) (msgdoc ("pattern guard (" ++ nicer p g ++ ") may fail to match."))
-                     stio (Right (code ++ jthrow))
-                 Nothing -> stio (Right code)
-    -- escode <- comp
- 
-    let name  = U.javaName g sym.name           -- P.foo
-        left (Left c) = c
-        left _ =  error "no ecode"
-        right (Right c) = c
-        right _ =  error "no scode"
-        ecode  = left escode
-        scode  = right escode
-        
+    let !rsimple = RSimple `member` sym.rkind
         comms = reverse [
-                 JComment (either show (const "no binding") escode),
-                 JComment ((nice sym g) ++ "  " ++ show sym.strsig ++ "  " ++ show sym.rkind),
-                 JComment (nicer sym.typ g), JComment (nicer x g)]
-        jexpr = (adapt ecode rtype).jex
-        cafV  = JMember { attr = attrFinal, jtype = rtype,
-                           name = name.base,
-                           init = Just jexpr}
-        newu  = JNewClass jtDelayed [] (unCommentG g [vMeth])          -- new Unknown<R>() { ... }
-        theU
-             | rlazy = newu
-             | otherwise = (JX.invoke [] . JX.xmem "eval" ) newu
-                                 
-        vMeth = JMethod { attr = attrs [JPublic, JFinal],
-                           gargs = [],
-                           -- @eval@ absolutely must return Lazy<T>
-                           jtype = autoboxed rtype,
-                           name = "eval", args = [], body = JBlock scode }
-        cafU  = JMember { attr = attrFinal, jtype = rtype,
-                           name = cafV.name,
-                           init = Just theU}
-    let !caf = case (rsimple, mutual) of
-             (false, _)    -> cafU
-             (_,  true)    -> cafU
-             (true, false) -> cafV
-    return (reverse (caf:comms))
+                    JComment ((nice sym g) ++ "  " ++ show sym.strsig ++ "  " ++ show sym.rkind),
+                    JComment (nicer sym.typ g), JComment (nicer x g)]
+        !rtyp    = fst (U.returnTypeN 0 sym.typ.rho)
+        !rlazy   = not sym.strsig.isStrict || not (RValue `member` sym.rkind)
+        !jtype   = rhoJT g rtyp
+        !rtype   = returnType sym.rkind jtype
+        !name    = U.javaName g sym.name           -- P.foo
 
+        cafX x   = JMember { attr = attrFinal, jtype = rtype,
+                          name = name.base,
+                          init = Just x}
+        newu sc  = JNewClass jtDelayed [] (unCommentG g [vMeth sc])          -- new Unknown<R>() { ... }
+        theU sc  = if rlazy then newu sc else (JX.invoke [] . JX.xmem "eval" ) (newu sc)
+        vMeth sc = JMethod { attr = attrs [JPublic, JFinal],
+                          gargs = [],
+                          -- @eval@ absolutely must return Lazy<T>
+                          jtype = autoboxed jtype,
+                          name = "eval", args = [], body = JBlock sc }
+
+        doscode = do
+              let badguard = T.openCaseWhen g x
+                  jthrow = [JThrow (JNew (Ref (JName "frege.runtime" "GuardFailed") []) [
+                                                      JAtom (show (nicer sym g)),
+                                                      JAtom (show sym.pos)])]
+              code <- if not rlazy && not rsimple && not mutual
+                 then do
+                      -- U.hint sym.pos (text (nicer sym g ++ " gets initialized directly."))
+                      compiling sym (genInit (JAtom name.base) rtype  x binds)                         
+                 else compiling sym (genReturn      (autoboxed jtype) x binds)
+              case badguard of
+                  Just (Left x) -> do
+                      U.warn (getpos x) (msgdoc ("guard (" ++ nicer x g ++ ") may evaluate to false."))
+                      stio (code ++ jthrow)
+                  Just (Right p) -> do
+                      U.warn (getpos p) (msgdoc ("pattern guard (" ++ nicer p g ++ ") may fail to match."))
+                      stio (code ++ jthrow)
+                  Nothing -> stio code
+        !decide = if not mutual
+            then if rsimple 
+                then do         -- lazy or not
+                    ecode <- compiling sym (genExpr false rtype x binds)
+                    let jexpr = (adapt ecode rtype).jex
+                    return (comms ++ [JComment (show ecode), cafX jexpr])
+                else do 
+                    scode <- doscode
+                    if rlazy 
+                    then return (comms ++ [cafX (theU scode)])
+                    else do
+                        let me = JMember{attr=attrFinal, jtype=rtype, name=name.base, init=Nothing}
+                            cafB = [me, JWhile (JBlock scode)]
+                        return (comms ++ cafB)
+            else do 
+                scode <- doscode
+                return (comms ++ [cafX (theU scode)])
+    decide
+ 
 innerCaf sym _ _ = do
     g <- getST 
     U.fatal sym.pos (text ("innerCaf: " ++ nicer sym g ++ " is not a CAF"))
@@ -1289,7 +1285,7 @@ cafCode (sym@SymV {depth = 0, expr = Just x}) binds = do
                  || not (RValue `member` sym.rkind)
         rsimple = RSimple `member` sym.rkind        
         ctxs  = if null bnds then [] else sym.typ.rho.context
-        cargs = map  (uncurry (makeConstraintArg g)) (zip ctxs ctxNames)
+        cargs = zipWith (makeConstraintArg g) ctxs ctxNames
          -- constraints = map  (uncurry (makeConstraintDef g)) (zip ctxs ctxNames)
         jtype = sigmaJT g symtyp
         rtype = returnType sym.rkind jtype
@@ -1303,7 +1299,7 @@ cafCode (sym@SymV {depth = 0, expr = Just x}) binds = do
                  jthrow = [JThrow (JNew (Ref (JName "frege.runtime" "GuardFailed") []) [
                                                      JAtom (show (nicer sym g)),
                                                      JAtom (show sym.pos)])]
-             code <- compiling sym (genStmts (autoboxed rtype) x binds)
+             code <- compiling sym (genReturn (autoboxed rtype) x binds)
              case badguard of
                  Just (Left x) -> do
                      U.warn (getpos x) (msgdoc ("guard (" ++ nicer x g ++ ") may evaluate to false."))
@@ -1513,7 +1509,7 @@ topFun (sym@SymV {expr = Just x}) binds = do
         argAttr     = if RTailRec `member` sym.rkind then BitSet.empty else attrFinal 
         -- (rty, _) = U.returnTypeN sym.depth sym.typ.rho
         -- staticWorker = null sym.typ.rho.context
-        constrargs  = map  (uncurry (makeConstraintArg g)) (zip sym.typ.rho.context ctxNames)
+        constrargs  = zipWith (makeConstraintArg g)  sym.typ.rho.context  ctxNames
         -- rjt         = rhoJT g rty
         wrjt        = si.returnJT
         workerArgs  = argDefs argAttr si argNames
@@ -1839,13 +1835,13 @@ genLambda rm x [] binds {-
     | otherwise -} = do
         g <- getST
         U.logmsg TRACEG (getpos x) (text ("genLambda[]: " ++ nice x g)) 
-        genStmts rm x binds
+        genReturn rm x binds
  
 genLambda _ x _ _ = do
     g <- getST
     U.fatal (getpos x) (text ("genLambda: bad expression: " ++ nice x g))
 
-genStmts, genCaseStmt :: JType -> Expr -> Tree Symbol Binding -> StG [JStmt] 
+genCaseStmt :: (JX -> [JStmt]) -> JType -> Expr -> Tree Symbol Binding -> StG [JStmt] 
 {--
   * The code for case statements can and will be optimized in various ways.
  
@@ -1883,7 +1879,7 @@ genStmts, genCaseStmt :: JType -> Expr -> Tree Symbol Binding -> StG [JStmt]
   * >  ... yet more alternatives ....
   * >  throw new NoMatch("xy.fr", 345, case expression)
   -}
-genCaseStmt rm (x@Case {ckind,ex=cex,alts=calts}) binds = do
+genCaseStmt jret rm (x@Case {ckind,ex=cex,alts=calts}) binds = do
          g <- getST
      -- case Con a b c  ... avoid actual creation of value unless a pattern is not
      -- itself a constructor application or a variable that is not referenced in its scope
@@ -1973,7 +1969,7 @@ genCaseStmt rm (x@Case {ckind,ex=cex,alts=calts}) binds = do
          genAlt noif binds codes mbcon bexs (alt@CAlt {pat,ex})
              | Nothing  <- mbcon = do
                  g <- getST
-                 (nbex, code) <- match noif pat (head bexs) (genStmts rm ex) binds
+                 (nbex, code) <- match noif pat (head bexs) (genStmts jret rm ex) binds
                  stio ((altComm g:code):codes, [nbex])
              | Just con <- mbcon = do
                  g <- getST
@@ -1985,7 +1981,7 @@ genCaseStmt rm (x@Case {ckind,ex=cex,alts=calts}) binds = do
                                  let nbexs = case stri of
                                          S ss -> zipWith (bexStr g) bexs (ss ++ allLazy)
                                          _    -> bexs
-                                 code <- matchCon noif pat con nbexs (genStmts rm ex) binds
+                                 code <- matchCon noif pat con nbexs (genStmts jret rm ex) binds
                                  g <- getST
                                  stio ((altComm g:code):codes, nbexs)
                              else do
@@ -1995,7 +1991,7 @@ genCaseStmt rm (x@Case {ckind,ex=cex,alts=calts}) binds = do
                          g <- getST
                          -- uvar <- conUVarAlt true alt
                          -- if uvar then do
-                         code <- genStmts rm ex binds
+                         code <- genStmts jret rm ex binds
                          stio ((altComm g:code):codes, bexs)
              | otherwise = undefined
              where
@@ -2030,8 +2026,34 @@ genCaseStmt rm (x@Case {ckind,ex=cex,alts=calts}) binds = do
              | T.patternRefutable g pat = false
              | Just _ <- T.openCaseWhen g ex = false
              | otherwise = true
-genCaseStmt rm nocase binds = error "genCaseStmt: no case"
- 
+genCaseStmt jret rm nocase binds = error "genCaseStmt: no case"
+
+--- runs 'genStmts' to generate code that returns the value
+genReturn :: JType -> Expr -> Tree Symbol Binding -> StG [JStmt]
+genReturn jt ex tree = genStmts return jt ex tree 
+    where
+        return x = [JReturn x]
+
+{--
+    Generate code like:
+    
+    > while (true) { block }
+    
+    where _block_ uses
+    
+    > atom = expr;
+    > break;
+    
+    instead of @return@
+    
+    This is used to initialize non-simple 'innerCaf's
+-}
+genInit :: JX -> JType -> Expr -> Tree Symbol Binding -> StG [JStmt]
+genInit jx jt ex tree = genStmts assignAndBreak jt ex tree
+    where 
+        assignAndBreak result = [JAssign jx result, JEx (JAtom "break")]
+        
+        
 {--
   * [usage] @genStmt rkind expression bindings@
   * [returns] A list of statements where the last one is a @return@
@@ -2039,9 +2061,10 @@ genCaseStmt rm nocase binds = error "genCaseStmt: no case"
   *           incomplete case statement
   * This is called for return expressions only.
   -}
-genStmts rm (x@Case {ckind,ex=cex,alts=calts}) binds = genCaseStmt rm x binds
+genStmts :: (JX -> [JStmt]) -> JType -> Expr -> Tree Symbol Binding -> StG [JStmt]
+genStmts jret rm (x@Case {ckind,ex=cex,alts=calts}) binds = genCaseStmt jret rm x binds
  
-genStmts rm (x@Let {env, ex}) binds = do
+genStmts jret rm (x@Let {env, ex}) binds = do
      case env of
          [k] -> do
              symv <- U.findV k
@@ -2050,26 +2073,26 @@ genStmts rm (x@Let {env, ex}) binds = do
                      | symv.depth == 0,
                        symv.strsig.isStrict,
                        RSimple `member` symv.rkind,
-                       RhoTau [] t <- symv.typ.rho = genStmts rm (cas vx) binds
+                       RhoTau [] t <- symv.typ.rho = genStmts jret rm (cas vx) binds
                      where
                          cas vx = Case CWhen vx [alt] x.typ
                          alt = CAlt {ex, pat = PVar symv.pos symv.name.uid symv.name.base}
-                 _ -> genLet rm x binds
-         _ -> genLet rm x binds
+                 _ -> genLet jret rm x binds
+         _ -> genLet jret rm x binds
  
-genStmts rm (x@Let {env,ex}) binds = genLet rm x binds
+genStmts jret rm (x@Let {env,ex}) binds = genLet jret rm x binds
  
-genStmts rm (x@(Ifte c t e _)) binds {-| not (T.isSimple x) -} = do
+genStmts jret rm (x@(Ifte c t e _)) binds {-| not (T.isSimple x) -} = do
          g <- getST
          cbnd <- genExpression false strict c binds
-         tstm <- genStmts rm t binds
-         estm <- genStmts rm e binds
+         tstm <- genStmts jret rm t binds
+         estm <- genStmts jret rm e binds
          stio [sComment (nicer x g), 
             JCond "if" (strictBind cbnd).jex tstm, 
             JBlockX "else" estm]
  
  
-genStmts rm ex binds
+genStmts jret rm ex binds
      {- | T.isSimple ex -} = do                                -- return or tailcall
          g   <- getST
          case ex of
@@ -2088,13 +2111,13 @@ genStmts rm ex binds
                      genEx tt aex = genExpr false tt aex binds
              _ = do
                  bnd <- genExpr true rm ex binds
-                 stio [sComment ("return " ++ show rm ++ "  " ++ nicer ex g),
-                         sComment (show bnd),
-                         JReturn bnd.jex]
+                 stio (  sComment ("return " ++ show rm ++ "  " ++ nicer ex g)
+                       : sComment (show bnd)
+                       : jret bnd.jex)
  
 
-genLet :: JType -> Expr -> Tree Symbol Binding -> StG [JStmt] 
-genLet rm (x@Let {env,ex}) binds = do
+genLet :: (JX -> [JStmt]) -> JType -> Expr -> Tree Symbol Binding -> StG [JStmt] 
+genLet jret rm (x@Let {env,ex}) binds = do
          g <- getST
          syms <- mapSt U.findV env
          case syms of
@@ -2114,13 +2137,13 @@ genLet rm (x@Let {env,ex}) binds = do
             g <- getST
             let letbinds = mkbind g JAtom binds sym
             decls <- gen false letbinds sym
-            stmts <- genStmts rm ex letbinds
+            stmts <- genStmts jret rm ex letbinds
             return (comment g : (map JLocal decls ++ stmts))
             
          -- generate declaration of inner function or caf
          gen mutual binds sym
-            | sym.depth == 0 = innerCaf sym binds mutual
-            | otherwise      = innerFun sym binds
+            | sym.depth == 0 = innerCaf sym binds mutual 
+            | otherwise      = innerFun sym binds 
          
          -- set up simple bindings, generate the mutually dependend items in a class
          -- instantiate that class and make bindings that access the bindings from outside
@@ -2131,6 +2154,7 @@ genLet rm (x@Let {env,ex}) binds = do
             u <- U.uniqid
             let letcl = JClass{attr = attrFinal, 
                     jtype, extend = Nothing, implement = [], defs = concat decls}
+                -- udecls = map (\JLocal decl -> decl) decls
                 jtype = Ref{jname = JName{qual="", base}, typeargs=[]}
                 base = "Let$" ++ show u
                 name = "let$" ++ show u
@@ -2138,7 +2162,7 @@ genLet rm (x@Let {env,ex}) binds = do
                         init = Just (JNew jtype [])}
                 member n = JExMem{jex = JAtom name, name=n, targs=[]}
                 letbinds = fold (mkbind g member) binds syms
-            stmts <- genStmts rm ex letbinds
+            stmts <- genStmts jret rm ex letbinds
             return (comment g : JLocal letcl : JLocal var : stmts) 
          comment g = sComment (nicer x g)
          mkbind :: Global -> (String -> JX)  -> Tree Symbol Binding -> Symbol -> Tree Symbol Binding
@@ -2153,7 +2177,7 @@ genLet rm (x@Let {env,ex}) binds = do
                         else if RValue `member` sym.rkind
                             then strict else lazy
                 name = (U.javaName g sym.name).base
-genLet _ ex binds = do
+genLet jret _ ex binds = do
      g <- getST
      U.fatal (getpos ex) (text("genLet: not a let  " ++ nice ex g))
  
@@ -2482,7 +2506,7 @@ genExpr rflag rjtype expr binds | Just sigma <- expr.typ = do
                 ++ " @@ " ++ nice faketype g))
             U.logmsg TRACEG (getpos expr) (text("genExpr: in environment " 
                 ++ nice faketype.rho.{context = ectxs} g))
-            body <- compiling fakesym (genStmts (strict rjtype) expr binds)
+            body <- compiling fakesym (genReturn (strict rjtype) expr binds)
             let newclass = JNewClass jtype  []  decls
                 decls    = unCommentG g [eval, work]
                 work     = JMethod{attr=attrFinal, gargs=[], jtype=strict rjtype, 
@@ -2554,7 +2578,7 @@ genSimple rflg rm (app@App a b (Just sigma)) binds = do
         lazyFun false jt  = jt
         lazyFun true  jt  = lazy jt
         genArgEx arm aex = genExpr false arm aex binds
-        remaining call rargs 
+        remaining !call rargs 
             | null rargs = do
                     g <- getST
                     U.logmsg TRACEG pos (text("resApp:  " 
