@@ -164,9 +164,31 @@ passC = do
                     when (msym.anno || isJust msym.nativ) do
                         U.error msym.pos (msgdoc ("class member " ++ msym.name.base ++ " must not be annotated."))
                     case osym.name.tynm.findit g of
-                        Just (ssym@SymC {pos}) -> mkanno symc msym osym ssym
+                        Just (ssym@SymC {pos}) -> do
+                                mkanno symc msym osym ssym
+                                return ()
                         nothing -> U.fatal pos (text ("methodcheck: class " ++ osym.name.tynm.nice g ++ " vanished."))
-                _ -> U.fatal pos (text ("more than 1 super class definitions for " ++ msym.name.nice g))
+                _ -> U.fatal pos (text (msym.name.nice g ++ " occurs in more than one super class of " ++ symc.name.nice g))
+        methodcheck symc (msym@SymL{pos}) = do
+            g <- getST
+            let jprevs = [ (MName sup msym.name.base).findit g | sup <- Symbol.supers symc ]
+                prevs  = [ p | Just p <- jprevs, Symbol.{anno?} p, Symbol.anno p ]
+            
+            case prevs of
+                [] -> U.error pos (msgdoc ("new class operation `" ++ msym.name.base
+                        ++ "` must not be an alias.")) 
+                [osym] | Just ali <- msym.alias.findit g,
+                         SymV{anno=true} <- ali,
+                         -- symc.name == same,
+                         Just ssym <- osym.name.tynm.findit g,
+                         SymC{} <- ssym = do
+                                    sig <- mkanno symc msym osym ssym
+                                    T.subsCheck ali ali.typ sig
+                       | otherwise = U.error pos (msgdoc (nicer msym g 
+                            ++ " may only point to a value whose type is known through annotation or import."))  
+                _ -> U.fatal pos (text (msym.name.nice g ++ " occurs in more than one super class of " ++ symc.name.nice g))
+
+
         methodcheck symc other = do
             g <- getST
             U.error other.pos (text (other.nice g ++ " not allowed in " ++ symc.nice g))
@@ -177,7 +199,7 @@ passC = do
          * t is the class variable of this class and n is a new name
          * that replaces accidental occurences of t in the annotation of the super method
          -}
-        mkanno :: Symbol -> Symbol -> Symbol -> Symbol -> StG ()
+        mkanno :: Symbol -> Symbol -> Symbol -> Symbol -> StG Sigma
         mkanno csym msym osym ssym = do
             g <- getST
             i <- U.uniqid
@@ -197,8 +219,12 @@ passC = do
                         rho = rho1.{context <- map rep}
                         repv (x,k) = maybe (x,k) Tau.varkind (tree.lookup x)
                         memtyp = ForAll (map repv osym.typ.bound) rho
-                    U.changeSym msym.{typ = memtyp, anno=true}
-                true -> U.fatal osym.pos (text ("mkanno:: untyped " ++ osym.nice g))
+                    when msym.{typ?} do
+                        U.changeSym msym.{typ = memtyp, anno=true}
+                    return memtyp
+                true -> 
+                    U.fatal osym.pos (text ("mkanno:: untyped " ++ osym.nice g))
+                    -- return U.pSigma
 
         checklink (symm@SymV {name=MName cls base}) = do
             g <- getST
@@ -432,6 +458,10 @@ funForCIT cname iname tname (mname@MName _ base) = do
         tsym <- U.findT tname
         isym <- U.findI iname
         csym <- U.findC cname
+        U.logmsg TRACE6 isym.pos (text ("funForCit class: " ++ nicer cname g
+                    ++ ", inst: " ++ nicer iname g
+                    ++ ", type: " ++ nicer tname g
+                    ++ ", member: " ++ nicer mname g))
         let ivmb = isym.env.lookup mname.key
             tvmb = tsym.env.lookup mname.key
             -- implemented vsym = isJust (Symbol.expr vsym) || isJust (Symbol.nativ vsym)
@@ -468,9 +498,9 @@ funForCIT cname iname tname (mname@MName _ base) = do
                         | MName yname _ <- alias,
                           Just ysym <- yname.findit g = when (isym.our g) do
                             U.symWarning U.hint ivsym (msgdoc ("There exists another implmentation of `"
-                                ++ mname.base ++ "` for unrelated " ++ ysym.nice g
+                                ++ mname.base ++ "` for unrelated " ++ ysym.nicer g
                                 ++ ", this will make it impossible to access "
-                                ++ ivsym.nice g
+                                ++ ivsym.nicer g
                                 ++ " directly."))
                         | otherwise = U.error tvsym.pos (msgdoc (tvsym.nice g
                                                         ++ " should be alias of " ++ ivsym.nice g))
@@ -481,9 +511,31 @@ funForCIT cname iname tname (mname@MName _ base) = do
                         U.logmsg TRACE6 ivsym.pos (text (mname.nice g ++ " not yet implemented in " ++ tsym.nice g))
                         U.linkq (MName tname base) ivsym
                 | otherwise = U.error isym.pos (msgdoc ("implementation missing for " ++ ivsym.nice g))
-            Just SymL{alias}    -- imported instance with links to type methods? 
+            Just SymL{pos=ipos, name=member, alias}    -- imported instance with links to type methods? 
                 | not (iname.our g), alias.{tynm?}, alias.tynm == tname = stio ()
-            Just osym -> U.fatal osym.pos (text ("expected instance member, found " ++ osym.nice g))
+                | otherwise = case alias.findit g of
+                    Just symv | SymV{} <- symv, !symv.anno && !(maybe false (const true) symv.nativ) = do
+                        U.error ipos (msgdoc ("function `" ++ nicer alias g
+                            ++ "` given as implmentation of instance member `"
+                            ++ nicer member g ++ "` must be annotated."))
+                        U.changeSym isym.{ env <- deletek member.key }
+                    Just osym | not (osym.our g) || implemented osym = case tvmb of
+                        Just (tsym @ SymL{alias=same})  
+                            | same == alias = stio ()
+                            | same == member = do
+                                    -- this is the normal case after enter
+                                    -- remove one indirection
+                                    U.changeSym tsym.{alias} 
+                        Just err -> U.error ipos (msgdoc ("definition of " ++ member.nicer g
+                                        ++ " not allowed because " ++ err.nicer g
+                                        ++ " already exists."))
+                        Nothing -> do
+                            U.logmsg TRACE6 ipos (text (mname.nice g ++ " not yet implemented in " ++ tsym.nice g))
+                            U.linkq (MName tname base) osym
+                    Just osym -> U.error ipos (text (nicer osym g ++ " is not implemented."))
+                    Nothing -> do
+                        U.fatal ipos (msgdoc (nicer member g ++ "  links to  " ++ alias.nicer g ++ ", but the latter doesn't exist."))
+            Just osym -> U.fatal isym.pos (text ("expected instance member, found " ++ osym.nice g))
             Nothing -> case tvmb of
                 Nothing -> inherit mname
                 Just (tvsym@SymV {pos})
@@ -530,10 +582,20 @@ funForCIT cname iname tname (mname@MName _ base) = do
                         U.error isym.pos (msgdoc (mname.nice g
                             ++ " already implemented via unrelated "
                             ++ ocsym.nice g))
+                    | VName{} <- alias = do
+                        -- may be introduced through superinstance?
+                        case alias.findit g of
+                            Just target -> do 
+                                U.logmsg TRACE6 isym.pos (msgdoc (
+                                    "linkq " ++ nice (MName iname base) g ++ " -> " ++ nice target g))
+                                U.linkq (MName iname base) target
+                                funForCIT cname iname tname mname   -- try again
+                            Nothing -> U.fatal ali.pos (msgdoc ("Link to nowhere: " ++ nicer ali g))
                 Just osym -> U.fatal osym.pos (text ("funForCIT: expected type member, found " ++ osym.nice g))
 funForCIT cname iname tname mname = error "funForCIT: not a member"
 
 --- check if 'Symbol' is an implemented function
+implemented SymD{} = true 
 implemented vsym = isJust (Symbol.expr vsym) || isJust (Symbol.nativ vsym)
 
 {--
@@ -550,18 +612,17 @@ tcInstMethod [] isym msym = do
         g <- getST
         U.error msym.pos (msgdoc (msym.nice g ++ " is not a class member function"))
 
-tcInstMethod scs      isym (msym@SymL {alias})   = do
-        tsym <- U.findV alias
-        tcInstMethod scs isym tsym
-        
-tcInstMethod (sc:scs) isym (msym@SymV {typ=sig}) = do
+tcInstMethod (sc:scs) isym msym | Symbol.{typ?} msym || msym.{alias?} = do
         g <- getST
-        -- U.logmsg TRACE6 msym.pos ("tcInstMethod: " ++ msym.nice g ++ ", class=" ++ sc.nice g)
-        case sc.env.lookup msym.name.key of
+        case sc.env.lookupS msym.name.key of
             Nothing -> tcInstMethod scs isym msym
             Just (SymV {typ=(s@ForAll sbnd srho)}) | not (U.isPSigma s) = do
-                let !mtnice = case U.isPSigma msym.typ of true -> "None"; false -> msym.typ.nicer g
+                g <- getST
+                let !mtnice = case U.isPSigma sig of true -> "None"; false -> sig.nicer g
                     !csig   = ForAll (filter ((sc.tau.var!=) . fst) sbnd) srho
+                    !sig    = case msym.name.findit g of
+                                Just xsym | xsym.{typ?} -> xsym.typ
+                                other    -> error ("tcInstMethod: link to nothing: " ++ nice msym g)
                 U.logmsg TRACE6 msym.pos (text (msym.nice g
                     ++ " class: " ++ sc.nice g
                     ++ " class method type: " ++ s.nicer g
@@ -600,10 +661,16 @@ tcInstMethod (sc:scs) isym (msym@SymV {typ=sig}) = do
                                 T.subsCheck msym sig msig
                                 T.checkConstraints msym sig msig
                                 T.checkConstraints msym msig sig
-                                U.changeSym msym.{typ = msig, anno = true}
+                                when (msym.{expr?}) do
+                                    U.changeSym msym.{typ = msig, anno = true}
                     other -> error "RhoTau expected"
-            Just (symv@SymV {typ=sig}) | U.isPSigma sig -> U.fatal symv.pos (text (symv.nice g ++ " of " ++ sc.nice g ++ " is not annotated"))
-            Just other -> U.fatal other.pos (text (other.nice g ++ " in " ++ sc.nice g))
+            Just (symv@SymV {typ=sig}) | U.isPSigma sig -> do
+                    U.fatal symv.pos (text (symv.nice g ++ " of " ++ sc.nice g ++ " is not annotated"))
+            -- Some class has a default method that links somewhere else
+            -- The method was introduced in a super class
+            Just SymL{} -> tcInstMethod scs isym msym 
+            Just other -> do
+                U.fatal other.pos (text (other.nice g ++ " in " ++ sc.nice g))
 
 tcInstMethod (sc:scs) isym (msym@SymV {typ=s}) | not (U.isPSigma s) = do
         g <- getST

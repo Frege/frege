@@ -158,6 +158,7 @@ error n s = do
     
     changeST Global.{sub <- SubSt.{errors <- (1+)}}
 
+native printStackTrace :: Throwable -> IO ()
 {--
  * Emit a message and return 'undefined'.
  * This indicates errors in the compiler, not in the source code compiled.
@@ -168,16 +169,12 @@ fatal n s = do
     let opt = g.options
         ns  = if display n == display Int.maxBound then "EOF" else display n
         is  = "F " ++ opt.source ++ ":" ++ ns ++ ": "
-    doio do
-        g.stderr.println (pretty 78 (text is <+> nest 8 s))
-    -- envDump
-    doio do
-        g.stderr.println ""
-        g.stderr.close
-        return ()
-    -- doio $ g.stderr.printLn
     changeST Global.{sub <- SubSt.{errors <- (1+)}}
-    Prelude.error (pretty 100 s)
+    doio do
+        stderr.println (pretty 78 (text is <+> nest 8 s))
+        let ex = Undefined.new "compiler error"
+        printStackTrace ex
+        throwIO ex
 
 hint, warn :: Position -> DOCUMENT -> StG ()
 warn = logmsg WARNINGS
@@ -886,15 +883,15 @@ private updateSym tab key value = case tab.lookup key of
  -}
 enter :: Symbol -> StG ()
 enter sym
-    | sym.{alias?} = do
+    | sym.{alias?}  = do
             g <- getST
             let asy = sym.alias.find g
             case asy of
-                Nothing -> do
+                Nothing | sym.alias.our g -> do
                     let sa  = sym.nicer g
                         -- st  = sym.alias.nice g
-                    error sym.pos (fill (break ("can't enter " ++ sa ++ " for unknown target")))
-                Just _ -> enterOrUpdate
+                    fatal sym.pos (fill (break ("can't enter " ++ sa ++ " for unknown target")))
+                sonst -> enterOrUpdate
     | otherwise    = enterOrUpdate
     where
         enterOrUpdate
@@ -1060,6 +1057,14 @@ findV qname = do
     case QName.findit qname g of
         Just (symc@SymV {pos}) -> stio symc
         Just sym -> fatal sym.pos (fill (break ("looked for function " ++ qname.nice g ++ ", found "
+                                    ++ sym.nice g)))
+        Nothing -> fatal Position.null (fill (break ("looked for function " ++ qname.nice g ++ ", found Nothing")))
+findVD qname = do
+    g <- getST
+    case QName.findit qname g of
+        Just (symc@SymV {pos}) -> stio symc
+        Just (symc@SymD {pos}) -> stio symc
+        Just sym -> fatal sym.pos (fill (break ("looked for function or constructor " ++ qname.nice g ++ ", found "
                                     ++ sym.nice g)))
         Nothing -> fatal Position.null (fill (break ("looked for function " ++ qname.nice g ++ ", found Nothing")))
 findD qname = do
@@ -2132,14 +2137,21 @@ ourGlobalFuns mtree ex = foldEx true collect Nil ex where
     collect acc (Vbl {name})
         | Local {} <- name = stio (Left acc)
         | otherwise = do
-            sym <- findV name
-            stio (Left (acc `including` sym))
+            sym <- findVD name
+            case sym of
+                SymV{} -> stio (Left (acc `including` sym))
+                sonst  -> stio (Left acc)
     collect acc (Mem {member})
         | Just list <- Tree.lookupS mtree member.value
                     = stio (Left (fold including acc list))
         | otherwise = stio (Left acc)
     collect acc _ = stio (Left acc)
 
+symVD f g sym = case sym of
+    SymV{} -> f sym
+    SymD{} -> g sym
+    other  -> Prelude.error (sym.name.base ++ " is neither SymV nor SymD")
+    
 {--
  * [usage] @fundep expr@
  * [returns] a list of our 'QName's that are directly mentioned in /ex/

@@ -100,6 +100,19 @@ findLocal (qn:qns) name
     | qn.base == name = qn
     | otherwise = findLocal qns name
 
+{--
+    Check if an expression is just a top level variable or a constructor
+    and return the name.
+    
+    Used to introduce aliases for definitions like
+    
+    > a = b
+    -}
+varcon :: Expr -> Maybe QName
+varcon Con{name} = Just name
+varcon Vbl{name} | !name.isLocal = Just name
+varcon _ = Nothing
+
 
 transdef env fname (d@FunDcl {poss}) = case d.name of
     ´^(strict|lazy)\$\d+$´ | [PVar{var}] <- d.pats -> do
@@ -110,6 +123,11 @@ transdef env fname (d@FunDcl {poss}) = case d.name of
         common aname d
   where
     pos = head poss
+    classMember (MName tynm _) g = case tynm.findit g of
+        Just SymC{}  = true
+        Just SymI{}  = true
+        other        = false
+    classMember other g = false
     common aname d = do
         g <- getST
         U.logmsg TRACE5 pos (text("transdef: env=" ++ show env ++ ", aname=" ++ show aname))
@@ -119,10 +137,16 @@ transdef env fname (d@FunDcl {poss}) = case d.name of
                     let funex = foldr lamNil d.expr d.pats
                         lamNil p e = Lam p e Nothing
                     x <- transExpr env fname funex
-                    -- U.logmsg TRACE5 pos ("function " ++ aname.nice g ++ " = " ++ Expr.nice x g)
-                    U.changeSym sym.{expr = Just x}
+                    case varcon x of
+                        -- make non local, unannotated definitions like @a = b@ into aliases
+                        Just name  | !sym.anno, !sym.name.isLocal, !(classMember aname g) = do
+                            let alias = SymL{sid=sym.sid, pos=sym.pos, vis=sym.vis, 
+                                            name=sym.name, alias=name}
+                            U.changeSym alias
+                        other -> U.changeSym sym.{expr = Just x}
                 | otherwise = U.fatal pos (text ("expected function, found " ++ sym.nice g))
             nothing -> do U.fatal pos (text ("Cannot happen, function " ++ aname.nice g ++ " missing"))
+
 
 {-
     AnnDcl    {pos::Line, vis::Visibility, name::String, typ::SigmaT t, doc::Maybe String}
@@ -140,6 +164,11 @@ transdef env fname (d@AnnDcl {pos}) = do
                     t <- transSigma d.typ
                     U.changeSym sym.{typ = t, anno=true}
                     U.logmsg TRACE5 pos (text ("function " ++ aname.nice g ++ " = " ++ t.nice g))
+                | SymL{pos=dpos, name, alias} <- sym, name.our g =
+                    U.error pos (msgdoc ("function " ++ name.nice g
+                        ++ " has been defined as alias for " ++ alias.nicer g
+                        ++ ". Place this annotation before line " ++ show dpos.line
+                        ++ " to prevent this error.")) 
                 | otherwise = U.fatal pos (text ("expected function, found " ++ sym.nice g))
 transdef env fname (d@NatDcl {pos}) = do
         g <- getST

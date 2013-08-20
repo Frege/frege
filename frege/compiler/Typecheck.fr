@@ -78,7 +78,7 @@ import frege.List (Tree, values, lookup, insertkv, insert, update, keys, includi
 
 import frege.compiler.Data
 import frege.compiler.Nice          except (group, break)
-import frege.compiler.Utilities     as U(pSigma, findC, findD, findV, freeTVars, freeTVnames,
+import frege.compiler.Utilities     as U(pSigma, findC, findD, findV, findVD, symVD, freeTVars, freeTVnames,
                                             mapEx, changeSym)
 import frege.compiler.Kinds         as K()                                            
 
@@ -343,17 +343,28 @@ substInst (vbl@Vbl {pos, name = MName tn bs, typ = Just (ForAll [] rho)})
                     [(_,iname)]
                         {- | MName iname bs != qname -} -> do
                             mem  <- findV vbl.name
-                            imem <- findV (MName iname bs)
-                            let nrho = rho.{context <- filter (not • sameCtx ctx)}
-                            U.logmsg TRACEO pos (text ("replace " ++ vbl.name.nice g
-                                ++ " :: " ++ vbl.typ.nicer g
-                                ++ " sigma :: " ++ mem.typ.nicer g
-                                ++ "  with  " ++ imem.name.nice g
-                                ++ " :: " ++ imem.typ.nicer g
-                                ++ " at type " ++ nrho.nicer g))
-                            changeST Global.{sub <- SubSt.{
-                                idKind <- insertkv (KeyTk vbl.pos.first) (Right imem.name)}}
-                            stio (Left vbl.{name=MName iname bs, typ = Just (ForAll [] nrho)})
+                            case (MName iname bs).findit g of
+                                Just imem -> do 
+                                    let nrho = rho.{context <- filter (not • sameCtx ctx)}
+                                        !repl | SymV{} <- imem = vbl.{name=imem.name, 
+                                                                        typ = Just (ForAll [] nrho)}
+                                              | SymD{} <- imem = Con{pos=vbl.pos, 
+                                                                        name=imem.name, 
+                                                                        typ = Just (ForAll [] nrho)}
+                                              | otherwise = error ("substInst WTF??? : " ++ nicer imem g) 
+                                    U.logmsg TRACEO pos (text ("replace " ++ vbl.name.nice g
+                                        ++ " :: " ++ vbl.typ.nicer g
+                                        ++ " sigma :: " ++ mem.typ.nicer g
+                                        ++ "  with  " ++ imem.name.nice g
+                                        ++ " :: " ++ imem.typ.nicer g
+                                        ++ " @@ " ++ nrho.nicer g))
+                                    changeST Global.{sub <- SubSt.{
+                                        idKind <- insertkv (KeyTk vbl.pos.first) (Right imem.name)}}
+                                    stio (Left repl)
+                                Nothing -> U.fatal vbl.pos (msgdoc ("substInst: trying "
+                                            ++ nice vbl g ++ ", but  "
+                                            ++ nice (MName iname bs) g
+                                            ++ " does not exist!"))
                         -- | otherwise = do
                         --     U.logmsg TRACEO pos (text ("mustn't substitute " ++ qname.nice g ++ " in its own body."))
                         --     stio (Left vbl)
@@ -728,26 +739,28 @@ tcRho' (x@Lit {pos,kind, value})  ety = case kind of
 
 
 tcRho' (x@Vbl {name})  ety = do
-    sym <- findV name
-    case U.isPSigma sym.typ of
-        false -> do
-            rho <- instantiate sym.typ
-            instRho x rho ety
-        true -> if sym.state == Unchecked
-            then do
-                checkName name
-                sym <- findV name
+    sym <- findVD name
+    case sym of 
+        SymD{} -> tcRho' Con{pos=x.pos, name=x.name, typ=x.typ} ety
+        other  -> case U.isPSigma sym.typ of
+            false -> do
                 rho <- instantiate sym.typ
                 instRho x rho ety
-            else if sym.state == Typechecking
-                 || sym.state == Recursive then do
-                            -- unavoidable in mutual recursive definitions
-                            U.changeSym sym.{state=Recursive}
-                            rho <- approxRho x
-                            instRho x rho ety
-                      else do
-                        g <- getST
-                        U.fatal (getpos x) (text ("tcRho: untyped " ++ x.nice g ++ ", state=" ++ show sym.state))
+            true -> if sym.state == Unchecked
+                then do
+                    checkName name
+                    sym <- findV name
+                    rho <- instantiate sym.typ
+                    instRho x rho ety
+                else if sym.state == Typechecking
+                     || sym.state == Recursive then do
+                                -- unavoidable in mutual recursive definitions
+                                U.changeSym sym.{state=Recursive}
+                                rho <- approxRho x
+                                instRho x rho ety
+                          else do
+                            g <- getST
+                            U.fatal (getpos x) (text ("tcRho: untyped " ++ x.nice g ++ ", state=" ++ show sym.state))
 tcRho' (x@Con {name}) ety = do
     sym <- U.findD name
     rho <- instantiate sym.typ

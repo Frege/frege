@@ -694,6 +694,12 @@ assign g Field{pos, name = Just toname, doc, vis, strict, typ} formalArg
         bind   = adaptArg g formalArg (if strict then S[] else U)
 assign g f a = error "assign: apply only named fields here"     -- see namedFields
 
+
+symCode binds sym = do
+    g <- getST
+    U.logmsg TRACEG sym.pos (text ("symbol code for " ++ nicer sym g))
+    symCode' binds sym
+    
 {--
   * Code for data types
   *
@@ -704,7 +710,7 @@ assign g f a = error "assign: apply only named fields here"     -- see namedFiel
   *   implements @Lazy<FV>@ and contains
   *   an abstract method @DCon@ to get the variant associated with @DCon@.
   -}
-symCode binds (sym@SymT {enum=true}) = do
+symCode' binds (sym@SymT {enum=true}) = do
      g <- getST
      let vals  = sortBy (comparing Symbol.name) (values sym.env)
          cons  = [ con | con@SymD {sid} <- vals ]                    -- constructors
@@ -727,7 +733,7 @@ symCode binds (sym@SymT {enum=true}) = do
      stio [JComment (nice sym g), result]
  
  
-symCode binds (sym@SymT {product=true, newt=true}) = do
+symCode' binds (sym@SymT {product=true, newt=true}) = do
      g <- getST
  
      let vals = sortBy (comparing Symbol.name) (values sym.env)
@@ -743,7 +749,7 @@ symCode binds (sym@SymT {product=true, newt=true}) = do
      stio [JComment (nice sym g), result]
  
  
-symCode binds (sym@SymT {product=true}) = do                    -- product
+symCode' binds (sym@SymT {product=true}) = do                    -- product
     g <- getST
  
     let vals    = sortBy (comparing Symbol.name) (values sym.env)
@@ -784,12 +790,12 @@ symCode binds (sym@SymT {product=true}) = do                    -- product
                           implement = imp, defs}
     stio [JComment (nice sym g), result]
 
-symCode binds (sym@SymT{env = Nil, nativ = Nothing, product=false, enum=false, newt=false})
+symCode' binds (sym@SymT{env = Nil, nativ = Nothing, product=false, enum=false, newt=false})
         = do
             g <- getST
             stio [JComment (nice sym g)]                          -- empty type
         
-symCode binds (sym@SymT {nativ=Nothing}) = do                   -- sum type
+symCode' binds (sym@SymT {nativ=Nothing}) = do                   -- sum type
      g <- getST
      let vals = sortBy (comparing Symbol.name) (values sym.env)
          cons = [ con | con@SymD {sid} <- vals ]
@@ -817,7 +823,7 @@ symCode binds (sym@SymT {nativ=Nothing}) = do                   -- sum type
                              defs = getCons ++ concat conDefs ++ mClass}
      stio [JComment (nice sym g), result]
  
-symCode binds (sym@SymT {sid, nativ = Just _}) = do                               -- nativ
+symCode' binds (sym@SymT {sid, nativ = Just _}) = do                               -- nativ
      g <- getST
      let vals = sortBy (comparing Symbol.name) (values sym.env)
      subDefs <- mapSt (symCode binds) vals
@@ -835,11 +841,11 @@ symCode binds (sym@SymT {sid, nativ = Just _}) = do                             
     - for each class method, an abstract method that returns a function (i.e. @Lambda@)
     - name space @I@ for default function implementations
     -}
-symCode binds (sym@SymC {sid}) = do           -- type class
+symCode' binds (sym@SymC {sid}) = do           -- type class
      g <- getST
      let vals = sortBy (comparing Symbol.name) (values sym.env)
      abstrFuns <- mapSt (abstractFun sym) vals
-     let ivals = filter (isJust • Symbol.expr) vals         -- default implementations
+     let ivals = filter (isJust • Symbol.expr) (filter Symbol.{expr?} vals) -- default implementations
      implFuns <- mapSt (symCode binds) ivals
      -- taujt    <- tauJT sym.tau
      let jtype = Ref (U.javaName g sym.name) []
@@ -859,7 +865,7 @@ symCode binds (sym@SymC {sid}) = do           -- type class
      - for each class method, an abstract method that returns a function
      - name space for default functions (?)
      -}
-symCode binds (sym@SymI {sid}) = do             -- instance definition
+symCode' binds (sym@SymI {sid}) = do             -- instance definition
      g <- getST
      csym <- U.findC sym.clas
  
@@ -871,21 +877,22 @@ symCode binds (sym@SymI {sid}) = do             -- instance definition
                                    m@SymV{}  <- values env ]
          -- links in type that point to instance members of this class and its superclasses
          -- The goal is to have (links to) implementations of all super class methods. 
-         methods1 = case U.instTSym (Symbol.typ sym) g of
+         methods2 = case U.instTSym (Symbol.typ sym) g of
               Just (tsym@SymT {pos}) -> [ alias |
-                                SymL {alias} <- values tsym.env, alias.{tynm?},    -- links
+                                SymL {name, alias} <- values tsym.env, alias.{tynm?},    -- links
                                 alias.base `elem` superMethods,           -- mentioning one of our methods
+                                name.base `notElem` map QName.base methods1,
                                 SymI {clas} <- QName.findit alias.tynm g, -- pointing to an instance
                                 SymC {supers} <- QName.findit clas g,     -- of a class that is in our hierarchy
                                 clas `elem` classes || any (`elem` classes) supers]
               _ -> error "unexpexted result from instTSym"
-         methods2 = [ name | name  <- map Symbol.name (values sym.env), name `notElem` methods1 ]
+         methods1 = map Symbol.name (values sym.env)
          -- methods of super classes that are implemented in the type itself
          methods3 = case U.instTSym (Symbol.typ sym) g of
-            Just (tsym@SymT {pos}) -> [ name |
-                                SymV{name} <- values tsym.env,
-                                 name.base `elem` superMethods,
-                                 name.base `notElem` methods] where
+            Just (tsym@SymT {pos}) -> [ sym.name |
+                                 sym  <- values tsym.env,
+                                 sym.name.base `elem` superMethods,
+                                 sym.name.base `notElem` methods] where
                         methods = map QName.base (methods1++methods2)
             _ -> error "unexpexted result from instTSym" 
          methods  = methods1 ++ methods2 ++ methods3
@@ -925,9 +932,9 @@ symCode binds (sym@SymI {sid}) = do             -- instance definition
      stio [JComment (nice sym g ++ " :: " ++ nice sym.typ g), result]
  
  
-symCode _ (sym@SymL{}) = getST >>= stio • (:[]) • JComment • nice sym
-symCode binds (sym@SymV {nativ = Just item}) = methClass sym
-symCode binds (sym@SymV {expr = Just x})
+symCode' _ (sym@SymL{}) = getST >>= stio • (:[]) • JComment • nice sym
+symCode' binds (sym@SymV {nativ = Just item}) = methClass sym
+symCode' binds (sym@SymV {expr = Just x})
     | sym.depth > 0 = do
         g <- getST
         trace g
@@ -940,7 +947,7 @@ symCode binds (sym@SymV {expr = Just x})
         trace g = U.logmsg TRACEG sym.pos (text ("compiling " ++ sym.nice g))
  
 --- unimplemented items produce a comment and an error message
-symCode binds sym = do
+symCode' binds sym = do
      g <- getST
      U.error sym.pos (text ("Can't generate code for " ++ nice sym g))
      stio [JComment (nice sym g)]
@@ -965,7 +972,38 @@ abstractFun symc (sym@SymV {sid}) = do
                              args = constrformal,
                              body = JEmpty}
      stio [JComment ((nice sym g) ++ " :: " ++ nice sym.typ g), result]
-abstractFun _ _ = undefined
+abstractFun symc syml | SymL {alias} <- syml = do
+    g <- getST
+    sym <- U.findV alias
+    let classCtx = Ctx {pos=Position.null, 
+                        cname = Symbol.name symc, 
+                        tau = Symbol.tau symc }
+        ourCtx = [ ctx | ctx <- sym.typ.rho.context, ctx.cname == classCtx.cname ]
+    case ourCtx of
+        [it] | it.tau.var == classCtx.tau.var =
+                abstractFun symc sym.{name <- QName.{base = syml.name.base}}
+             | otherwise = do
+                -- we have C a => ...
+                -- but we need C c
+                -- so first rename all c to a new name
+                -- then rename a to c
+                let nn = head [ nn | nn <- U.allBinders,
+                                     nn != classCtx.tau.var,
+                                     nn `notElem` sym.typ.vars ]
+                    tv = classCtx.tau.{var=nn}
+                    s1 = U.substSigma (insert Nil classCtx.tau.var tv) sym.typ
+                    s2 = U.substSigma (insert Nil it.tau.var classCtx.tau) s1
+                abstractFun symc sym.{typ=s2, name <- QName.{base = syml.name.base}}
+        [] -> U.fatal syml.pos (text ("aliased abstract function misses "
+                                        ++ nice symc g ++ " context:") </>
+                                nest 4 (text (nice sym.name g ++ " :: " ++ nice sym.typ g)))
+        _  -> U.fatal sym.pos (msgdoc ("aliased abstract function has more than one "
+                    ++ nice symc g ++ " contexts "
+                    ++ nice sym.name g ++ " :: " ++ nice sym.typ g))
+         
+abstractFun symc symx = do
+    g <- getST
+    U.fatal symx.pos (msgdoc ("Can't abstractFun " ++ nice symx g ++ " of " ++ nice symc g))
  
 {--
    >  class @Eq eq@
@@ -981,7 +1019,7 @@ abstractFun _ _ = undefined
    4. substitute it in instace member type
    5. reconstruct forall bound in instance member type
   -}
-fakeInstSigma (symc@SymC{supers}) (symi@SymI{sid}) (sym@SymV{typ}) = do
+fakeInstSigma (symc@SymC{supers}) (symi@SymI{sid}) sym | Symbol.{typ?} sym = do
      g <- getST
      let symjsb      = sym.typ.vars
          instjsb     = symi.typ.vars
@@ -993,11 +1031,14 @@ fakeInstSigma (symc@SymC{supers}) (symi@SymI{sid}) (sym@SymV{typ}) = do
                          var `notElem` symjsb ]
         tree1 = Tree.fromList (zip symjsb newvars)
         rho1  = U.substRho tree1 sym.typ.rho
+
+     U.logmsg TRACEG sym.pos (text ("making fake type for  " ++ nicer sym g))        
      U.logmsg TRACEG sym.pos (text ("renamed  " ++ nicer sym.typ g ++ "  to  " ++ nicer rho1 g))
  
      let classes = symc.name:symc.supers
-         memc = head [ sym | c <- classes, sym <- ((MName c sym.name.base).findit g).toList ]
-     symc <- U.findC memc.name.tynm
+         -- clsm = head [ sym | c <- classes, sym <- (MName c sym.name.base).find g ]
+         (memc,className) = head [ (sym,c) | c <- classes, sym <- (MName c sym.name.base).findit g ]
+     symc <- U.findC className
      let clas = symc.tau
          tree2 = U.unifySigma g memc.typ (ForAll [] rho1.{context=[]})
      U.logmsg TRACEG sym.pos (text ("unifySigma (" ++ nicer memc.typ g ++ ") "
@@ -1020,7 +1061,7 @@ fakeInstSigma (symc@SymC{supers}) (symi@SymI{sid}) (sym@SymV{typ}) = do
          kinds  = map (maybe KVar id . lookup s4tree) bvars
          bound = zip bvars kinds
          sigma5 = ForAll bound rho4      -- binds in correct order
-     U.logmsg TRACEG sym.pos (text ("fake type is  " ++ nicer sigma5 g))
+     U.logmsg TRACEG sym.pos (text ("fake type for  " ++ nicer sym g ++ "  is  " ++ nicer sigma5 g))
      stio sym.{typ=sigma5}
 fakeInstSigma _ _ _ = error "fakeInstSigma: bad args"
  
@@ -1029,27 +1070,31 @@ instFun symc symt mname = do
      g <- getST
      -- establish a fake type for instance member that matches the one of the instance
      -- cmem  <-  U.findV (MName (Symbol.name symc) (QName.base mname))
-     sym   <-  U.findV mname
-     sym   <-  fakeInstSigma symc symt sym
+     let sym =  fromMaybe (error ("instFun not found: " ++ mname.nice g)) (mname.findit g)
+     fsym   <-  fakeInstSigma symc symt sym.{name <- QName.{base=mname.base}}
  
      -- let bndsV = sym.typ.bound
      --    bndsI = (Symbol.typ symt).bound
      let implies = impliesG g
-         ctxs = [ ctx | ctx <- sym.typ.rho.context,
+         ctxs = [ ctx | ctx <- fsym.typ.rho.context,
                         not (any (`implies` ctx) symt.typ.rho.context)]
          ourCtxNms = drop symt.typ.rho.context.length ctxNames   -- ctx3, ctx4, ....
-         isCAF = null ctxs && sym.depth == 0
-         csig = sym.typ.{rho <- Rho.{context = symt.typ.rho.context ++ ctxs}}
-         csym = sym.{typ = csig}
+         isCAF = null ctxs && 
+                    (if sym.{depth?} then sym.depth == 0 
+                                     else ((0==) . length . snd . U.returnType) sym.typ.rho)
+         csig = fsym.typ.{rho <- Rho.{context = symt.typ.rho.context ++ ctxs}}
+         csym = fsym.{typ = csig}
  
-     let cmeth = case sym.expr of
-             Just (v@Vbl {name=MName cname bs})
-                 | cname `elem` (symc.name:symc.supers),
-                   Just (meth@SymV{}) <- v.name.findit g,    -- just class method
-                   isJust meth.nativ || isJust meth.expr = meth
-             other -> sym -- instance method
+     let cmeth = if sym.{expr?}
+            then case sym.expr of
+                Just (v@Vbl {name=MName cname bs})
+                     | cname `elem` (symc.name:symc.supers),
+                       Just (meth@SymV{}) <- v.name.findit g,    -- just class method
+                       isJust meth.nativ || isJust meth.expr = meth
+                other -> sym -- instance method
+            else sym.{typ = fsym.typ}
  
-     mhbind <- compiling csym (instSym sym.pos cmeth sym.typ)
+     mhbind <- compiling csym (instSym sym.pos cmeth fsym.typ)
  
  
      let constrformal = zipWith (makeConstraintArg g)  ctxs ourCtxNms
@@ -1061,7 +1106,7 @@ instFun symc symt mname = do
          result = JMethod {attr = attrs [JPublic, JFinal],
                              gargs = [],      -- ftargs,
                              jtype = sjt,     -- if higher then eosjt else sjt,
-                             name = latinF ++ mangled sym.name.base,
+                             name = latinF ++ mangled mname.base,
                              args = constrformal,
                              body = JBlock ([JReturn impl])}
          impl = mhbind.jex
@@ -1069,7 +1114,7 @@ instFun symc symt mname = do
  --            | otherwise = JX.new [bindto] jtMH
  --            where bindto = fold app (JX.xmem "j" mhbind.jex) constrargs -- mh.j.bindTo(ctx1) ...
  --        app x a = (JX.invoke [a] • JX.xmem "bindTo") x
-     stio [JComment ((nice sym g) ++ " :: " ++ nice sym.typ g), result]
+     stio [JComment ((nice fsym g) ++ " :: " ++ nice fsym.typ g), result]
  
  
  
