@@ -46,7 +46,7 @@ package frege.compiler.Grammar where
 
 import frege.Prelude hiding(<+>)
 
-import frege.List(Tree, keyvalues, keys, insertkv)
+import Data.TreeMap(insertkv)
 import Data.List as DL(elemBy)
 import frege.compiler.Data      as D
 import frege.compiler.Nice      except (group, annotation, break)

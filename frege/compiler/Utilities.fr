@@ -43,7 +43,7 @@ package frege.compiler.Utilities
     where
 
 import frege.Prelude except (error, print, println, break, <+>)
-import frege.List (Tree, Map, OrdSet, updatekv, insertkv,
+import Data.TreeMap (Tree, updatekv, insertkv, lookup, each, insert,
                     union, including, contains, keys, values, fromKeys)
 import Data.List as DL(partitioned, sortBy, minimumBy)
 
@@ -681,9 +681,9 @@ unAlias g tau = if isOn g.options.flags SPECIAL then fake tau else unAlias (fake
 
                 aliased (tau1@TApp a b) (SymA{pos,name,typ}) = case rho of
                         -- the expansion of the type alias must be more than a tvar 
-                        RhoTau [] tau2 | not (isTvApp tau2) -> case unify Nil tau2 tau1 of
+                        RhoTau [] tau2 | not (isTvApp tau2) -> case unify empty tau2 tau1 of
                             Just subst -> Just (substTau env aApp)
-                                where env = Tree.map unAlias subst
+                                where env = Tree.tmap unAlias subst
                             Nothing    -> Nothing
                         _              -> Nothing
                     where
@@ -698,6 +698,7 @@ unAlias g tau = if isOn g.options.flags SPECIAL then fake tau else unAlias (fake
 
 
                 -- substTau env (TFun a b)  = TFun (substTau env a) (substTau env b)
+                substTau :: Tree String (TauT β) -> TauT β -> TauT β
                 substTau env (TApp a b)  = TApp (substTau env a) (substTau env b)
                 substTau env (TVar{var})
                     | Just tau <- lookup env var = tau
@@ -716,7 +717,7 @@ unAlias g tau = if isOn g.options.flags SPECIAL then fake tau else unAlias (fake
                         return t2
                 unify t TVar{var} tau = case lookup t var of
                         Nothing  -> Just (insert t var tau)         -- extend substitution
-                        Just old -> case unify Nil old tau of       -- check if previous substitution matches current
+                        Just old -> case unify empty old tau of       -- check if previous substitution matches current
                             Just sub | all varSelf (each sub) = Just t
                             _                                 = Nothing
                     where
@@ -1121,7 +1122,7 @@ nstname s g = case s of
 tsort :: (Show a, Ord a) => [(a, [a])] -> [[a]]
 tsort odeps = result where
     -- make a Tree (o,Int) and assign each o a unique number
-    numobj os = loop Tree.Nil 0 os where
+    numobj os = loop Tree.empty 0 os where
         loop t !i (o:os)
             | Just _ <- Tree.lookup t o = Prelude.error ("tsort: duplicate object " ++ show o)
             | otherwise = loop  (Tree.insert t o i) (i+1) os
@@ -1140,13 +1141,13 @@ tsort odeps = result where
     -- make deep dependencies
     -- fatal3 = Prelude.error "tsort: uninitialized array element"
     deepdep t i
-        | t `contains` i = Nil
+        | t `contains` i = Tree.empty
         | otherwise = fold union di
                         [ deepdep ti x | x <- (keys di) ]
         where
             di = deparr.frozenElemAt i
             ti = t `including` i
-    deeps = Array.fromList [ deepdep Nil i | i <- enumFromTo 0 (deparr.length-1) ]
+    deeps = Array.fromList [ deepdep Tree.empty i | i <- enumFromTo 0 (deparr.length-1) ]
     i `dependson` j = deeps.frozenElemAt i `contains` j
     sortit [] = []
     sortit (x:xs) = sortit before ++ (eqs:sortit after) where
@@ -1167,11 +1168,11 @@ isTName _           = false
 --- return a list of 'TVar's that are unbound in the type
 --- the first argument is the list of 'TVar' names bound outside this rho
 freeTVars :: [String] -> RhoT a -> [TauT a]
-freeTVars bound rho = values (freeRhoTVars bound Nil rho)
+freeTVars bound rho = values (freeRhoTVars bound Tree.empty rho)
 
 --- like freeTVars, but returns only 'TVar'  names
 freeTVnames :: [String] -> RhoT a -> [String]
-freeTVnames bound rho = keys (freeRhoTVars bound Nil rho)
+freeTVnames bound rho = keys (freeRhoTVars bound Tree.empty rho)
 
 freeRhoTVars bound collected (RhoFun ctx (ForAll bndleft rho1) rho2) =
     freeRhoTVars (map fst bndleft ++ bound) (freeRhoTVars bound ctxcoll rho2) rho1
@@ -1435,7 +1436,7 @@ validRho bound rho = do
             _ -> stio rho
     where
         check (Ctx pos qname tau) = do
-            let vars = keys (freeTauTVars [] Nil tau)
+            let vars = keys (freeTauTVars [] Tree.empty tau)
                 bads = filter (`notElem` bound) vars
             unless (null bads) do
                 error pos (fill (break ("context must not name type variables " ++ joined "," bads)))
@@ -2029,15 +2030,16 @@ mapExBody b f x = mapEx b f x
 
 {-- @localSyms ex@ returns the set of all local uids mentioned in /ex/
  -}
-localSyms ex = foldEx true collect Nil ex where
+localSyms ex = foldEx true collect Tree.empty ex where
     collect acc (Vbl {name=nm@Local {uid}}) = do
         --sym <- findV nm
         stio (Left (acc `including` uid))
     collect acc _ = stio (Left acc)
 
 --- replace a set of uids
+replUids :: Tree Int Int -> Expr -> StG Expr
 replUids t = mapEx true rep where
-    rep (v@Vbl{name=Local{uid}}) = case lookup t uid of
+    rep (v@Vbl{name=Local{uid}}) = case t.lookupI uid of
         Just nid -> stio (Right v.{name <- QName.{uid=nid}})
         Nothing  -> stio (Right v)
     rep x = stio (Left x)
@@ -2046,8 +2048,9 @@ replUids t = mapEx true rep where
     Copy an expression, all patterns will be refreshed and references
     renamed accordingly. The new expression will have the same type as the old one.
     -}
+copyExpr :: Maybe Position -> Tree Int Int -> Expr -> StG Expr    
 copyExpr mbp t x = mapEx false (copy t) x where
-    ins t (k,v) = insert t k v
+    ins t (k::Int,v) = Tree.insert t k v
     copy tree (Lam{pat,ex,typ}) = do
         let qnames  = patNames pat
             olduids = map QName.uid qnames
@@ -2133,7 +2136,7 @@ untypeExpr x = mapEx true unty x
  * we make sure to first type check @T.foo@ forall our /T/ that has a /foo/.
  -}
 ourGlobalFuns :: Tree String [Symbol] -> Expr -> StG (Tree Symbol ())
-ourGlobalFuns mtree ex = foldEx true collect Nil ex where
+ourGlobalFuns mtree ex = foldEx true collect Tree.empty ex where
     collect acc (Vbl {name})
         | Local {} <- name = stio (Left acc)
         | otherwise = do
@@ -2158,7 +2161,7 @@ symVD f g sym = case sym of
  -}
 fundep (SymV {name, expr=Just x})  = do
     g <- getST
-    deptree <- ourGlobalFuns Nil x
+    deptree <- ourGlobalFuns Tree.empty x
     let dep = [ Symbol.name sy | sy <- keys deptree, Symbol.our sy g  ]
     stio (name, dep)
 fundep (SymV {name, expr=Nothing}) = stio (name, [])
@@ -2388,8 +2391,8 @@ isIO _ = Nothing
  *
  * > unifySigma (forall a b. Maybe a -> [b]) (Maybe Int -> [Float]) ==> [(a,Int), (b, Float)]
  -}
-unifySigma g (ForAll [] _) _ = Nil
-unifySigma g s1 (ForAll _ rho) = unifyRho g Nil s1.rho rho
+unifySigma g (ForAll [] _) _ = Tree.empty
+unifySigma g s1 (ForAll _ rho) = unifyRho g Tree.empty s1.rho rho
 
 unifyRho :: Global -> Tree String Tau -> Rho -> Rho -> Tree String Tau
 unifyRho g t (rho1@RhoFun{}) rho2
@@ -2401,14 +2404,14 @@ unifyRho g t (rho1@RhoFun{}) rho2
         t2     = unifyRho g t  rho1.sigma.rho rho2.sigma.rho
 -- rho1 must be a RhoTau as the first clause catches all cases where it is a RhoFun
 unifyRho g t rho1 rho2
-    | RhoTau{}      <- rho2        = unifyTau g t  rho1.tau   rho2.tau
+    | RhoTau{}      <- rho2        = unifyTau   t  rho1.tau   rho2.tau
     | rtau@RhoTau{} <- tauRho rho2 = unifyRho g t  rho1       rtau
 unifyRho g t _ _ = t
 
-
-unifyTau g t (TVar {var}) b = insert t var b
-unifyTau g t (TApp a b) (TApp c d) = unifyTau g (unifyTau g t a c) b d
-unifyTau g t _ _ = t
+unifyTau :: Tree String (TauT δ) -> TauT α -> TauT δ -> Tree String (TauT δ)
+unifyTau t (TVar {var}) b = insert t var b
+unifyTau t (TApp a b) (TApp c d) = unifyTau  (unifyTau  t a c) b d
+unifyTau t _ _ = t
 
 {--
  * [usage] @sigmaInst sigma1 sigma2@
