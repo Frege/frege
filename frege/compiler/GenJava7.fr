@@ -969,7 +969,7 @@ abstractFun symc (sym@SymV {sid}) = do
                              gargs = [],       -- map targ (filter (!=tauvar) bnds),
                              jtype = if cafMeth 
                                         then (lazy . tauJT g . fst . U.returnType) sym.typ.rho 
-                                        else Lambda,    
+                                        else jtFunc sym.depth,    
                              name = latinF ++ mangled sym.name.base,
                              args = constrformal,
                              body = JEmpty}
@@ -1102,7 +1102,7 @@ instFun symc symt mname = do
      let constrformal = zipWith (makeConstraintArg g)  ctxs ourCtxNms
          sjt          = if isCAF 
                             then (lazy . tauJT g . fst . U.returnType) sym.typ.rho 
-                            else Lambda
+                            else jtFunc (if sym.{depth?} then sym.depth else U.arity sym) 
      let -- constrargs   = map JAtom (take sym.typ.rho.context.length ctxNames)
          -- eosjt = erasedObj sjt
          result = JMethod {attr = attrs [JPublic, JFinal],
@@ -2417,8 +2417,6 @@ instSym pos sym sigma = do
          SymV {name = MName clas m, depth, rkind} 
             | Just (SymC {tau}) <- clas.findit g = do
                  g <- getST
-                 when (U.isOn g.options.flags OPTIMIZE && depth > 0) do
-                    U.hint pos (text ("using " ++ nicer sym g))
                  let inst   = JInvoke get (tail ctxs)
                      get    = JX.jexmem  (head ctxs) (latinF ++ mangled m)
                      mode   = if depth > 0
@@ -2695,7 +2693,11 @@ genSimple rflg rm (app@App a b (Just sigma)) binds = do
                 then genAnon vbl args
                 else case sym.name of
                     MName cname _
-                        | Just (SymC {sid}) <- cname.findit g = genAnon vbl args
+                        | Just (SymC {sid}) <- cname.findit g = do
+                            when (U.isOn g.options.flags OPTIMIZE && d > 0 && !isLazy) do
+                                U.hint pos (text ("using " ++ nicer sym g
+                                    ++ "  strictly."))
+                            genClassMember sym vsigma args d
                     noclassmember -> case sym.nativ of
                         Just _    -> do
                                 cenum <- isConstructorEnum sym vsigma
@@ -2718,6 +2720,34 @@ genSimple rflg rm (app@App a b (Just sigma)) binds = do
             ari (sym@SymV {nativ=Just _}) = U.arity sym
             ari sym                       = sym.depth
             !tailcall   = rflg && isLazy
+            
+            -- depth is guaranteed to be <= length args
+            genClassMember sym vsigma args d = do
+                g    <- getST
+                bind <- instSym pos sym vsigma
+                
+                let aargs = take d args
+                    rargs = drop d args
+                
+                -- prepare the arguments, they must be lazy
+                abinds <- sequence (zipWith genArgEx anys aargs)
+                si     <- symInfo sym
+                
+                if isLazy
+                then do
+                    let cargs = map Binding.jex abinds
+                        call  = Bind{stype=nicer sigma g, ftype=sigma, 
+                                    jtype = lazy si.returnJT,
+                                    jex = (JX.invoke cargs . JX.xmem "apply") bind.jex}
+                    remaining call rargs
+                else do
+                    let cargs = map Binding.jex (reverse abinds)
+                        call  = Bind{stype=nicer sigma g, ftype=sigma, 
+                                    jtype = Lazy Something, -- going to change when we know more
+                                    jex = (JX.invoke cargs . JX.xmem "eval") bind.jex}
+                    remaining call rargs
+                
+                    
             
             genNative sym = do
                 g <- getST
@@ -2789,6 +2819,7 @@ genSimple rflg rm (app@App a b (Just sigma)) binds = do
                                                         -- "apply", "eval" or "work"
                         _             -> Nothing
                     !rev = if aew == Just "eval" then reverse else id
+                    lazyresult = maybe false (=="apply") aew && !callLazy  
                     ajts 
                         | Just s <- aew,  s `elem` ["eval", "apply"] = anys
                         | otherwise = map (lazyFun (callLazy && !tailcall)) si.argJTs
@@ -2797,7 +2828,8 @@ genSimple rflg rm (app@App a b (Just sigma)) binds = do
                     !rargs      = drop depth args
 
                 abinds <- sequence (zipWith genArgEx ajts aargs)
-                let call = Bind (nicer sigma g) sigma si.returnJT 
+                let call = Bind (nicer sigma g) sigma 
+                            (if lazyresult then lazy si.returnJT else si.returnJT) 
                             (JInvoke static (ctxs ++ map Binding.jex (rev abinds)))
                 remaining call rargs
 -- 
