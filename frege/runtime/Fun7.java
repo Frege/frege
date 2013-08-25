@@ -79,16 +79,19 @@ public abstract class Fun7<X> extends Lambda {
     }
     
 	/**
-	 * The Java typechecker won't accept a function that promisses 
-	 * to return X in place of a function that promises to return {@link Object},
-     * though this should be completely save, shouldn't it? 
-	 * 
-	 * @return This function, now promising to return Objects
-	 */
+     * <p>Force the Java typechecker to accept sensible substitutions.</p>
+     * <p>The Java typechecker won't accept a function that promisses 
+     * to return X in place of a function that promises to return {@link Object},
+     * though this should be completely save, shouldn't it?</p>
+     * <p>It also refuses to accept any frege type, when {@link Lazy} is demanded,
+     * though every frege type implements {@link Lazy}.</p>   
+     * 
+     * @return This function, now promising to return a broader type
+     */
 	@SuppressWarnings("unchecked")
-	final public Fun7<Object> toObject() {
-		return (Fun7<Object>) this;    	
-	}
+	final public  <B, Y extends B> Fun7<B> toSuper(Fun7<Y> it) {
+    	return (Fun7<B>) it;    	
+    }
 
     /**
      * <p> Run the function. </p>
