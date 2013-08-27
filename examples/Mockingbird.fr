@@ -1,0 +1,239 @@
+module examples.Mockingbird
+
+    where
+
+import Data.List
+
+
+--- representation of SKI expressions with variables and constants 
+data SKI = S | K | I | Var String | Const String | App SKI SKI
+
+{-- 
+    Something like
+    
+    > SKKy
+    
+    is represented as left leaning 'App' tree, but sometimes we
+    want to use the isomorphism with a list:
+    
+    > flat (App (App (App a b) c) d) = [a, b, c, y]
+    > flat p = [p] -- where p is not an App
+    
+    This only flattens the outermost 'App', of course.
+    Note that the result is never the empty list, as atomic SKI expressions
+    result in a singleton list.
+    -}
+flat = reverse . flat'
+    where flat' (App a b) = b:flat' a
+          flat' x         = [x]
+          
+--- The converse of 'fold', the following law holds:
+--- > unflat (flat x) == x
+--- Can be used like 
+--- > unflat (replicate 1000 I)
+unflat = foldl1 (<>) 
+
+infixl 7 `<>`
+
+--- Embed the SKI syntax into Frege.
+--- The expression
+--- > SKK(S(KS)K)x
+--- can be written thus:
+--- S <> K <> K <> (S <> (K <> S) <> K) <> Var "x"     
+(<>) = App
+
+
+{--
+    A "definition" of an additional combinator, like in
+    
+    > Bfgh = f(gh)        -- a bluebird
+    > Mx   = xx           -- a mockingbird
+    
+    The left hand side must consist of an "combinator" in the form of a 'Const',
+    that is applied to all the variables that occur in the right hand side.
+    Every variable must appear only once in the left hand side.
+    
+    The right hand side is the defining expression, where only variables
+    that have been introduced on the left are allowed. But here they can 
+    appear in any order and 0,1 or more times.
+    
+    See also ':=', which allows to create the "bluebird" definition
+    
+    > Def  (App (App (App (Const "B") f) g) h)   (App f (App g h))
+    
+    like so:
+    
+    > "Bfgh" := (f <> (g <> h))
+    
+    -} 
+data DEF = Def SKI SKI
+
+
+derive Eq SKI
+
+instance Show SKI where
+    show S = "S"
+    show K = "K"
+    show I = "I"
+    show (Var s)   = s
+    show (Const s) = s
+    show app = show first ++ concatMap showsub rest where first:rest = flat app
+    
+    showsub (app@App{}) = "(" ++ show app ++ ")"
+    showsub ski = show ski
+
+instance Show DEF where
+    show (Def a b) = show a ++ " = " ++ show b
+
+
+--- some variables 
+vx = Var "x"
+vy = Var "y"
+vz = Var "z"
+vw = Var "w"
+va = Var "a"
+vb = Var "b"
+vc = Var "c"
+vf = Var "f"
+vg = Var "g"
+vh = Var "h"
+
+--- Evaluate a SKI expression to normal form.
+--- - All primitive expressions are in normal form
+--- - a <> b is in normal form if b is in normal form and the expression cannot get reduced.
+--- - I <> a can be reduced to a
+--- - K <> x <> y can be reduced to x
+--- - S <> x <> y <> z  can be reduced to   x <> z <> (y <> z)
+--- - nothing else can be reduced.
+
+--- The definition below is a bit complex, but we must avoid 
+--- stack overflows on deeply nested expressions like
+--- >   unflat (replicate 5000 I)
+
+eval = opt . unflat . eval' . flat
+    where
+        -- eval can have the head of the list in unflatted form
+        -- eval' xs | traceLn ("evaluating: " ++ show xs) = undefined
+        eval' (I:x:ys)      = eval' (x : ys)
+        eval' (K:x:_:ys)    = eval' (x : ys)
+        eval' (S:f:g:h:ys)  = eval' (f:h:g<>h:ys)
+        eval' (x:xs)        = case flat x of
+            [y] -> y : xs   -- x was atomic
+            ys  -> eval' (ys ++ xs)
+        opt (App I y)                   = opt y
+        opt (App (App K x) _)           = opt x
+        opt (App (App (App S K) _) x)   = opt x    -- identity
+        opt (App (App (App S I) I) x)   = opt (App x x)  -- mocking
+        opt (App a b)                   = App (opt a) (opt b)
+        opt x                           = x
+
+identity = S <> K <> K
+
+
+--- get the set of variables in an SKI expressions
+freevars = uniq . sort . vars
+
+--- get an unordered list of variables that occur in an SKI expressions, duplicates possible
+vars (Var s)   = [s]
+vars (App a b) = vars a ++ vars b
+vars _ = []
+
+
+--- Define new combinators like this:
+--- >  "Uxy" :=  vy <> (vx <> vx <> vy)
+--- Rules:
+--- - The left hand side must not be the empty string
+--- - The left hand side must start with an uppercase letter.
+--- - The rest of the left hand side must be distinct lowercase letters.
+--- - The right hand side is an SKI expression.
+--- - The right hand side must not name variables that do not occur in the left hand side.
+
+""  := rhs = error "The left hand side of a definition must not be empty."
+lhs := rhs 
+        | not (c.charAt 0).isUpperCase 
+            = error "The left hand side of a definition must start with an uppercase letter"
+        | (not . all Char.isLowerCase . unpacked . concat) vs 
+            = error "Except for the first character, all characters of the left hand side must be lowercase letters."
+        | (not . uniqvars) vs 
+            = error "No variable name must occur more than once in the left hand side."
+        | bad <- filter (`notElem`  vs) (freevars rhs), !(null bad)
+            = error ("expression has free variables " ++ show bad)
+        | otherwise = Def left rhs 
+    where
+        c:vs = map display (unpacked lhs)
+        left = unflat (Const c : map Var vs)
+        uniqvars [] = true
+        uniqvars (a:as) = a `notElem` as && uniqvars as
+
+--- Compute the SKI expression for a defined combinator.
+--- for example:
+--- > make ("Bfgh" := f <> (g <> h))
+--- will return
+--- > S <> (K <> S) <> K
+--- Hence,
+----> B = S(KS)K
+make (def@Def (Const c) ski)
+    | traceLn ("result is " ++ show def) = undefined
+    | otherwise = ski
+make (def@Def (App a (Var b)) ski)
+    | traceLn ("make SKI expression for  " ++ show def) = undefined
+    | otherwise = make (Def a (b `elimination` ski))
+    where
+        byrule n ski | false, traceLn ("by rule " ++ show n ++ ": " ++show ski) = undefined
+                     | otherwise = ski
+        -- 1.  I is a v elimination for v, becaue Iv = v
+        -- 2.  If v does not occur in x, then Kx is a v-elimination, because Kxv = x
+        -- 3.  If Y does not contain v, then Y is a v-elimination of Yv, becaue Yv=Yv
+        -- 4.  in YZ, the v-elimination is SY'Z' where Y' is a
+        --     v elimination of Y and Z' is a v-elimination of Z
+        v `elimination` x 
+            | false, traceLn ("compute " ++ b ++ "-elimination of " ++ show x) = undefined 
+            | otherwise  = case x of
+                    Var s         
+                        | s == v    = byrule 1 I
+                        | otherwise = byrule 2 (K <> x)
+                    App y (Var s) | s == v,
+                        v `notElem` vars y = byrule 3 y
+                    y | v `notElem` vars y = byrule 2 (K <> y)
+                    App a b                = byrule 4 (S <> a' <> b') where
+                        a' = v `elimination` a
+                        b' = v `elimination` b
+                        
+make def = error ("not well formed: " ++ show def) 
+
+--- Make sure that 'make' does work.
+checkdef (def@Def left right) = do
+    println ("Defintion: " ++ show def)
+    let ski = make def
+        vars = tail (flat left)
+        app = unflat (ski:vars)
+        res = eval app
+    println ("SKI Expression: " ++ show ski)
+    println (show app ++ " should evaluate to " ++ show right)
+    println (show (res == right) ++ ": " ++ show res)
+    return (res == right)
+
+
+mockingbird = "Mx"      :=  vx <> vx
+flipper     = "Ffab"    :=  vf <> vb <> va
+turing      = "Uxy"     :=  vy <> (vx <> vx <> vy)
+fix         = "Yf"      :=  vf <> (theU <> theU <> vf) where theU = make turing
+trush       = "Txy"     :=  vy <> vx
+bluebird    = "Bxyz"    :=  vx <> (vy <> vz)
+queer       = "Qxyz"    :=  vy <> (vx <> vz)
+dove        = "Dxyzw"   :=  vx <> vy <> (vz <> vw)
+
+birds = [bluebird, mockingbird, flipper, turing, trush, queer, dove, fix]
+y = make fix
+ 
+main args = do
+    alle <- mapM checkdef birds
+    println ("ALL TESTS: " ++ show (and alle))
+    println ("fix = " ++ show y)
+    println ("evaluating: " ++ show (y <> vf))
+    let res = (eval (y <> vf))
+    println res
+    mapM_ println (take 10 (some res))
+  where
+    some (App x rest) = x <> er : some er where er = eval rest 
+    some x = [x]
