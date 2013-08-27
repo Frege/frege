@@ -46,6 +46,9 @@ public class WrappedCheckedException extends Undefined {
 	 * 
 	 */
 	public final static WrappedCheckedException wrapIfNeeded(final Throwable ex) {
+		if (ex instanceof WrappedCheckedException) {
+			return (WrappedCheckedException)ex;
+		}
 		return new WrappedCheckedException(ex);
 	}
 	
@@ -72,7 +75,12 @@ public class WrappedCheckedException extends Undefined {
 			if (cls.isInstance(exc)) {
 				return handler.apply(exc).apply(0).result().<Object> forced();
 			}
-			throw exc;	// go to next catch, if any
+			// java6 does not allow rethrowing exc here
+			if (exc instanceof RuntimeException) 
+				throw (RuntimeException) exc;
+			if (exc instanceof Error)
+				throw (Error) exc;
+			throw wrapIfNeeded(exc);	// go to next catch, if any
 		}
 //		finally {
 //			System.out.println("leaving try for " + cls.getName());

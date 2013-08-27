@@ -26,7 +26,6 @@ YACC = pbyacc
 JAVA = java7 -Dfrege.javac=internal
 
 
-
 DOC  = doc/frege
 DOCF = doc/frege/compiler
 DIR1 = build/afrege
@@ -100,6 +99,8 @@ shadow-prelude:
 
 clean:
 	rm -rf build/afrege build/bfrege build/frege
+	rm -rf build
+	mkdir build
 
 {frege/prelude}.fr{$(PREL1)}.class::
 	$(FREGEC0) $<
@@ -135,6 +136,37 @@ fregec.jar: compiler $(DIR)/check1
 	jar  -uvfe  fregec.jar frege.compiler.Main
 	cp fregec.jar fallback.jar
 
+fregec6.jar: fallback.jar savejava
+	@echo The following will probably only work if you just made a fregec.jar
+	@echo Adapting the sources for dumb old java6 ....
+	cp frege/runtime/Concurrent.java6 save/frege/runtime/Concurrent.java
+	cp frege/runtime/Runtime.java6    save/frege/runtime/Runtime.java
+	cp frege/runtime/CompilerSupport.java6    save/frege/runtime/CompilerSupport.java
+	rm -rf build6
+	mkdir build6
+	@echo You can ignore the compiler warning.
+	$(JAVAC) -J-Xmx1g -source 1.6 -target 1.6 -sourcepath save -d build6 \
+	    save/frege/compiler/Main.java
+	jar -cf   fregec6.jar -C build6 frege
+	jar -uvfe fregec6.jar frege.compiler.Main
+	@echo Looks good .... let us try to make the tools and library ... 
+	grep -v ForkJoin frege/StandardLibrary.fr >save/StandardLibrary.fr
+	$(JAVA) -Xmx1g -Xss4m -Dfrege.javac="javac -source 1.6 -target 1.6" -jar fregec6.jar -d build6 -nocp -fp build6 -make \
+	    frege/StandardTools.fr save/StandardLibrary.fr
+	@echo Still running? Now we have it almost .... 
+	cp frege/tools/yygenpar-fr frege/tools/YYgenparM-fr build6/frege/tools
+	jar -cf   fregec6.jar -C build6 frege
+	jar -uvfe fregec6.jar frege.compiler.Main
+	@echo
+	@echo !-------------- PLEASE NOTE ----------------------------------------------
+	@echo !  The new compiler will itself generate java6 classes if run in a JDK6.  
+	@echo !  Unfortunately, the Java 6 compiler may not understand proper Java.     
+	@echo !  To avoid those problems, use this JAR always thus:                     
+	@echo !      java  -Dfrege.javac=\"javac -source 1.6 -target 1.6\" -jar fregec6.jar ...  
+	@echo !  where javac is a JDK-7 compiler!                                       
+	@echo !-------------------------------------------------------------------------
+	@echo
+	
 #
 #	Avoid recompilation of everything, just remake the compiler with itself and jar it.
 #	One should have a fallback.jar, just in case ....
@@ -167,7 +199,7 @@ compiler: compiler2 $(COMPF)/Grammar.class $(COMPF)/Main.class tools
 $(COMPF)/Grammar.class: frege/compiler/Grammar.fr $(COMPF)/Scanner.class $(COMPF)/GUtil.class
 	$(FREGEC2) -v frege/compiler/Grammar.fr
 frege/compiler/Grammar.fr: frege/compiler/Grammar.y
-	@echo 49 shift/reduce conflicts expected
+	@echo 1 shift/reduce conflict expected
 	$(YACC) -v frege/compiler/Grammar.y
 	$(FREGE) -cp fregec.jar frege.tools.YYgen -m State  frege/compiler/Grammar.fr
 	$(FREGE) -cp fregec.jar frege.tools.LexConvt frege/compiler/Grammar.fr
@@ -345,6 +377,7 @@ $(DIR1)/check1: $(PRE1) $(DIR1)/PreludeProperties.class
 
 
 runtime:
+	mkdir build || @echo The previous message can be safely ignored.
 	$(JAVAC) -d build frege/runtime/*.java
 	@echo Runtime is complete.
 
