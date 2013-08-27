@@ -16,7 +16,7 @@ data SKI = S | K | I | Var String | Const String | App SKI SKI
     is represented as left leaning 'App' tree, but sometimes we
     want to use the isomorphism with a list:
     
-    > flat (App (App (App a b) c) d) = [a, b, c, y]
+    > flat (App (App (App a b) c) d) = [a, b, c, d]
     > flat p = [p] -- where p is not an App
     
     This only flattens the outermost 'App', of course.
@@ -63,7 +63,7 @@ infixl 7 `<>`
     
     like so:
     
-    > "Bfgh" := (f <> (g <> h))
+    > "Bfgh" := (Var "f" <> (Var "g" <> Var "h"))
     
     -} 
 data DEF = Def SKI SKI
@@ -98,34 +98,112 @@ vf = Var "f"
 vg = Var "g"
 vh = Var "h"
 
---- Evaluate a SKI expression to normal form.
---- - All primitive expressions are in normal form
---- - a <> b is in normal form if b is in normal form and the expression cannot get reduced.
---- - I <> a can be reduced to a
---- - K <> x <> y can be reduced to x
---- - S <> x <> y <> z  can be reduced to   x <> z <> (y <> z)
---- - nothing else can be reduced.
+{-- 
+    Reduce a SKI expression according to the following rules:
+    - A primitive expressions (I,K,S,Var,Const) reduces to itself
+    - @I <> a@ reduces to @a@
+    - @K <> x <> y@ reduces to @x@
+    - @S <> x <> y <> z@  reduces to   @x <> z <> (y <> z)@
+    - @a<>b@ reduces to reduced @c<>b@, where @c@ is the reduced @a@. 
 
---- The definition below is a bit complex, but we must avoid 
---- stack overflows on deeply nested expressions like
---- >   unflat (replicate 5000 I)
+    Note that, if we have a<>b, b is not reduced.
 
-eval = opt . unflat . eval' . flat
+    The definition below is a bit complex, but we must avoid 
+    stack overflows on deeply nested expressions like
+    
+    >   unflat (replicate 5000 I)
+    
+    The reduction algorithm trades stack space against heap space, by
+    going down to the expression nested deepest on the left, while pushing
+    the right elemenst to a list (like 'flat'). Once the innermost expression
+    has been reduced, we have either a Var, a Const or a basic combinator.
+    
+    If it is a basic combinator, then its effect on the argument list is 
+    computed, and the process continues until we have an atom that connot 
+    be applied to the list anymore. 
+    
+    For example 
+    
+    > II(KI)I                   
+    > (((II)(KI))I)             II(KI)I
+    > ((II)(KI))   [I]          II(KI)I
+    > (II) [KI,I]               II(KI)I
+    
+    Only at this point do we see that we can reduce II:
+    
+    > I [KI, I]                 I(KI)I
+    
+    The I pops the first argument off the list and lets it operate on the tail.
+    Now again, we have an expression of the form @a <> b@ on top:
+    
+    > (KI) [I]                  KII
+    > K [I, I]                  KII
+    
+    Now K can operate on the list, by throwing the second element away and
+    we continue to operate with the first I.
+     
+    > I []                      I
+    -}
+eval = evaluate false
+evaluate eager = unflat . reduce []
     where
-        -- eval can have the head of the list in unflatted form
-        -- eval' xs | traceLn ("evaluating: " ++ show xs) = undefined
-        eval' (I:x:ys)      = eval' (x : ys)
-        eval' (K:x:_:ys)    = eval' (x : ys)
-        eval' (S:f:g:h:ys)  = eval' (f:h:g<>h:ys)
-        eval' (x:xs)        = case flat x of
-            [y] -> y : xs   -- x was atomic
-            ys  -> eval' (ys ++ xs)
-        opt (App I y)                   = opt y
-        opt (App (App K x) _)           = opt x
-        opt (App (App (App S K) _) x)   = opt x    -- identity
-        opt (App (App (App S I) I) x)   = opt (App x x)  -- mocking
-        opt (App a b)                   = App (opt a) (opt b)
-        opt x                           = x
+        -- reduce acc ex | traceLn ("reduce: " ++ show ex ++ "  " ++ show acc) = undefined
+        -- first the basic laws
+        reduce acc (App I y)                    = reduce acc y
+        reduce acc (App (App K x) _)            = reduce acc x
+        reduce acc (App (App (App S f) g) h)    = reduce acc (f <> h <> (g <> h))
+        
+        -- Now the critical step to avoid too deeply nested left recursions.
+        -- The expression b is saved for later, and we continue with the left hand side
+        -- Since this is tail recursion, it will be a loop at runtime.
+        reduce acc (App a b)                    = reduce (b:acc) a
+        
+        -- At this point, the leftmost expression of the original
+        -- expression is not of the form @a<>b@ anymore and the arguments
+        -- are in the accumulator.
+        -- For example, when we had
+        --  (K <> K <> x) <> a <> b
+        -- we have now evaluated (K <> K <> x) to K (by equation 2)
+        -- and a,b are on the stack, so it looks like
+        --   reduce [a,b] K
+        -- and this is just another way to say
+        --   reduce [] (K <> a <> b)
+        -- But, we do now apply the basic reduction rules to the stack. 
+        -- We could as well do 
+        --        reduce [] (unflat (top:acc))
+        -- but this way we avoid flattening/unflattening of the whole 
+        -- expression all the time.
+        reduce (x:xs)     I                     = reduce xs x
+        reduce (x:_:xs)   K                     = reduce xs x 
+        reduce (f:g:h:xs) S                     = reduce (h:(g<>h):xs) f
+        -- At tis point, the expression is reduced.
+        -- It is nether of the form (a <> b), nor is it a I,K or S
+        -- that could operate on the list.
+        -- We take the opportunity to optimize the arguments a bit, 
+        -- without reducing them fully. For, if we did reduce them
+        -- now, then evaluation of
+        --  Yf,  where Y is the fixpoint operator Yf = f(Yf)
+        -- would cause us to evaluate Yf again, which would result in
+        -- f(Yf) and we had to reduce that Yf again and so on ad infinitum.
+        reduce acc x                            = x:map f acc
+            where f = if eager then evaluate true else opt
+        
+{--  This is a "light" reduce: it does not re-apply itself to the result
+    of optimizing sub-expressions, hence in general
+    
+    > opt (a <> b) != opt (opt a <> opt b)
+    
+    It is used to remove superfluous K, I and S from the result,
+    but it does not take into account all reducible expressions that
+    result from the optimization. Hence it does not recurse potentially
+    endlessly.
+    -}
+opt (App I y)                    = opt y
+opt (App (App K x) _)            = opt x
+opt (App (App (App S f) g) h)    = opt (f <> h <> (g <> h))
+opt (App a b)                    = App (opt a) (opt b) -- no recursion here
+opt x                            = x
+
 
 identity = S <> K <> K
 
@@ -133,7 +211,7 @@ identity = S <> K <> K
 --- get the set of variables in an SKI expressions
 freevars = uniq . sort . vars
 
---- get an unordered list of variables that occur in an SKI expressions, duplicates possible
+--- get an unordered list of variables that occur in a SKI expressions, duplicates possible
 vars (Var s)   = [s]
 vars (App a b) = vars a ++ vars b
 vars _ = []
@@ -150,8 +228,8 @@ vars _ = []
 
 ""  := rhs = error "The left hand side of a definition must not be empty."
 lhs := rhs 
-        | not (c.charAt 0).isUpperCase 
-            = error "The left hand side of a definition must start with an uppercase letter"
+        | (c.charAt 0).isLowerCase 
+            = error "The left hand side of a definition must not start with a variable."
         | (not . all Char.isLowerCase . unpacked . concat) vs 
             = error "Except for the first character, all characters of the left hand side must be lowercase letters."
         | (not . uniqvars) vs 
@@ -171,7 +249,7 @@ lhs := rhs
 --- will return
 --- > S <> (K <> S) <> K
 --- Hence,
-----> B = S(KS)K
+--- > B = S(KS)K
 make (def@Def (Const c) ski)
     | traceLn ("result is " ++ show def) = undefined
     | otherwise = ski
@@ -205,9 +283,10 @@ make def = error ("not well formed: " ++ show def)
 checkdef (def@Def left right) = do
     println ("Defintion: " ++ show def)
     let ski = make def
-        vars = tail (flat left)
+        const:vars = flat left
         app = unflat (ski:vars)
-        res = eval app
+        eager = const != Const "Y"
+        res = evaluate eager app
     println ("SKI Expression: " ++ show ski)
     println (show app ++ " should evaluate to " ++ show right)
     println (show (res == right) ++ ": " ++ show res)
@@ -234,6 +313,7 @@ main args = do
     let res = (eval (y <> vf))
     println res
     mapM_ println (take 10 (some res))
+    println $ (eval . (<>vx) . unflat . replicate 10) (S<>K<>K)
   where
     some (App x rest) = x <> er : some er where er = eval rest 
     some x = [x]
