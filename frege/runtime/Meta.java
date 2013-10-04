@@ -356,4 +356,21 @@ public class Meta {
         int        subx3()         default 0;     // index of 3rd subexpression, set fot If
     }
     
+    /**
+     * This annotation is on the Ĳ static nested class of a module.
+     * It tells which function "pointers" are implemented in this module.
+     * 
+     * This will avoid multiple generation of function pointers for
+     * the same function in different classes, since the function 
+     * pointers of imported classes can be re-used.
+     * 
+     * Entries in qnames() and jnames() with the same index belong together.
+     */
+    @Retention(RetentionPolicy.RUNTIME)
+    @interface FunctionPointers {
+    	/** qualified names of functions */
+    	QName[]		qnames()	default {};
+    	/** java names of function pointers. */ 
+    	String[]	jnames()	default {};
+    }
 }

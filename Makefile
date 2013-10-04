@@ -377,7 +377,7 @@ $(DIR1)/check1: $(PRE1) $(DIR1)/PreludeProperties.class
 
 
 runtime:
-	mkdir build || @echo The previous message can be safely ignored.
+	mkdir build || echo The previous message can be safely ignored.
 	$(JAVAC) -d build frege/runtime/*.java
 	@echo Runtime is complete.
 
