@@ -367,10 +367,15 @@ public class Meta {
      * Entries in qnames() and jnames() with the same index belong together.
      */
     @Retention(RetentionPolicy.RUNTIME)
-    @interface FunctionPointers {
+    public @interface FunctionPointers {
     	/** qualified names of functions */
     	QName[]		qnames()	default {};
-    	/** java names of function pointers. */ 
+    	/** 
+    	 * names of function pointers. 
+    	 * 
+    	 *  This is only the member name, the package name and Ĳ 
+    	 *  must be prepended upon reading!
+    	 */ 
     	String[]	jnames()	default {};
     }
 }

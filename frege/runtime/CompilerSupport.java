@@ -16,6 +16,13 @@ public class CompilerSupport {
 	    cl = loader.loadClass(pack);
 		return cl.getAnnotation(Meta.FregePackage.class);
 	}
+  
+  public static Meta.FunctionPointers getFunctions(ClassLoader loader, String pack) 
+		  throws ClassNotFoundException {
+	  Class<?> cl = null;
+	  cl = loader.loadClass(pack);
+	  return cl.getAnnotation(Meta.FunctionPointers.class);
+  }
 
 	/**
 	 *  Reads the named (text) file in the given encoding.
