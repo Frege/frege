@@ -261,7 +261,7 @@ CLASSES  =       $(COMPF1)/Scanner.class   $(COMPF1)/Classtools.class \
 		$(COMPF1)/TAlias.class    $(COMPF1)/Classes.class \
 		$(COMPF1)/tc/Methods.class $(COMPF1)/tc/Patterns.class \
 		$(COMPF1)/Typecheck.class $(COMPF1)/Transform.class \
-		$(COMPF1)/gen/Util.class  $(COMPF1)/gen/Const.class \
+		$(COMPF1)/gen/Const.class  $(COMPF1)/gen/Util.class \
 		$(COMPF1)/gen/Bindings.class $(COMPF1)/gen/Match.class \
 		$(COMPF1)/GenMeta.class   $(COMPF1)/GenJava7.class \
 		$(COMPF1)/DocUtils.class $(COMPF1)/EclipseUtil.class
