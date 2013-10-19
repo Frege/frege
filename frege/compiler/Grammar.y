@@ -1045,8 +1045,18 @@ plainfldid:
     ;
 
 typedef:
-    TYPE CONID '=' tau         { \t\i   \_\r -> TypDcl {pos=yyline i, vis=Public, name=Token.value i, vars=[], rho=RhoTau [] r, doc=Nothing}}
-    | TYPE CONID dvars '=' tau { \t\i\vs\_\r -> TypDcl {pos=yyline i, vis=Public, name=Token.value i, vars=vs, rho=RhoTau [] r, doc=Nothing}}
+    TYPE CONID '=' sigma         { \t\i   \_\r -> TypDcl {pos=yyline i, 
+                                                            vis=Public, 
+                                                            name=Token.value i, 
+                                                            vars=[], 
+                                                            typ = r, 
+                                                            doc=Nothing}}
+    | TYPE CONID dvars '=' sigma { \t\i\vs\_\r -> TypDcl {pos=yyline i, 
+                                                            vis=Public, 
+                                                            name=Token.value i, 
+                                                            vars=vs, 
+                                                            typ = r, 
+                                                            doc=Nothing}}
     ;
 
 wheredef :
