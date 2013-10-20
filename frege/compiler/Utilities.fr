@@ -797,6 +797,8 @@ insName _ = Prelude.error "not an instance"
  * determine 'QName' of type given in an instance definition
  -}
 instTSym (ForAll _ (RhoTau _ tau)) g = instTauSym tau g
+instTSym (ForAll _ (RhoFun{})) g     = (TName pPrelude "->").findit g
+    
 instTSym _ g = Nothing
 --- return type symbol for constructor of tau, if any
 instTauSym tau g = case tau of
@@ -1464,7 +1466,7 @@ transSigma sigma = do
  -}
 transCtx (Ctx pos name tau) = do
         name <- defaultXName pos (TName pPreludeBase "Eq") name
-        tau  <- transTau tau
+        tau  <- transTau tau >>= forceTau
         stio (Ctx pos name tau)
 
 
@@ -1478,15 +1480,16 @@ transRho (RhoFun ctx (ForAll bnd rho1) rho2) = do
         ctx  <- mapSt transCtx ctx
         stio (RhoFun ctx (ForAll bnd rho1) rho2)
 transRho  (RhoTau ctx tau) = do
-        tau <- transTau tau
+        sig  <- transTau tau
         ctx  <- mapSt transCtx ctx
-        stio $ RhoTau ctx tau
+        stio $ sig.rho.{context = ctx}
+
 
 {--
     check a tau and translate it to 'QName' form
  -}
-transTau :: TauT SName -> StG (TauT QName)
-transTau (TVar{pos,var,kind}) = return (TVar {pos,var,kind})
+transTau :: TauT SName -> StG (SigmaT QName)
+transTau (TVar{pos,var,kind}) = return (tauAsSigma (TVar {pos,var,kind}))
 
 transTau (t@Meta _) = do    -- Meta must not happen at this time
     g <- getST
@@ -1507,27 +1510,25 @@ transTApp (con:as) = do
                     Just (SymT {name,typ=ForAll bs _}) -> do
                             let ncon = TCon {pos, name}
                             as <- mapSt transTau as
-                            return (Tau.mkapp ncon as)
+                            appTauSigmas ncon as
                             -- checkTApp partial (ncon:as)
                     Just (alias@SymA {typ})
-                        | ForAll bs (RhoTau _ tau) <- typ,
-                          length as >= length bs = do
+                        | ForAll _ (RhoTau _ tau) <- typ,
+                          length as >= length alias.vars = do
                                 as <- mapSt transTau as  -- partial args allowed in alias
-                                let env = Tree.fromList (zip (map fst bs) as)
-                                    ras = drop (length bs) as
+                                let tas = mapMaybe sigmaAsTau as
+                                    env = Tree.fromList (zip (map Tau.var alias.vars) tas)
+                                    ras = drop (length alias.vars) as
                                 let nt = substTau env tau
                                 -- make sure errors are flagged on the right position
                                 let posnt = case Tau.flat nt of
                                         (tcon:xs) | tcon.{pos?} = Tau.mkapp tcon.{pos} xs
                                         other -> nt
-                                case posnt of
-                                    TApp _ _  -> return (Tau.mkapp posnt ras)
-                                    nt | null ras  = stio posnt
-                                       | otherwise = return (Tau.mkapp posnt ras)
-                        | ForAll bs (RhoTau _ tau) <- typ,
-                          length as < length bs = do
+                                appTauSigmas posnt ras
+                        | ForAll _ (RhoTau _ tau) <- typ,
+                          length as < length alias.vars = do
                                 error pos (msgdoc ("apply " ++ alias.nice g ++ " to at least "
-                                        ++ show (length bs)
+                                        ++ show (length alias.vars)
                                         ++ " type arguments"))
                                 unit
                         | otherwise = do error pos (msgdoc("malformed " ++ alias.nice g
@@ -1539,12 +1540,52 @@ transTApp (con:as) = do
                     Nothing -> do
                         error pos (msgdoc("Can't find `" ++ tn.nice g ++ "`"))
                         unit
-          where unit = stio (TCon {pos, name=TName pPreludeBase "()"})
+          where unit = return (tauAsSigma (TCon {pos, name=TName pPreludeBase "()"}))
         other -> do
-            con <- transTau con
+            con <- transTau con >>= forceTau
             as  <- mapSt transTau as
-            stio (Tau.mkapp con as)
+            appTauSigmas con as
 transTApp _ = undefined                   -- must only be used with tau.flat
+
+--- wrap a 'Tau' in a 'Sigma'
+tauAsSigma t = ForAll [] (unTau (RhoTau [] t))
+
+{--
+    Extract a 'Tau' from a 'Sigma' of the form:
+    
+    > ForAll [] (RhoTau [] t)
+    > ForAll [] (RhoFun [] a b) 
+-}
+sigmaAsTau (ForAll [] (RhoTau [] t)) = Just t
+sigmaAsTau (ForAll [] (r@RhoFun{})) | RhoTau [] t <- tauRho r  = Just t
+sigmaAsTau _ = Nothing
+
+forceTau sig = case (sigmaAsTau sig) of
+    Just t  -> return t
+    Nothing -> do
+        g <- getST
+        error sig.getpos (msgdoc ("illegal type  " ++ nicer sig g 
+            ++ ", forall types are not allowed here."))
+        return TCon{pos=sig.getpos, name=TName pPreludeBase "()"}
+    
+
+{--
+    > appTauSigmas tau sigs  
+    
+    Apply a list of 'Sigma's to a type constructor
+    
+    This will result in errors whenever one of 'Sigma's is not really a 'Tau'
+-}
+appTauSigmas tau sigs = foldM appTauSig tau sigs >>= return . tauAsSigma
+    where
+        appTauSig tau sig = maybe noway (return . TApp tau) (sigmaAsTau sig)
+            where 
+                noway = do
+                    g <- getST
+                    error tau.pos (msgdoc ("illegal type argument  " ++ nicer sig g 
+                        ++ " in type application of  " ++ nicer tau g
+                        ++ ", forall types are not allowed here."))
+                    return tau
 
 --- make sure only canonical names are returned from resolve
 canonical g qname = case QName.findit qname g of
@@ -2244,7 +2285,7 @@ returnTypeN n rho = Prelude.error "returnTypeN: too many arguments"
 {--
  * make @RhoFun a b@ to @RhoTau (TFun a b)@ if possible
  -}
-tauRho (RhoFun ctxs (ForAll [] (RhoTau _ a)) rho2)
+tauRho (RhoFun ctxs (ForAll [] (RhoTau [] a)) rho2)
     | RhoTau _ b <- tauRho rho2 = RhoTau ctxs (Tau.tfun a b)
 tauRho r = r
 
