@@ -9,6 +9,8 @@
 use warnings;
 use strict;
 
+my $doc = scalar @ARGV > 0 ? shift @ARGV : "../dev/frege.github.com/doc";
+
 open(my $in, qq{find frege -name "*.fr" -print|})
     or die "Can't run find: $!";
 
@@ -21,7 +23,7 @@ while (<$in>) {
     my $fr = $_;
     my $html = $fr;
     $html =~ s/\.fr$/.html/;
-    $html = "doc/$html";
+    $html = "$doc/$html";
     my $pack = $fr;
     $pack =~ s/\.fr//;
     $pack =~ s{/}/./g;
@@ -31,7 +33,7 @@ while (<$in>) {
 #    print "$class: $fr\n";
 #    print "\tjava -Xss1m -cp build frege.compiler.Main -d build -make $pack\n";
     print "$html: $class\n";
-    print "\tjava -Xss1m -cp build frege.tools.Doc -d doc $pack\n";
+    print "\tjava -Xss1m -cp build frege.tools.Doc -d $doc $pack\n";
     push @all, $html;
 }
 print "docu: ", join(" ", @all), "\n";

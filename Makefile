@@ -26,7 +26,7 @@ YACC = pbyacc
 JAVA = java7 -Dfrege.javac=internal
 
 
-DOC  = doc/frege
+DOC  = ../frege.github.com/doc
 DOCF = doc/frege/compiler
 DIR1 = build/afrege
 PREL1  = $(DIR1)/prelude
@@ -69,7 +69,6 @@ FREGEC2  = $(FREGE) bfrege.compiler.Main -d build -hints -O
 
 #	final compiler
 FREGECC  = $(FREGE) frege.compiler.Main  -d build -hints -O
-GENDOC   = $(FREGE) frege.tools.Doc -d doc
 
 #	shadow Prelude files in the order they must be compiled
 SPRELUDE  =  shadow/frege/prelude/PreludeBase.fr shadow/frege/prelude/PreludeNative.fr \
@@ -392,9 +391,9 @@ doc/index.html: $(RUNTIME)
 
 
 docu: build/frege/tools/Doc.class
-	javadoc -private -sourcepath . -d doc -encoding UTF-8 frege.runtime
+	javadoc -private -sourcepath . -d $(DOC) -encoding UTF-8 frege.runtime
 	$(FREGECC)  -make frege/StandardLibrary.fr
-	perl scripts/gendocmk.pl >makedoc
+	perl scripts/gendocmk.pl $(DOC) >makedoc
 	$(MAKE) -f makedoc docu
 	rm makedoc
 
