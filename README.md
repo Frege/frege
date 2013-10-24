@@ -68,6 +68,6 @@ Links
 
 [Nightly Builds](http://jenkins.jamestastic.com/job/frege/)
 
-[Online Docs (Runtime Javadoc)](http://jamestastic.com/frege-doc/)
+[Online Docs (Runtime Javadoc)](http://www.frege-lang.org/doc/index.html)
 
-[Online Docs (Frege)](http://jamestastic.com/frege-doc/frege/)
+[Online Docs (Frege)](http://www.frege-lang.org/doc/index.html)
