@@ -1298,7 +1298,7 @@ primary:
     | qualifiers    '{' getfields '}' { \q\(p::Token)\fs\_ -> let {
                         // n   = Simple q;
                         flp = Vbl (yyline p) (wellKnown p "flip") Nothing;
-                        bul = Vbl (yyline p) (wellKnown p "•")    Nothing;
+                        bul = Vbl (yyline p) (contextName p "•")   Nothing;
                         c []     = undefined;
                         c (f:fs) = fold cex (chup f) fs where {
                             cex x f = bul `nApp` x `nApp` chup f;

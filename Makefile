@@ -71,7 +71,9 @@ FREGEC2  = $(FREGE) bfrege.compiler.Main -d build -hints -O
 FREGECC  = $(FREGE) frege.compiler.Main  -d build -hints -O
 
 #	shadow Prelude files in the order they must be compiled
-SPRELUDE  =  shadow/frege/prelude/PreludeBase.fr shadow/frege/prelude/PreludeNative.fr \
+SPRELUDE  =  shadow/frege/prelude/PreludeBase.fr \
+		shadow/frege/control/Semigroupoid.fr shadow/frege/control/Category.fr \
+		shadow/frege/prelude/PreludeNative.fr \
 		shadow/frege/prelude/PreludeList.fr shadow/frege/prelude/PreludeMonad.fr \
 		shadow/frege/prelude/Maybe.fr \
 		shadow/frege/prelude/PreludeIO.fr \
@@ -80,7 +82,9 @@ SPRELUDE  =  shadow/frege/prelude/PreludeBase.fr shadow/frege/prelude/PreludeNat
 		shadow/frege/prelude/Arrays.fr \
 		shadow/frege/prelude/Math.fr shadow/frege/prelude/Floating.fr
 #	Prelude files in the order they must be compiled
-PRELUDE  =  frege/prelude/PreludeBase.fr frege/prelude/PreludeNative.fr \
+PRELUDE  =  frege/prelude/PreludeBase.fr \
+		frege/control/Semigroupoid.fr frege/control/Category.fr \
+		frege/prelude/PreludeNative.fr \
 		frege/prelude/PreludeList.fr frege/prelude/PreludeMonad.fr \
 		frege/prelude/Maybe.fr \
 		frege/prelude/PreludeIO.fr \
