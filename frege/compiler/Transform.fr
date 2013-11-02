@@ -172,15 +172,26 @@ pass9 = do
     stio ("expressions", length collectedvars)
 
 easySym (vsym@SymV {pos})
+    
     | Just x <- vsym.expr = do
         g <- getST
-        if U.isOn g.options.flags INLINE then do
+        
+        if U.isOn g.options.flags INLINE && not (defaultMethod vsym.name g) then do
             ux <- inlined x >>= easyExpression
             U.changeSym vsym.{expr = Just ux}
         else do
             nx <- easyExpression x
             U.changeSym vsym.{expr = Just nx}
+    
     | otherwise = stio ()
+    
+    where
+        defaultMethod name g = case name of
+                MName tname _ -> case tname.findit g of
+                    Just SymC{} -> true
+                    _           -> false
+                _ -> false
+
 easySym sym = do
     g <- getST
     U.fatal sym.pos (text ("easySym no SymV : " ++ sym.nice g))
@@ -219,7 +230,7 @@ easyClassMethodSym (sym@SymV{expr = Just x, typ}) = do
         easy <- goodClassMethod x
         unless ( easy ) do
             g <- getST
-            U.warn sym.pos (text (nice sym g
+            U.symWarning U.warn sym (text (nice sym g
                 ++ (if easy then "" else " is not easy enough ") 
                 ++ (if RSafeTC  `member` sym.rkind  then "" else " recurses deeply ")
                 ++ (if RTailRec `member` sym.rkind  then " is tail recursive " else "")))
@@ -244,21 +255,23 @@ easyClassMethodSym (sym@SymV{expr = Just x, typ}) = do
                 Vbl{name=Local{}} -> return true
                 Vbl{name} -> do
                     vsym <- U.findV name
+                    -- when (vsym.vis == Private) do
+                    --     U.hint (getpos x) (text("uses private " ++ nice name g))
                     return (vsym.vis != Private)
                 Con{name} -> return true        -- constructors always exported
                 Case{} -> do
                     g <- getST
-                    let pok = if x.ckind == CWhen
-                            then isNothing (openCaseWhen g x) 
-                            else isNothing (patsComplete g (map CAlt.pat x.alts))
-                    if pok then do
-                        eok <- mapM goodClassMethod (map CAlt.ex x.alts)
-                        return (and eok)
-                    else return false                    
+                    -- do not check the guards, they are checked through Lam and
+                    -- the case statement they are in.
+                    let compl = x.ckind == CWhen || isNothing (caseComplete g x)
+                    eok <- mapM goodClassMethod (map CAlt.ex x.alts)
+                    return (and (compl:eok))                    
                 Lam{pat,ex}   -> do
                     g <- getST
-                    case patsComplete g [pat] of
-                        Just _  -> return false      -- incomplete pattern
+                    case caseComplete g (Case CNormal ex [CAlt pat ex] Nothing) of
+                        Just p  -> do
+                            -- U.hint (getpos x) (text("incomplete: " ++ nicer p g))
+                            return false      -- incomplete pattern or open case when
                         nothing -> goodClassMethod ex
                 Ifte{}  -> do
                     c <- goodClassMethod x.cnd
@@ -274,7 +287,7 @@ easyClassMethodSym sym = return ()
 checkDepth (vsym@SymV {pos, name = MName inst  base}) = do
         g <- getST
         cmeth <- classMethodOfInstMethod pos inst base
-        when (cmeth.depth != vsym.depth) do
+        when (cmeth.depth > vsym.depth) do
             U.symWarning U.hint vsym (msgdoc (
                 nicer vsym g ++ " has depth " ++ show vsym.depth
                 ++ " while " 
@@ -2122,6 +2135,28 @@ strictness sids x = do
                 _ -> error "appstr: no appropriate sym"
         appstr _ = error "appstr: []"
 
+
+{--
+    > caseComplete g (Case ...)
+    
+    Check if a normal @case@ statement covers all cases.
+    This is true if the patterns of the alternatives that 
+    have no 'openCaseWhen' expression are complete.
+    
+    If this is itself a 'CWhen' @case@, the result is the same as
+    for 'openCaseWhen'.
+ 
+-}
+caseComplete g x
+    | Case{ckind, ex, alts, typ} <- x = case ckind of
+        CWhen -> openCaseWhen g x
+        _ -> case partitioned (isNothing . openCaseWhen g . CAlt.ex) alts of
+                            -- use of head justified because there are no case
+                            -- statements without alternatives
+            ([], oalts) -> openCaseWhen g . CAlt.ex . head $ oalts
+            (ralts, _)  -> maybe Nothing (Just . Right) (patsComplete g (map CAlt.pat ralts))
+    | otherwise = Nothing   -- not a case?  
+         
 {--
  * [usage] @patsComplete g [pat, ...]@
  * [return] @Just p@ where @p@ is a pattern that is missing in the set or @Nothing@
