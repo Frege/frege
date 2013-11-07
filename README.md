@@ -66,7 +66,7 @@ Links
 
 [Author's Blog](http://fregepl.blogspot.com/)
 
-[Nightly Builds](http://jenkins.jamestastic.com/job/frege/)
+Nightly Builds     (currently discontinued) 
 
 [Online Docs (Runtime Javadoc)](http://www.frege-lang.org/doc/index.html)
 
