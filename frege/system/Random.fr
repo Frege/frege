@@ -1,0 +1,196 @@
+{--
+    This module deals with the common task of pseudo-random number generation.
+    
+    It is possible to generate repeatable results, 
+    by starting with a specified initial random number,
+    or to get different results on each run by using a generator that
+    gets seeded in a system-dependend random way, or by supplying a seed
+    from some other source.
+    
+    In Frege, the underlying mechanism for actually generating random
+    numbers is provided by 'J.Random'. Consequently,
+    one cannot expect that a random generator seeded with a certain value
+    will generate the same sequence of random numbers as its 
+    Haskell counterpart.
+      
+-}
+module frege.system.Random where
+
+import Java.Util as J()     -- access java type
+
+
+--- The class 'RandomGen' provides a common interface to random number generators.
+
+class RandomGen g where
+    {-- 
+        The next operation returns an Int that is uniformly distributed 
+        in the range returned by genRange (including both end points), 
+        and a new generator. 
+    -}
+    next     :: g -> (Int, g)
+    --- Returns an uniformly distributed 'Long' and a new generator.
+    nextLong :: g -> (Long, g)
+    --- Returns an uniformly distributed 'Bool' and a new generator.
+    nextBool :: g -> (Bool, g)
+    --- Returns a random 'Double' _d_ with @0<=d<1@ and a new generator.
+    nextDouble :: g -> (Double, g)
+    {--
+        The split operation allows one to obtain two distinct random number generators. 
+        This is very useful in functional programs (for example, 
+        when passing a random number generator down to recursive calls), 
+        but very little work has been done on statistically robust implementations. 
+    -}
+    split    :: g -> (g,g)
+    
+    {-- 
+        Gives the full range of the random generator, which must not depend
+        on the state of the generator, but only on its type.
+        
+        The default definition is ('Int.minBound', 'Int.maxBound')
+    -}
+    genRange :: g -> (Int, Int)
+    genRange _ = (minBound, maxBound)
+
+
+
+{-- 
+    The 'StdGen' instance of 'RandomGen' delegates random number generation
+    to an instance of 'J.Random'.
+    -}
+instance RandomGen StdGen
+
+--- Standard random number generator
+abstract data StdGen = StdGen Long where
+    {-- 
+        The function 'StdGen.make' provides a way of producing an initial generator, 
+        by mapping an 'Int' into a generator. 
+        
+        Distinct arguments should be likely to produce distinct generators.
+    -}
+    make seed = StdGen seed
+    private nextST (StdGen seed) next = do
+            r <- J.Random.new seed
+            i <- next r
+            l <- J.Random.nextLong r
+            return (i, StdGen l)
+    --- get the next 'Int' and a new generator
+    next g = ST.run (nextST g J.Random.nextInt)
+    --- Make two independent generators, seeded by two 'Long' values drawn from the argument
+    split g = (StdGen s1, StdGen s2) where
+            (s1, g') = nextLong g
+            (s2, _)  = nextLong g'
+    nextLong   (g@StdGen seed) = ST.run (nextST g J.Random.nextLong)
+    nextBool   (g@StdGen seed) = ST.run (nextST g J.Random.nextBoolean)
+    nextDouble (g@StdGen seed) = ST.run (nextST g J.Random.nextDouble)
+    --- set the global random number generator
+    setGlobal (StdGen seed) = theRandom.setSeed seed
+
+--- Make an initial generator based on an 'Int' seed.
+mkStdGen :: Int -> StdGen
+mkStdGen seed = StdGen.make seed.long
+
+--- This is the global random number generator
+private theRandom = IO.performUnsafe (J.Random.new ())
+
+--- The global random generator.
+getStdGen = do
+    l <- theRandom.nextLong
+    return (StdGen.make l)
+
+setStdGen = StdGen.setGlobal
+
+getStdRandom f = do
+    g <- getStdGen
+    return . fst . f $ g
+
+{-- 
+    Applies 'split' to the current global random generator, 
+    updates it with one of the results, and returns the other.
+    -}
+newStdGen = do
+    g <- getStdGen
+    let (g1, g2) = split g
+    setStdGen g1
+    return g2
+
+class Random r where
+    --- a random value in the given bounds
+    randomR     :: forall r g . RandomGen g => (r, r) -> g -> (r, g)
+    --- a random value in the given bounds from the global generator
+    randomRIO   :: (r, r) -> IO r
+    randomRIO bounds = getStdRandom (randomR bounds)
+    --- a random value
+    random      :: forall r g . RandomGen g => g -> (r, g)
+    --- a random value from the global generator
+    randomIO    :: IO r
+    randomIO = getStdRandom random
+    --- a list of random values in the given bound
+    randomRs    :: forall r g . RandomGen g => (r, r) -> g -> [r]
+    randomRs bnds g = case randomR bnds g of (!h,!nextg) -> h:randomRs bnds nextg
+    --- a list of random values            
+    randoms     :: forall r g . RandomGen g => g -> [r]
+    randoms g  =  case random g of (!h,!nextg) -> h : randoms nextg
+
+instance Random Long where
+    {--
+        We allow only intervals from (Long.minBound `div` 2)
+        to (Long.maxBound `div` 2) with the exception (Long.minBound, Long.maxBound),
+        which is allowed.
+    -}
+    randomR (lower,upper) g
+       | Long.minBound == lower && Long.maxBound == upper = g.nextLong
+       | lower >= Long.minBound  `div` 2L  && upper <= Long.maxBound `div` 2L = let
+           range = upper - lower + 1L
+           (!rl, !g1)  =  g.nextLong
+           n           = rl `mod` range
+           !g0         = n + lower
+       in (g0, g1)
+       | otherwise = error ("invalid range " ++ show (lower, upper) ++ " in Long.randomR")
+    random g = randomR (minBound, maxBound) g
+
+
+instance Random Int where
+    random g = randomR (minBound, maxBound) g
+    randomR :: RandomGen a => (Int, Int) -> a -> (Int, a)
+    randomR (lower,upper) g = let
+                l = lower.long
+                u = upper.long
+                (li, !g1) = g.next
+                i = li.long
+                r = u - l + 1L
+                n = abs (i `mod` r) + l
+                !g0 = (n `band` 0xffffffffL).int
+            in (g0, g1)
+
+instance Random Integer where
+    {--
+        For the interval (Long.minBound, Long.maxBound), just the
+        converted 'Long' value is returned.
+        
+        For any other interval, some non-negative 'Long' value not greater
+        than the difference between the upper and the lower bound is added
+        to the lower bound.
+    -}
+    randomR (lower,upper) g
+       | Long.minBound.big == lower && Long.maxBound.big == upper 
+                    = case g.nextLong of
+            (n, g) -> (n.big, g)
+       | otherwise  = case g.nextLong of
+            (n, g) -> (abs n.big `rem` (upper-lower) + lower, g)
+           
+    random g = randomR (Long.minBound.big, Long.maxBound.big) g
+
+instance Random Bool where
+    random g = randomR (false, true) g
+    randomR (_,_) g = g.nextBool
+
+instance Random Double where
+    random g = g.nextDouble
+    randomR (a, b) g = case g.nextDouble of
+        (d, g) -> (a + abs (d * (b-a)), g)
+
+instance Random Float where
+    random g = case g.nextDouble of 
+        (d,g) -> (d.float,g) 
+    randomR (a, b) g = case g.nextDouble of
+        (d, g) -> (a + abs (d.float * (b-a)), g)
