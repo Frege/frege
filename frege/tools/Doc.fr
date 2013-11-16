@@ -71,9 +71,14 @@ import frege.compiler.Utilities  as U(print, println, theClassLoader)
 import frege.compiler.Classtools as CT()
 import frege.lib.QuickCheck      as QC(property)
 import frege.compiler.DocUtils
+import frege.control.monad.State as S(execState)
+import frege.java.util.Zip
+import frege.java.Util
 
--- main args = IO.performUnsafe (mainIO args)
-
+main args
+    | null args = usage 
+    | any (~ ´^-h(elp)?´) args = usage
+    | any (~ ´^-\?´)      args = usage
 main args = do
     -- now   <- System.currentTimeMillis()
     mbopt <- scanOpts C.stdOptions args
@@ -81,15 +86,116 @@ main args = do
         Nothing -> System.exit 1
         Just (opt, cs) -> do
             global <- standardOptions
-            (_, g) <- return $! StG.run (classes cs) global.{options = opt}
+            results <- mapM (docThing global.{options = opt}) cs
+            unless (all ((0==) . Global.errors) (concat results)) do
+                stderr.println "there were errors"
+                System.exit 1
+            -- (_, g) <- return $! StG.run (things cs) global.{options = opt}
             return ()
 
 
-classes cs = foreach cs work
+usage = mapM_ stderr.println [
+        "usage: java -jar fregec.jar frege.tools.Doc [-v] [-d opt] modules ...",
+        "", 
+        "   -v          print a message for each processed module",
+        "   -d docdir   specify root directory for documentation",
+        "               Documentation for module x.y.Z will be writen to",
+        "               $docdir/x/y/Z.html",
+        "",
+        "    Modules can be specified in three ways:",
+        "      my.nice.Modul   the Java class for this module must be on the class path.",
+        "      directory/      all modules that could be loaded if the given directory was",
+        "                      on the class path.",
+        "      path.jar        all modules in the specified JAR file",
+        ""
+    ]
+    
+docThing :: Global -> String -> IO [Global]
+docThing global arg = do
+    f <- File.new arg
+    directory <- f.isDirectory
+    regular   <- f.isFile
+    
+    if directory || regular
+        then do
+            let silent = global -- .{options <- D.Options.{flags <- flip BitSet.unionE IDE}}
+            let gpath  = silent.{options <- D.Options.{path  =  [arg]}} 
+                                                    -- flags <- flip BitSet.differenceE WITHCP}}
+            loader <- theClassLoader gpath.options  
+            let gopts = gpath.{sub <- D.SubSt.{loader}}
+                 
+            if directory then docDir  gopts  f [] 
+                         else docArch gopts  f
+        else do
+            g <- return . execState (work arg) $ global
+            return [g]
+
+docArch :: Global -> MutableIO File ->  IO [Global]
+docArch opts f = do
+        j <- ZipFile.new f 
+        ns <- j.entries
+            >>= Enumeration.toList
+            >>= mapM ZipEntry.getName 
+            `finally` j.close
+        let mods = (map ftom . filter classes) ns
+        mapM (return . flip execState opts ) (map work mods)
+    `catch` zipex
+    `catch` ioex
+  where
+    -- predicate to filter class files of top level classes
+    classes name = name ~ ´\.class$´ && name !~ ´\$´
+    -- make module name from path name
+    ftom path = mod 
+        where
+            mod          = (´\\|/´.matcher withoutClass).replaceAll "."
+            withoutClass = (´\.class$´.matcher path).replaceFirst ""
+    zipex :: ZipException -> IO [Global]
+    zipex zex = do
+        path <- f.getName
+        stderr.println zex.show
+        stderr.println ("(is " ++ path ++ " not a valid ZIP or JAR file?)")
+        return []
+    ioex  :: IOException  -> IO [Global]
+    ioex iox = do
+        stderr.println iox.show
+        return []            
+                                    
+docDir :: Global -> MutableIO File -> [String] -> IO [Global]
+docDir opts f pcs = do
+    name <- f.getPath
+    -- stderr.println ("Entering " ++ name)
+    mbcontent <- f.list
+    case mbcontent of
+        Nothing -> return []      -- empty directory
+        Just arr -> do
+            list <- readonly StringArr.toList arr
+            globs <- mapM (docDirEntry opts f pcs) list
+            return (concat globs)
+    
+
+docDirEntry :: Global -> MutableIO File -> [String] -> String -> IO [Global]
+docDirEntry opts f pcs ent = do
+    f <- File.new f ent
+    directory <- f.isDirectory
+    regular   <- f.isFile
+    if directory then do
+        docDir opts f (ent:pcs) 
+    else if regular then do
+        if ent ~ ´\.class$´ && ent !~ ´\$´          --
+        then do
+            let base = strhead ent (ent.length - ".class".length)
+                pack = joined "." (reverse (base:pcs))
+            name <- f.getPath
+            -- stderr.println ("Found " ++ name ++ " taken as " ++ pack)
+            g <- return . execState (work pack) $ opts
+            return [g]
+        else return []
+    else return []
 
 
 --- make 1 documentation file
 work c = do
+    -- doio $ stderr.println ("work " ++ c)
     changeST Global.{options <- Options.{source = c}}
     g <- getST
     changeST Global.{sub <- SubSt.{thisPack = Pack.new g.options.source}}
@@ -121,13 +227,17 @@ continueImport = do
     g <- getST
     r <- I.importClassData Position.null g.thisPack
     case r of
-        Nothing -> stio ()
+        Nothing -> do
+            -- doio $ stderr.println ("Couldn't import " ++ show g.thisPack)
+            return ()
         Just fp -> do
             mkLinks (NSX "PreludeBase") pPreludeBase
             unless (inPrelude g.thisPack g) do
                 mkLinks (NSX "Prelude") pPrelude
             -- time to open output file
             C.openFilePrinter ".html"
+            when (BitSet.member VERBOSE g.options.flags) do
+                doio $ stderr.println("documenting " ++ g.options.source)
             continueNamespaces fp
 
 data Date = native java.util.Date where
