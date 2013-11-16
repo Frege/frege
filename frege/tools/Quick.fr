@@ -34,11 +34,12 @@
 module frege.tools.Quick where
 
 import frege.java.lang.Reflect
-import frege.lib.QuickCheck QC(quick, verbose, Property, Config, Testable, Gen, Result)
-import frege.lib.Random (StdGen, newStdGen)
+import Test.QuickCheck QC()
+-- import frege.lib.Random (StdGen, newStdGen)
 
---- functionality relies on the absolute name of type 'QuickCheck.Property'
-propName = TName{pack=Pack.new "frege.lib.QuickCheck", base="Property"}
+--- functionality relies on the absolute name of type 'QuickCheckGen.Gen'
+propName = TName{pack=Pack.new "frege.test.QuickCheckProperty", base="Prop"}
+genName  = TName{pack=Pack.new "frege.test.QuickCheckGen", base="Gen"}
 
 import frege.compiler.Main (standardOptions)
 import frege.compiler.Import (importClass)
@@ -71,7 +72,7 @@ instance Monoid Counter where
                             failed  = c1.failed  +  c2.failed,
                             aborted = c1.aborted || c2.aborted}
 
-counterMconcat = property (Counter.mempty == mconcat (replicate 1_000_000 mempty))
+counterMconcat = QC.property (Counter.mempty == mconcat (replicate 1_000_000 mempty))
 
 testFailed = Counter {passed = 0, failed = 1, aborted = false}
 testPassed = Counter {passed = 1, failed = 0, aborted = false}
@@ -240,8 +241,9 @@ getProps pack = do
         Just env -> return [ sym.name.base |
                 sym@SymV{} <- values env,
                 ForAll _ RhoTau{context=[], tau} <- Just sym.typ,
-                TCon{name} <- Just tau,
-                name == propName 
+                TApp TCon{name=gen} TCon{name=prop} <- Just tau,
+                gen  == genName,
+                prop == propName 
             ]
 
             
@@ -273,7 +275,7 @@ checkProps opts modul props = do
     our claim that the Lambda is a Property and will allow us to
     use it just like any other 'Property'.
 -}
-native toLambda "(frege.runtime.Lambda)" :: Object -> IO Property
+native toLambda "(frege.runtime.Lambda)" :: Object -> IO QC.Property
 
 checkField :: Options -> String -> Class a -> String -> IO Counter
 checkField Opt{excluded=true, props} _ _ prop | prop `elem` props = return mempty
@@ -284,11 +286,11 @@ checkField opts modul clas prop = do
         fld <- clas.getDeclaredField prop
         obj <- fld.get Nothing
         p   <- toLambda obj
-        -- println (modul ++ "." ++ prop ++ ": ")
-        (r, ss) <- check quick.{configMaxTest=opts.ntimes} p
-        when (not r || opts.verbose) do
-            println (chomp  (modul ++ "." ++ prop ++ ": " ++ unlines ss))
-        return (if r then testPassed else testFailed)
+        when (opts.verbose) do print (modul ++ "." ++ prop ++ ": ")
+        result <- QC.quickCheckWithResult QC.stdArgs.{maxSuccess=opts.ntimes, chatty=opts.verbose} p
+        when (not (QC.isSuccess result) && not opts.verbose) do
+            println (modul ++ "." ++ prop  ++ " FAILED")
+        return (if QC.isSuccess result then testPassed else testFailed)
     `catch` exceptions
     -- ExceptionInInitializerError is passed to caller, so as to avoid getting it multiple times
   where
@@ -320,52 +322,3 @@ asyncCounter fork action = do
 asyncCheckModule o m    = asyncCounter forkIO (checkModule o m)
 asyncCheckField o m c p = asyncCounter forkIO (checkField o m c p)                    
 
--- The rest is a rewrite of 3 quickcheck functions to get a silent check.
-
-check :: Testable a => Config -> a -> IO (Bool, [String])
-check config a =
-  do rnd <- newStdGen
-     return (tests config (QC.evaluate a) rnd 0 0 [])
-
-tests :: Config -> Gen Result -> StdGen -> Int -> Int -> [[String]] -> (Bool, [String])
-tests config gen rnd0 ntest nfail stamps
-    | ntest == config.configMaxTest = (true, done "passed" ntest stamps)
-    | nfail == config.configMaxFail = (true, done "arguments exhausted after" ntest stamps)
-    | otherwise                     = case Result.ok result of
-           Nothing    ->
-             tests config gen rnd1 ntest (nfail+1) stamps
-           Just true  ->
-             tests config gen rnd1 (ntest+1) nfail (Result.stamp result:stamps)
-           Just false ->  
-              (false, lines ( "falsifiable, after "
-                       ++ show ntest
-                       ++ " tests:" ++ QC.lnsep
-                       ++ (unlines . map ("    " ++)) (Result.arguments result)
-                        )) 
-    where
-        result      = QC.generate (Config.configSize config ntest) rnd2 gen
-        (rnd1,rnd2) = Random.split rnd0
-
-done :: String -> Int -> [[String]] -> [String]
-done mesg ntest stamps = lines ( mesg ++ " " ++ show ntest ++ " tests" ++ table stamps)
-    where
-        table = display
-            • map entry
-            • reverse
-            • sort
-            • map pairLength
-            • group
-            • sort
-            • filter (not • null)
-
-        display []  = "."
-        display [x] = " (" ++ x ++ ")."
-        display xs  = "." ++ QC.lnsep ++ "    " ++  joined (QC.lnsep ++ "    ") (map (++ ".") xs)
-        
-        pairLength xss        = (length xss, head xss)
-        entry (n, xs)         = percentage n ntest
-                               ++ " "
-                               ++ joined ", " xs
-        
-        percentage n m        = show ((100 * n) `div` m) ++ "%"
-                  
