@@ -23,7 +23,7 @@ JAVAC = javac -encoding UTF-8
 YACC = pbyacc
 # JAVA = java7 -XX:+TieredCompilation "-Dfrege.javac=javac -J-Xmx512m"
 # JAVA = java7 -XX:+TieredCompilation -Dfrege.javac=internal
-JAVA = java7 -Dfrege.javac=internal
+JAVA = java -Dfrege.javac=internal
 
 
 DOC  = ../frege.github.com/doc
@@ -394,12 +394,9 @@ runtime:
 doc/index.html: $(RUNTIME)
 
 
-docu: build/frege/tools/Doc.class
+docu: fregec.jar
 	javadoc -private -sourcepath . -d $(DOC) -encoding UTF-8 frege.runtime
-	$(FREGECC)  -make frege/StandardLibrary.fr
-	perl scripts/gendocmk.pl $(DOC) >makedoc
-	$(MAKE) -f makedoc docu
-	rm makedoc
+	$(JAVA) -cp fregec.jar frege.tools.Doc -v -d $(DOC) -x frege.compiler,frege.runtime,frege.S,frege.V fregec.jar
 
 
 #
