@@ -39,7 +39,7 @@
  * of compiling a frege package and writes
  * a documentation of that package. All public classes, instances,
  * data types, type aliases and functions are listed along with
- * programmer supplied documentation from /doc/ comments.
+ * programmer supplied documentation from _doc_ comments.
  *
  * Usage:
  * >java frege.tools.Doc [-d docpath] your.frege.Package ...
@@ -55,7 +55,6 @@
  * packages, which are assumed to exist in the same @docpath@.
  -}
 
-
 package  frege.tools.Doc where
 
 import frege.Prelude hiding(print, println, Integral, div, seq, join)
@@ -64,9 +63,9 @@ import Data.TreeMap (Tree, keys, values, each, insertkv)
 import Data.List as DL(sortBy, groupBy, intersperse)
 
 
-import frege.compiler.Data       as D hiding(JType)
+import frege.compiler.Data       as D hiding(JType, TokenID)
 import frege.compiler.Import     as I()
-import frege.compiler.Main       as C(standardOptions, noClassLoader, scanOpts)
+import frege.compiler.Main       as C(standardOptions, noClassLoader)
 import frege.compiler.Utilities  as U(print, println, theClassLoader)
 import frege.compiler.Classtools as CT()
 import Test.QuickCheck      as QC(property)
@@ -75,17 +74,33 @@ import frege.control.monad.State as S(execState)
 import frege.java.util.Zip
 import frege.java.Util
 
+data DocOpts = DOpt {
+        verbose :: Bool     --- print a line for each documentation file
+        docdir  :: String   --- path name of documentation root, must exist
+        except  :: [String] --- excluded modules
+        path    :: [String] --- class path
+    }
+
+options = DOpt {verbose = false, docdir = ".", except = [], path = [] }
+
 main args
     | null args = usage 
     | any (~ ´^-h(elp)?´) args = usage
     | any (~ ´^-\?´)      args = usage
 main args = do
     -- now   <- System.currentTimeMillis()
-    mbopt <- scanOpts C.stdOptions args
+    mbopt <- scanOpts options args
     case mbopt of
         Nothing -> System.exit 1
-        Just (opt, cs) -> do
+        Just (docopt, cs) -> do
             global <- standardOptions
+            let opt1
+                    | docopt.verbose = C.stdOptions.{flags <- flip BitSet.unionE VERBOSE}
+                    | otherwise      = C.stdOptions
+                -- We put the excepted modules in 'Option.sourcePath'
+                opt = opt1.{dir = docopt.docdir, 
+                            sourcePath = docopt.except,
+                            path = docopt.path }
             results <- mapM (docThing global.{options = opt}) cs
             unless (all ((0==) . Global.errors) (concat results)) do
                 stderr.println "there were errors"
@@ -93,21 +108,83 @@ main args = do
             -- (_, g) <- return $! StG.run (things cs) global.{options = opt}
             return ()
 
+scanOpts :: DocOpts -> [String] -> IO (Maybe (DocOpts, [String]))
+scanOpts opt [] = usage >> (return $ Just (opt, []))
+scanOpts opt ("-d" : docdir : rest) = do
+    dd <- File.new docdir
+    dir <- dd.isDirectory
+    wri <- dd.canWrite
+    if dir
+    then if wri
+    then scanOpts opt.{docdir} rest
+    else do
+        stderr.println (docdir ++ " is not writable.")
+        return Nothing
+    else do
+        stderr.println (docdir ++ " is not an existing directory.")
+        return Nothing
+scanOpts opt ("-v" : rest) = scanOpts opt.{verbose=true} rest
+scanOpts opt ("-x" : mods : rest) = do
+    let modx = ´,\s*´.splitted mods
+    scanOpts opt.{except <- (++ modx)} rest
+ 
+scanOpts opts ("-cp":path:args) = do
+    let ps = U.pathRE.splitted path
+    let pschecked = map peCheck ps
+        peCheck pe = do
+            let isjar = String.toUpperCase pe ~ #\.(ZIP|JAR)$#
+            f      <- File.new pe
+            exists <- f.exists
+            readable <- f.canRead
+            isdir  <- f.isDirectory
+            if exists
+              then if readable
+                then if isdir
+                  then return true
+                  else if isjar then IO.return true
+                    else do
+                        stderr.println (pe ++ " should be a jar or zip archive or a directory")
+                        return false
+                else do
+                    stderr.println (pe ++ " is not readable")
+                    return false
+              else do
+                stderr.println (pe ++ " does not exist")
+                return false
+    bits <- sequence pschecked
+    rest <- scanOpts opts.{path = ps} args
+    if fold (&&) true bits then return rest else return Nothing    
+
+scanOpts opt (args@ ´^-´ : rest) = do
+    if head args == "-help"
+    then do
+        usage
+        return Nothing
+    else do 
+        stderr.println ("illegal command line argument '" ++ head args
+            ++ "', try -help" )
+        return Nothing    
+        
+scanOpts opt args = return (Just (opt, args))
 
 usage = mapM_ stderr.println [
-        "usage: java -jar fregec.jar frege.tools.Doc [-v] [-d opt] modules ...",
+        "Usage: java -jar fregec.jar frege.tools.Doc [-v] [-d opt] [-x mod,...] modules ...",
         "", 
-        "   -v          print a message for each processed module",
-        "   -d docdir   specify root directory for documentation",
-        "               Documentation for module x.y.Z will be writen to",
-        "               $docdir/x/y/Z.html",
+        "   -v              print a message for each processed module",
+        "   -d docdir       specify root directory for documentation",
+        "                   Documentation for module x.y.Z will be writen to",
+        "                   $docdir/x/y/Z.html",
+        "   -cp classpath   class path for doc tool",
+        "   -x mod1[,mod2]  exclude modules whose name starts with 'mod1' or 'mod2'", 
         "",
         "    Modules can be specified in three ways:",
-        "      my.nice.Modul   the Java class for this module must be on the class path.",
+        "      my.nice.Modul   by name, the Java class for this module must be on the class path",
         "      directory/      all modules that could be loaded if the given directory was",
-        "                      on the class path.",
-        "      path.jar        all modules in the specified JAR file",
-        ""
+        "                      on the class path, except exxcluded ones",
+        "      path.jar        all modules in the specified JAR file, except excluded ones",
+        "",
+        "Example: document base frege distribution without compiler modules",
+        "   java -cp fregec.jar frege.tools.Doc -d doc -x frege.compiler fregec.jar",
     ]
     
 docThing :: Global -> String -> IO [Global]
@@ -119,7 +196,7 @@ docThing global arg = do
     if directory || regular
         then do
             let silent = global -- .{options <- D.Options.{flags <- flip BitSet.unionE IDE}}
-            let gpath  = silent.{options <- D.Options.{path  =  [arg]}} 
+            let gpath  = silent.{options <- D.Options.{path  <- (arg:)}} 
                                                     -- flags <- flip BitSet.differenceE WITHCP}}
             loader <- theClassLoader gpath.options  
             let gopts = gpath.{sub <- D.SubSt.{loader}}
@@ -137,11 +214,13 @@ docArch opts f = do
             >>= Enumeration.toList
             >>= mapM ZipEntry.getName 
             `finally` j.close
-        let mods = (map ftom . filter classes) ns
+        let mods = (filter (not . excluded) . map ftom . filter classes) ns
         mapM (return . flip execState opts ) (map work mods)
     `catch` zipex
     `catch` ioex
   where
+    -- predicate for excluded modules
+    excluded s = any (s.startsWith) opts.options.sourcePath
     -- predicate to filter class files of top level classes
     classes name = name ~ ´\.class$´ && name !~ ´\$´
     -- make module name from path name
@@ -185,10 +264,13 @@ docDirEntry opts f pcs ent = do
         then do
             let base = strhead ent (ent.length - ".class".length)
                 pack = joined "." (reverse (base:pcs))
-            name <- f.getPath
+            -- name <- f.getPath
             -- stderr.println ("Found " ++ name ++ " taken as " ++ pack)
-            g <- return . execState (work pack) $ opts
-            return [g]
+            if any pack.startsWith opts.options.sourcePath
+            then return []
+            else do
+                g <- return . execState (work pack) $ opts
+                return [g]
         else return []
     else return []
 
@@ -204,7 +286,7 @@ work c = do
     changeST Global.{namespaces <- insertkv (NSX "PreludeBase")     pPreludeBase}
     unless (inPrelude g.thisPack g) do
         changeST Global.{namespaces <- insertkv (NSX "Prelude")     pPrelude}
-        I.importClass Position.null pPrelude
+        -- I.importClass Position.null pPrelude
     when (g.errors == 0) continueImport
 
 mkLinks :: NSName -> Pack -> StG ()
@@ -213,13 +295,26 @@ mkLinks ns pack = do
     case g.packages.lookup pack of
         Nothing -> stio ()
         Just env -> do
-            let syms = [ sym | (k,sym) <- each env,
-                                not (Symbol.{alias?} sym),    -- no links
-                                isNothing (g.thisTab.lookup k) ]
+            let syms = {- filter (wanted g) -} (values env)
             foreach syms link
   where
-    link (sym::Symbol) = I.linkHere (ns.unNS)
+    wanted g (sym@SymL{}) = case sym.name.findit g of
+        Just SymD{} -> false
+        -- Just SymV{name=MName clname _}
+        --     | Just SymC{} <- clname.findit g = false
+        _ -> true
+    wanted _ _  = true 
+    
+    link :: Symbol -> StG ()
+    link (sym::Symbol) = do
+        g <- getST
+        case g.thisTab.lookupS sym.name.key of
+            Just _  -> return ()
+            Nothing -> let rsym = fromMaybe sym (sym.name.findit g) in 
+                        I.linkHere (ns.unNS)
                             protoItem.{name=Simple sym.pos.first.{value=sym.name.base},
+                                       members = if rsym.{env?} && not rsym.{clas?}
+                                                    then Just [] else Nothing, 
                                        alias=sym.name.base}
                             sym
 
@@ -231,9 +326,9 @@ continueImport = do
             -- doio $ stderr.println ("Couldn't import " ++ show g.thisPack)
             return ()
         Just fp -> do
-            mkLinks (NSX "PreludeBase") pPreludeBase
-            unless (inPrelude g.thisPack g) do
-                mkLinks (NSX "Prelude") pPrelude
+            -- mkLinks (NSX "PreludeBase") pPreludeBase
+            -- unless (inPrelude g.thisPack g) do
+            --     mkLinks (NSX "Prelude") pPrelude
             -- time to open output file
             C.openFilePrinter ".html"
             when (BitSet.member VERBOSE g.options.flags) do
@@ -300,9 +395,9 @@ continueNamespaces fp = do
         dat  =  if null dsyms then []
                 else [h2 (Label "data" (text "Data Types")),
                         DL (Just "data") (map (docSym g) dsyms)]
-        vals =  if null funs then []
+        vals =  if null funs && null links then []
                 else [h2 (Label "let" (text "Functions and Values")),
-                        DL (Just "func") (map (docSym g) funs)]
+                        DL (Just "func") (map (docSym g) (funs ++ links))]
         ordered = if null allfuns then []
                 else [h2 (Label "case" (text "Functions and Values by Type")),
                         DL (Just "func") (map docTypes ordfuns)]
@@ -311,6 +406,16 @@ continueNamespaces fp = do
         isyms = sortBy (comparing Symbol.name) [sym | sym@SymI {pos} <- values g.thisTab]
         dsyms = sortBy (comparing Symbol.name) [sym | sym@SymT {pos} <- values g.thisTab]
         funs  = sortBy (comparing Symbol.name) [sym | sym@SymV {pos} <- values g.thisTab]
+        links = sortBy (comparing Symbol.name) [sym | sym@SymL {alias} <- values g.thisTab,
+                                                    alias.our g,
+                                                    other <- alias.findit g,
+                                                    not other.{flds?},  -- no constructor aliases
+                                                    noclassmember g other.name]
+            where
+                noclassmember g (MName tname _) = case tname.findit g of
+                    Just SymC{} -> false
+                    other       -> true
+                noclassmember f _ = true
         allfuns = funs ++ [ s | syms <- [csyms, isyms, dsyms], sym :: Symbol <- syms,
                                 sym.{env?},
                                 s <- values sym.env, Symbol.{typ?} s ]
