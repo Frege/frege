@@ -108,7 +108,7 @@ public class Runtime {
 			c = a.charAt(i++);
 			if (c<' ' || c == '\177') {
 				sr.append('\\');
-				sr.append(java.lang.String.format("%o", (int) c));
+				sr.append(java.lang.String.format("%03o", (int) c));
 			}
 			else if (c == '\\' || c == '"') {
 				sr.append('\\');
