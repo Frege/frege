@@ -1,4 +1,4 @@
-{-- This is an undocumented module
+{-- 
 
     Support for Java reflective arrays.
 
@@ -19,7 +19,7 @@ type ArrayOf s a = Mutable s (JavaArray a)
 
 {--
     The type @JavaArray X@ corresponds to Java's @J[]@ for any type @X@
-    where @J@ is the corresponding java type,
+    where @J@ is the corresponding java type of @X@,
     but note that Java does not really have generic arrays.
     
     We can use arrays generically inside Frege, but native code 
@@ -101,7 +101,7 @@ data JavaArray a = native "java.lang.Object" where
     
     {--
         Set the element at a certain index of a mutable array to a value
-        that is wrapped in 'Maybe'.
+        that is wrapped in 'Maybe'. This won't work for primitive element types.
 
         This will throw an
         'IndexOutOfBoundsException' if the index is lower than 0 or
@@ -137,13 +137,36 @@ data JavaArray a = native "java.lang.Object" where
     -}
     native   setElemAt  java.lang.reflect.Array.set  :: Mutable s (JavaArray a) -> Int -> a -> ST s ()
 
+    {--
+        Create a mutable array from a finite list.            
+    -}
+    fromList :: ArrayElem α => [α] -> STMutable β (JavaArray α)
+    fromList xs = do
+        let !len = xs.length 
+        arr <- newArray len
+        zipWithM_ (ArrayElem.setElemAt arr) [0..len-1] xs
+        return arr
+
+    {--
+        Apply a function to an array element and 
+        write the result to another array at the same index.
+        
+        If the target array is a primitive one, 
+        there must be no null elements in the source array.
+    -}
+    mapElem src dest f index = do
+        fmap (fmap f) (ArrayElem.getAt src index) >>= ArrayElem.setAt dest index
 
 instance ListSource JavaArray where
     --- Unload an immutable array to a list
     --- The resulting list consists of all the non null elements of the array argument.
     toList :: JavaArray a -> [a]
     toList ra = mapMaybe ra.itemAt [0..ra.length-1] 
-    
+
+--- Create an immutable array from a finite list whose elements are 'ArrayElem`
+--- Uses 'JavaArray.fromList' and makes it read-only.
+fromList :: ArrayElem α => [α] -> JavaArray α
+fromList xs = (JavaArray.fromList xs >>= readonly id).run
         
 -- Array Elements
 
@@ -267,55 +290,39 @@ derive ArrayElement Integer
 derive ArrayElement (Maybe a)
 derive ArrayElement (Either a b)
 
+--- Map a function over the elements of a mutable array.
+--- The results will be collected in a new mutable array of the same length.
+--- If the target element type is a primitive one, no *null* elements are allowed in the source array.
 mapArray :: (ArrayElem b, ArrayElem a) => (a -> b) -> Mutable s (JavaArray a) -> ST s (Mutable s (JavaArray b))
 mapArray f ra = do
-        max <- readonly JavaArray.length ra
+        max <- ra.getLength
         rb  <- newArray max
-        loop 0 max rb
-    where
-        loop n max rb 
-            | n >= max  = return rb
-            | otherwise = do
-                a <- getAt ra n
-                setAt rb n (fmap f a)
-                loop (n+1) max rb          
+        mapM_ (JavaArray.mapElem ra rb f) [0..max-1]
+        return rb
 
-mapArrayInline :: ArrayElem a => (a -> a) -> Mutable s (JavaArray a) -> ST s ()
-mapArrayInline f ra = do
-        max <- readonly JavaArray.length ra
-        loop 0 max
-    where 
-        loop n max  
-            | n >= max = return ()
-            | otherwise = do
-                a <- getAt ra n
-                setAt ra n (fmap f a)
-                loop (n+1) max 
+--- Modify a mutable array by applying a function to all its elements.
+modifyArray :: ArrayElem a => (a -> a) -> Mutable s (JavaArray a) -> ST s ()
+modifyArray f ra = do
+        max <- ra.getLength
+        mapM_ (JavaArray.mapElem ra ra f) [0..max-1]
 
+--- Equivalent of 'fold' for mutable arrays. 
+--- The array must not be shared with other threads that might modify it during the fold.
 foldArray :: (ArrayElem a) => (b -> a -> b)  -> b -> Mutable s (JavaArray a) -> ST s b
-foldArray f acc arr = do
-        max <- readonly JavaArray.length arr
-        readonly (loop 0 max acc) arr
-    where
-        loop n max !acc !arr
-            | n >= max = acc
-            | otherwise = case itemAt arr n of
-                Just v  -> loop (n+1) max (f acc v) arr
-                Nothing -> loop (n+1) max acc arr             
+foldArray f acc  = readonly (fold f acc . toList)             
 
+{--
+    Create a mutable array of a given size and set all elements to a value that may depend
+    on the index and arry elements with a smaller index.
+    
+    For example, to create an array of 1000 fibonacchi numbers, we could write:
+    
+    > funArray fib 1000 where
+    >   fib 0 _ = 1n
+    >   fib 1 _ = 1n
+    >   fib n a = a.[n-1] + a.[n-2]
+-}
 funArray f n = do
             arr <- newArray n
-            loop 0 n arr
-    where
-        loop i n arr
-            | i >= n = return arr
-            | otherwise = do
-                readonly (f i) arr >>= setElemAt arr i
-                loop (i+1) n arr
-
-listArray xs = do
-    let !n = length xs
-    arr <- newArray n
-    sequence_ (zipWith (setElemAt arr) [0..n-1] xs)
-    return arr
-    
+            mapM_ (\i -> readonly (f i) arr >>= setElemAt arr i) [0..n-1]
+            return arr
