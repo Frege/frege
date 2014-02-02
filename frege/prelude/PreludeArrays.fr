@@ -1,0 +1,328 @@
+{-- 
+
+    Support for Java reflective arrays.
+
+-}
+protected module frege.prelude.PreludeArrays where
+
+import frege.prelude.PreludeBase 
+import frege.prelude.PreludeNative (JavaType)
+import frege.prelude.PreludeList(ListSource, length, map, fold, zipWith)
+import frege.prelude.Maybe (mapMaybe)
+import frege.prelude.PreludeMonad
+import frege.prelude.PreludeIO
+import frege.control.Semigroupoid
+import frege.control.Category
+
+--- short hand for 'Mutable' @s@ ('JavaArray' @a@)
+type ArrayOf s a = Mutable s (JavaArray a)
+
+{--
+    The type @JavaArray X@ corresponds to Java's @J[]@ for any type @X@
+    where @J@ is the corresponding java type of @X@,
+    but note that Java does not really have generic arrays.
+    
+    We can use arrays generically inside Frege, but native code 
+    that expects or returns arrays will not be generic.  
+    
+    The native interface will take every occurence of 
+    
+    > JavaArray X
+    
+    or
+    
+    > Mutable s (JavaArray X)
+    
+    in native declarations to denote the corresponding Java array type.
+    But when the type argument is variable, it will be just @Object@.
+    This corresponds to the usage in 
+    'http://docs.oracle.com/javase/7/docs/api/index.html?java/lang/reflect/Array.html the array reflection API'.
+
+    Multi-dimensional arrays are not very well supported out of the box.
+    If one needs more than 2 dimensions, the type will get quite complex,
+    as of course arrays are mutable and so one will have multiple levels
+    of 'JavaArray' nested in 'Mutable' nested in 'JavaArray' and so forth. 
+-}
+data JavaArray a = native "java.lang.Object" where
+
+    ---  create a one dimensional Java array 
+    native new   java.lang.reflect.Array.newInstance :: Class a -> Int -> STMutable s (JavaArray a)
+    
+    ---  create a two dimensional Java array 
+    native new2D java.lang.reflect.Array.newInstance 
+                    :: Class a -> Int -> Int -> ST s (Mutable s (JavaArray (Mutable s (JavaArray a))))
+    
+    --- create a one dimensional Java array that holds 'Mutable' data
+    native newM  java.lang.reflect.Array.newInstance :: Class a -> Int -> STMutable s (JavaArray (Mutable s a))
+    
+    {-- 
+        Tell the length of an immutable Java array.
+        
+        Because the length of an array cannot change, 
+        it is safe to use this function with 'readonly'. 
+    -}  
+    pure native length  java.lang.reflect.Array.getLength :: JavaArray a -> Int
+    
+    --- Return the length of a mutable array in the 'ST' monad.
+    getLength :: ArrayOf α β -> ST α Int
+    getLength = readonly length
+    
+    {--
+        Get the array element at a given index. This will throw an
+        'IndexOutOfBoundsException' if the index is lower than 0 or
+        greater or equal to the length of the array.
+        
+        Because in general, array elements may be @null@, the return
+        value is wrapped in 'Maybe', as usual.
+    -}
+    pure native itemAt  java.lang.reflect.Array.get  :: JavaArray a -> Int -> Maybe a
+    
+    {--
+        Like 'JavaArray.itemAt' but the result is not wrapped in 'Maybe'.
+        
+        This is appropriate for arrays of primitive values.
+        For all other arrays, the user is expected to prove that the
+        element cannot be @null@ or else risk a 'NullPointerException'
+    -}
+    pure native elemAt  java.lang.reflect.Array.get  :: JavaArray a -> Int -> a
+    
+    {--
+        Get the array element at a certain index of a mutable array and
+        return it in the 'ST' monad.
+        
+        This will throw an
+        'IndexOutOfBoundsException' if the index is lower than 0 or
+        greater or equal to the length of the array.
+        
+        Because in general, array elements may be @null@, the return
+        value is wrapped in 'Maybe', as usual.
+    -}
+    native       getAt  java.lang.reflect.Array.get  :: Mutable s (JavaArray a) -> Int -> ST s (Maybe a)
+    
+    {--
+        Set the element at a certain index of a mutable array to a value
+        that is wrapped in 'Maybe'. This won't work for primitive element types.
+
+        This will throw an
+        'IndexOutOfBoundsException' if the index is lower than 0 or
+        greater or equal to the length of the array.
+        
+        To set the corresponding array element to @null@, pass 'Nothing',
+        otherwise pass a 'Just' value.  
+    -}
+    native       setAt  java.lang.reflect.Array.set  :: Mutable s (JavaArray a) -> Int -> Maybe a -> ST s ()
+
+    {-- 
+        Get the array element at a certain index of a mutable array and
+        return it in the 'ST' monad.
+        
+        This will throw an
+        'IndexOutOfBoundsException' if the index is lower than 0 or
+        greater or equal to the length of the array.
+
+        Unlike with 'JavaArray.getAt' the element *must not be @null@*.
+                        
+        This is appropriate for arrays of primitive values.
+        For all other arrays, the user is expected to prove that the
+        element cannot be @null@ or else risk a 'NullPointerException'.
+    -} 
+    native   getElemAt  java.lang.reflect.Array.get  :: Mutable s (JavaArray a) -> Int -> ST s a
+
+    {--
+        Set the element at a certain index of a mutable array.
+
+        This will throw an
+        'IndexOutOfBoundsException' if the index is lower than 0 or
+        greater or equal to the length of the array. 
+    -}
+    native   setElemAt  java.lang.reflect.Array.set  :: Mutable s (JavaArray a) -> Int -> a -> ST s ()
+
+    {--
+        Create a mutable array from a finite list.            
+    -}
+    fromList :: ArrayElem α => [α] -> STMutable β (JavaArray α)
+    fromList xs = do
+        let !len = xs.length 
+        arr <- newArray len
+        zipWithM_ (ArrayElem.setElemAt arr) [0..len-1] xs
+        return arr
+
+    {--
+        Apply a function to an array element and 
+        write the result to another array at the same index.
+        
+        If the target array is a primitive one, 
+        there must be no null elements in the source array.
+    -}
+    mapElem src dest f index = do
+        fmap (fmap f) (ArrayElem.getAt src index) >>= ArrayElem.setAt dest index
+
+instance ListSource JavaArray where
+    --- Unload an immutable array to a list
+    --- The resulting list consists of all the non null elements of the array argument.
+    toList :: JavaArray a -> [a]
+    toList ra = mapMaybe ra.itemAt [0..ra.length-1] 
+
+--- Create an immutable array from a finite list whose elements are 'ArrayElem`
+--- Uses 'JavaArray.fromList' and makes it read-only.
+fromList :: ArrayElem α => [α] -> JavaArray α
+fromList xs = (JavaArray.fromList xs >>= readonly id).run
+        
+-- Array Elements
+
+{--
+    Type class for basic 'JavaArray' operations. The *element type*
+    must be an instance of this class to support arrays of that type.
+    
+    'ArrayElem' is not derivable, derive sub-class 'ArrayElement' instead.
+    
+    The operations are mostly overloaded on return type and provide the 
+    appropriate @java.lang.Class@ object when needed. 
+    
+    This supports one dimensional and two dimensional arrays.
+    Note that 'JavaArray' cannot be an instance of 'ArrayElem' itself,
+    because it has no fixed @java.lang.Class@ instance.
+-}
+class ArrayElem JavaType a => a where
+    --- Create a one dimensional array with elements of the instantiated type.
+    newArray    :: Int -> ST s (ArrayOf s a)
+    --- Create a two dimensional array with elements of the instantiated type.
+    new2DArray  :: Int -> Int -> ST s (ArrayOf s (ArrayOf s a))
+    --- Get item at index from immutable array, see 'JavaArray.itemAt'
+    itemAt      :: JavaArray a -> Int -> Maybe a
+    --- Get non-null element at index from immutable array, see 'JavaArray.elemAt'
+    elemAt      :: JavaArray a -> Int -> a
+    --- Get item at index from mutable array, see 'JavaArray.getAt'
+    getAt       :: Mutable s (JavaArray a) -> Int -> ST s (Maybe a)
+    --- Set item or null at index in mutable array, see 'JavaArray.setAt'
+    setAt       :: Mutable s (JavaArray a) -> Int -> Maybe a -> ST s ()
+    --- Get non null item at index from mutable array, see 'JavaArray.getElemAt'
+    getElemAt   :: Mutable s (JavaArray a) -> Int -> ST s a
+    --- Set item at index in mutable array. see 'JavaArray.setElemAt'
+    setElemAt   :: Mutable s (JavaArray a) -> Int -> a -> ST s ()
+    
+    newArray n = JavaArray.new javaClass n
+    new2DArray i j = JavaArray.new2D javaClass i j
+
+{-- 
+    Type class for array elements of primitive type.
+    
+    Not thought for public use, as all instances are pre-defined.
+    
+    The default implementation of 'PrimitiveArrayElement.setAt'
+    does not support passing 'Nothing', because there can be no
+    @null@ in primitive arrays.
+-}
+class PrimitiveArrayElement ArrayElem a => a where
+    --- Default implementation suitable for primitive types.
+    --- It is an error to put 'Nothing' in a primitive array.
+    setAt arr inx = maybe (error "cannot have null in primitive arrays") (setElemAt arr inx) >>= return
+    --- Default implementation suitable for primitive types, wraps result with 'Just'
+    getAt arr inx = getElemAt arr inx >>= return . Just
+    --- Default implementation suitable for primitive types, wraps result with 'Just'
+    itemAt arr inx = Just (elemAt arr inx)
+
+
+--- 'ArrayElement' is the class one derives for array elements.
+--- In addition to the base class 'ArrayElem' it also supports mutable array elements.
+class ArrayElement ArrayElem a => a where
+    --- Create an array of mutable items. 
+    --- Such an array may never be immutable itself. 
+    newArrayM  :: Int -> ST s (ArrayOf s (Mutable s a))
+    newArrayM n = JavaArray.newM javaClass n
+    
+    --- Get item at index from immutable array, see 'JavaArray.itemAt'
+    itemAt      = JavaArray.itemAt
+    --- Get non-null element at index from immutable array, see 'JavaArray.elemAt'
+    elemAt      = JavaArray.elemAt
+    --- Get item at index from mutable array, see 'JavaArray.getAt'
+    getAt       = JavaArray.getAt
+    --- Set item or null at index in mutable array, see 'JavaArray.setAt'
+    setAt       = JavaArray.setAt
+    --- Set item at index in mutable array. see 'JavaArray.setElemAt'
+    setElemAt   = JavaArray.setElemAt
+    --- Get non null item at index from mutable array, see 'JavaArray.getElemAt'
+    getElemAt   = JavaArray.getElemAt
+    
+-- Instances for primitive array elements. 
+-- These use the specialised getXXX/setXXX function from java.lang.reflect.Array
+
+instance PrimitiveArrayElement Int where
+    native javaClass "int.class" :: Class Int
+    pure native  elemAt     java.lang.reflect.Array.getInt  :: JavaArray Int -> Int -> Int
+    native       getElemAt  java.lang.reflect.Array.getInt  :: Mutable s (JavaArray Int) -> Int -> ST s Int
+    native       setElemAt  java.lang.reflect.Array.setInt  :: Mutable s (JavaArray Int) -> Int -> Int -> ST s ()
+
+instance PrimitiveArrayElement Long where
+    native javaClass "long.class" :: Class Long
+    pure native  elemAt     java.lang.reflect.Array.getLong  :: JavaArray Long -> Int -> Long
+    native       getElemAt  java.lang.reflect.Array.getLong  :: Mutable s (JavaArray Long) -> Int -> ST s Long
+    native       setElemAt  java.lang.reflect.Array.setLong  :: Mutable s (JavaArray Long) -> Int -> Long -> ST s ()
+
+instance PrimitiveArrayElement Char where
+    native javaClass "char.class" :: Class Char
+    pure native  elemAt     java.lang.reflect.Array.getChar  :: JavaArray Char -> Int -> Char
+    native       getElemAt  java.lang.reflect.Array.getChar  :: Mutable s (JavaArray Char) -> Int -> ST s Char
+    native       setElemAt  java.lang.reflect.Array.setChar  :: Mutable s (JavaArray Char) -> Int -> Char -> ST s ()
+
+instance PrimitiveArrayElement Bool where
+    native javaClass "boolean.class" :: Class Bool
+    pure native  elemAt     java.lang.reflect.Array.getBoolean  :: JavaArray Bool -> Int -> Bool
+    native       getElemAt  java.lang.reflect.Array.getBoolean  :: Mutable s (JavaArray Bool) -> Int -> ST s Bool
+    native       setElemAt  java.lang.reflect.Array.setBoolean  :: Mutable s (JavaArray Bool) -> Int -> Bool -> ST s ()
+        
+instance PrimitiveArrayElement Float where
+    native javaClass "float.class" :: Class Float
+    pure native  elemAt     java.lang.reflect.Array.getFloat  :: JavaArray Float -> Int -> Float
+    native       getElemAt  java.lang.reflect.Array.getFloat  :: Mutable s (JavaArray Float) -> Int -> ST s Float
+    native       setElemAt  java.lang.reflect.Array.setFloat  :: Mutable s (JavaArray Float) -> Int -> Float -> ST s ()
+
+instance PrimitiveArrayElement Double where
+    native javaClass "double.class" :: Class Double
+    pure native  elemAt     java.lang.reflect.Array.getDouble  :: JavaArray Double -> Int -> Double
+    native       getElemAt  java.lang.reflect.Array.getDouble  :: Mutable s (JavaArray Double) -> Int -> ST s Double
+    native       setElemAt  java.lang.reflect.Array.setDouble  :: Mutable s (JavaArray Double) -> Int -> Double -> ST s ()
+
+instance ArrayElement (String) where
+    native javaClass "java.lang.String.class" :: Class String 
+
+derive ArrayElement Integer
+derive ArrayElement (Maybe a)
+derive ArrayElement (Either a b)
+
+--- Map a function over the elements of a mutable array.
+--- The results will be collected in a new mutable array of the same length.
+--- If the target element type is a primitive one, no *null* elements are allowed in the source array.
+mapArray :: (ArrayElem b, ArrayElem a) => (a -> b) -> Mutable s (JavaArray a) -> ST s (Mutable s (JavaArray b))
+mapArray f ra = do
+        max <- ra.getLength
+        rb  <- newArray max
+        mapM_ (JavaArray.mapElem ra rb f) [0..max-1]
+        return rb
+
+--- Modify a mutable array by applying a function to all its elements.
+modifyArray :: ArrayElem a => (a -> a) -> Mutable s (JavaArray a) -> ST s ()
+modifyArray f ra = do
+        max <- ra.getLength
+        mapM_ (JavaArray.mapElem ra ra f) [0..max-1]
+
+--- Equivalent of 'fold' for mutable arrays. 
+--- The array must not be shared with other threads that might modify it during the fold.
+foldArray :: (ArrayElem a) => (b -> a -> b)  -> b -> Mutable s (JavaArray a) -> ST s b
+foldArray f acc  = readonly (fold f acc . toList)             
+
+{--
+    Create a mutable array of a given size and set all elements to a value that may depend
+    on the index and arry elements with a smaller index.
+    
+    For example, to create an array of 1000 fibonacchi numbers, we could write:
+    
+    > funArray fib 1000 where
+    >   fib 0 _ = 1n
+    >   fib 1 _ = 1n
+    >   fib n a = a.[n-1] + a.[n-2]
+-}
+funArray f n = do
+            arr <- newArray n
+            mapM_ (\i -> readonly (f i) arr >>= setElemAt arr i) [0..n-1]
+            return arr

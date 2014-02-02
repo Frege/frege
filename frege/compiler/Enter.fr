@@ -46,7 +46,7 @@ import Data.List  as DL(uniqBy, sort, sortBy)
 import frege.compiler.Data
 import frege.compiler.Nice (text, msgdoc)
 import frege.compiler.Utilities     as U(vSym, linkq, pSigma)
--- import frege.compiler.Transdef()  as T
+import frege.compiler.gen.Util(sigmaJT, rawName)
 
 {--
  * In this pass, we insert placeholders in the symbol table
@@ -470,10 +470,13 @@ deriveInst (d@DrvDcl {pos}) = do
         typ  <- U.transSigma d.typ
         case U.instTSym typ g of
             Just (sym@SymT {env}) | ctrs <- U.envConstructors env,
-                                    not (null ctrs) || clas.base == "Exceptional" -> do
-                dcls <- deriveDcls pos clas sym ctrs
+                                    not (null ctrs)
+                                    || inPrelude clas.pack g && clas.base == "ArrayElement" 
+                                    || inPrelude clas.pack g && clas.base == "JavaType" 
+                                    || inPrelude clas.pack g && clas.base == "Exceptional" -> do
+                dcls <- deriveDcls pos clas sym ctrs d.typ.rho
                 -- dtyp <- withDerivedContext pos d.typ d.clas
-                stio idcl.{defs=dcls, typ=withDerivedContext pos d.typ d.clas}
+                stio idcl.{defs=dcls, typ=withDerivedContext pos d.typ d.clas clas}
             Just sym -> do
                 U.error pos (msgdoc ("Can't derive " ++  clas.nice g
                              ++ " (" ++ typ.nice g ++ "), type has no constructors"))
@@ -485,24 +488,29 @@ deriveInst (d@DrvDcl {pos}) = do
     where
         idcl = InsDcl {pos=d.pos, vis=d.vis, clas=d.clas,
                        typ=d.typ, doc=d.doc, defs=[]}
-        withDerivedContext pos (ForAll [] rho) clas
+        withDerivedContext pos (ForAll [] rho) klasse qname
+            | TName ppp base <- qname, 
+              base `notElem` derivable = ForAll [] rho
             | null rho.context = ForAll [] rho.{context}
             where
-                context = [ Ctx pos clas (TVar pos KVar v) | v <- U.freeTVnames [] rho ]
-        withDerivedContext pos sigma clas = sigma
+                context = [ Ctx pos klasse (TVar pos KVar v) | v <- U.freeTVnames [] rho ]
+        withDerivedContext pos sigma _ _ = sigma
 
 deriveInst d = do
     U.fatal d.pos (text ("deriveInst got definition with constructor "
                     ++ show (constructor d)))
 
+--- List of derivabel classes
+--- Note that special classes like 'Exceptional' and 'JavaType' are not listed here.
+--- This controls also whether type variables in the instance type must have the same class membership.
+derivable = ["Eq", "Ord", "Enum", "Bounded", "Show", "Exceptional"]
 
 
-
-deriveDcls :: Position -> QName -> Symbol -> [Symbol] -> StG [DefinitionS]
-deriveDcls pos clas forty ctrs = do
+deriveDcls :: Position -> QName -> Symbol -> [Symbol] -> RhoT SName -> StG [DefinitionS]
+deriveDcls pos clas forty ctrs instrho = do
     g <- getST
     U.logmsg TRACE4 pos (text ("derive " ++ QName.nice clas g ++ " for " ++ Symbol.nice forty g))
-    let derivable = ["Eq", "Ord", "Enum", "Bounded", "Show", "Exceptional"]
+    let 
         con = head ctrs
         -- arity of a constructor
         arity sym = length (Symbol.flds sym)
@@ -597,6 +605,8 @@ deriveDcls pos clas forty ctrs = do
         mkop a op b = nApp (nApp op a) b
         -- construct "show v"
         showit v = vShow `nApp` v
+        -- type constructor for 'Class'
+        pClass = TCon{pos, name = With1 baseToken pos.first.{tokid=CONID, value="Class"}}
         -- construct  a `op` b
         -- mkbin op a b = nApp (nApp (var op) a) b
         -- derive Eq
@@ -765,13 +775,24 @@ deriveDcls pos clas forty ctrs = do
                     doc = Nothing}]
             where
                 tapp = TApp pClass (TCon pos this)
-                pClass = TCon{pos, name = With1 baseToken pos.first.{tokid=CONID, value="Class"}}
                 this = case forty.name of
                     TName p b -> With1 pos.first.{tokid=CONID, value=x}
                                         pos.first.{tokid=CONID, value=b}
                                     where x = head [ s | (NSX s, ps) <- g.namespaces.each,
                                                             ps == p ]
                     _ -> error ("Cannot derive for non type: " ++ nicer forty g)
+        deriveClass "JavaType" | Just _ <- forty.nativ = deriveClass "Exceptional"
+        deriveClass "JavaType" = [
+                NatDcl{pos, vis=Public, name="javaClass", 
+                    txs = [(ForAll [] (RhoTau [] tapp), [])], 
+                    meth = rawName jt ++ ".class", 
+                    isPure = true, 
+                    doc = Nothing}]
+            where
+                tapp = TApp pClass this
+                this | RhoTau{tau} <- instrho = tau
+                     | otherwise = error ("Cannot derive for non type: " ++ nicer forty g)
+                jt = sigmaJT g forty.typ
         deriveClass s = error ("can't deriveClass " ++ s)
 
     case clas of
@@ -785,15 +806,20 @@ deriveDcls pos clas forty ctrs = do
                     ++ (if length bad == 1 then head bad ++ " is not a nullary constructor"
                         else joined ", " bad ++ " are not nullary constructors")))
                 stio []
+        TName ppp "JavaType"
+            | inPrelude ppp g = return (deriveClass "JavaType")
+        TName ppp "ArrayElement"
+            | inPrelude ppp g = return (deriveClass "JavaType")
         TName ppp "Exceptional" 
             | inPrelude ppp g = if isJust forty.nativ
                 then return (deriveClass "Exceptional")
                 else do
                     U.error pos (msgdoc ("Can't derive Exceptional for " ++ forty.nicer g
-                        ++ ", only native types are allowed"))
+                        ++ ", only native types are allowed. "
+                        ++ "(Did you want do derive JavaType?)"))
                     return []
         TName ppp ccc | inPrelude ppp g,
-                        ccc `elem` derivable -> stio (deriveClass ccc)
+                        ccc `elem` derivable = stio (deriveClass ccc)
         _ -> do
             U.error pos (msgdoc ("Can't derive " ++ clas.nice g
                 ++ ", only Prelude classes Eq, Ord, Enum, Bounded and Show may be derived."))

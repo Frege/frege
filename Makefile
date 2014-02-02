@@ -79,6 +79,7 @@ SPRELUDE  =  shadow/frege/prelude/PreludeBase.fr \
 		shadow/frege/prelude/PreludeIO.fr \
 		shadow/frege/java/Lang.fr \
 		shadow/frege/prelude/PreludeText.fr \
+		shadow/frege/prelude/PreludeArrays.fr \
 		shadow/frege/prelude/Arrays.fr \
 		shadow/frege/prelude/Math.fr shadow/frege/prelude/Floating.fr
 #	Prelude files in the order they must be compiled
@@ -90,6 +91,7 @@ PRELUDE  =  frege/prelude/PreludeBase.fr \
 		frege/prelude/PreludeIO.fr \
 		frege/java/Lang.fr \
 		frege/prelude/PreludeText.fr \
+		frege/prelude/PreludeArrays.fr \
 		frege/prelude/Arrays.fr \
 		frege/prelude/Math.fr frege/prelude/Floating.fr
 
@@ -258,13 +260,14 @@ CLASSES  =       $(COMPF1)/Scanner.class   $(COMPF1)/Classtools.class \
 		$(COMPF1)/BaseTypes.class \
 		$(COMPF1)/Data.class      $(COMPF1)/Utilities.class \
 		$(COMPF1)/GUtil.class	$(COMPF1)/Grammar.class \
-		$(COMPF1)/Fixdefs.class   $(COMPF1)/Import.class    $(COMPF1)/Enter.class \
+		$(COMPF1)/Fixdefs.class   $(COMPF1)/Import.class \
+		$(COMPF1)/gen/Const.class  $(COMPF1)/gen/Util.class \
+		$(COMPF1)/Enter.class \
 		$(COMPF1)/Javatypes.class $(COMPF1)/Kinds.class $(COMPF1)/Transdef.class \
 		$(COMPF1)/tc/Util.class   \
 		$(COMPF1)/TAlias.class    $(COMPF1)/Classes.class \
 		$(COMPF1)/tc/Methods.class $(COMPF1)/tc/Patterns.class \
 		$(COMPF1)/Typecheck.class $(COMPF1)/Transform.class \
-		$(COMPF1)/gen/Const.class  $(COMPF1)/gen/Util.class \
 		$(COMPF1)/gen/Bindings.class $(COMPF1)/gen/Match.class \
 		$(COMPF1)/GenMeta.class   $(COMPF1)/GenJava7.class \
 		$(COMPF1)/DocUtils.class $(COMPF1)/EclipseUtil.class
