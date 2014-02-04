@@ -7,7 +7,7 @@ protected module frege.prelude.PreludeArrays where
 
 import frege.prelude.PreludeBase 
 import frege.prelude.PreludeNative (JavaType)
-import frege.prelude.PreludeList(ListSource, length, map, fold, zipWith)
+import frege.prelude.PreludeList as L(ListSource, length, map, fold, zipWith, null) 
 import frege.prelude.Maybe (mapMaybe)
 import frege.prelude.PreludeMonad
 import frege.prelude.PreludeIO
@@ -148,14 +148,73 @@ data JavaArray a = native "java.lang.Object" where
         return arr
 
     {--
+        Create a mutable array from a finite index/value list.
+        
+        Indexes not mentioned in the list remain @null@ for 
+        non primitive array elements and 0 otherwise.            
+    -}
+    fromIndexList :: ArrayElem α => [(Int,α)] -> STMutable β (JavaArray α)
+    fromIndexList xs = do
+        let !len = L.fold max 0 (L.map fst xs) 
+        arr <- newArray (if null xs then 0 else len+1)
+        mapM_ (\(i,a) -> ArrayElem.setElemAt arr i a)  xs
+        return arr
+
+    {--
         Apply a function to an array element and 
         write the result to another array at the same index.
         
         If the target array is a primitive one, 
         there must be no null elements in the source array.
     -}
-    mapElem src dest f index = do
-        fmap (fmap f) (ArrayElem.getAt src index) >>= ArrayElem.setAt dest index
+    mapElem :: (ArrayElem γ, ArrayElem α) => (γ->α) -> JavaArray γ -> ArrayOf β α -> Int -> ST β ()
+    mapElem f src dest index = ArrayElem.setAt dest index value 
+        where value = fmap f (ArrayElem.itemAt src index) 
+    
+    --- Map a function over the elements of an immutable array.
+    --- The results will be collected in a new mutable array of the same length.
+    --- If the target element type is a primitive one, no *null* elements are allowed in the source array.
+    map :: (ArrayElem α, ArrayElem β) => (α->β) -> JavaArray α -> STMutable γ (JavaArray β)
+    map f src = do
+            let !max = length src
+            dest  <- newArray max
+            mapM_ (JavaArray.mapElem f src dest) [0..max-1]
+            return dest
+    
+    --- Modify a mutable array by applying a function to all its elements.
+    modify :: ArrayElem α => (α->α) -> ArrayOf β α -> ST β ()
+    modify f dest = do
+            max <- dest.getLength
+            mapM_ (modifyAt f dest) [0..max-1]
+    
+    --- Equivalent of 'fold' for mutable arrays. 
+    fold :: ArrayElem α => (β->α->β) -> β -> ArrayOf γ α -> ST γ β
+    fold f acc arr = arr.getLength >>= foldM collect acc . enumFromTo 0
+        where
+            collect acc i = ArrayElem.getAt arr i >>= return . maybe acc (f acc)      
+    
+    {--
+        Create a mutable array of a given size and compute the values of its elements
+        by some function. The function gets the current index and  
+        the already computed values in  the form of an immutable array,
+        where it can access elements with a *smaller* index than the current one. 
+        
+        The restriction to smaller indexes is because array elements are
+        strict in Frege. For example, we can't store unevaluated values in
+        an @int[]@ array, because the Java type of unevaluated values is not @int@.
+        
+        To create an array of 1000 fibonacchi numbers, one could write:
+        
+        > cache fib 1000 where
+        >   fib 0 _ = 1n
+        >   fib 1 _ = 1n
+        >   fib n a = a.[n-1] + a.[n-2]
+    -}
+    cache f n = do
+                arr <- newArray n
+                mapM_ (\i -> readonly (f i) arr >>= setElemAt arr i) [0..n-1]
+                return arr
+
 
 instance ListSource JavaArray where
     --- Unload an immutable array to a list
@@ -165,10 +224,39 @@ instance ListSource JavaArray where
 
 --- Create an immutable array from a finite list whose elements are 'ArrayElem`
 --- Uses 'JavaArray.fromList' and makes it read-only.
-fromList :: ArrayElem α => [α] -> JavaArray α
-fromList xs = (JavaArray.fromList xs >>= readonly id).run
-        
+arrayFromList :: ArrayElem α => [α] -> JavaArray α
+arrayFromList xs = (JavaArray.fromList xs >>= readonly id).run
+
+--- Create an immutable array from a finite index/value list.
+--- Uses 'JavaArray.fromIndexList' and makes it read-only.    
+arrayFromIndexList :: ArrayElem α => [(Int, α)] -> JavaArray α
+arrayFromIndexList xs = (JavaArray.fromIndexList xs >>= readonly id).run    
 -- Array Elements
+
+
+{-- 
+    Map a function over the elements of an immutable array,
+    and collect the results in another immutable array.
+
+    Uses 'JavaArray.map' and makes result read-only. 
+-}
+arrayMap :: (ArrayElem a, ArrayElem b) => (a->b) -> JavaArray a -> JavaArray b
+arrayMap f arr = snd (ST.run (JavaArray.map f arr >>= readonly id >>= return . (,) arr))
+
+{--
+    Left fold an immutable array
+-}
+arrayFold :: (α->β->α) -> α -> JavaArray β -> α
+arrayFold f acc = fold f acc . JavaArray.toList
+
+{--
+    Memoize a number of results from a function that maps
+    'Int' to the array element.
+    
+    Uses 'JavaArray.cache' and makes it immutable
+    -}
+arrayCache f n = (JavaArray.cache f n >>= readonly id).run
+
 
 {--
     Type class for basic 'JavaArray' operations. The *element type*
@@ -200,6 +288,9 @@ class ArrayElem JavaType a => a where
     getElemAt   :: Mutable s (JavaArray a) -> Int -> ST s a
     --- Set item at index in mutable array. see 'JavaArray.setElemAt'
     setElemAt   :: Mutable s (JavaArray a) -> Int -> a -> ST s ()
+    --- Modify item at index in mutable array with result of function application.
+    modifyAt    :: (a -> a) -> Mutable s (JavaArray a) -> Int -> ST s ()
+    modifyAt f arr i = getAt arr i >>= setAt arr i . fmap f 
     
     newArray n = JavaArray.new javaClass n
     new2DArray i j = JavaArray.new2D javaClass i j
@@ -286,43 +377,11 @@ instance PrimitiveArrayElement Double where
 instance ArrayElement (String) where
     native javaClass "java.lang.String.class" :: Class String 
 
+instance ArrayElement (a -> b) where
+    native javaClass "frege.runtime.Lambda.class" :: Class (a -> b)
+    
 derive ArrayElement Integer
 derive ArrayElement (Maybe a)
 derive ArrayElement (Either a b)
-
---- Map a function over the elements of a mutable array.
---- The results will be collected in a new mutable array of the same length.
---- If the target element type is a primitive one, no *null* elements are allowed in the source array.
-mapArray :: (ArrayElem b, ArrayElem a) => (a -> b) -> Mutable s (JavaArray a) -> ST s (Mutable s (JavaArray b))
-mapArray f ra = do
-        max <- ra.getLength
-        rb  <- newArray max
-        mapM_ (JavaArray.mapElem ra rb f) [0..max-1]
-        return rb
-
---- Modify a mutable array by applying a function to all its elements.
-modifyArray :: ArrayElem a => (a -> a) -> Mutable s (JavaArray a) -> ST s ()
-modifyArray f ra = do
-        max <- ra.getLength
-        mapM_ (JavaArray.mapElem ra ra f) [0..max-1]
-
---- Equivalent of 'fold' for mutable arrays. 
---- The array must not be shared with other threads that might modify it during the fold.
-foldArray :: (ArrayElem a) => (b -> a -> b)  -> b -> Mutable s (JavaArray a) -> ST s b
-foldArray f acc  = readonly (fold f acc . toList)             
-
-{--
-    Create a mutable array of a given size and set all elements to a value that may depend
-    on the index and arry elements with a smaller index.
-    
-    For example, to create an array of 1000 fibonacchi numbers, we could write:
-    
-    > funArray fib 1000 where
-    >   fib 0 _ = 1n
-    >   fib 1 _ = 1n
-    >   fib n a = a.[n-1] + a.[n-2]
--}
-funArray f n = do
-            arr <- newArray n
-            mapM_ (\i -> readonly (f i) arr >>= setElemAt arr i) [0..n-1]
-            return arr
+derive ArrayElement (a,b)
+derive ArrayElement (a,b,c)
