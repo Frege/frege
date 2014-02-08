@@ -1563,12 +1563,13 @@ wrapped g (sym@SymV {nativ = Just item, throwing}) = not (null throwing) || niSp
 wrapped g SymV {} = false
 wrapped g SymD {} = false
 wrapped g _ = error "wrapped: no symv"
--- 
--- {--
---  * Tell if a native function must be called through it's wrapper.
---  *
---  * Plain types and Maybe types can be called directly
---  -}
+ 
+{--
+    Tell if a native function must be called through it's wrapper.
+  
+    This is the case when it is wrapped for some other reason
+    than that the return type is 'Maybe'.
+  -}
 wrappedOnly g (sym@SymV {nativ = Just _, throwing}) 
         = not (null throwing) || niSpecial g rty && isNothing (U.isMaybe rty)
     where
@@ -2595,7 +2596,40 @@ genSimple rflg rm (app@App a b (Just sigma)) binds = do
                     r <- foldSt (apply pos) (call `adapt` Applicable) rbinds
                     stio (coerce g rm r.{ftype=sigma})
         coerce :: Global -> JType -> Binding -> Binding
-        coerce g target  bind = adapt  bind.{stype = nicer bind.ftype g} target                    
+        coerce g target  bind = adapt  bind.{stype = nicer bind.ftype g} target
+        
+        ari (sym@SymV {nativ=Just _}) = U.arity sym
+        ari sym                       = sym.depth
+        
+        -- true, when at least one arg is a full application
+        -- of a known function or constructor with strict args
+        appArg g = any prop args where
+                prop ex
+                    | App{} <- ex,
+                      flat <- map fst (U.flatx ex),
+                      Vbl{name} <- head flat,
+                      Just sym  <- name.findit g 
+                    = case sym of
+                        SymV{} -> let a = ari sym in a > 0 && length flat > a  
+                        SymD{} -> any ConField.strict sym.flds && length flat > length sym.flds
+                        _      -> false
+                prop _       = false
+        -- wrap the strict code for this application in a
+        --   new Delayed() { public Object eval() { return ...; }}
+        genDelayed :: StG Binding
+        genDelayed = do
+                g <- getST
+                bind <- genSimple false (strict rm) app binds 
+                let jx = JNewClass{jt = jtDelayed, args=[], 
+                            decls=[eval]}
+                    eval = JMethod{attr=GU.attrs[JFinal, JPublic], 
+                               gargs=[], 
+                               jtype=Something, 
+                               name = "eval", 
+                               args = [], 
+                               body = JBlock [JReturn bind.jex]}
+                return (newBind g sigma jx).{jtype = rm}
+                    
         genApp (con@Con {pos, name = cname, typ = Just csigma}) args = do
             g <- getST
             sym <- U.findD cname
@@ -2618,8 +2652,17 @@ genSimple rflg rm (app@App a b (Just sigma)) binds = do
                                 !aargs  = take a args
                                 !rargs  = drop a args
                                 !ajts   = map (lazyFun isLazy) si.argJTs
-                            abinds <- sequence (zipWith genArgEx ajts aargs)
-                            
+                                                        
+                            if struct && isLazy && appArg g
+                            then
+                                -- we are calling a constructor Foo lazily that has 
+                                -- strict fields, and in one of the fields there is
+                                -- an application of bar.
+                                -- Instead of
+                                --   Foo.apply(bar.apply(a))
+                                -- we generate
+                                --   new Delayed () { return Foo(bar(a)); }
+                                genDelayed
                             -- if there are any strict fields in the constructed value
                             -- and we need to be lazy, we must use the
                             -- conf.apply(...) form to be able to pass the arguments
@@ -2628,7 +2671,9 @@ genSimple rflg rm (app@App a b (Just sigma)) binds = do
                             -- If there are no strict fields, the arguments are demanded 
                             -- all lazy anyways, hence we can use the direct form, no matter
                             -- if it is required lazy or not. 
-                            if struct && isLazy && 
+                            else do
+                                abinds <- sequence (zipWith genArgEx ajts aargs) 
+                                if struct && isLazy && 
                                     -- true if any binding would need conversion
                                     not (and (zipWith 
                                                 isA (map Binding.jtype abinds) 
@@ -2670,6 +2715,7 @@ genSimple rflg rm (app@App a b (Just sigma)) binds = do
                                        -- else genDirect sym
                                     genDirect sym
           where
+            -- when we have (constructor Gt), for example.
             isConstructorEnum (SymV {name=VName pp1 "constructor"})
                 (ForAll [] (RhoFun []
                     (ForAll [] (RhoTau [] (TCon {name})))
@@ -2678,8 +2724,6 @@ genSimple rflg rm (app@App a b (Just sigma)) binds = do
                     symt <- U.findT name
                     stio symt.enum
             isConstructorEnum _ _ = stio false
-            ari (sym@SymV {nativ=Just _}) = U.arity sym
-            ari sym                       = sym.depth
             !tailcall   = rflg && isLazy
             
             -- depth is guaranteed to be <= length args
@@ -2753,12 +2797,26 @@ genSimple rflg rm (app@App a b (Just sigma)) binds = do
                         ++ " in strict context."))
                 let callLazy = isLazy && 
                             (not rflg || not (RSafeTC `member` sym.rkind))
+                -- do we have an application in a strict arg? 
+                let strictArgs = callLazy && appArg g  
+                -- are we lazy, so that we would be forced to compile
+                --     take (i-1) xs
+                -- as take.apply(minus.apply(i,1), xs)
+                -- In that case we better do
+                --
+                --    new Delayed() {
+                --        public Object eval() {
+                --            return take(i-1, xs);
+                --        }
+                --    }
                 case lookup binds sym of
                     Just (b@Bind{jtype=Lambda})
+                        | strictArgs = genDelayed
                         | callLazy  = genStraight callLazy sym si b.{jex <- JX.xmem "apply"}
                         | otherwise = genStraight callLazy sym si b.{jex <- JX.xmem (workNameSI si)}
                     Just b -> genAnon vbl args  -- lambda bound function
                     Nothing
+                        | strictArgs = genDelayed
                         | callLazy = do
                             bcall <- instSym pos sym vsigma
                             genStraight callLazy sym si bcall.{jex <- JX.xmem "apply"}
@@ -2785,10 +2843,10 @@ genSimple rflg rm (app@App a b (Just sigma)) binds = do
                         | Just s <- aew,  s `elem` ["eval", "apply"] = anys
                         | otherwise = map (lazyFun (callLazy && !tailcall)) si.argJTs
                     !depth      = ari sym
-                    !aargs      = take depth args
+                    -- aargs      = take depth args
                     !rargs      = drop depth args
 
-                abinds <- sequence (zipWith genArgEx ajts aargs)
+                abinds <- sequence (zipWith genArgEx ajts args)
                 let call = Bind (nicer sigma g) sigma 
                             (if lazyresult then lazy si.returnJT else si.returnJT) 
                             (JInvoke static (ctxs ++ map Binding.jex (rev abinds)))
