@@ -44,20 +44,58 @@ import frege.compiler.Nice (msgdoc, text)
 import Data.TreeMap (keys, Tree)
 
 
---- enumeration constants for the native interface kind
-data NIKind = NIOp | NINew | NIMethod | NIMember | NICast | NINewArray | NIStatic
+--- Enumeration constants for the native interface kind.
+--- They indicate what java construct to create for an application of a native function.
+--- See Java Language Specification, Section 15. 
+data NIKind = NIOp          --- generate unary or binary expression (JLS 15.15, 15.17 ff.)
+            | NINew         --- generate class instance creation expression (JLS 15.9)
+            | NIMethod      --- generate instance method invocation expression (JLS 15.12)
+            | NIMember      --- generate instance field access expression (JLS 15.11)
+            | NICast        --- generate cast expression (JLS 15.16)
+            | NIStatic      {-- generate class field access expression or 
+                                class method invocation expression (JLS 15.11, 15.12 -}
+            | NINewArray    --- generate array creation expression (JLS 15.10)
+            | NIArrayGet    --- generate array access expression (JLS 15.10)
+            | NIArraySet    --- generate assignment to array element     
+          
 derive Eq NIKind
 derive Show NIKind
  
 {--
-    determine kind of java expression to generate, based on the item information
+    Determine kind of java expression to generate, based on the java item information.
+    
+    This is so that when we have
+    
+    > native x javaitem :: type
+    
+    the 'NIKind' is determined in a purely lexical manner from @javaitem@
+    and is later refined by type information, etc.  
   -}
+--- - To get a class instance creation expression, the java item must be @new@
 niKind "new"            = NINew
+
+--- - To get an array assignment expression, write "[]="
+niKind "[]="            = NIArraySet
+
+--- - To get an unbary or binary expression, the java item must be the operator.
 niKind ´^\W+$´          = NIOp
+
+--- - To get a method invocation expression for an instance method, use the simple name of the method. 
 niKind ´^[\w\$]+$´      = NIMethod
+
+--- - To get a field access expression for an instance field, use ".xxx" where @xxx@ is the simple name of the field.
 niKind ´^\.[\w\$]+$´    = NIMember
+
+--- - To get a cast expression, write "(Type)" where @Type@ is the target type.
 niKind ´^\(.+\)$´       = NICast
+
+--- - To get an array creation expression, write "new[]"
 niKind ´.+\[\]$´        = NINewArray
+
+--- - To get an array access expression, write "[i]"
+niKind ´^\[\w+\]$´      = NIArrayGet
+
+--- - To get class method invocation or class field access expression, write the fully qualified name of the method or field.
 niKind _                = NIStatic
 
 {--
@@ -94,8 +132,14 @@ sanity SymV{pos, name, typ, nativ = Just item, pur, throwing, over}
                 U.error (getpos typ) (msgdoc ("Java method must have at least one argument - the receiver."))
             NICast -> when (nargs != 1) do
                 U.error (getpos typ) (msgdoc ("Java cast must have one and only one argument."))
-            NINewArray -> when (nargs != 1) do
-                U.error (getpos typ) (msgdoc ("Java array creation must have one and only one argument of type `Int`."))
+            NINewArray | not pur -> when (nargs != 1) do
+                            U.error (getpos typ) (msgdoc ("Java array creation must have one and only one argument of type `Int`."))
+                       | otherwise = U.error (getpos typ) (msgdoc ("Java array creation cannot be pure."))
+            NIArrayGet -> when (nargs != 2) do
+                U.error (getpos typ) (msgdoc ("Java array access must have exactly two arguments."))
+            NIArraySet | not pur -> when (nargs != 3) do
+                            U.error (getpos typ) (msgdoc ("Java array assignment must have exactly three arguments."))
+                       | otherwise = U.error (getpos typ) (msgdoc ("Java array assignment cannot be pure."))
             NIStatic -> return ()
 
     where
@@ -184,8 +228,9 @@ sanity SymV{pos, name, typ, nativ = Just item, pur, throwing, over}
                 else if mb then do
                     U.error pos (msgdoc ("The types Maybe () and [()] do not make sense in the native interface."))
                 else case nki of
-                    NIMethod  ->  return ()    
-                    NIStatic  ->  return ()            
+                    NIMethod   ->  return ()    
+                    NIStatic   ->  return ()
+                    NIArraySet ->  return ()            
                     _         ->  U.error pos (msgdoc ("Only methods may be void."))
             | otherwise = do
                 g <- getST
@@ -269,7 +314,9 @@ sanity SymV{pos, name, typ, nativ = Just item, pur, throwing, over}
                                             then "IO" else "ST")
                                         ++ " actions."))
                             Nothing | pur = return ()
-                                    | otherwise = U.fatal pos (msgdoc("Methods.sanity.1stArg: phantom=Nothing, pur=false, !pureType"))  
+                                    | otherwise = U.error pos (
+                                        msgdoc("Non pure native type  " ++ nicer tau g
+                                            ++ " must not appear immutable unless function is pure."))  
                         | nki == NINewArray = if nt == "int" 
                             then return () 
                             else U.error (getpos tau) (msgdoc ("`Int` expected."))
