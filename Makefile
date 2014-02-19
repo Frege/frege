@@ -78,7 +78,7 @@ SPRELUDE  =  shadow/frege/prelude/PreludeBase.fr \
 		shadow/frege/prelude/PreludeIO.fr \
 		shadow/frege/java/Lang.fr \
 		shadow/frege/prelude/PreludeArrays.fr \
-		shadow/frege/prelude/PreludeNative.fr \
+		shadow/frege/java/util/Regex.fr \
 		shadow/frege/prelude/PreludeText.fr \
 		shadow/frege/prelude/Arrays.fr \
 		shadow/frege/prelude/Math.fr shadow/frege/prelude/Floating.fr
@@ -90,7 +90,7 @@ PRELUDE  =  frege/prelude/PreludeBase.fr \
 		frege/prelude/PreludeIO.fr \
 		frege/java/Lang.fr \
 		frege/prelude/PreludeArrays.fr \
-		frege/prelude/PreludeNative.fr \
+		frege/java/util/Regex.fr \
 		frege/prelude/PreludeText.fr \
 		frege/prelude/Arrays.fr \
 		frege/prelude/Math.fr frege/prelude/Floating.fr
@@ -399,7 +399,7 @@ doc/index.html: $(RUNTIME)
 
 docu: fregec.jar
 	javadoc -private -sourcepath . -d $(DOC) -encoding UTF-8 frege.runtime
-	$(JAVA) -cp fregec.jar frege.tools.Doc -v -d $(DOC) -x frege.compiler,frege.runtime,frege.S,frege.V fregec.jar
+	$(JAVA) -cp fregec.jar frege.tools.Doc -v -d $(DOC) -x frege.compiler,frege.runtime,frege.S,frege.V,frege.PreludePr fregec.jar
 
 
 #
