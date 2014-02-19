@@ -11,8 +11,7 @@ import java.util.concurrent.Callable;
 public interface Lazy extends Callable<Object> {
 
 	/**
-	 * <p> Compute and cache the value by repeatedly invoking {@link Lazy#eval}, 
-	 * or return previously cached result. </p>
+	 * <p> Compute the value if it need be. </p>
 	 * 
 	 * @see java.util.concurrent.Callable#call()
 	 */

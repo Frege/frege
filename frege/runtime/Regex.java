@@ -9,7 +9,7 @@ import java.util.regex.Pattern;
 
 /**
  * This is the home of the {@link java.util.regex.Matcher} related functions 
- * referenced from {@link frege.Prelude}
+ * referenced from <b>frege.Prelude</b>.
  * 
  * <p> Most matcher operations implemented in
  * {@link java.util.regex.Matcher} change the state of the

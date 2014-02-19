@@ -15,7 +15,7 @@ public class Concurrent {
 	/**
      * The fork/join pool for ad hoc parallelism used by Frege runtime system..
      * 
-     * @see fork(), setFregeForkJoindPool()
+     * @see Concurrent#fork Concurrent#setFregeForkJoindPool
      */
    private static java.util.concurrent.ForkJoinPool fjpool = null;
 

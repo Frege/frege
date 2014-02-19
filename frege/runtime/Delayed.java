@@ -39,7 +39,7 @@ package frege.runtime;
  * <p> Base class for lazy values.</p>
  *
  * <p> Functions will create instances of subclasses of {@link Delayed} once
- * all arguments got applied. Note that all other classes implementing {@link lazy}
+ * all arguments got applied. Note that all other classes implementing {@link Lazy}
  * are pseudo-lazy, where the {@link Lazy#call} method is the identity. This
  * is to avoid needless wrappings and conversions. </p> 
  *
@@ -270,7 +270,7 @@ public abstract class Delayed implements Lazy, Applicable {
 	/**
 	 * Make sure we have a {@link Lazy} value.
 	 * 
-	 * <p>This is, in a sense, the exact opposite of {@link Delayed.forced}. 
+	 * <p>This is, in a sense, the exact opposite of {@link Delayed#forced}. 
 	 * Whereas the latter evaluates a {@link Delayed}, unless already evaluated,
 	 * this method constructs a {@link Delayed} value unless it is already a {@link Lazy} 
 	 * one.</p>
@@ -278,7 +278,7 @@ public abstract class Delayed implements Lazy, Applicable {
 	 * <p>Because all {@link Algebraic} and {@link Lambda} implement {@link Lazy}, 
 	 * this will create a wrapper for native values only.</p>
 	 * 
-	 *   @arg val some value
+	 *   @param  val some value
 	 *   @return If the argument is already {@link Lazy}, it is returned properly casted.
 	 *           Otherwise it is wrapped in a {@link Delayed.Value} and returned.
 	 *   @author ingo 
@@ -303,7 +303,7 @@ public abstract class Delayed implements Lazy, Applicable {
 		 * Make a value look like it was {@link Delayed}
 		 * 
 		 * @param arg a non-lazy value
-		 * @see Delayed.delayed
+		 * @see Delayed#delayed
 		 */
 		Value(Object arg) {
 			super.item = arg;
