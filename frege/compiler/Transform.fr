@@ -617,8 +617,10 @@ returnExprKind syms sym (ex@App a b typ) = do
     case f of
         Vbl {name} -> do
             symf <- U.findV name
-            let r  = symf.rkind `intersection` RState.singleton RSafeTC
-                rw = symf.rkind `intersection` (RState.fromList [RSafeTC, RAlways, RValue])
+            let -- r  = symf.rkind `intersection` RState.singleton RSafeTC
+                rw = if RSafeTC `member` symf.rkind 
+                        then RState.fromList [RSafeTC, RValue]
+                        else RState.singleton RSafeTC
             if isJust symf.nativ then stio (rw)
               else if (length args < symf.depth) 
                     then stio ((rw.differenceE RAlways).unionE RValue)     -- unsaturated function is a LAMBDA value
@@ -628,9 +630,9 @@ returnExprKind syms sym (ex@App a b typ) = do
                         _       -> stio (rw)                        -- global fun
                     Just _ -> do
                         g <- getST
-                        if symf.sid == Symbol.sid sym
+                        if symf.sid == Symbol.sid sym               -- self recursive
                             then stio (RState.fromList [RSafeTC, RTailRec, RValue])
-                            else if null r || (symf.sid `elem` syms)
+                            else if (symf.sid `elem` syms)
                                 then if U.isOn g.options.flags PROPERTC
                                     then stio  (RState.fromList [RSafeTC, RValue])        -- just like not recursive
                                     else
@@ -642,7 +644,7 @@ returnExprKind syms sym (ex@App a b typ) = do
                                         if RSafeTC `member` symf.rkind
                                         then stio (RState.singleton RAlways)    
                                         else stio (RState.singleton RSafeTC)
-                                else stio (rw)                          -- same as called
+                                else return rw                          -- this is safe tc and value
         Con {name} -> stio (RState.fromList [RSafeTC, RValue])
         _ -> do
                 n <- references syms f
@@ -752,6 +754,14 @@ closedLambdaSym sym = do
     g <- getST
     U.fatal sym.pos (text ("closedLambdaSym no SymV : " ++ sym.nice g))
 
+closedLambdaInInnerSym (vsym@SymV{}) 
+    | Just x <- vsym.expr = do
+        nx <- U.mapEx true closedLambda x
+        U.changeSym vsym.{expr = Just nx}
+    | otherwise = stio ()
+closedLambdaInInnerSym sym = do
+    g <- getST
+    U.fatal sym.pos (text ("closedLambdaSym no SymV : " ++ sym.nice g))
 {-
 renameSym (vsym@SymV {})
     | Just x <- vsym.expr = do
@@ -1529,9 +1539,12 @@ unusedLet x = stio (Left x)
 
 
 --- lift mutual recursive let functions to the top level
-unLet (x@Let {env,ex}) | length env > 1 = do
-    vals <- mapSt U.findV env
-    unLetMutual vals x 
+unLet (x@Let {env,ex}) 
+    | length env > 1 = do
+        vals <- mapSt U.findV env
+        if (any Symbol.anno vals)
+            then unLetMutual vals x
+            else return (Left x) 
   where
     unLetMutual :: [Symbol] -> Expr -> StG (Either Expr Expr)
     unLetMutual vals (x@Let {env,ex}) = do
@@ -1615,7 +1628,7 @@ unLet (xlet@Let {env=letenv,ex=letex,typ=lettyp})
             used  <- U.localSyms ex
             inner <- innerSids ex
             let thisSids = fold including inner (sym.sid:[ uid | PVar{uid} <- U.patVars pat ])  -- including x
-            if all (thisSids `contains`) (keys used)         -- ex uses only x and
+            if sym.anno && all (thisSids `contains`) (keys used)         -- ex uses only x and
               then do
                 g <- getST
                 let name = U.unusedName (VName g.thisPack x.base)  g
@@ -1771,7 +1784,7 @@ closedLambda (lam@Lam {pat,ex,typ = Just sigma}) = do
                     vks   = map Tau.varkind (U.freeTVars [] sigma.rho)
                 
                 typ  <- TCU.cleanSigma (ForAll vks sigma.rho)
-                let sym   = sym0.{name, expr=Just lamx, vis=Private, typ}
+                let sym   = sym0.{name, expr=Just lamx, vis=Private, state=Typechecked, typ}
                     var   = Vbl {pos=sym.pos, name, typ = Just sigma}
                 U.enter sym
                 sym <- U.findV sym.name
@@ -1785,11 +1798,39 @@ closedLambda (lam@Lam {pat,ex,typ = Just sigma}) = do
                 stio (Right var)
             else stio (Right lam)
 
-closedLambda (letex@Let{env,ex}) = do       -- do not change an inner symbol bound to a lambda
-        syms <- mapSt U.findV env
+closedLambda (letex@Let{env,ex}) = do       -- now we can lift harmless inner lambdas
+        -- syms <- mapSt U.findV env
         ex   <- U.mapEx true closedLambda ex
-        foreach syms closedLambdaSym 
-        return (Right letex.{ex})
+        -- foreach syms closedLambdaInInnerSym
+        (nenv, nex) <- foldM inner ([],ex) env
+        let result = if null nenv
+            then nex
+            else letex.{ex=nex, env=nenv}
+        when (length nenv < length env) do
+            g <- getST
+            U.logmsg TRACE8 (getpos letex) (
+                text ("let bindings removed.")
+                </> text ("before: " ++ nice letex g)
+                </> text ("after:  " ++ nice result g))
+        return (Right result) 
+    where
+        inner (env, ex) qn = do
+            sym <- U.findV qn
+            case sym.expr of
+                Just def -> do
+                    constr <- TC.collectConstrs def
+                    if null constr
+                    then do
+                        ndef <- U.mapEx true closedLambda def
+                        case ndef of
+                            Vbl{name} -> do
+                                nex <- replName sym.sid name ex
+                                return (env, nex)
+                            sonst -> do
+                                U.changeSym sym.{expr = Just ndef}
+                                return (qn:env, ex)
+                    else return (qn:env, ex)
+                sonst -> return (qn:env, ex) 
         
 closedLambda x = stio (Left x)
 
