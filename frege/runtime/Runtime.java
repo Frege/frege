@@ -197,15 +197,24 @@ public class Runtime {
     *    *
     *  <p> Called from the java <tt>main</tt> method of a frege program.
     *  This converts the argument String array to a list and passes this to
-    *  the compiled frege main function. The result is an IO action of type
-    *  <tt>IO ()</tt> to which then <tt>IO.performUnsafe</tt> is applied.
+    *  the compiled frege main function, if it is a function. 
+    *  The result is an IO action of type
+    *  <tt>IO a</tt> to which then <tt>IO.performUnsafe</tt> is applied.
     *  The resulting {@link Lambda} then actually executes the frege code
     *  when evaluated.</p>
     *
     */
-	public static void runMain(final Object arg) {
+	public static java.lang.Integer runMain(final Object arg) {
+		java.lang.Integer xit = 0;
 		try {
-			Delayed.delayed(arg).call();
+			Object mainres = Delayed.delayed(arg).call();
+			mainres = Delayed.<Object>forced(mainres);
+			if (mainres instanceof java.lang.Integer) {
+				xit = (java.lang.Integer)mainres;
+			}
+			else if (mainres instanceof java.lang.Boolean) {
+				xit = (boolean)(java.lang.Boolean)mainres ? 0 : 1;
+			}
 		}
 //		catch (Exception ex) {
 //			throw new Error(ex); // ex.printStackTrace();
@@ -214,7 +223,7 @@ public class Runtime {
 			stderr.flush();
 			stdout.flush();
 		}
-		return;
+		return xit;
 	}
 	
 	final public static void exit() {

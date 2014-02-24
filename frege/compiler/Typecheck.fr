@@ -142,31 +142,58 @@ pass = do
 --- e.g. @tc "Int"@ is the 'Tau' with type constructor for @PreludeBase.Int@
 tc n = TCon {pos=Position.null, name=TName pPreludeBase n}
 
-mainSigma = ForAll [] (RhoFun [] (ForAll [] (RhoTau [] strings)) (RhoTau [] iovoid))
+mainSigmaA t = ForAll [] 
+                (RhoFun [] (ForAll [] (RhoTau [] strings)) 
+                           (RhoTau [] iovoid))
+    where
+        strings = TApp (tc "[]") tauString          -- [String]
+        iovoid = TApp (TApp (tc "ST") (tc "RealWorld")) t
+
+mainSigma = ForAll [] 
+                (RhoFun [] (ForAll [] (RhoTau [] strings)) 
+                           (RhoTau [] iovoid))
     where
         strings = TApp (tc "[]") tauString          -- [String]
         iovoid = TApp (TApp (tc "ST") (tc "RealWorld")) (tc "()")
 
+mainSimple (ForAll xs RhoFun{rho}) = ForAll xs rho
+mainSimple sigma = sigma
+
 {--
  * make sure that, for example,  @main _ = return ()@ is not rejected later because of
  * inferred type @forall a m Monad m . a -> m ()@
+ 
+ Note that code like:
+ 
+ > main = return
+ 
+ is bound to fail, because it gets annotated as
+ 
+ > main :: IO ()
  -}
 annotateMain = do
     g <- getST
     case (VName g.thisPack "main").findit g of
         Just sym | sym.name.pack == g.thisPack,
-                   not sym.anno = U.changeSym sym.{typ = mainSigma, anno = true}
+                   Just x <- sym.expr,
+                   not sym.anno = if U.lambdaDepth x > 0 
+                            then U.changeSym sym.{typ = mainSigma, anno = true}
+                            else U.changeSym sym.{typ = mainSimple mainSigma, anno = true}
         _ -> stio ()
 
 checkMain = do
     g <- getST
+    tau <- Util.newMeta ("a", KType)
     case (VName g.thisPack "main").findit g of
         Just sym | sym.name.pack == g.thisPack -> do
             let m = Vbl {pos = sym.pos, name = sym.name, typ = Just pSigma}
-            checkAnnotated m mainSigma
+                sigma 
+                    | RhoFun{} <- sym.typ.rho = mainSigmaA tau 
+                    | otherwise               = mainSimple (mainSigmaA tau)
+            checkAnnotated m sigma
             gnew <- getST
             when (g.errors < gnew.errors) do
-                U.error sym.pos (msgdoc ("The main function must have type [String] -> IO ()"))
+                U.error sym.pos (msgdoc ("The main function must have type " ++ nicer sigma g))
             when (g.errors == gnew.errors && not (null sym.typ.rho.context)) do
                 U.error sym.pos (msgdoc ("The main function type must not have type class constraints."))
         _ -> stio ()
