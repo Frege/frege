@@ -79,7 +79,7 @@ import Data.TreeMap (Tree, values, lookup, insertkv, insert, update, keys, inclu
 import frege.compiler.Data
 import frege.compiler.Nice          except (group, break)
 import frege.compiler.Utilities     as U(pSigma, findC, findD, findV, findVD, symVD, freeTVars, freeTVnames,
-                                            mapEx, changeSym)
+                                            mapEx, foldEx, changeSym)
 import frege.compiler.Kinds         as K()                                            
 
 import frege.compiler.tc.Util
@@ -668,7 +668,7 @@ checkSigma1 annotated x s = do
                 ctxmetas <- mapM ctxTvs rho.context
                 
                 let fctx    = map snd . filter relevantCtx $ zip ctxmetas rho.context
-                    onlyrho = filter (`notElem` tvs) rhometas -- only in rho, but not in skolTvs
+                    -- onlyrho = filter (`notElem` tvs) rhometas -- only in rho, but not in skolTvs
                     relevantCtx
                         | annotated     = all (`elem` rhometas) 
                                             . filter (not . MetaTv.isFlexi)
@@ -1090,17 +1090,31 @@ literalType ctxs (lit@Lit{pos, kind, value, typ=Just sigma})
 literalType _ x = return (Left x)
 
 
-
 --- Resolve the x.m finally
 --- Resolve overloaded methods
 resolveHas expr = do
-        ctxs <- collectConstrs expr
-        mapEx true (literalType ctxs) expr >>= mapEx true rHas
+        ctxs  <- collectConstrs expr
+        mems  <- foldEx true countMem 0 expr    -- count how many mems we have
+        mapEx true (literalType ctxs) expr >>= resolveHas' mems
     where
-        rHas (x@Mem{ex, member, typ = Just sigma}) = do
+        resolveHas' 0 ex = mapEx true (rHas true) ex
+        resolveHas' n ex = do
+            U.logmsg TRACET (getpos ex) (text("TDNR for  " ++ show n ++ " expressions"))
+            nex <- mapEx  true (rHas false) ex
+            m   <- foldEx true  countMem 0 nex
+            if m < n        -- something has been resolved
+            then resolveHas' m nex
+            else resolveHas' 0 nex  -- finish with error messages
+        -- count number of Mem constructs 
+        countMem acc Mem{}  = return . Left $! (acc+1)
+        countMem acc _      = return . Left $ acc
+        -- the first argument tells if we flag errors or not
+        -- whether to flag them is controlled by resolveHas'
+        rHas flagerr (x@Mem{ex, member, typ = Just sigma}) = do
             app <- checkRho x.{typ = Nothing} sigma.rho -- now type of ex should be known
             case app of
                 Mem{}
+                    | not flagerr = return (Left x)
                     | Just sigma <- ex.typ,
                       RhoTau{tau} <- sigma.rho = do
                         tau <- reduced tau
@@ -1127,16 +1141,16 @@ resolveHas expr = do
                                             <+> text (nicer sigma g))
                                     <+/> text " does not have a definite type.")
                                 return (Left x)
-                other -> return (Left app)      -- Mem resolved!
-        rHas (x@Mem{ex, member, typ = Nothing}) = do
+                other -> return (Left app)      -- Mem resolved (or not flagged)
+        rHas _ (x@Mem{ex, member, typ = Nothing}) = do
             g <- getST
             error ("expression  " ++ x.nicer g ++ "  is untyped")
-        rHas (v@Vbl{pos, name, typ}) | not name.isLocal = do
+        rHas true (v@Vbl{pos, name, typ}) | not name.isLocal = do
             sym <- U.findV name
             case sym.over of
                 [] -> return (Right v)
                 _  -> resolveOver v sym
-        rHas x = return (Left x)
+        rHas _ x = return (Left x)
 
 --- resolve overloaded variable
 resolveOver :: Expr -> Symbol -> StG (Expr|Expr)
