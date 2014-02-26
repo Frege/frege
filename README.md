@@ -66,7 +66,7 @@ Links
 
 [Author's Blog](http://fregepl.blogspot.com/)
 
-Nightly Builds     (currently discontinued) 
+[Language reference](http://www.frege-lang.org/doc/Language.pdf)
 
 [Online Docs (Runtime Javadoc)](http://www.frege-lang.org/doc/index.html)
 
