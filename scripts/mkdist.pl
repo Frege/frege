@@ -29,7 +29,7 @@ system qq{jar$exe -cfe dist/frege$version.jar frege.compiler.Main  -C build freg
 
 #   ship documentation
 #   sometimes it's good to have it offline
-system qq{jar$exe -cf  dist/htmldocs$version.zip doc/frege doc/*.html doc/*.css doc/package-list};
+# system qq{jar$exe -cf  dist/htmldocs$version.zip doc/frege doc/*.html doc/*.css doc/package-list};
 
 #
 #   Collect and jar the library sources.
@@ -39,4 +39,4 @@ system qq{jar$exe -cf  dist/htmldocs$version.zip doc/frege doc/*.html doc/*.css 
 #
 my @frsrcs = grep { $_ !~ m{frege/(contrib|compiler|rt)/|frege/Scrap} }
                 (split /\s+/, qx{find$exe frege -name "*.fr" -print});
-system qq{jar$exe -cf dist/libsources$version.zip @frsrcs}
+system qq{jar$exe -uf dist/frege$version.jar @frsrcs}
