@@ -1315,16 +1315,10 @@ primary:
                         u x ((r::Token, false, e):xs) = u (Mem x r.{value <- ("upd$" ++)} Nothing  `nApp` e)  xs;
                                 } in u x fs}
     | primary '.' '[' expr ']'      { \p\(t::Token)\_\v\_  ->
-                                        Mem p t.{tokid=VARID, value="frozenGetAt"} Nothing
+                                        let elem = t.position.change VARID "elemAt"
+                                        in Vbl {pos=elem, name=Simple elem.first, typ=Nothing}
+                                            `nApp` p
                                             `nApp` v}
-    | primary '.' '[' expr '=' expr ']'
-                                    { \p\(t::Token)\_\v\_\x\_ ->
-                                        Mem p t.{tokid=VARID, value="updAt"} Nothing
-                                            `nApp` v `nApp` x }
-    | primary '.' '[' expr GETS expr ']'
-                                    { \p\(t::Token)\_\v\_\x\_ ->
-                                        Mem p t.{tokid=VARID, value="setAt"} Nothing
-                                            `nApp` v `nApp` x }
     ;
 
 term:
