@@ -51,7 +51,7 @@ import Data.List as DL(elemBy)
 import frege.compiler.Data      as D
 import frege.compiler.Nice      except (group, annotation, break)
 import frege.compiler.Utilities as U(
-    posItem, posLine, unqualified, tuple)
+    unqualified, tuple)
 import frege.compiler.GUtil
 
 
@@ -76,8 +76,8 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type mbdot           Token
 //%type commata         Int
 //%type semicoli        Int
-//%type packagename     (Pos String)
-//%type packagename1    (Pos String)
+//%type packagename     (String, Position)
+//%type packagename1    (String, Position)
 //%type nativename      String
 //%type nativepur       (Bool, Bool)
 //%type docs            String
@@ -93,8 +93,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type varidkw         Token
 //%type word            String
 //%type words           [String]
-//%type varid           (Pos String)
-//%type varids          [Pos String]
+//%type varid           Token
 //%type fldid           (Position, String, Visibility, Bool)
 //%type strictfldid     (Position, String, Visibility, Bool)
 //%type plainfldid      (Position, String, Visibility, Bool)
@@ -103,17 +102,16 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type qvarop          SName
 //%type qvarids         [SName]
 //%type qconid          SName
-//%type qunop           (Pos String)
 //%type tyname          SName
-//%type annoitem        (Pos String)
-//%type nativestart     (Pos String)
+//%type annoitem        Token
+//%type nativestart     Token
 //%type importspec      ImportItem
 //%type importspecs     [ImportItem]
 //%type memspec         ImportItem
 //%type memspecs        [ImportItem]
 //%type importitem      ImportItem
 //%type alias           Token
-//%type annoitems       [Pos String]
+//%type annoitems       [Token]
 //%type importliste     ImportList
 //%type definitions     [Def]
 //%type definition      [Def]
@@ -159,8 +157,6 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type rhofun          RhoS
 //%type rhotau          RhoS
 //%type rho             RhoS
-//%type fldtype         (Pos String, SigmaS)
-//%type fldtypes        [(Pos String, SigmaS)]
 //%type field           (String, Exp)
 //%type fields          [(String, Exp)]
 //%type getfield        (Token, Bool,Exp)
@@ -223,7 +219,6 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%explain importspec   an import specification
 //%explain memspec      a member import specification
 //%explain memspecs     a list of member imports
-//%explain qunop        a qualified unary operator
 //%explain unop         an unary operator
 //%explain word         a word
 //%explain words        words
@@ -580,8 +575,8 @@ import:
 importliste:
     { linkAll }
     | varid '(' importspecs ')' { \v\_\is\_ -> do
-            when ( posItem v `notElem` [ "except", "excluding", "without", "außer", "ohne", "hiding" ]) do
-                yyerror (posLine v) (show "hiding" ++ " expected instead of " ++ show (posItem v))
+            when ( v.value `notElem` [ "except", "excluding", "without", "außer", "ohne", "hiding" ]) do
+                yyerror (yyline v) (show "hiding" ++ " expected instead of " ++ show v.value)
             YYM.return linkAll.{items=is}
         }
     | '(' ')'               { \_\_    -> linkNone }
@@ -630,7 +625,7 @@ alias:
     | operator              { \v -> do { op <- unqualified v; return op }} 
     ;
 
-varid:   VARID              { vid }
+varid:   VARID
     ;
 
 varidkw:
@@ -642,11 +637,6 @@ varidkw:
     | PACKAGE               { Token.{tokid = VARID} }
     | IMPORT                { Token.{tokid = VARID} }
     ;
-
-// varids:
-//    varid                   { single }
-//    | varid ',' varids      { liste  }
-//    ;
 
 qvarids:
     qvarop                  { single }
@@ -713,9 +703,9 @@ annotation:
 
 annoitem:
     varid
-    | '(' operator ')'          { \_\a\_ -> do binop a }
-    | '(' unop ')'              { \_\a\_ -> vid a }
-    | '(' '-' ')'               { \_\a\_ -> vid a }
+    | '(' operator ')'          { \_\a\_ -> do unqualified a }
+    | '(' unop ')'              { \_\a\_ -> a }
+    | '(' '-' ')'               { \_\a\_ -> a }
     ;
 
 annoitems:
@@ -731,9 +721,9 @@ nativedef:
 
 nativestart:
       NATIVE annoitem      { flip const }
-    | NATIVE operator      { \_\b  -> do binop b }
-    | NATIVE unop          { \_\b  -> vid b }
-    | NATIVE '-'           { \_\b  -> vid b }
+    | NATIVE operator      { \_\b  -> do unqualified b }
+    | NATIVE unop          { \_\b  -> b }
+    | NATIVE '-'           { \_\b  -> b }
     ;
 
 sigex: 
@@ -748,21 +738,21 @@ sigexs:
 
 impurenativedef:
     nativestart DCOLON sigexs
-                    { \item\col\t -> NatDcl {pos=posLine item, vis=Public, name=posItem item,
-                                                meth=posItem item, txs=t, isPure=false, 
+                    { \item\col\t -> NatDcl {pos=yyline item, vis=Public, name=item.value,
+                                                meth=item.value, txs=t, isPure=false, 
                                                 doc=Nothing}}
     | nativestart nativename DCOLON sigexs
-                    { \item\j\col\t -> NatDcl {pos=posLine item, vis=Public, name=posItem item,
+                    { \item\j\col\t -> NatDcl {pos=yyline item, vis=Public, name=item.value,
                                                 meth=j, txs=t, isPure=false, 
                                                 doc=Nothing}}
     | nativestart operator   DCOLON sigexs
                     { \item\o\col\t -> do {
-                            o <- binop o;
-                            YYM.return (NatDcl {pos=posLine item, vis=Public, name=posItem item,
-                                                meth=posItem o, txs=t, isPure=false, 
+                            o <- unqualified o;
+                            YYM.return (NatDcl {pos=yyline item, vis=Public, name=item.value,
+                                                meth=o.value, txs=t, isPure=false, 
                                                 doc=Nothing})}}
     | nativestart unop      DCOLON sigexs
-                    { \item\o\col\t -> NatDcl {pos=posLine item, vis=Public, name=posItem item,
+                    { \item\o\col\t -> NatDcl {pos=yyline item, vis=Public, name=item.value,
                                                 meth=Token.value o, txs=t, isPure=false, 
                                                 doc=Nothing}} 
     ;
@@ -893,9 +883,9 @@ classdef:
     | CLASS CONID tapp EARROW varid wheredef {
         \_\i\tau\_\v\defs -> do
             ctxs <- U.tauToCtx tau
-            sups <- classContext (Token.value i) ctxs (posItem v)
+            sups <- classContext (Token.value i) ctxs (v.value)
             YYM.return (ClaDcl {pos = yyline i, vis = Public, name = Token.value i,
-                             clvar = TVar (posLine v) KVar (posItem v),
+                             clvar = TVar (yyline v) KVar v.value,
                              supers = sups, defs = defs, doc = Nothing})
     }
     ;
@@ -1037,9 +1027,9 @@ strictfldid:
     ;
 
 plainfldid:
-    varid                       { \(name, pos) -> do
+    varid                       { \v -> do
                                     g <- getST
-                                    return (pos, name, Public, U.strictMode g)
+                                    return (yyline v, v.value, Public, false)
                                 }
     ;
 
@@ -1141,7 +1131,7 @@ gqual:
     expr                            { \e ->  Left (Nothing, e) }
     | expr GETS expr                { \p\g\e -> do
                                         pat <- exprToPat p
-                                        YYM.return (Left (Just (pat, getpos pat), e)) }
+                                        YYM.return (Left (Just pat, e)) }
     ;
 
 gquals:
@@ -1395,8 +1385,8 @@ getfield:
     ;
 
 field:
-    varid '='  expr                  { \s\_\x ->  (posItem s, x) }
-    | varid                          { \s     ->  (posItem s, Vbl (posLine s) (Simple (posLine s).first) Nothing) }
+    varid '='  expr                  { \s\_\x ->  (Token.value s, x) }
+    | varid                          { \s     ->  (s.value, Vbl (yyline s) (Simple s) Nothing) }
     ;
 
 exprSC :

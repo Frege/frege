@@ -55,8 +55,7 @@ import frege.Prelude hiding(<+>)
 import Data.List as DL(elemBy)
 import frege.compiler.Data      as D
 import frege.compiler.Nice      except (group, annotation, break)
-import frege.compiler.Utilities as U(
-    posItem, posLine, unqualified, tuple)
+import frege.compiler.Utilities as U(unqualified, tuple)
 
 
 data Program =  
@@ -68,7 +67,7 @@ type Def = DefinitionT
 type Exp = ExprT SName
 type Pat = PatternT SName
 type Item = Token
-type Qual = Either (Maybe (Pos Pat), Exp) [Def]
+type Qual = Either (Maybe Pat, Exp) [Def]
 type Guard = (Position, [Qual], Exp)
 private type YYM = State
 
@@ -122,10 +121,6 @@ varcon o
     | m ~ #(\w+'*`?$)# <- Token.value o, Just s <- m.group 1, (s.charAt 0).isUpperCase = Con
     | otherwise = Vbl
 
---- check that operator is unqualified
-binop op = do
-    tok <- unqualified op
-    YYM.return (vid tok)
 
 --- make a binary expression
 mkapp a op b = varcon op (yyline op) (opSname op) Nothing `nApp` a `nApp` b
@@ -157,8 +152,8 @@ updCtr dc = dc.{vis = Private}
 {--
     create an annotation
     -}
-annotation :: SigmaS -> Pos String -> Def
-annotation sig (item, pos) = AnnDcl { pos=pos, vis=Public, name=item, typ=sig, doc=Nothing}
+annotation :: SigmaS -> Token -> Def
+annotation sig it = AnnDcl { pos=yyline it, vis=Public, name=it.value, typ=sig, doc=Nothing}
 
 exprToPat :: Exp -> YYM Global Pat
 
@@ -332,7 +327,7 @@ gdsexpr gds = (flatten • map trans) gds where
         tg ln ex [] = ex
         tg ln ex (Left (p, x):qs) = case p of
                 Nothing -> Case CWhen x [calt.{ pat = PLit {kind = LBool, value = "true", pos = ln}}] Nothing
-                Just (pat, line) -> Case CWhen x [calt.{ pat = pat }] Nothing
+                Just pat -> Case CWhen x [calt.{ pat = pat }] Nothing
            where
                 calt = CAlt {pat = PVar {var = "_", uid = 0, pos = Position.null}, ex = tg ln ex qs}
         tg ln ex (Right _:_) = error ("line " ++ show ln ++ ": let definition in guard?")
@@ -415,12 +410,12 @@ listComprehension pos e (q:qs) l2 = case q of
     Left (Nothing, b)          -> do   -- b
         rest <- rest
         YYM.return (Ifte b rest l2 Nothing)
-    Left (Just (pat, pos), xs) -> do   -- pat <- x
+    Left (Just pat, xs) -> do   -- pat <- x
         uid <- U.uniqid
         xsuid <- U.uniqid
         anuid <- U.uniqid
         let
-            f     = Position.first pos
+            f     = Position.first (getpos pat)
             h     = Simple f.{tokid = VARID, value = "lc$" ++ show uid }
             us    = Simple f.{tokid = VARID, value = "_us" ++ show uid }
             xsn   = Simple f.{tokid = VARID, value = "_xs" ++ show xsuid }
@@ -510,8 +505,8 @@ mkEither pos tau taus = fold mkE tau taus
 
 mkMonad line [e]
     | Left (Nothing, x) <- e = YYM.return x
-    | Left (Just _, x)  <- e = do
-            yyerror line ("last statement in a monadic do block must not be  pat <- ex")
+    | Left (Just p, x)  <- e = do
+            yyerror (getpos p) ("last statement in a monadic do block must not be  pat <- ex")
             YYM.return x
     | Right _ <- e = do
             yyerror line ("last statement in a monadic do block must not be  let decls")
@@ -519,36 +514,23 @@ mkMonad line [e]
 
 mkMonad line (e:es)
     | Left (Nothing,  x) <- e
-        =  do
-            rest <- mkMonad line es
-            YYM.return (bind0 `nApp` x `nApp` rest)
-    | Left (Just pps, x) <- e, (pat, pos) <- pps
+        =   do
+                rest <- mkMonad line es 
+                let pos = getpos x
+                    f   = pos.first
+                    bind0 = Vbl pos (contextName f ">>") Nothing
+                YYM.return (bind0 `nApp` x `nApp` rest)
+    | Left (Just pat, x) <- e   -- , (pat, pos) <- pps
         = do
             rest <- mkMonad line es
-            let res = {- if refutable pat
-                      // x >>= \of -> CASE of OF pat -> do ...; _ -> fail in "pattern failed"
-                    then bind  `nApp`  x `nApp` (Lam Nil (ofpat pos) (failcase pos pat rest) Nothing)
-                    else -} bind  `nApp`  x `nApp` (Lam pat rest Nothing)
+            let pos = getpos x
+                f   = pos.first
+                bind = Vbl pos (contextName f ">>=") Nothing
+            let res =  bind  `nApp`  x `nApp` (Lam pat rest Nothing)
             YYM.return res
     | Right defs <- e = do
             rest <- mkMonad line es
             YYM.return (Let [] defs rest  Nothing)
-    where
-        f = Position.first line
-        pos x = Pos f.{tokid=VARID, value=x} (Position.last line)
-        -- wellknown x = With1 monadToken f.{tokid=VARID, value=x}
-        -- local x = Simple f.{tokid=VARID, value=x}
-        bind0 = Vbl (pos ">>") (contextName f ">>") Nothing
-        bind  = Vbl (pos ">>=") (contextName f ">>=") Nothing
-        -- ofvar pos = Vbl pos (local "of") Nothing
-        -- failvar =   Vbl (pos "fail") (wellknown "fail") Nothing
-        -- ofpat pos = PVar pos  "of"
-        -- def pos   = PVar pos  "_"
-        -- failcase pos pat rest = Case CNormal (ofvar pos) [alt1, alt2]  Nothing where
-        --    alt1 = CAlt {env = Nil, pat = pat, ex = rest}
-        --    alt2 = CAlt {env = Nil, pat = def pos, ex = failure }
-            -- version 2 needed application to invar, we don't
-            -- failure = failvar {-`nApp` invar-}  `nApp` Lit line LString "\"pattern failed\"" Nothing
 
 mkMonad _ _ = Prelude.error "empty monadic do block"
 
