@@ -80,7 +80,6 @@ SPRELUDE  =  shadow/frege/prelude/PreludeBase.fr \
 		shadow/frege/prelude/PreludeArrays.fr \
 		shadow/frege/java/util/Regex.fr \
 		shadow/frege/prelude/PreludeText.fr \
-		shadow/frege/prelude/Arrays.fr \
 		shadow/frege/prelude/Math.fr shadow/frege/prelude/Floating.fr
 #	Prelude files in the order they must be compiled
 PRELUDE  =  frege/prelude/PreludeBase.fr \
@@ -92,7 +91,6 @@ PRELUDE  =  frege/prelude/PreludeBase.fr \
 		frege/prelude/PreludeArrays.fr \
 		frege/java/util/Regex.fr \
 		frege/prelude/PreludeText.fr \
-		frege/prelude/Arrays.fr \
 		frege/prelude/Math.fr frege/prelude/Floating.fr
 
 all:  frege.mk runtime compiler fregec.jar
