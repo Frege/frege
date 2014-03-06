@@ -1274,10 +1274,10 @@ qualifiers:
 primary:
     term
     | DO  '{' dodefs  '}'             { \d\_\defs\_   -> do mkMonad (yyline d) defs }
-    | primary   '.' VARID             { \p\_\(v::Token) -> umem p v Nothing}
+    | primary   '.' VARID             { \p\_\(v::Token) -> umem p v id}
     | primary   '.' operator          { \p\_\v -> do {v <- unqualified v;
-                                                    YYM.return (umem p v Nothing)}}
-    | primary   '.' unop              { \p\_\v -> umem p v Nothing}
+                                                    YYM.return (umem p v id)}}
+    | primary   '.' unop              { \p\_\v -> umem p v id}
     | qualifiers    '{' VARID '?' '}' { \q\_\(v::Token)\_\_ ->
                                             Vbl (yyline v) (q v.{value <- ("has$" ++)}) Nothing}
     | qualifiers    '{' VARID '=' '}' { \q\_\(v::Token)\_\_ ->
@@ -1295,14 +1295,14 @@ primary:
                             chup (r, true, e)  = flp `nApp` Vbl (yyline r) (q r.{value <- ("chg$"++)}) Nothing `nApp` e;
                             chup (r, false, e) = flp `nApp` Vbl (yyline r) (q r.{value <- ("upd$"++)}) Nothing `nApp` e;
                                       }} in c fs }
-    | primary   '.' '{' VARID '?' '}' { \p\_\_\(v::Token)\_\_ -> umem p v.{value <- ("has$"++)} Nothing}
-    | primary   '.' '{' VARID '=' '}' { \p\_\_\(v::Token)\_\_ -> umem p v.{value <- ("upd$"++)} Nothing}
-    | primary   '.' '{' VARID GETS '}' {\p\_\_\(v::Token)\_\_ -> umem p v.{value <- ("chg$"++)} Nothing}
+    | primary   '.' '{' VARID '?' '}' { \p\_\_\(v::Token)\_\_ -> umem p v.{value <- ("has$"++)} id}
+    | primary   '.' '{' VARID '=' '}' { \p\_\_\(v::Token)\_\_ -> umem p v.{value <- ("upd$"++)} id}
+    | primary   '.' '{' VARID GETS '}' {\p\_\_\(v::Token)\_\_ -> umem p v.{value <- ("chg$"++)} id}
     | primary   '.' '{' getfields '}' { \x\(p::Token)\_\fs\_ ->
                                 let {
                         u x [] = x;
-                        u x ((r::Token, true , e):xs) = u (umem x r.{value <- ("chg$" ++)} Nothing  `nApp` e)  xs;
-                        u x ((r::Token, false, e):xs) = u (umem x r.{value <- ("upd$" ++)} Nothing  `nApp` e)  xs;
+                        u x ((r::Token, true , e):xs) = u (umem x r.{value <- ("chg$" ++)} (`nApp` e))  xs;
+                        u x ((r::Token, false, e):xs) = u (umem x r.{value <- ("upd$" ++)} (`nApp` e))  xs;
                                 } in u x fs}
     | primary '.' '[' expr ']'      { \p\(t::Token)\_\v\_  ->
                                         let elem = t.position.change VARID "elemAt"
