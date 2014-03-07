@@ -78,23 +78,38 @@ public class Runtime {
 	
 	/**
 	 * Provide UTF-8 encoded standard printer for stdout with automatic line flushing
+	 * <p>Must be thread local so that it works in the online REPL, for instance. </p>
 	 */
-	public static PrintWriter stdout = new PrintWriter(
-			new OutputStreamWriter(System.out, StandardCharsets.UTF_8),
-			true);
+	public static ThreadLocal<PrintWriter> stdout = new ThreadLocal<PrintWriter>() {
+		@Override protected PrintWriter initialValue() {
+			return new PrintWriter(
+					new OutputStreamWriter(System.out, StandardCharsets.UTF_8),
+					true);
+		}
+	};
 	
 	/**
 	 * Provide UTF-8 encoded standard printer for stderr with autoflush
+	 *  <p>Must be thread local so that it works in the online REPL, for instance. </p>
 	 */
-	public static PrintWriter stderr = new PrintWriter(
-			new OutputStreamWriter(System.err, StandardCharsets.UTF_8),
-			true);
+	public static ThreadLocal<PrintWriter> stderr = new ThreadLocal<PrintWriter>() {
+		@Override protected PrintWriter initialValue() {
+			return new PrintWriter(
+					new OutputStreamWriter(System.err, StandardCharsets.UTF_8),
+					true);
+		}
+	};
+	
 	
 	/**
 	 * Provide UTF-8 decoded standard inupt Reader
 	 */
-	public static BufferedReader stdin = new BufferedReader(
-			new InputStreamReader(System.in, StandardCharsets.UTF_8));
+	public static ThreadLocal<BufferedReader> stdin = new ThreadLocal<BufferedReader>() {
+		@Override protected BufferedReader initialValue() {
+			return new BufferedReader(
+					new InputStreamReader(System.in, StandardCharsets.UTF_8));
+		}
+	};
 	
     /**
      * <p> Utility method used by <code>String.show</code> to quote a string. </p>
@@ -220,8 +235,8 @@ public class Runtime {
 //			throw new Error(ex); // ex.printStackTrace();
 //		}
 		finally {
-			stderr.flush();
-			stdout.flush();
+			stderr.get().flush();
+			stdout.get().flush();
 		}
 		return xit;
 	}
