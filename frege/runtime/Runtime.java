@@ -220,7 +220,7 @@ public class Runtime {
     *
     */
 	public static java.lang.Integer runMain(final Object arg) {
-		java.lang.Integer xit = 0;
+		java.lang.Integer xit = null;
 		try {
 			Object mainres = Delayed.delayed(arg).call();
 			mainres = Delayed.<Object>forced(mainres);
