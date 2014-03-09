@@ -236,7 +236,7 @@ $(DIR2)/Prelude.class: $(RUNTIME) $(COMPF1)/Main.class frege/Prelude.fr $(PRELUD
 
 
 SOURCES  =      $(COMPS)/Scanner.fr   $(COMPS)/Classtools.fr \
-		$(COMPS)/BaseTypes.fr \
+		$(COMPS)/BaseTypes.fr $(COMPS)/types/Flags.fr \
 		$(COMPS)/Data.fr      $(COMPS)/Utilities.fr \
 		$(COMPS)/GUtil.fr \
 		$(COMPS)/Main.fr      $(COMPS)/Grammar.y \
@@ -250,8 +250,7 @@ SOURCES  =      $(COMPS)/Scanner.fr   $(COMPS)/Classtools.fr \
 		$(COMPS)/tc/Util.fr \
 		$(COMPS)/gen/Util.fr  $(COMPS)/gen/Const.fr \
 		$(COMPS)/gen/Bindings.fr $(COMPS)/gen/Match.fr \
-		$(COMPS)/GenMeta.fr   $(COMPS)/GenJava7.fr  \
-		$(COMPS)/DocUtils.fr $(COMPS)/EclipseUtil.fr
+		$(COMPS)/GenMeta.fr   $(COMPS)/GenJava7.fr
 
 
 CLASSES  =       $(COMPF1)/Scanner.class   $(COMPF1)/Classtools.class \
@@ -267,8 +266,7 @@ CLASSES  =       $(COMPF1)/Scanner.class   $(COMPF1)/Classtools.class \
 		$(COMPF1)/tc/Methods.class $(COMPF1)/tc/Patterns.class \
 		$(COMPF1)/Typecheck.class $(COMPF1)/Transform.class \
 		$(COMPF1)/gen/Bindings.class $(COMPF1)/gen/Match.class \
-		$(COMPF1)/GenMeta.class   $(COMPF1)/GenJava7.class \
-		$(COMPF1)/DocUtils.class $(COMPF1)/EclipseUtil.class
+		$(COMPF1)/GenMeta.class   $(COMPF1)/GenJava7.class
 
 #
 # GNU make apparently does not understand our meta rules
@@ -365,7 +363,7 @@ $(COMPF1)/Grammar.class: frege/compiler/Grammar.fr
 	$(FREGEC0)  -make frege.compiler.Grammar
 $(COMPF1)/Scanner.class: frege/compiler/Scanner.fr
 	$(FREGEC0)  -make frege.compiler.Scanner
-$(COMPF1)/Main.class : $(PRE1) $(LIBF1)/PP.class $(CLASSES) frege/Version.fr
+$(COMPF1)/Main.class : $(PRE1) $(SOURCES) frege/Version.fr
 	$(FREGEC0)  -make frege.compiler.Main
 $(DIR1)/Prelude.class: $(SPRELUDE) frege/Prelude.fr
 	rm -rf $(COMPF1)
