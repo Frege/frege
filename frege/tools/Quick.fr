@@ -18,7 +18,9 @@
               the current class path.
     - dir/    A directory path. The directory is searched for class files,
               and for each class files an attempt is made to load it as if
-              the given directory was in the class path.
+              the given directory was in the class path. The directory must
+              be the root of the classes contained therein, otherwise the
+              classes won't get loaded.
     - path-to.jar A jar or zip file is searched for class files, and for each
               class file found an attempt is made to load it as if the
               jar was in the class path.
@@ -49,6 +51,7 @@ import frege.compiler.Import (importClass)
 import frege.compiler.Data hiding (Options, GenSt)
 import frege.compiler.Utilities (theClassLoader)
 import frege.compiler.Javatypes (forName)
+import frege.lib.Modules (zipWalk, dirWalk)
 import Data.TreeMap (values)
 import Data.List as DL
 import Data.Monoid
@@ -74,7 +77,7 @@ instance Monoid Counter where
                             failed  = c1.failed  +  c2.failed,
                             aborted = c1.aborted || c2.aborted}
 
-counterMconcat = QC.property (Counter.mempty == mconcat (replicate 1_000_000 mempty))
+counterMconcat = QC.once (Counter.mempty == mconcat (replicate 1_000_000 mempty))
 
 testFailed = Counter {passed = 0, failed = 1, aborted = false}
 testPassed = Counter {passed = 1, failed = 0, aborted = false}
@@ -83,7 +86,7 @@ unAborted c
     | Counter.aborted c = mempty
     | otherwise         = c 
 
-
+main :: [String] -> IO Bool
 main [] = do
     mapM_ stderr.println [
         "usage: java -cp fregec.jar frege.tools.Quick [ options ] modules ...",
@@ -102,21 +105,20 @@ main [] = do
         "      path.jar        all modules in the specified JAR file",
         ""
         ]
+    return false
     
+
     
 main args = do
     (options, modules) <- getOpt defaultOptions args
     g <- standardOptions
-    mvars   <- mapM (thread options.{global=g}) modules
-    results <- mapM MVar.take mvars
+    results <- mapM (checkThing options.{global=g}) modules
     let result = mconcat results
     println ("Properties passed: " ++ show result.passed
         ++ ", failed: " ++ show result.failed)
     if (result.failed > 0 || result.aborted) 
-        then System.exit 1
-        else System.exit 0
-  where
-    thread o m = asyncCounter forkIO (checkThing o m) 
+        then return false
+        else return true
 
 
 
@@ -153,73 +155,14 @@ checkThing opts arg = do
             loader <- theClassLoader gpath.options  
             let gldr  = gpath.{sub <- Data.SubSt.{loader}}
                 gopts = opts.{global=gldr} 
-            if directory then checkDir  gopts  f [] 
-                         else checkArch gopts  f
+            packs <- if directory then dirWalk loader "" f 
+                         else ZipFile.new f >>= zipWalk loader
+            counts <- mapM (checkModule gopts) (map fst packs)
+            return (mconcat counts)
             -- return true
         else do
             checkModule opts arg
 
-checkArch :: Options -> MutableIO File ->  IO Counter
-checkArch opts f = do
-        j <- ZipFile.new f 
-        ns <- j.entries
-            >>= Enumeration.toList
-            >>= mapM ZipEntry.getName 
-            `finally` j.close
-        let mods = (map ftom . filter classes) ns
-        mvars <- mapM (asyncCheckModule opts) mods
-        cs    <- mapM MVar.take mvars
-        (return . mconcat . map unAborted) cs
-    `catch` zipex
-    `catch` ioex
-  where
-    -- predicate to filter class files of top level classes
-    classes name = name ~ ´\.class$´ && name !~ ´\$´
-    -- make module name from path name
-    ftom path = mod 
-        where
-            mod          = (´\\|/´.matcher withoutClass).replaceAll "."
-            withoutClass = (´\.class$´.matcher path).replaceFirst ""
-    zipex :: ZipException -> IO Counter
-    zipex zex = do
-        path <- f.getName
-        stderr.println zex.show
-        stderr.println ("(is " ++ path ++ " not a valid ZIP or JAR file?)")
-        return testAborted
-    ioex  :: IOException  -> IO Counter
-    ioex iox = do
-        stderr.println iox.show
-        return testAborted
-    
-
-checkDir :: Options -> MutableIO File -> [String] -> IO Counter
-checkDir opts f pcs = do
-    mbcontent <- f.list
-    case mbcontent of
-        Nothing -> return mempty      -- empty directory
-        Just arr -> do
-            list <- readonly toList arr
-            mvars <- mapM (checkDirEntry opts f pcs) list
-            es    <- mapM (MVar.take) mvars
-            (return . mconcat . map unAborted) es
-    
-
-checkDirEntry :: Options -> MutableIO File -> [String] -> String -> IO (MVar Counter)
-checkDirEntry opts f pcs ent = do
-    f <- File.new f ent
-    directory <- f.isDirectory
-    regular   <- f.isFile
-    if directory then do
-        r <- checkDir opts f (ent:pcs)
-        MVar.new r
-    else if regular then do
-        if ent ~ ´\.class$´ && ent !~ ´\$´          --
-        then do
-            let base = strhead ent (ent.length - ".class".length)
-                pack = joined "." (reverse (base:pcs))
-            asyncCheckModule opts pack
-        else MVar.new mempty  -- not a class file or not a valid package name
-    else MVar.new mempty            -- do not follow symlinks
 
 checkModule :: Options -> String -> IO Counter 
 checkModule opts pack = do
@@ -300,27 +243,4 @@ checkField opts modul clas prop = do
     exceptions exc = do
         stderr.println (exc.show ++ " while trying to check property " ++ modul ++ "." ++ prop)
         return testFailed
-
--- Asynchronous stuff
-async :: (IO () -> IO ()) -> IO a -> IO (MVar (Throwable|a))
-async fork action = do
-    m <- newEmptyMVar
-    fork do
-            x <- catchAll action
-            m.put x
-    return m
-
-asyncCounter fork action = do
-    m <- newEmptyMVar
-    fork do
-        x <- catchAll action
-        case x of
-            Left exc -> do
-                stderr.println ("Async error: " ++ exc.show)
-                m.put testAborted
-            Right v -> m.put v
-    return m
-
-asyncCheckModule o m    = asyncCounter forkIO (checkModule o m)
-asyncCheckField o m c p = asyncCounter forkIO (checkField o m c p)                    
 
