@@ -12,7 +12,7 @@ import frege.compiler.Classtools as CT(getFrege)
     The classes inside the ZIP/JAR must be loadable with the given
     'ClassLoader'
     
-    [throws:] 'ClassNotFoundException'  
+    Ignores 'ClassNotFoundException's and 'NoClassDefFoundError's
     -}
 zipWalk :: ClassLoader -> ZipFile -> IO [(String, CT.FregePackage)]
 zipWalk loader zip = do 
@@ -23,7 +23,7 @@ zipWalk loader zip = do
             >>= mapM _.getName  -- give us the names
             >>= mapM (getX loader)       -- load them all 
                 . map           -- substitute / and \ with .
-                    (flip _.replaceAll "." . pathSep.matcher)
+                    (flip _.replaceAll "." . dirSep.matcher)
                 . map           -- cut off ".class"
                     (flip _.replaceAll "" . classAtEnd.matcher)
                 . filter        -- no '$' in the class name
@@ -31,15 +31,37 @@ zipWalk loader zip = do
                 . filter        -- only "*.class" 
                     (~ classAtEnd)
             >>= return . catMaybes 
-        `finally` zip.close
+    `finally` zip.close
  
---- load a package and return a tuple of package name and 'FregePackage'
+--- load a package and return maybe a tuple of package name and 'FregePackage'
 getX loader p = fmap (fmap ((,) p)) (getFrege loader p)
+        `catch` classNotFound
+    where
+        classNotFound (ex::ClassNotFoundException) = return Nothing
+        
 classAtEnd = ´\.class$´
 dollars    = ´\$´
-pathSep    = ´/|\\´ 
+dirSep    = ´/|\\´ 
 
+--- the path separator used here
+pathSep = fromMaybe ":"  (System.getProperty "path.separator")
 
+--- a pattern that can be used to 'Regex.split' a 'String' by the path separator
+pathRE = case regcomp pathSep.quote of
+    Right p -> p
+    Left _ -> Prelude.error ("cannot regcomp " ++ pathSep.quote)
+
+--- the class path this JVM started with, as ['String']
+classPath = (pathRE.splitted • fromMaybe "." • System.getProperty) "java.class.path"
+
+{--
+    Walk a directory and find Frege modules.
+    
+    The classes in the directory must be loadable with the given
+    'ClassLoader'
+    
+    Ignores 'ClassNotFoundException's and 'NoClassDefFoundError's  
+    -}
 dirWalk :: ClassLoader -> String -> MutableIO File -> IO [(String, CT.FregePackage)]
 dirWalk loader sofar file = do
     isd  <- file.isDirectory
@@ -66,20 +88,23 @@ dirWalk loader sofar file = do
                     mapM subwalk ls >>= return . concat 
         else return []
 
-main [arg] = do
+--- Walk a directory or a zip file and search for Frege packages.
+--- If the argument is neither a directory nor a ZIP/JAR file, an empty list is returned.
+walkThing arg = do
         loader  <- CT.makeClassLoader [arg]
         what    <- File.new arg
         isdir   <- what.isDirectory
-        packs   <- if isdir 
-                    then dirWalk loader "" what
-                    else ZipFile.new what >>= zipWalk loader
-                    `catch` cnf
+        if isdir 
+            then dirWalk loader "" what
+            else ZipFile.new what >>= zipWalk loader
+            -- `catch` cnf
                     `catch` fnf
-        mapM_ (println . fst) packs
     where
         cnf (ex::ClassNotFoundException) = return []
         fnf (ex::FileNotFoundException) =  do
-            stderr.println ex.getMessage
+            stderr.println ("Could not walk " ++ ex.getMessage)
             return []
-            
-     
+
+walkCP = mapM walkThing classPath >>= return . concat
+                        
+main = mapM_ (\x -> walkThing x >>= mapM_ (println . fst)) classPath     
