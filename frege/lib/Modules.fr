@@ -1,0 +1,85 @@
+--- Find frege modules 
+module frege.lib.Modules where
+
+import Data.List as L()
+import Java.Net(URLClassLoader)
+import Java.util.Zip
+import frege.compiler.Classtools as CT(getFrege)
+
+{--
+    Walk a 'ZipFile' and find Frege modules.
+    
+    The classes inside the ZIP/JAR must be loadable with the given
+    'ClassLoader'
+    
+    [throws:] 'ClassNotFoundException'  
+    -}
+zipWalk :: ClassLoader -> ZipFile -> IO [(String, CT.FregePackage)]
+zipWalk loader zip = do 
+          zip.entries           -- read the entries of the zip file
+            >>= _.toList        -- make it a list
+                                -- remove the directories
+            >>= filterM (liftM not . _.isDirectory)
+            >>= mapM _.getName  -- give us the names
+            >>= mapM (getX loader)       -- load them all 
+                . map           -- substitute / and \ with .
+                    (flip _.replaceAll "." . pathSep.matcher)
+                . map           -- cut off ".class"
+                    (flip _.replaceAll "" . classAtEnd.matcher)
+                . filter        -- no '$' in the class name
+                    (!~ dollars) 
+                . filter        -- only "*.class" 
+                    (~ classAtEnd)
+            >>= return . catMaybes 
+        `finally` zip.close
+ 
+--- load a package and return a tuple of package name and 'FregePackage'
+getX loader p = fmap (fmap ((,) p)) (getFrege loader p)
+classAtEnd = ´\.class$´
+dollars    = ´\$´
+pathSep    = ´/|\\´ 
+
+
+dirWalk :: ClassLoader -> String -> MutableIO File -> IO [(String, CT.FregePackage)]
+dirWalk loader sofar file = do
+    isd  <- file.isDirectory
+    isf  <- file.isFile
+    name <- file.getName
+    let subof "" x = x
+        subof a  x = a ++ "." ++ x
+    if isf 
+    then do
+        if name ~ classAtEnd && name !~ dollars
+        then do
+            let pack = flip _.replaceAll "" . classAtEnd.matcher $ sofar
+            fmap maybeToList (getX loader pack)
+        else 
+            return []
+    else if name !~ dollars
+        then do
+            subfiles <- file.list
+            case subfiles of
+                Nothing    -> return []
+                Just files -> do
+                    ls <- readonly toList files
+                    let subwalk f = File.new file f >>= dirWalk loader (subof sofar f)
+                    mapM subwalk ls >>= return . concat 
+        else return []
+
+main [arg] = do
+        loader  <- CT.makeClassLoader [arg]
+        what    <- File.new arg
+        isdir   <- what.isDirectory
+        packs   <- if isdir 
+                    then dirWalk loader "" what
+                    else ZipFile.new what >>= zipWalk loader
+                    `catch` cnf
+                    `catch` fnf
+        mapM_ (println . fst) packs
+    where
+        cnf (ex::ClassNotFoundException) = return []
+        fnf (ex::FileNotFoundException) =  do
+            stderr.println ex.getMessage
+            return []
+            
+     
