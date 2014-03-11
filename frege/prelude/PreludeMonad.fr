@@ -70,7 +70,8 @@ protected package frege.prelude.PreludeMonad
 
 import frege.prelude.PreludeBase 
 import frege.prelude.PreludeList(ListSource, ListLike.++, 
-                                reverse, map, concat, unzip, zipWith, foldr, replicate)
+                                reverse, map, concat, unzip, zipWith, 
+                                chunked, fold, foldr, replicate)
 import frege.control.Semigroupoid
 import frege.control.Category
 
@@ -302,12 +303,14 @@ void = fmap (const ())
 msum        =  foldr mplus mzero
 
 --- 'filterM' generalizes the list-based 'filter' function.
---filterM          :: (Monad m) => (a -> m Bool) -> [a] -> m [a]
-filterM p xs = filterM xs.toList where
-    filterM  []     =  return []
-    filterM  (x:xs) =  do
+filterM mp = fold (liftM2 (++)) (return []) . map (shortFilterM mp) . chunked 512
+
+--- Version of 'filterM' that works on small lists with length < 1000 only.
+--- Beware of stack overflow, and use 'filterM', when in doubt.
+shortFilterM !p  []     =  return []
+shortFilterM !p  (x:xs) =  do
        flg <- p x
-       ys  <- filterM  xs
+       ys  <- shortFilterM p xs
        return (if flg then x:ys else ys) 
 
 --- @replicateM n act@ performs the action @n@ times, gathering the results.
@@ -378,19 +381,20 @@ zipWithM_ f xs ys =  sequence_ (zipWith f xs ys)
     This version of 'sequence' runs in constant stack space,
     but needs heap space proportional to the size of the input list.
     -}
+sequence = fold (liftM2 (++)) (return []) . map shortSequence . chunked 512
 
--- sequence :: (ListSource list, Monad m) => list (m a) -> m [a]
-sequence xs = loop xs.toList []
-        where                  
-            loop [] acc     = return (reverse acc)
-            loop (m:ms) acc = do a <- m; loop ms (a:acc)
+{-- 
+    A version of 'sequence' that uses the stack and may overflow
+    with longer lists. 
+    
+    A length of about 500 should be ok in most cases.
+    -}
+shortSequence = foldr (liftM2 (:)) (return [])
+
 
 {-- fold ('>>') over a list of monadic values for side effects -}
-sequence_ xs = loop xs.toList
-    where
-        loop (m:ms) = m >> loop ms
-        loop []     = return ()             -- foldr (>>) (return ()) xs
-
+sequence_ [] = return ()
+sequence_ (x:xs) = x >> sequence_ xs
 
 --- @mapM f@ is equivalent to @sequence • map f@
 -- mapM  :: (ListSource list, Monad m) => (a -> m b) -> list a -> m [b]
@@ -404,9 +408,12 @@ mapM_ f = sequence_ • map f -- • toList
 forM  xs f = (sequence  • map f)  xs
 forM_ xs f = (sequence_ • map f)  xs
 
---- @foldM f a xs@ folds a monadic function @f@ over the list @xs@.
--- foldM :: (ListSource s, Monad m) => (a -> b -> m a) -> a -> s b -> m a
-foldM f a bs = fm f bs a
+--- @foldM f a xs@ folds a monadic function _f_ over the list _xs_.
+foldM p z = fold (\acc\as -> acc >>= flip (shortFoldM p) as) (return z)  . chunked 512
+
+--- 'shortFoldM' is suitable only for lists with a length way below 1000.
+--- Beware of stack overflow and use 'foldM' instead.
+shortFoldM f a bs = fm f bs a
     where
         fm f (b:bs) a = a `f` b >>= fm f bs
         fm f []     a = return a
