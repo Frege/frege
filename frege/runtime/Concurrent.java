@@ -47,6 +47,43 @@ public class Concurrent {
     	}
     }
 
+    /**
+     * <p>An executor service to run forkIO threads</p>
+     */
+    private static java.util.concurrent.ExecutorService execService = null;
+    
+    /**
+     * <p>Set the {@link java.util.concurrent.ExecutorService} that 
+     * should be used to run <i>forkIO</i> threads.</p>
+     * 
+     * If the executor service of the Frege runtime is not yet set, 
+     * it will be initialized with the argument. If, however, Frege's
+     * executor service is already in use, it will not be given up.
+     * It is thus possible to pass a <code>null</code> to query the
+     * current executor service.
+     * 
+     * This should be used by external code that maintains its own 
+     * executor service
+     * <b>before</b> calling into Frege code
+     * to prevent creation of another executor service by the Frege runtime.
+     * 
+     * If the {@link Concurrent#executorService} finds no executor service, it will
+     * create a fixed {@link java.util.concurrent.ThreadPoolExecutor} with a maximum
+     * number of threads that equals 2 times the number of CPU cores available.
+     *      
+     * @param svc - an executor service to use
+     * @return The executor service the Frege runtime will actually use. 
+     */
+    public static java.util.concurrent.ExecutorService
+    		setFregeExecutorService(java.util.concurrent.ExecutorService svc) {
+    	synchronized (Runtime.emptyString) {
+    		if (execService == null) {
+    			execService = svc;
+    		}
+    		return execService;
+    	}
+    }
+    
 	/**
      *  <p>Evaluate <code>e</code> in <code>const e</code> in parallel. 
      *  This is a helper function for the `par` operator.</p>
@@ -96,6 +133,22 @@ public class Concurrent {
         return true;
     }
 
+    /**
+     * <p>Give access to the current executor service.</p>
+     * 
+     * <p>If the Frege executor service {@link Concurrent#execService} is not
+     * yet initialized, creates a fixed thread pool executor.</p>
+     * 
+     *  @return the executor service
+     */
+    final public static java.util.concurrent.ExecutorService executorService() {
+    	return (execService == null) ?
+    		setFregeExecutorService(
+    				java.util.concurrent.Executors.newFixedThreadPool(
+    						2 * java.lang.Runtime.getRuntime().availableProcessors()))
+    		: execService;
+    }
+    
     /**
      * <p>Monitor wait on a given object.</p>
      * <p>Because {@link Object#wait} must be run in a synchronized block,
