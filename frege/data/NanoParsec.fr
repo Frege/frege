@@ -121,6 +121,16 @@ reporterror (ts,msg) = msg ++ ", found: "
 -}
 label msg p = p <|> Parser.failure msg
 
+infix 14 `<?>`
+{--
+    > p <?> msg
+    
+    Causes the error message to be _msg_ when _p_ fails.
+    
+    The error will be reported at the position where _p_ failed.
+-}
+p <?> msg = p <+> Parser.failure msg
+
 -- ---------------------- simple parsers --------------------------
 {--
     > expect t
@@ -149,11 +159,19 @@ satisfy p = Parser sat
             Just (h, t) | p h   = Right (t, h)
             nothing             = Left  (ts, "unexpected token")
 
+--- > any
+--- Fails only on 'eos'
+pany = satisfy (const true)
+
+--- > token p
+--- Is the same as p, but skips spaces afterwards-
+symbol p = p <* spaces
 -- ------------------------------------------- character classification 
 space       = satisfy (Char.isWhitespace :: Char -> Bool)
 digit       = satisfy (Char.isDigit      :: Char -> Bool)
 letter      = satisfy (Char.isLetter     :: Char -> Bool)
 uppercase   = satisfy (Char.isUpperCase  :: Char -> Bool)
+spaces      = skip space
 
 -- ---------------------------------------- special parsers for strings
 string s = Parser it
@@ -171,7 +189,11 @@ match r = Parser it
             nothing -> Left  (xs, "expected to match ´" ++ display r ++ "´")
           where m = Regex.matcher r xs
                 
-            
+-- -------------------------------------------------- common tokens
+ident = symbol . label "identifier expected" $ do 
+        l <- letter
+        fmap (l:) (many (letter <|> digit))
+                    
 -- -------------------------------------------------- parser repetition 
 
 --- The optional parser always succeeds and returns its result wrapped in 'Maybe'
@@ -211,7 +233,45 @@ skipWhile p = skip (satisfy p)
  
 --- > choice ps
 --- Tries the parsers in the list from left to right, until success. 
-choice = fold (<|>) (Parser.failure "empty choice")
+choice = fold (<|>) pzero
+
+--- > count n p
+--- Applies _p_ _n_ times and returns a list of the results
+count n p = replicateM n p
+
+--- > between left right p 
+--- Parses _left_, then _p_ and finally _right_ and returns the result of _p_
+between left right p = left *> (p <* right)
+
+--- > option v p 
+--- Applies _p_, and returns _v_ when it fails.
+--- Always succeeds.
+option v p = p <|> Parser.return v
+
+--- > p `sepBy1` q
+--- Parses p and many q followed by p
+sepBy1 p q = p >>= (\r -> fmap (r:) (many (q *> p)))
+
+--- > p `sepBy` q
+--- Like 'sepBy1', but allows zero _p_ elements
+sepBy p q = p `sepBy1` q <|> Parser.return []
+
+--- > p `endBy` q
+--- Parses zero or more occurrences of _p_ separated and ended by _q_
+endBy p q = many (p <* q)
+
+--- > p `endBy1` q
+--- Parses one or more occurrences of _p_ separated and ended by _q_
+endBy1 p q = some (p <* q)
+
+--- > p `sepEndBy` q
+--- Parses zero or more occurences of _p_, separated and optionally ended by _q_
+sepEndBy p q = p `sepBy` q <* optional q
+
+--- > p `sepEndBy1` q
+--- Parses zero or more occurences of _p_, separated and optionally ended by _q_
+sepEndBy1 p q = p `sepBy1` q <* optional q
+
 
 -- ------------------------------------------------ Parser properties
 
@@ -219,7 +279,7 @@ ascii = fmap chr (Q.choose (ord ' ', 126))
 inputs = Q.listOf ascii
 parsers = Q.elements [
     ("match no char", satisfy (const false)),   -- fail
-    ("match any char", satisfy (const false)),  -- suceed
+    ("match any char", pany),  
     ("match even char", satisfy (even . ord)),   -- fail 50%
     ("letter", letter), 
     ("digit", digit), 
@@ -227,7 +287,7 @@ parsers = Q.elements [
     -- ("eos", eos >> return (chr 0)),
     ("letter letter", letter >> letter), 
     ("digit letter", digit >> letter), 
-    ("letter any letter", letter >> satisfy (const true) >> letter)
+    ("letter any letter", letter >> pany >> letter)
     ]
 -- avoid deriving Show for Parser
 allParsers prop = parsers >>= (\(s,x) ->
@@ -248,8 +308,8 @@ same p q = Q.forAll inputs (\xs ->
 --- p succeeds if and only if q succeeds
 agree p q = Q.forAll inputs (\xs ->
         case Parser.run p xs of
-          Left _  -> either (const true) (const false) (Parser.run q xs)
-          Right _ -> either (const false) (const true) (Parser.run q xs)
+          Left   _ -> either (const true) (const false) (Parser.run q xs)
+          Right  _ -> either (const false) (const true) (Parser.run q xs)
     )
     
 --- p succeeds if and only if q fails
@@ -271,30 +331,86 @@ consumesNotOnFailure p = Q.forAll inputs (\xs ->
         Right _      -> Q.label "parser success" true
     )
 
+
 --- 'return' _a_ always succeeds
 prop_return = succeeds (return 'a')
+
 --- 'pzero' fails
-prop_pzero = fails pzero
+prop_pzero_1 = fails pzero
+
+--- 'pzero' consumes not
+prop_pzero_2 = consumesNotOnFailure pzero
+
 --- 'Parser.failure' fails
 prop_failure = fails (Parser.failure "x")
+
+--- @any@ and @eos@ disagree
+prop_any_eos = pany `disagree` eos
+
 --- 'optional' always succeeds
 prop_optional = allParsers (\p -> succeeds (optional p))
+
+--- 'option' always succeeds
+prop_option = allParsers (\p -> succeeds (option 'a' p))
+
 --- 'many' always succeeds
 prop_many = allParsers (\p -> succeeds (many p))
+
 --- 'skip' always succeeds
 prop_skip = allParsers (\p -> succeeds (skip p))
+
 --- 'many' and 'skip' consume the same amount of tokens
 prop_skip_many_consume_the_same = allParsers (\p ->
     skip p `consumeTheSame` many p)
+
 --- 'many' and 'skip' agree
 prop_skip_many_agree = allParsers (\p ->
     skip p `agree` many p)
+
 --- 'skip' is 'many' followed by return ()
 prop_skip_fast_many = allParsers (\p ->
     skip p `same` (many p >> return ()))
-            
-main = do
+
+--- > p <|> pzero
+--- consumes nothing on failure of _p_
+prop_alt_pzero_no_consume = allParsers (\p ->
+    consumesNotOnFailure (p <|> pzero))
+
+--- @p@ and @p <|> pzero@ agree
+prop_p_agrees_p_or_pzero = allParsers (\p ->
+    p `agree` (p <|> pzero))
+
+--- @pzero <|> p@ is the same as @p@
+prop_p_or_zero_same_p = allParsers (\p ->
+    (pzero <|> p) `same` p)
+
+--- @choice []@ is the same as @pzero@    
+prop_choice_0 = (choice [] `asTypeOf` pany) `same` (pzero)
+
+--- @choice [p]@ is the same as @p@    
+prop_choice_1 = allParsers (\p ->
+    choice [p] `same` p)
+
+--- @choice [p,q]@ is the same as @p <|> q@    
+prop_choice_2 = allParsers (\p ->
+    allParsers (\q ->
+    choice [p,q] `same` (p <|> q)))
+
+--- @count 0@ is the same as @return []@
+prop_count_0 = allParsers (\p ->
+    count 0 p `same` return [])
+
+--- @count 0@ is the same as @p@
+prop_count_1 = allParsers (\p ->
+    count 1 p `same` fmap return p)
+                                    
+private main = do
     parseTest (skip $ letter >> satisfy (const true) >> letter) ['d', 'W', '^']
     parseTest (many $ letter >> satisfy (const true) >> letter) ['d', 'W', '^']
     parseTest (fmap _.match $ match ´foo´) "xfoo"
+    parseTest (fmap _.match $ match ´(?i)(x?)foo´) "XfOo"
+    parseTest (ident `sepBy` expect ',') "a,b,c"
+    parseTest (letter `sepBy` expect ',') ""
+    parseTest (letter `sepBy1` expect ',') "a,,b,c"
+    parseTest (between (expect '[') (expect ']') $ ident `sepEndBy` expect ',') "[,]"
     
