@@ -2,15 +2,122 @@
 module examples.PointFree where
 
 import Data.List
-import Data.NanoParsec
+import Data.NanoParsec as N
+import Lib.PP()
 
 main = forever aline `catch` eof
     where eof (ex::IOException) = return ()
     
 aline = getLine >>= process
 
-process = parseTest parser
+process s = case parser.run s of
+    Left xs -> println $ reporterror xs
+    Right (_, x) -> do
+        println x
+        case x of
+            Lam a y -> do
+                unless (a `occurs` y) do
+                    println ("-- " ++ a ++ " does not occur in right hand side.")
+                println (a `elim` y)
+            _ -> return ()  
 
-parser = lambda <* (spaces >> eos)
+parser = spaces *> (lambda <* (spaces >> eos))
 
-lambda = fmap packed ident
+-- elimination
+
+--- does variable a occur in expression?
+a `occurs` Var s = s == a
+a `occurs` (App f x) = a `occurs` f || a `occurs` x
+a `occurs` (Lam v x)
+    | v == a = false    -- a is shadowed
+    | otherwise = a `occurs` x
+a `occurs` _ = false
+
+a `elim` Var s
+    | a == s    = Var "id"
+    | otherwise = App (Var "pure") (Var s)
+a `elim` Lam b x = a `elim` (b `elim` x)
+a `elim` (App f (Var s))
+    | a == s && not (a `occurs`  f) = f
+a `elim` (ex@App f x)
+    | a `occurs` ex = App (App (Op "<*>") a') b' where
+                    a' = a `elim` f
+                    b' = a `elim` x
+a `elim` x = App (Var "pure") x 
+
+-- lexical
+
+backslash = symbol (expect '\\')
+comma = symbol (expect ',')
+lpar = symbol (expect '(')
+rpar = symbol (expect ')')
+lbrc = symbol (expect '[')
+rbrc = symbol (expect ']')
+arrow = symbol (string "->" )
+name = label "identifier expected" (symbol . fmap _.match $ match ´^\w+´)
+oper = label "operator expected" (symbol . fmap _.match $ match ´^[^\s\d\w,()\\\[\]]+´)
+
+-- expressions
+
+data Expr = Var String
+    | Op String
+    | Nil
+    | App Expr Expr
+    | Lam String Expr
+    
+instance Show Expr where
+    show  = PP.pretty 80 . annotate
+
+var = fmap Var name
+op  = fmap Op  oper
+
+lambda = do
+    backslash
+    v <- name
+    arrow
+    e <- expr
+    return (Lam v e)
+
+expr = binex <|> lambda
+binex = do
+    left <- app
+    other <- optional do
+        o <- op 
+        right <- binex
+        return (o, right)
+    case other of
+        Just (op, right) -> return $ App (App op left) right
+        Nothing -> return left
+app = fmap (foldl1 App) (some term)
+term = var 
+    <|> between lpar rpar (expr <|> op)
+    <|> between lbrc rbrc (fmap list $ expr `sepBy` comma)
+
+list = foldr cons Nil where cons  a = App (App (Op ":") a) 
+
+atomic (Var _) = true
+atomic (Op _) = true
+atomic Nil = true
+atomic _ = false
+
+appleft x
+    | Lam{} <- x = PP.bracket "(" (annotate x) ")"
+    | App (App (Op _) _) _  <- x = PP.bracket "(" (annotate x) ")"
+    | otherwise = annotate x
+
+subanno x
+    | atomic x  = annotate x
+    | otherwise = PP.bracket "(" (annotate x) ")" 
+-- pretty printing
+annotate Nil = PP.text "[]"
+annotate (Var v) = PP.text v
+annotate (Op  v) = PP.text "(" PP.<> PP.text v PP.<> PP.text ")"
+annotate (App (App (Op op) a) b) = appleft a 
+                                PP.<+> PP.text op 
+                                PP.<+> PP.nest 2 (appleft b)
+annotate (App a b) = appleft a PP.<+> PP.nest 2 (subanno b)
+annotate (Lam v x) = PP.text "\\" 
+                        PP.<> PP.text v 
+                        PP.<+> PP.text "->" 
+                        PP.<+> PP.nest 2 (annotate x)
+                        
