@@ -1,0 +1,300 @@
+--- Small parser, inspired by Parsec, but much less versatile
+module frege.data.NanoParsec where
+
+import Data.List
+import Prelude.PreludeBase (StringJ)
+import Data.Monoid
+
+import Test.QuickCheck as Q()
+
+{--
+    A stream of tokens.
+-}
+class Stream s where
+    --- split the input stream in head and tail
+    uncons :: s a -> Maybe (a, s a)
+    --- give the length of the stream
+    slength :: s a -> Int
+    --- lazily convert to list
+    slist :: s a -> [a]
+    slist s
+        | Just (a, b) <- uncons s = a : slist b
+        | otherwise               = []
+    --- check if empty
+    snull :: s a -> Bool
+    snull = maybe true (const false) . uncons
+
+instance Stream [] where
+    uncons [] = Nothing
+    uncons (h:t) = Just (h, t)
+    slength = length
+
+instance Stream StringJ where
+    uncons x 
+        | null x = Nothing
+        | otherwise = Just (x.polymorphicElemAt 0, strtail x 1)
+    slength = length
+        
+{--
+    Parser type
+-}
+
+data Parser s t r = Parser {
+        run :: s t -> Either (s t, String) (s t, r)
+    } where
+    --- fail with given error message
+    failure s = Parser (\ts -> Left  (ts, s))
+
+instance MonadAlt Parser s t where
+    --- generic failure
+    pzero    = Parser.failure "parse failed" 
+    --- generic success
+    return a = Parser $ (\ts -> Right (ts, a))
+    --- > p >>= (r -> q)
+    --- > p >> q
+    --- If @p@ succeeds, the overall result is that of @q@
+    --- Otherwise, the overall result is failure.
+    --- Could be read as _p followed by q_.
+    Parser p >>= f = Parser next
+        where
+            next i = case p i of
+                Right (i', r) = case f r of
+                    Parser q = q i'
+                Left err = Left err
+    {-- 
+        > p <|> q
+        
+        The result is that of the first parser, if it succeeds,
+        otherwise that of the second one. Note that @q@ is
+        run on the same input as @p@, even if @p@ already consumed something.
+        
+        > expect 'c' <|> expect 'd'
+        
+        would succeed if the input starts with 'c' or 'd'. 
+    -}                
+    Parser p <|>  Parser q = Parser plus
+        where
+            plus i = case p i of
+                Left _ = q i
+                right  = right
+
+    {--
+        > p <+> q
+        
+        The result is that of the first parser, if it succeeds,
+        otherwise that of the second one, who is applied to the
+        input left by _p_
+    -}
+    Parser p <+> Parser q = Parser plus
+        where
+            plus i = case p i of
+                Left (rest, _) = q rest
+                right  = right
+
+
+--- run a 'Parser' on some input and report
+parseTest Parser{run} s = case run s of
+    Left xs = do
+        print "Parse failed: "
+        println (reporterror xs)
+    Right (rest, result) = do
+        println "Parse succeeded!"
+        println result
+        unless (snull rest) do
+            println (reporterror (rest, "Warning! Tokens left"))
+
+-- ---------------------- error reporting -------------------------
+
+reporterror (ts,msg) = msg ++ ", found: "
+                        ++ fold (++) "" (map display (take 8 $ slist ts))
+
+{-- 
+    Causes the error message to be _msg_ when _p_ fails.
+    
+    The error will be reported at the position where _p_ was attempted,
+    not necessarily at the position where _p_ failed: 
+  
+    > Parser.run (letter >> digit) "a?"  
+    > unexpected token, found ?
+    > Parser.run (label "id expected" $ letter >> digit) "a?"
+    > id expected, found a?
+-}
+label msg p = p <|> Parser.failure msg
+
+-- ---------------------- simple parsers --------------------------
+{--
+    > expect t
+    This parser succeeds if the input is not empty and the head
+    of the input equals _t_. 
+-}            
+expect c = Parser exp
+    where
+        exp ts = case uncons ts of
+            Just (h, t) 
+                | h == c    = Right (t, h)
+            nothing         = Left  (ts, (show c) ++ " expected")
+
+--- The 'eos' parser suceeds if the input is empty.
+eos = Parser noinput
+    where
+        noinput ts = case uncons ts of
+            Just _ = Left (ts, "end of input expected")
+            sonst  = Right (ts, ())
+
+--- > satisfy p
+--- Suceeds if the next token satisfies _p_
+satisfy p = Parser sat
+    where
+        sat ts = case uncons ts of
+            Just (h, t) | p h   = Right (t, h)
+            nothing             = Left  (ts, "unexpected token")
+
+-- ------------------------------------------- character classification 
+space       = satisfy (Char.isWhitespace :: Char -> Bool)
+digit       = satisfy (Char.isDigit      :: Char -> Bool)
+letter      = satisfy (Char.isLetter     :: Char -> Bool)
+uppercase   = satisfy (Char.isUpperCase  :: Char -> Bool)
+
+-- ---------------------------------------- special parsers for strings
+string s = Parser it
+    where
+        it xs = if xs.startsWith s 
+            then Right (strtail xs (length s), s)
+            else Left  (xs, "expected '" ++ display s ++ "'")
+
+--- This parser succeeds if the pattern matches the beginning of the string.
+--- For efficiency reasons, the pattern should start with @^@
+match r = Parser it
+    where
+        it xs = case m.find of
+            Just y | xs.startsWith y.match -> Right (strtail xs (y.match.length), y)
+            nothing -> Left  (xs, "expected to match ´" ++ display r ++ "´")
+          where m = Regex.matcher r xs
+                
+            
+-- -------------------------------------------------- parser repetition 
+
+--- The optional parser always succeeds and returns its result wrapped in 'Maybe'
+optional :: Parser s t r -> Parser s t (Maybe r)
+optional p = p >>= return . Just <|> return Nothing
+
+--- > many p
+--- Collects as many _p_ as possible and returns the results in a list.
+--- Suceeds also when _p_ fails the first time, in that case the result is an empty list.
+--- Must not be applied to a parser that always succeeds!
+many p = do
+    a   <- optional p
+    case a  of
+        Nothing -> return []
+        Just a  -> fmap (a:) (many p)
+
+--- > some p
+--- Like 'many', except there must be at least one _p_
+--- Must not be applied to a parser that always succeeds!
+some p = p >>= (\x -> fmap (x:) (many p))
+many1 = some
+
+--- > skip p
+--- equivalent to 
+--- > many p >> return ()
+--- but faster, because it does not build up lists.
+--- Must not be applied to a parser that always succeeds!
+skip p = forever (p <|> pzero) <+> return ()
+
+--- > manyWhile p
+--- Collect tokens as long as they satisfy _p_
+manyWhile p = many (satisfy p)
+
+--- > skipWhile p
+--- Skip tokens as long as they staisfy p
+skipWhile p = skip (satisfy p)
+ 
+--- > choice ps
+--- Tries the parsers in the list from left to right, until success. 
+choice = fold (<|>) (Parser.failure "empty choice")
+
+-- ------------------------------------------------ Parser properties
+
+ascii = fmap chr (Q.choose (ord ' ', 126))
+inputs = Q.listOf ascii
+parsers = Q.elements [
+    ("match no char", satisfy (const false)),   -- fail
+    ("match any char", satisfy (const false)),  -- suceed
+    ("match even char", satisfy (even . ord)),   -- fail 50%
+    ("letter", letter), 
+    ("digit", digit), 
+    ("space", space), 
+    -- ("eos", eos >> return (chr 0)),
+    ("letter letter", letter >> letter), 
+    ("digit letter", digit >> letter), 
+    ("letter any letter", letter >> satisfy (const true) >> letter)
+    ]
+-- avoid deriving Show for Parser
+allParsers prop = parsers >>= (\(s,x) ->
+    Q.printTestCase s (prop x))
+
+--- p always suceeds
+succeeds p = Q.forAll inputs (\xs ->
+    either (const false) (const true) (Parser.run p xs))
+
+--- p always fails
+fails p = Q.forAll inputs (\xs ->
+    either (const true) (const false) (Parser.run p xs))
+
+--- p and q are the same parsers    
+same p q = Q.forAll inputs (\xs ->
+    Parser.run p xs == Parser.run q xs)
+
+--- p succeeds if and only if q succeeds
+agree p q = Q.forAll inputs (\xs ->
+        case Parser.run p xs of
+          Left _  -> either (const true) (const false) (Parser.run q xs)
+          Right _ -> either (const false) (const true) (Parser.run q xs)
+    )
+    
+--- p succeeds if and only if q fails
+disagree p q = Q.forAll inputs (\xs ->
+        case Parser.run p xs of
+          Right _ -> either (const true) (const false) (Parser.run q xs)
+          Left  _ -> either (const false) (const true) (Parser.run q xs)
+    )
+
+--- p and q consume the same input
+consumeTheSame p q = Q.forAll inputs (\xs ->
+    fmap fst (Parser.run p xs) 
+        == fmap fst (Parser.run q xs)) 
+
+--- p consumes no input on failure
+consumesNotOnFailure p = Q.forAll inputs (\xs ->
+    case Parser.run p xs of
+        Left (ts, _) -> Q.label "parser failed" (ts == xs)
+        Right _      -> Q.label "parser success" true
+    )
+
+--- 'return' _a_ always succeeds
+prop_return = succeeds (return 'a')
+--- 'pzero' fails
+prop_pzero = fails pzero
+--- 'Parser.failure' fails
+prop_failure = fails (Parser.failure "x")
+--- 'optional' always succeeds
+prop_optional = allParsers (\p -> succeeds (optional p))
+--- 'many' always succeeds
+prop_many = allParsers (\p -> succeeds (many p))
+--- 'skip' always succeeds
+prop_skip = allParsers (\p -> succeeds (skip p))
+--- 'many' and 'skip' consume the same amount of tokens
+prop_skip_many_consume_the_same = allParsers (\p ->
+    skip p `consumeTheSame` many p)
+--- 'many' and 'skip' agree
+prop_skip_many_agree = allParsers (\p ->
+    skip p `agree` many p)
+--- 'skip' is 'many' followed by return ()
+prop_skip_fast_many = allParsers (\p ->
+    skip p `same` (many p >> return ()))
+            
+main = do
+    parseTest (skip $ letter >> satisfy (const true) >> letter) ['d', 'W', '^']
+    parseTest (many $ letter >> satisfy (const true) >> letter) ['d', 'W', '^']
+    parseTest (fmap _.match $ match ´foo´) "xfoo"
+    
