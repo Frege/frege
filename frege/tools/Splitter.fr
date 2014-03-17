@@ -1,0 +1,306 @@
+--- This is an undocumented module
+module frege.tools.Splitter where
+
+import Data.List
+import Data.TreeMap as L(values, keys, each, Tree)
+
+import frege.compiler.types.Flags as Compilerflags(IDE)
+
+import frege.compiler.Data
+import frege.compiler.Main()
+import frege.compiler.Typecheck as T()
+import frege.compiler.Utilities as U()
+
+usage = mapM_ stderr.println [
+        "usage: java frege.tools.Splitter [-flags] source.fr [item,... module [helpermodule]]",
+        "",
+        "    Flags:",
+        "        -v             be verbose",
+        "        -d dir         target directory for new modules",
+        "        -fp classpath  (additional) classpath for imports",
+        "        -nocp          use only -fp, not the java class path",
+        "",
+        "   When only a souce file is given, it is analyzed and",
+        "   the tool will give some suggestions about how it could be splitted.",
+        "",
+        "   A list of items separated by comma requires actual splitting",
+        "   of the source file by extraction of all named top level functions",
+        "   and data types along with the items they depend on to a new",
+        "   source file with the given module name.",
+        "   The extracted items will then be removed from the original source code, ",
+        "   and an appropriate import declaration is inserted, if needed.",
+        "",
+        "   If, in addition, a name for a helper module is given, the set of items",
+        "   that are used by both the extracted items and the remaining items",
+        "   are written to that module, and appropriate import declarations are",
+        "   provided.",
+        "", 
+        "   Note that actual splitting will overwrite the original source file,",
+        "   so please make sure you have a way to undo the changes.",
+        "",
+        "   It is recommended to first let the tool suggest some possible splittings,",
+        "   and only then to realise one of the suggestions."
+    ]
+
+main args = do
+    g       <- Main.standardOptions
+    scanned <- Main.scanOpts Main.stdOptions args
+    case scanned  of
+        Just (opts, splitargs)
+            | length splitargs == 1 
+                || length splitargs == 3
+                || length splitargs == 4 -> do
+                    let source = head splitargs
+                        sargs  = tail splitargs
+                        opt'   = opts.{source}.{flags <- flip BitSet.unionE IDE}
+                        g'     = g.{options = opt'}
+                        passes = takeUntil (\(_,s,_) -> s ~ ´simplify lets´) Main.passes
+                                ++ [(split sargs, "splitting", return true)]
+                    case StG.run (foreach passes Main.runpass) g' of
+                        (_, g) -> do
+                            when (g.errors > 0) do
+                                stderr.println "Source code has errors. See you later."
+                                (System.exit 3)
+                            return ()
+            | otherwise = do
+                stderr.println ("Please give filename, "
+                    ++ "or filename, items and one or two module names.")
+                when (length splitargs > 4) do
+                    stderr.println "Note that here must be no spaces in item list."
+                stderr.println "You may want to use the -help flag for usage information."
+                System.exit 2
+        Nothing -> usage >> System.exit 1
+
+split :: [String] -> StG (String, Int)
+split args = do
+    g <- getST
+    members <- T.memberTree     -- to identify our members
+    let ours g      = (filter (flip Symbol.our g) . filter noAliases) (values g.thisTab)
+        noAliases SymL{} = false
+        noAliases _      = true
+        ascending g = sortBy (comparing Symbol.pos) (ours g)
+    makeRanges (ascending g)
+    -- Symbols have changed because of makeRanges
+    g <- getST 
+    -- doio $ mapM_ (printRange g) (ascending g)
+    let deps g  = map (symDep g members) (ascending g)
+        udeps   = map (\(a,as) -> (a, filter (a!=) as))     -- eliminate self recursion
+                    (zip (map Symbol.name (ascending g)) (map keys (deps g)))
+        deptree = Tree.fromList udeps
+        tdeps   = U.tsort udeps
+    case args of 
+        [] -> doio $ do 
+                dot <- openWriter "deps.dot"
+                dot.println "digraph dependencies {"
+                mapM_ (dotDep dot g deptree) tdeps
+                dot.println "}"
+                dot.close
+                stderr.println "Dependency graph written to deps.dot, use"
+                stderr.println "  dot -Tsvg -O deps.dot"
+                stderr.println "to obtain a visualisation you can see in a browser."
+        [members, modul, helper] -> return ()  
+    return ("items", length (ours g))
+
+dotDep :: PrintWriter -> Global -> (Tree QName [QName]) -> [QName] -> IO ()
+dotDep writer g tree qns = do
+    let deps = fold union [] (mapMaybe (Tree.lookup tree) qns)
+        cluster = nicename ((head qns).{base <- ("cluster_" ++)})
+        dep q = maybe [] id  (Tree.lookup tree q)
+        singledep x qn1 qn2 = do
+            writer.println (x ++ nicename qn1  ++ " -> " ++ nicename qn2)
+        subdep q = mapM_ (singledep "\t\t" q) (filter (`elem` qns) (dep q))
+        outdep q = mapM_ (singledep "\t\t" q) (filter (`notElem` qns) (dep q))
+        clusterdep q = writer.println ("\t" ++ cluster ++ " -> " ++  nicename q)
+        nicename q = case nicer q g of
+                s@´^\w+$´   -> s
+                x           -> show x
+    case qns of
+        [qn] -> mapM_ (singledep "\t" qn) deps
+        _  -> do
+            writer.println ("\tsubgraph " ++ cluster ++ " {")
+            mapM_ subdep qns 
+            writer.println ("\t}")
+            -- mapM_ clusterdep (filter (`notElem` qns) deps)
+            mapM_ outdep qns 
+    
+    return () 
+
+printDep g tree qns = do
+    print (joined "," (map (flip nicer g) qns))
+    case fold union [] (mapMaybe (Tree.lookup tree) qns) of
+        [] -> println " :: []"
+        xs | length qns == 1 = println (" :: " ++ show (map (flip nicer g) xs))
+           | otherwise = do
+                println ""
+                println ("    :: " ++ show (map (flip nicer g) xs))
+
+printRange g symbol = do 
+    println (show symbol.pos.first.offset
+        ++ "-" ++ show (symbol.pos.end)  
+        ++ Symbol.nicer symbol g
+        ++ "      " ++ symbol.pos.first.value ++ " .. " ++ symbol.pos.last.value)
+
+{--
+    The full range goes from the lower range to the upper range, inclusive.
+    
+    The lower range is determined by going from the original position
+    backwards as long as there are comments or documentation.
+    
+    The upper range is the last non comment or documentation token before
+    the next definition in the ascending list of definitions, or, if
+    there is no next, the last token in the file.
+    -} 
+fullRange symbol next = do
+        g <- getST
+        doio $ printRange g symbol
+        lower <- lowerRange symbol
+        upper <- upperRange symbol next
+        return (Pos lower upper)
+    where
+        upperRange :: Symbol -> Maybe Symbol -> StG Token
+        upperRange symbol Nothing = do
+            g <- getST
+            let toks = g.sub.toks
+            return (elemAt toks (toks.length - 1))
+        upperRange symbol (Just next) 
+            | symbol.pos.end >= next.pos.start = do
+                g <- getST
+                doio $ stderr.println "I am sorry, but I can't continue."
+                doio $ stderr.println ("The definitions of " 
+                        ++ nicer symbol g ++ "  and  "
+                        ++ nicer next g   ++ "  do overlap, ")
+                doio $ stderr.println "probably because of annotations detached from their definitions."
+                doio $ System.exit 4
+                return symbol.pos.first
+            | otherwise = do
+                g     <- getST
+                lower <- lowerRange next
+                let toks = g.sub.toks
+                case lower `indexIn` toks of
+                    Nothing -> error ("Couldn't find lower range token "
+                                ++ show lower ++ " of " ++ next.nicer g)
+                    Just i  -> return (elemAt toks  (i-1))
+        -- skip comments backwards
+        skipComments :: Int -> JArray Token -> Int
+        skipComments 0 arr = 0
+        skipComments n arr
+            -- prev.tokid == COMMENT       = skipComments (n-1) arr
+            -- prev.tokid == DOCUMENTATION = skipComments (n-1) arr
+            | prev.tokid `elem` dclintro  = skipComments (n-1) arr
+            | otherwise                   = n
+            where 
+                !prev = elemAt arr (n-1)
+                dclintro :: [TokenID]
+                dclintro = [PUBLIC, PRIVATE, PROTECTED, 
+                            TYPE, DATA, CLASS, INSTANCE, DERIVE,
+                            NATIVE, PURE, ABSTRACT,
+                            COMMENT, DOCUMENTATION]
+        lowerRange :: Symbol -> StG Token
+        lowerRange symbol = do 
+            g <- getST
+            let toks = g.sub.toks
+                this = symbol.pos.first `indexIn` toks
+            case this of
+                Just index -> return (elemAt toks n) where n = skipComments index toks
+                Nothing -> error ("Couldn't find start token "
+                            ++ show symbol.pos.first ++ " of " ++ symbol.nicer g)
+                
+
+--- find the index of a given token    
+indexIn token array = loop 0
+    where
+        loop n | n >= JArray.length array     = Nothing
+               | elemAt array n == token      = Just n
+               | otherwise                    = loop (n+1)
+                   
+{-- 
+    Update symbol positions with their full range computed by 'fullRange'.
+    -}
+makeRanges [] = return ()   -- no symbols at all
+makeRanges ascending = do
+    -- symbol1,         symbol2,          symbol3
+    -- Just symbol2.pos Just symbol3.pos, Nothing
+    let nextTokens = map Just (tail ascending) ++ [Nothing]
+        ranges = zipWith fullRange ascending nextTokens
+    ranges <- sequence ranges
+    mapM_ U.changeSym (zipWith Symbol.{pos=} ascending ranges)
+    
+-- symDep g _ sym | traceLn ("doing symDep for " ++ nicer sym g) = undefined
+symDep g members SymA{typ} = sigmaDep g typ
+symDep g members SymT{env} = fold L.union Tree.empty (map (symDep g members) (values env))
+symDep g members SymD{typ} = sigmaDep g typ
+symDep g members SymV{typ,expr} = sigmaDep g typ L.`union` maybe Tree.empty (exprDep g members) expr
+symDep g members SymL{name, alias}
+    | name.our g, not (alias.our g) = nameDep g Tree.empty name    -- imported item
+    | otherwise = case alias.findit g of
+        Just sym -> symDep g members sym
+        Nothing  -> Tree.empty
+symDep g members SymI{clas, typ, env} = fold L.union tree (map (symDep g members) (values env))
+    where
+        tree = nameDep g sigt clas
+        sigt = sigmaDep g typ
+symDep g members SymC{supers, env} = fold L.union tree (map (symDep g members) (values env))
+    where
+        tree = fold (nameDep g) Tree.empty supers
+symDep g members sym = error ("don't know dependencies of " ++ nicer sym g)
+
+-- nameDep :: g -> tree -> QName -> tree
+nameDep g tree Local{uid, base}   = tree
+nameDep g tree MName{tynm, base}  = if tynm.our g then Tree.insert tree tynm () else tree
+nameDep g tree name               = if name.our g then Tree.insert tree name () else tree
+
+
+exprDep g mems ex = exDep Tree.empty ex
+    where
+        exDep tree Vbl{name}        = nameDep g tree name
+        exDep tree Con{name}        = nameDep g tree name
+        exDep tree ConFS{name}      = nameDep g tree name
+        exDep tree App{fun, arg}    = exDep (exDep tree fun) arg
+        exDep tree Lit{}            = tree
+        exDep tree Let{env, ex}     = fold L.union (exDep tree ex) (map (symDep g mems) syms) where
+                                         syms = mapMaybe (flip QName.findit g) env 
+        exDep tree Lam{pat, ex}     = exDep (patDep tree pat) ex
+        exDep tree Ifte{cnd, thn, els}  = fold exDep tree [cnd, thn, els]
+        exDep tree Mem{ex, member}  = case Tree.lookupS mems member.value of
+                                        Nothing   -> exDep tree ex
+                                        Just syms -> fold (nameDep g) (exDep tree ex) nms where
+                                            nms = map Symbol.name syms  
+        exDep tree Case{ex, alts}   = fold altDep (exDep tree ex) alts where
+                                        altDep tree CAlt{pat, ex} = exDep (patDep tree pat) ex 
+        exDep tree Ann{ex, typ}  = maybe Tree.empty (sigmaDep g) typ L.`union` exDep tree ex
+        
+        patDep tree PVar{uid, var}          = tree
+        patDep tree PCon{qname, pats}       = fold patDep (nameDep g tree qname) pats
+        patDep tree PConFS{qname, fields}   = fold patDep (nameDep g tree qname) pats
+            where pats = map snd fields
+        patDep tree PAt{pat}                = patDep tree pat
+        patDep tree PUser{pat}              = patDep tree pat
+        patDep tree PLit{}                  = tree
+        patDep tree PAnn{pat}               = patDep tree pat
+        patDep tree PMat{}                  = tree
+
+
+
+sigmaDep g (ForAll _ rho) = rhoDep g Tree.empty rho
+
+rhoDep g tree RhoFun{context, sigma, rho} = result
+    where
+        result = rhoDep g sdep rho
+        sdep   = rhoDep g cdep sigma.rho
+        cdep   = fold (ctxDep g) tree context
+rhoDep g tree RhoTau{context, tau} = tauDep g cdep tau
+    where
+        cdep   = fold (ctxDep g) tree context
+                
+ctxDep g tree Ctx{pos, cname, tau} = tauDep g ctree tau
+    where
+        ctree = nameDep g tree cname
+
+tauDep :: Global -> Tree QName () -> Tau -> Tree QName ()
+tauDep g tree (TApp a b)            = tauDep g (tauDep g tree a) b
+tauDep g tree TCon{pos, name}       = nameDep g tree name
+tauDep g tree TVar{pos, kind, var}  = tree
+tauDep g tree (Meta _)              = tree
+
+      
+    
