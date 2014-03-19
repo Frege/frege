@@ -332,6 +332,7 @@ resolveConstraints sym
         x   <- resolveHas x
         cxs <- collectConstrs x
         rho <- simplify sym.pos typ.rho.{context=cxs}
+                >>= simplify sym.pos        -- remove duplicates 
         -- Drop the contexts that contain a rigid tvar that is not occuring in the type itself.
         -- Those stem from typechecking applications of higher rank functions where
         -- there is a constraint in an inner forall.
@@ -341,8 +342,15 @@ resolveConstraints sym
         ctxmetas <- mapM ctxTvs rho.context
         let filteredCtx = [ ctx | (metas, ctx) <- zip ctxmetas rho.context,
                                   all (`elem` rhometas)  (filter (not . MetaTv.isFlexi) metas)]
-        U.changeSym sym.{typ <- Sigma.{rho <- Rho.{context=filteredCtx}}, expr = Just x}
-    | otherwise = return () 
+        U.changeSym sym.{typ <- Sigma.{rho <- rmtrailing . Rho.{context=filteredCtx}}, 
+                         expr = Just x}
+    | otherwise = return ()
+    where 
+        rmtrailing rho 
+            | RhoFun{} <- rho = rho.{rho <- zapctx}
+            | otherwise = rho
+        zapctx RhoTau{context, tau} = RhoTau{context=[], tau}
+        zapctx RhoFun{context, sigma, rho} = RhoFun{context=[], sigma, rho = zapctx rho} 
      
 {--
  * look for applications of class member functions in the code of the named item
@@ -378,18 +386,24 @@ substInst (vbl@Vbl {pos, name = MName tn bs, typ = Just (ForAll [] rho)})
                             case (MName iname bs).findit g of
                                 Just imem -> do 
                                     let nrho = rho.{context <- filter (not • sameCtx ctx)}
+                                        strho = U.substRho 
+                                                    (U.unifySigma g imem.typ ForAll{bound=[], rho=nrho}) 
+                                                    imem.typ.rho
                                         !repl | SymV{} <- imem = vbl.{name=imem.name, 
-                                                                        typ = Just (ForAll [] nrho)}
+                                                                        typ = Just (ForAll [] strho)}
                                               | SymD{} <- imem = Con{pos=vbl.pos, 
                                                                         name=imem.name, 
-                                                                        typ = Just (ForAll [] nrho)}
+                                                                        typ = Just (ForAll [] strho)}
                                               | otherwise = error ("substInst WTF??? : " ++ nicer imem g) 
-                                    U.logmsg TRACEO pos (text ("replace " ++ vbl.name.nice g
-                                        ++ " :: " ++ vbl.typ.nicer g
-                                        ++ " sigma :: " ++ mem.typ.nicer g
-                                        ++ "  with  " ++ imem.name.nice g
-                                        ++ " :: " ++ imem.typ.nicer g
-                                        ++ " @@ " ++ nrho.nicer g))
+                                    U.logmsg TRACEO pos (
+                                        text ("replace " ++ vbl.name.nice g) 
+                                        </> nest 4 (
+                                            text (":: " ++ vbl.typ.nicer g)
+                                            </> text ("sigma :: " ++ mem.typ.nicer g) 
+                                            </> text ("with  " ++ imem.name.nice g)
+                                            <+> text (" :: " ++ imem.typ.nicer g)
+                                            </> text ("@@ " ++ nrho.nicer g)
+                                            </> text ("?? " ++ strho.nicer g)))
                                     changeST Global.{sub <- SubSt.{
                                         idKind <- insertkv (KeyTk vbl.pos.first) (Right imem.name)}}
                                     stio (Left repl)
