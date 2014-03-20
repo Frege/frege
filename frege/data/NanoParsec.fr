@@ -4,6 +4,9 @@ module frege.data.NanoParsec where
 import Data.List
 import Prelude.PreludeBase (StringJ)
 import Data.Monoid
+import Control.monad.trans.MonadTrans
+import Control.monad.trans.MonadIO
+import Data.wrapper.Identity
 
 import Test.QuickCheck as Q()
 
@@ -70,18 +73,20 @@ abstract data ArrayIterator a = AI { !array :: JArray a, !at :: Int, !limit :: I
 {--
     Parser type
 -}
-
-data Parser s t r = Parser {
-        run :: s t -> Either (s t, String) (s t, r)
+type Parser s t r = ParserT s t Identity r
+data ParserT s t m r = Parser {
+        run :: s t -> m ((s t, String)|(s t, r))
     } where
     --- fail with given error message
-    failure s = Parser (\ts -> Left  (ts, s))
+    failure s = Parser (\ts -> return (Left  (ts, s)))
+    --- run a 'Identity' parser
+    runid p = Identity.run . Parser.run p
 
-instance MonadAlt Parser s t where
+instance MonadAlt (Monad m) => ParserT s t m where
     --- generic failure
     pzero    = Parser.failure "parse failed" 
     --- generic success
-    return a = Parser $ (\ts -> Right (ts, a))
+    return a = Parser $ (\ts -> return (Right (ts, a)))
     {--
         > p >>= (r -> q)
         > p >> q
@@ -90,12 +95,14 @@ instance MonadAlt Parser s t where
         
         Could be read as _p followed by q_.
     -}
-    Parser p >>= f = Parser next
+    Parser p >>= f = Parser bind
         where
-            next i = case p i of
-                Right (i', r) = case f r of
-                    Parser q = q i'
-                Left err = Left err
+            bind i = do
+                pi <- p i
+                case pi of
+                    Right (!i', !r) = case f r of
+                        Parser !q = q i'
+                    Left err = return (Left err)
     {-- 
         > p <|> q
         
@@ -109,9 +116,11 @@ instance MonadAlt Parser s t where
     -}                
     Parser p <|>  Parser q = Parser plus
         where
-            plus i = case p i of
-                Left _ = q i
-                right  = right
+            plus i = do
+                pi <- p i
+                case pi of
+                    Left _ = q i
+                    right  = return right
 
     {--
         > p <+> q
@@ -122,13 +131,17 @@ instance MonadAlt Parser s t where
     -}
     Parser p <+> Parser q = Parser plus
         where
-            plus i = case p i of
-                Left (rest, _) = q rest
-                right  = right
+            plus i = do
+                pi <- p i 
+                case pi of
+                    Left (rest, _) = q rest
+                    right  = return right
 
+--- 'Monad' transformer for 'Parser'
+data ParserX s t m a = ParserT { run :: s t -> m ((s t, String)|(s t, a)) }
 
 --- run a 'Parser' on some input and report
-parseTest Parser{run} s = case run s of
+parseTest Parser{run} s = case Identity.run (run s) of
     Left xs = do
         print "Parse failed: "
         println (reporterror xs)
@@ -176,23 +189,23 @@ expect c = Parser exp
     where
         exp ts = case uncons ts of
             Just (h, t) 
-                | h == c    = Right (t, h)
-            nothing         = Left  (ts, (show c) ++ " expected")
+                | h == c    = return $ Right (t, h)
+            nothing         = return $ Left  (ts, (show c) ++ " expected")
 
 --- The 'eos' parser suceeds if the input is empty.
 eos = Parser noinput
     where
         noinput ts = case uncons ts of
-            Just _ = Left (ts, "end of input expected")
-            sonst  = Right (ts, ())
+            Just _ = return $ Left (ts, "end of input expected")
+            sonst  = return $ Right (ts, ())
 
 --- > satisfy property
 --- Suceeds if there is a next token _t_ and  _property_ _t_ is true.
 satisfy p = Parser sat
     where
         sat ts = case uncons ts of
-            Just (h, t) | p h   = Right (t, h)
-            nothing             = Left  (ts, "unexpected token")
+            Just (h, t) | p h   = return $ Right (t, h)
+            nothing             = return $ Left  (ts, "unexpected token")
 
 --- > pany
 --- Fails if and only if 'eos' succeeds, otherwise returns the next token.
@@ -212,16 +225,16 @@ spaces      = skip space
 string s = Parser it
     where
         it xs = if xs.startsWith s 
-            then Right (strtail xs (length s), s)
-            else Left  (xs, "expected '" ++ display s ++ "'")
+            then return $ Right (strtail xs (length s), s)
+            else return $ Left  (xs, "expected '" ++ display s ++ "'")
 
 --- This parser succeeds if the pattern matches the beginning of the string.
 --- For efficiency reasons, the pattern should start with @^@
 match r = Parser it
     where
         it xs = case m.find of
-            Just y | xs.startsWith y.match -> Right (strtail xs (y.match.length), y)
-            nothing -> Left  (xs, "expected to match ´" ++ display r ++ "´")
+            Just y | xs.startsWith y.match -> return $ Right (strtail xs (y.match.length), y)
+            nothing -> return $ Left  (xs, "expected to match ´" ++ display r ++ "´")
           where m = Regex.matcher r xs
                 
 -- -------------------------------------------------- common tokens
@@ -232,8 +245,14 @@ ident = symbol . label "identifier expected" $ do
 -- -------------------------------------------------- parser repetition 
 
 --- The optional parser always succeeds and returns its result wrapped in 'Maybe'
-optional :: Parser s t r -> Parser s t (Maybe r)
-optional p = p >>= return . Just <|> return Nothing
+optional :: Monad m => ParserT s t m r -> ParserT s t m (Maybe r)
+optional p = p >>= rj <|> Parser.return Nothing
+    where
+        rj :: Monad m => r -> ParserT s t m (Maybe r)
+        rj a = return (Just a)
+
+optibad :: Monad m => ParserT s t m r -> ParserT s t m (Maybe r)
+optibad p = p >>= (return . Just) <|> return Nothing
 
 --- > many p
 --- Collects as many _p_ as possible and returns the results in a list.
@@ -256,7 +275,9 @@ many1 = some
 --- > many p >> return ()
 --- but faster, because it does not build up lists.
 --- Must not be applied to a parser that always succeeds!
-skip p = forever (p <|> pzero) <+> return ()
+skip :: Monad α => ParserT β δ α γ -> ParserT β δ α  ()
+skip p = ux  <+> Parser.return ()
+    where ux = p >> ux
 
 --- > manyWhile p
 --- Collect tokens as long as they satisfy _p_
@@ -271,11 +292,16 @@ skipWhile p = skip (satisfy p)
 
 look (Parser prefix) (Parser p1) (Parser p2) = Parser it
     where 
-        it inp = case prefix inp of
-            Right _ -> p1 inp
-            Left  _ -> p2 inp
+        it inp = do
+            pi <- prefix inp
+            case pi of
+                Right _ -> p1 inp
+                Left  _ -> p2 inp
 
-select :: [(Parser s t b, Parser s t a)] -> Parser s t a -> Parser s t a
+select :: Monad m =>
+            [(ParserT s t m b, ParserT s t m a)] 
+            -> ParserT s t m a 
+            -> ParserT s t m a
 select xs y = foldr (\(p1,p2)\end -> look p1 p2 end) y xs
    
 --- > choice ps
@@ -324,6 +350,7 @@ sepEndBy1 p q = p `sepBy1` q <* optional q
 
 ascii = fmap chr (Q.choose (ord ' ', 126))
 inputs = Q.listOf ascii
+parsers :: Q.Gen (String, Parser [] Char Char) 
 parsers = Q.elements [
     ("match no char", satisfy (const false)),   -- fail
     ("match any char", pany),  
@@ -342,11 +369,11 @@ allParsers prop = parsers >>= (\(s,x) ->
 
 --- p always suceeds
 succeeds p = Q.forAll inputs (\xs ->
-    either (const false) (const true) (Parser.run p xs))
+    either (const false) (const true) (Parser.runid p xs))
 
 --- p always fails
 fails p = Q.forAll inputs (\xs ->
-    either (const true) (const false) (Parser.run p xs))
+    either (const true) (const false) (Parser.runid p xs))
 
 --- p and q are the same parsers    
 same p q = Q.forAll inputs (\xs ->
@@ -354,28 +381,28 @@ same p q = Q.forAll inputs (\xs ->
 
 --- p succeeds if and only if q succeeds
 agree p q = Q.forAll inputs (\xs ->
-        case Parser.run p xs of
-          Left   _ -> either (const true) (const false) (Parser.run q xs)
-          Right  _ -> either (const false) (const true) (Parser.run q xs)
+        case Parser.runid p xs of
+          Left   _ -> either (const true) (const false) (Parser.runid q xs)
+          Right  _ -> either (const false) (const true) (Parser.runid q xs)
     )
     
 --- p succeeds if and only if q fails
 disagree p q = Q.forAll inputs (\xs ->
-        case Parser.run p xs of
-          Right _ -> either (const true) (const false) (Parser.run q xs)
-          Left  _ -> either (const false) (const true) (Parser.run q xs)
+        case Parser.runid p xs of
+          Right _ -> either (const true) (const false) (Parser.runid q xs)
+          Left  _ -> either (const false) (const true) (Parser.runid q xs)
     )
 
 --- p and q consume the same input
 consumeTheSame p q = Q.forAll inputs (\xs ->
-    fmap fst (Parser.run p xs) 
-        == fmap fst (Parser.run q xs)) 
+    fmap fst (Parser.runid p xs) 
+        == fmap fst (Parser.runid q xs)) 
 
 --- p consumes no input on failure
 consumesNotOnFailure p = Q.forAll inputs (\xs ->
-    case Parser.run p xs of
-        Left (ts, _) -> Q.label "parser failed" (ts == xs)
-        Right _      -> Q.label "parser success" true
+    case Parser.runid p xs of
+        (Left (ts, _)) -> Q.label "parser failed" (ts == xs)
+        (Right _)      -> Q.label "parser success" true
     )
 
 
@@ -432,7 +459,7 @@ prop_p_or_zero_same_p = allParsers (\p ->
     (pzero <|> p) `same` p)
 
 --- @choice []@ is the same as @pzero@    
-prop_choice_0 = (choice [] `asTypeOf` pany) `same` (pzero)
+prop_choice_0 = (choice [] `asTypeOf` pany) `same` (pzero::Parser [] Char Char)
 
 --- @choice [p]@ is the same as @p@    
 prop_choice_1 = allParsers (\p ->
