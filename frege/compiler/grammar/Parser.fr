@@ -1,0 +1,359 @@
+--- experimental Parser
+package frege.compiler.grammar.Parser
+        -- inline(§, k, s, i, b)
+    where 
+
+import Compiler.types.Flags
+import Compiler.Data
+import Compiler.GUtil hiding (yyerror)
+import Compiler.Main()
+import Compiler.Utilities as U()
+import Compiler.Nice ()
+import Test.QuickCheck as Q()
+import Data.NanoParsec as N hiding (between)
+import Control.monad.trans.MonadTrans
+import Data.List
+import Data.TreeMap (Tree, insertkv)
+
+--- the main program
+main args = do
+    g       <- Main.standardOptions
+    scanned <- Main.scanOpts Main.stdOptions args
+    case scanned  of
+        Just (opts, ourargs) -> mapM_ (run g opts) ourargs
+        Nothing -> return ()
+
+run :: Global -> Options -> String -> IO ()
+run g opts source = do                
+        let opt' = opts.{source} -- .{flags <- flip BitSet.unionE IDE}
+            g'   = g.{options = opt', gen <- GenSt.{printer=stdout}}
+            passes = head Main.passes 
+                        : (runParser, "parsing", return true)
+                        : drop 2 Main.passes
+        case StG.run (foreach passes Main.runpass) g' of
+                (_, g) -> do
+                            when (g.errors > 0) do
+                                stderr.println "Source code has errors. See you later."
+                            return ()
+
+runParser = do
+        g      <- getST
+        result <- modul.run (filter Token.noComment g.sub.toks.toList)
+        case result of
+            (Right (Program.Module (packname, defs, doc)), str) -> do
+                changeST Global.{sub <-  SubSt.{thisPack = Pack.new packname,
+                                                definitions = defs,
+                                                packageDoc = doc}}
+                stio ("tokens",  g.sub.toks.length)
+            (Left err, ts) -> do
+                U.error (pos ts) (Nice.text err Nice.</> Nice.text " at " 
+                                        Nice.<+> Nice.text (if null ts then "EOF" else yynice (head ts)))
+                stio ("tokens", g.sub.toks.length) 
+            nothing -> stio ("tokens", g.sub.toks.length)
+    where
+        pos [] = Position.null
+        pos (t:_) = Position.Pos t t
+
+-- -------------------------------------------------------------------- meta
+
+--- make sure item is unqualified (applies to 'operator' only)
+unqualified o = o >>= lift . U.unqualified
+
+{-
+    qvarid:  QUALIFIER QUALIFIER varop  { \n\t\v     -> With2 n t v}
+        |    QUALIFIER varop            { \t\v       -> With1 t v}
+        |    VARID                      { \v         -> Simple v }
+-}
+qualified t1 t2 = do
+        q1 <- token QUALIFIER
+        do 
+                q2 <- token QUALIFIER
+                v  <- t1
+                return (With2 q1 q2 v)
+            <|> do
+                v  <- t1
+                return (With1 q1 v)
+    <|>
+        Simple <$> t2
+
+--- remember the input stream. Suceeds always.
+mark   = ParserT (\pos -> return (Right pos, pos))
+--- resume parsing with a modified input stream
+resume pos = ParserT (\_ -> return (Right (), pos))
+
+
+skipdef = do
+        pos <- mark
+        resume (skip 0 pos)
+    where
+        skip !n pos | Nothing <- uncons pos = pos
+        skip 0 pos
+            | Just (t,ts) <- u, isChar ';' t = pos
+            | Just (t,ts) <- u, isChar '}' t = pos
+            where u = uncons pos
+        skip n pos
+            | Just (t,ts) <- u, isChar '}' t = skip (n-1) ts
+            | Just (t,ts) <- u, isChar '{' t = skip (n+1) ts
+            | Just (t,ts) <- u, otherwise    = skip n ts
+            where u = uncons pos
+
+--- mark begin and end of some item
+positioned p = do
+        here <- mark
+        result <- p
+        there <- mark
+        return (position here there, result)
+    where
+        position from to = case uncons from of
+            Just (f, _) -> case uncons to of
+                Just (t, _) 
+                    | t != f -> Pos f (head . takeWhile (!=t) . slist $ from)
+                    | otherwise = Pos t t
+                Nothing -> Pos f (last (slist from))
+            Nothing -> Position.null
+
+between what left right parser = do
+    tokch left
+    r <- parser
+    tokch right 
+        <|> yyerror ("missing " ++ show right ++ " after " ++ what ++ ", found ")
+    reduce what r   
+                    
+    
+-- -------------------------------------------------------------------- lexical stuff
+    
+token t     = satisfy (isToken t)   >>= tracetok
+tokch c     = satisfy (isChar  c)   >>= tracetok
+keywd s     = satisfy (isKey   s)   >>= tracetok
+
+isToken x   =  (x==) . Token.tokid
+isChar  c t = isToken CHAR t  && yychar t == c
+isKey   s t = isToken VARID t && t.value == s   
+
+--- tokens allowed in package names
+pallowed = [VARID, DATA, TYPE, NATIVE, PURE, PACKAGE, IMPORT]
+varidkw = choice (map token pallowed)
+
+operator = satisfy op
+    where op x = let tid = Token.tokid x in tid >= LOP1 && tid <= NOP16 
+
+
+-- -------------------------------------------------------------------- Error handling
+yydebug = maybe false (const true) (System.getenv "YYDEBUG")
+
+tracetok t 
+    | yydebug, traceLn (show t.line ++ ": consuming " ++ yynice t) = return t
+    | otherwise = return t
+
+reduce s x 
+    | yydebug, traceLn ("reducing " ++ s) = return x
+    | otherwise = return x
+    
+yyfound bad msg = lift do 
+    U.error (yyline bad) (
+        Nice.text (msg++",") Nice.<+> Nice.nest 4 (
+            Nice.text "found: " Nice.<+> Nice.text (yynice bad)
+        )
+      )
+
+yyerror msg = do
+    pos <- mark
+    let t = errortoken pos
+    lift $ U.error (yyline t) (Nice.text msg Nice.<+> Nice.text (yynice t))
+    return t
+
+--- extract the first token or EOF marker from a stream
+errortoken = maybe eof fst . uncons
+    where
+        eof = Token{tokid = COMMENT, value = "END OF INPUT", 
+                    line = maxBound, offset = maxBound, 
+                    qual=[], col=1}
+
+expecting f msg = satisfy f <|> yyerror msg
+
+noexpression t = Vbl{pos=yyline t, name=Simple t, typ=Nothing}        
+-- -------------------------------------------------------------------- Grammar
+
+--- alias name for imported item                  
+alias = token VARID <|> token CONID <|> unqualified operator
+
+--- some documentation comments, without separator
+docs     = joined "\n" . map _.value <$> some (token DOCUMENTATION)
+
+--- some documentation, separated and ended by semicolon
+docDefs  = joined "\n" <$> docs `sepEndBy1` tokch ';'
+
+--- > Data.List
+packagename = magicPack <$> packagename1
+
+--- > a.Q.x.y.Pack
+packagename1 = do 
+        t <- token CONID
+        lift do
+             changeST Global.{sub <- SubSt.{idKind <- insertkv (KeyTk t) (Left())}}
+        return t.value 
+    <|> do
+        a <- varidkw <* tokch '.' <|> token QUALIFIER
+        c <- packagename1
+        reduce "packagename1" (a.value++ "." ++ c)
+
+
+--- > package foo.bar.Baz
+packageclause = do
+        doc <- optional docs
+        token PACKAGE
+        c <- packagename   
+        reduce "packageclause" (c, doc)
+        
+memspecs = memspec `sepEndBy` tokch ','
+memspec = 
+        do
+            v <- alias
+            a <- optional alias
+            let x = fromMaybe v a
+            return protoItem.{name  = Simple v, alias = U.enclosed  x.value}
+    <|> do
+            token PUBLIC
+            fmap ImportItem.export memspec
+
+unop  = tokch '!' <|>  tokch '?' 
+varop = token VARID <|> unop
+
+   
+qvarid = qualified varop (token VARID)
+qconid = qualified (token CONID) (token CONID)
+opname = opSname <$> operator
+
+{-
+    importitem:
+        qvarid                          { \v        -> protoItem.{ name = v } }
+        | CONID '(' memspecs ')'        { \v\_\ms\_ -> protoItem.{ name = Simple v, members = Just ms} }
+        | CONID '(' ')'                 { \v\_\_    -> protoItem.{ name = Simple v, members = Just []} }
+        | qconid                        { \v        -> protoItem.{ name = v } }
+        | operator                      { \t        -> protoItem.{ name = opSname t } }
+        | unop                          { \v        -> protoItem.{ name = Simple v} }
+-}
+importitem =
+    protoItem.{name=} <$> qvarid 
+    <|> do
+        c  <- token CONID
+        ms <- between "member specifications" '(' ')' memspecs
+        reduce "importitem Q(...)" protoItem.{name = Simple c, members = Just ms}
+    <|> protoItem.{name=} <$> qconid
+    <|> protoItem.{name=} <$> opname
+    <|> protoItem.{name=} . Simple <$> unop
+         
+{-
+    importspec:
+    importitem                      { \s      -> ImportItem.{alias = (U.enclosed . Token.value . SName.id . ImportItem.name) s} s}
+    | importitem alias              { \s\a    -> ImportItem.{alias = U.enclosed (Token.value a)} s }
+    | PUBLIC importspec             { \_\s    -> ImportItem.export s }
+-}        
+-- importspec :: ParserT [] Token StG ImportItem
+importspec = 
+    (token PUBLIC >> ImportItem.export `fmap` importspec)
+    <|> do 
+        item  <- importitem
+        ali   <- alias <|> return item.name.id
+        return (ImportItem.{alias = U.enclosed ali.value} item)
+         
+
+--- 'importspec', 'importspec', 
+importspecs = importspec `sepEndBy` (tokch ',')
+
+importliste = 
+                          linkNone.{items=} <$> liste
+    <|> (token PUBLIC   >> _.{publik=true}  <$> importliste)
+    <|> (keywd "hiding" >> linkAll.{items=} <$> liste)
+    <|> reduce "empty import list" linkAll
+  where
+    liste = between "import items" '(' ')' importspecs
+
+importdef = do
+        token IMPORT
+        (pos, pack) <- positioned packagename
+        as <- optional asNamespace
+        imports <- importliste
+        reduce "import" ImpDcl{pos, pack, as, imports}
+    where
+        asNamespace = do
+            as <- optional (keywd "as")
+            c  <- token CONID
+            lift do
+                changeST Global.{sub <- SubSt.{idKind <- insertkv (KeyTk c) (Left()) }}
+            return c.value
+
+documentation = do
+    comment <- token DOCUMENTATION
+    reduce "documentation" DocDcl {pos = yyline comment, text = comment.value}
+
+vbl p = do
+    t <- p
+    return Vbl{pos=yyline t, name=Simple t, typ=Nothing}
+
+vbls p = do
+    name <- p
+    return Vbl{pos = yyline (SName.id name), name, typ=Nothing}
+
+term = vbls qvarid 
+
+primary = term
+
+unex = primary
+    <|> liftM2 nApp (vbl unop) primary
+
+appex = foldl1 nApp <$> some unex
+
+binex = appex
+
+topex = binex
+
+expr = topex
+
+funlhs = binex >>= lift . funhead
+
+fundcl (pos, name, pats) expr = FunDcl {poss=[pos], vis=Public, name, pats, expr, doc=Nothing}
+
+function = do
+    head <- funlhs
+    expecting (isChar '=') "'=' expected, found"
+    e <- expr <+> do
+            t <- yyerror "syntax error in right hand side of function definition at "
+            skipdef
+            return (noexpression t)
+    reduce "function" (fundcl head e)
+
+localdef = function
+
+publicdefinition = localdef
+
+visibledefinition = do
+        modifier <- optional (token PRIVATE 
+                                <|> token PROTECTED 
+                                <|> token PUBLIC)
+        publicdf <- publicdefinition
+        case maybe PUBLIC _.tokid modifier of
+            PRIVATE     -> return (updVis Private   publicdf)
+            PROTECTED   -> return (updVis Protected publicdf)
+            _           -> return publicdf
+        
+
+
+definition  =
+        documentation 
+        <|> importdef
+        <|> visibledefinition
+
+definitions = definition `sepEndBy1` some (tokch ';')
+
+--- parse whole program    
+modul :: ParserT [] Token StG Program
+modul = do
+        (packname, doc) <- packageclause
+        defs <- tokch ';' *> definitions 
+            <|> token WHERE *> between "top level definitions" '{' '}' definitions
+        eos <|> do
+            t <- pany
+            lift (U.warn (yyline t) (Nice.text "end of program before end of file")) 
+        reduce "module" $ Program.Module (packname, defs, doc)
+        
