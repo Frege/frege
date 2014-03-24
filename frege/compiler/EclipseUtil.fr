@@ -5,7 +5,7 @@
 
 package frege.compiler.EclipseUtil where
 
-import frege.compiler.Data
+import frege.compiler.Data  -- frege.compiler.Data
 import frege.compiler.Utilities as U(isPSigma)
 import frege.compiler.Import as I hiding(pass, post)
 import frege.compiler.tc.Util as TC
@@ -14,8 +14,16 @@ import Data.TreeMap (each, values)
 import Data.List as DL(sortBy, maximumBy)
 import frege.compiler.DocUtils as DU(docit, docSym, DL, Doc, emitHtml)
 import frege.lib.PP()
+import frege.lib.Modules
 
 
+--- initialize the root of the package tree
+initRoot path = do
+    all <- walkPath path
+    let t = fold pack noPacks (map sp all)
+        sp (a,b) = (Regex.splitted ´\.´ a, b)
+    stderr.println ("initRoot: " ++ (show . map fst . flat $ t))
+    return t
 
 --- create a 'Token' list from an 'JArray' backwards
 backwards :: JArray Token  -> Int -> [Token]
@@ -61,8 +69,8 @@ instance Show Proposal where
     [tokens] array of tokens
     [index]  index into the array, points to the token that starts before  the caret
     -}
-proposeContent :: Global -> Int -> JArray Token -> Int -> [Proposal]
-proposeContent !global !offset !tokens !index = propose 
+proposeContent :: Global -> Y RTree -> Int -> JArray Token -> Int -> [Proposal]
+proposeContent !global root !offset !tokens !index = propose 
     where
         snekot = backwards tokens index     -- reverse order, last token before cursor on top
         thisline = takeWhile onThisLine snekot
@@ -93,13 +101,54 @@ proposeContent !global !offset !tokens !index = propose
                         rep s =    (´^\W+´  .matcher dots).replaceAll "" where
                             dots = (´\W´    .matcher base).replaceAll "."
                             base = (´\.\w+$´.matcher    s).replaceAll ""
-                            
-        propose 
+        collectpack [_] = []
+        collectpack []  = []
+        collectpack (Token{tokid,value} : xs) = case tokid of
+            VARID -> value : collectpack xs
+            CONID -> value : collectpack xs
+            QUALIFIER -> substr value 0 (value.length-1) : collectpack xs
+            _ | tokid > TokenID.CHAR && tokid < TokenID.LOP0    -- keyword
+                    -> value : collectpack xs
+            _ -> collectpack xs
+            
+        propose
             | null snekot = [theProposal.{
                 proposal = "module template",
                 newText  = "--- This is an undocumented module\nmodule "
                             ++ modname global ++ " where\n\nimport Data.List\n",
                 cursor   = 0}]
+            | (Token{tokid=IMPORT} : xs) <- reverse thisline,
+              traceLn("rule: IMPORT") || true,
+              key <- collectpack xs,
+              traceLn("looking for " ++ show key ++ " in " ++ joined "," (map fst (flat root))) || true,
+              mbres <- pfind key root
+                    = let pref = if theProposal.prefix == "." then "" 
+                                    else theProposal.prefix
+                          theP = if direct && theProposal.prefix == "."
+                                then insideProposal -- keep the "." 
+                                else theProposal   
+                        in case mbres of
+                        Just res -> case unR res of
+                            Just doc = [theP.{
+                                        proposal = last key,
+                                        newText = last key,
+                                        additional = doc}]
+                            Nothing = importProposal  where
+                                importProposal = [theP.{
+                                                proposal = kx,
+                                                newText = kx,
+                                                additional = add
+                                            } |
+                                    (k, mb) <- flat res,
+                                    k.startsWith pref,
+                                    let kx = maybe (k++".") (const k) (unR mb)
+                                        add = maybe 
+                                            ("Subpackages:<br><br>" 
+                                                ++ joined ", " (map fst (flat mb))) 
+                                            (htmlify global) 
+                                            (unR mb)
+                                  ]
+                        Nothing -> []
             | (Token{tokid=VARID} :Token{tokid=CHAR, value="."}      : (qual@Token{tokid=VARID})   :_) <- snekot,
               traceLn ("rule: " ++ qual.value ++ "." ++ theProposal.prefix) || true,
               Just (Right qname) <- Global.resolved global qual,
@@ -583,12 +632,28 @@ thisTab g = case g.packages.lookup g.thisPack of
 --     native flush :: StringWriter RealWorld -> IO ()
 --     native toString :: StringWriter RealWorld -> IO String
 
+htmlDocumentation :: String -> StG String
+htmlDocumentation doc = case doc of
+            ""   -> return ("Undocumented package")
+            text -> do
+                g <- getST 
+                let doc = Doc $ docit g (Just text)
+                sw <-  doio $  StringWriter.new ()
+                p  <-  doio $  StringWriter.printer sw
+                changeST Global.{gen <- GenSt.{printer=p}}
+                emitHtml false doc      -- html without CSS, eclipse does not understand    
+                doio $ p.close
+                -- doio $ sw.flush
+                doio $ sw.toString
+                
+htmlify g s = fst $ StG.run (htmlDocumentation s) g
+
 packDocumentation :: String -> StG String
 packDocumentation pack = do
     g <- getST
     r <- I.getFP pack
     case r of
-        Right (Just fp) -> case fp.doc of
+        Right (Just fp) -> case "module " ++ pack ++ "\n\n" ++ fp.doc of
             ""   -> return ("Undocumented package " ++ pack)
             text -> do 
                 let doc = Doc $ docit g (Just text)
@@ -596,10 +661,10 @@ packDocumentation pack = do
                 p  <-  doio $  StringWriter.printer sw
                 changeST Global.{gen <- GenSt.{printer=p}}
                 emitHtml false doc      -- html without CSS, eclipse does not understand    
-                doio $ g.printer.close
+                doio $ p.close
                 -- doio $ sw.flush
-                result <- doio $ sw.toString
-                return result
+                doio $ sw.toString
+                
         Left ex -> return (ex.getMessage)            
         sonst   -> return ("(java class?) " ++ pack)
      
@@ -621,8 +686,7 @@ symbolDocumentation sym = do
     emitHtml false doc      -- html without CSS, eclipse does not understand    
     doio $ g.printer.close
     -- doio $ sw.flush
-    result <- doio $ sw.toString
-    return result
+    doio $ sw.toString
 
 {--
     Correct the result of 'frege.compiler.Scanner.dependencies',
