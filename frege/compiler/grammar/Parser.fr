@@ -86,7 +86,8 @@ skipdef = do
         pos <- mark
         resume (skip 0 pos)
     where
-        skip !n pos | Nothing <- uncons pos = pos
+        skip !n pos 
+            | Nothing <- uncons pos = pos
         skip 0 pos
             | Just (t,ts) <- u, isChar ';' t = pos
             | Just (t,ts) <- u, isChar '}' t = pos
@@ -95,6 +96,7 @@ skipdef = do
             | Just (t,ts) <- u, isChar '}' t = skip (n-1) ts
             | Just (t,ts) <- u, isChar '{' t = skip (n+1) ts
             | Just (t,ts) <- u, otherwise    = skip n ts
+            | otherwise                      = error "skip"
             where u = uncons pos
 
 --- mark begin and end of some item
@@ -287,17 +289,116 @@ documentation = do
     comment <- token DOCUMENTATION
     reduce "documentation" DocDcl {pos = yyline comment, text = comment.value}
 
+--- reduces a 'Token' to a 'Vbl'
 vbl p = do
     t <- p
     return Vbl{pos=yyline t, name=Simple t, typ=Nothing}
 
+--- reduces a 'Sname' to a 'Vbl'
 vbls p = do
     name <- p
     return Vbl{pos = yyline (SName.id name), name, typ=Nothing}
 
+--- a term
 term = vbls qvarid 
 
-primary = term
+{--
+    gqual:
+        expr                            { \e ->  Left (Nothing, e) }
+        | expr GETS expr                { \p\g\e -> do
+                                            pat <- exprToPat p
+                                            YYM.return (Left (Just pat, e)) }
+-}
+gqual = do
+        e <- expr
+        o <- optional (token GETS >> expr)
+        case o  of
+            Nothing -> return (Left (Nothing, e))
+            Just x -> lift do
+                pat <- exprToPat e
+                return (Left (Just pat, x))
+ 
+{--
+    lcqual:
+        gqual
+        | expr '=' expr                  { \e\t\x -> do { fh <- funhead e; YYM.return (Right (fundef fh x)) }}
+        | LET '{' letdefs '}'            { \_\_\ds\_ -> Right ds }
+-}
+lcqual = look (token LET) lqual gqual
+    where
+        lqual = do
+            token LET
+            Right <$> between "let definitions" '{' '}' letdefs
+        gqual = do
+            p <- expr
+            pos <- mark
+            t <- pany
+            case t.tokid  of
+                GETS                = ege p
+                CHAR | isChar '=' t = eee p
+                _                   = do
+                    resume pos
+                    return (Left (Nothing, p))
+        ege e = do
+            x <- expr
+            lift do
+                pat <- exprToPat e
+                return (Left (Just pat, x))
+        eee e = do
+            x <- expr
+            fh <- lift do
+                funhead e
+            return (Right (fundef fh x))
+
+{--
+    primary:
+        term
+        | DO  '{' dodefs  '}'             { \d\_\defs\_   -> do mkMonad (yyline d) defs }
+        | primary   '.' VARID             { \p\_\(v::Token) -> umem p v id}
+        | primary   '.' operator          { \p\_\v -> do {v <- unqualified v;
+                                                        YYM.return (umem p v id)}}
+        | primary   '.' unop              { \p\_\v -> umem p v id}
+        | qualifiers    '{' VARID '?' '}' { \q\_\(v::Token)\_\_ ->
+                                                Vbl (yyline v) (q v.{value <- ("has$" ++)}) Nothing}
+        | qualifiers    '{' VARID '=' '}' { \q\_\(v::Token)\_\_ ->
+                                                Vbl (yyline v) (q v.{value <- ("upd$" ++)}) Nothing}
+        | qualifiers    '{' VARID GETS '}' { \q\_\(v::Token)\_\_ ->
+                                                Vbl (yyline v) (q v.{value <- ("chg$" ++)}) Nothing}
+        | qualifiers    '{' getfields '}' { \q\(p::Token)\fs\_ -> let {
+                            // n   = Simple q;
+                            flp = Vbl (yyline p) (wellKnown p "flip") Nothing;
+                            bul = Vbl (yyline p) (contextName p "•")   Nothing;
+                            c []     = undefined;
+                            c (f:fs) = fold cex (chup f) fs where {
+                                cex x f = bul `nApp` x `nApp` chup f;
+                                chup :: (Token, Bool, Exp) -> Exp;
+                                chup (r, true, e)  = flp `nApp` Vbl (yyline r) (q r.{value <- ("chg$"++)}) Nothing `nApp` e;
+                                chup (r, false, e) = flp `nApp` Vbl (yyline r) (q r.{value <- ("upd$"++)}) Nothing `nApp` e;
+                                          }} in c fs }
+        | primary   '.' '{' VARID '?' '}' { \p\_\_\(v::Token)\_\_ -> umem p v.{value <- ("has$"++)} id}
+        | primary   '.' '{' VARID '=' '}' { \p\_\_\(v::Token)\_\_ -> umem p v.{value <- ("upd$"++)} id}
+        | primary   '.' '{' VARID GETS '}' {\p\_\_\(v::Token)\_\_ -> umem p v.{value <- ("chg$"++)} id}
+        | primary   '.' '{' getfields '}' { \x\(p::Token)\_\fs\_ ->
+                                    let {
+                            u x [] = x;
+                            u x ((r::Token, true , e):xs) = u (umem x r.{value <- ("chg$" ++)} (`nApp` e))  xs;
+                            u x ((r::Token, false, e):xs) = u (umem x r.{value <- ("upd$" ++)} (`nApp` e))  xs;
+                                    } in u x fs}
+        | primary '.' '[' expr ']'      { \p\(t::Token)\_\v\_  ->
+                                            let elem = t.position.change VARID "elemAt"
+                                            in Vbl {pos=elem, name=Simple elem.first, typ=Nothing}
+                                                `nApp` p
+                                                `nApp` v}
+-}
+primary = primary_nr
+
+--- the non-recursive part of a primary
+primary_nr = term
+    <|> do
+        d <- token DO
+        between "do block" '{' '}' dodefs >>= lift . mkMonad (yyline d)  
+    where
+        dodefs = lcqual `sepEndBy1` tokch ';'
 
 unex = primary
     <|> liftM2 nApp (vbl unop) primary
@@ -322,6 +423,9 @@ function = do
             skipdef
             return (noexpression t)
     reduce "function" (fundcl head e)
+
+letdef = function
+letdefs = letdef `sepEndBy1` tokch ';'
 
 localdef = function
 
