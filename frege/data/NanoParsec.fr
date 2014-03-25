@@ -12,8 +12,10 @@ import Test.QuickCheck as Q()
 
 {--
     A stream of tokens.
+    
+    This provides a list-like interface to feed 'Parser's. 
 -}
-class Stream s where
+class TokenStream s where
     {-- split the input stream in head and tail -}
     uncons :: s a -> Maybe (a, s a)
     --- give the length of the stream
@@ -27,18 +29,20 @@ class Stream s where
     snull :: s a -> Bool
     snull = maybe true (const false) . uncons
 
-instance Stream [] where
+instance TokenStream [] where
     uncons [] = Nothing
     uncons (h:t) = Just (h, t)
     slength = length
 
-instance Stream StringJ where
+--- Can be very slow on larger inputs. 
+--- Depends on how the JVM implements substrings.
+instance TokenStream StringJ where
     uncons x 
         | null x = Nothing
         | otherwise = Just (x.polymorphicElemAt 0, strtail x 1)
     slength = length
 
-instance Stream StringIterator
+instance TokenStream StringIterator
 abstract data StringIterator a = SI { !string :: StringJ a, !at :: Int, !limit :: Int }
     where
         --- make iterator from 'String'
@@ -54,7 +58,7 @@ abstract data StringIterator a = SI { !string :: StringJ a, !at :: Int, !limit :
             | otherwise   = case (string.polymorphicElemAt at; SI string (at+1) limit) of
                                 !result -> Just result
                  
-instance Stream ArrayIterator
+instance TokenStream ArrayIterator
 abstract data ArrayIterator a = AI { !array :: JArray a, !at :: Int, !limit :: Int }
     where
         --- make iterator from 'JArray'
@@ -95,7 +99,7 @@ type Parser  s t   r = ParserT s t Identity r
     
     is the type of parsers that reads tokens of type _t_
     from a stream _s t_ and returns either an error message string
-    or a result _r_ in monad __m_.
+    or a result _r_ in monad _m_.
     
     
     Works in principle like a combination of 'StateT' and 'EitherT', 
@@ -107,21 +111,21 @@ type Parser  s t   r = ParserT s t Identity r
     
      
 -}
-data ParserT s t m r = ParserT { run :: (s t) -> m ((String | r), s t) }
+abstract data ParserT s t m r = P { run :: (s t) -> m ((String | r), s t) }
 
-getPos      = ParserT getPos
+getPos      = ParserT.P getPos
     where
         getPos str = return (Right str, str) 
-putPos pos   = ParserT putPos
+putPos pos   = ParserT.P putPos
     where
         putPos _ = return (Right (), pos)
-modifyPos f  = ParserT modPos
+modifyPos f  = ParserT.P modPos
     where
         modPos pos = return (Right (), f pos)
 
 
 --- fail with given error message
-failure s = ParserT (\pos -> return (Left s, pos))
+failure s = ParserT.P (\pos -> return (Left s, pos))
 --- run a 'Identity' parser
 runid p = Identity.run . Parser.run p
 --- run a Parser, return just the result/error
@@ -129,9 +133,9 @@ parse p  = fmap fst . Parser.run p
 
 instance MonadAlt (Monad m) => ParserT s t m where
     --- generic failure
-    pzero    = ParserT (\pos -> return (Left "parse failed", pos)) 
+    pzero    = ParserT.P (\pos -> return (Left "parse failed", pos)) 
     --- generic success
-    return a = ParserT (\pos -> return (Right a, pos))
+    return a = ParserT.P (\pos -> return (Right a, pos))
     {--
         > p >>= (r -> q)
         > p >> q
@@ -140,13 +144,13 @@ instance MonadAlt (Monad m) => ParserT s t m where
         
         Could be read as _p followed by q_.
     -}
-    ParserT p >>= f = ParserT bind
+    ParserT.P p >>= f = ParserT.P bind
         where
             bind pos = do
                 pi <- p pos
                 case pi of
                     (Right r, pos') = case f r of
-                        ParserT q = q pos'
+                        ParserT.P q = q pos'
                     (Left err, pos') = return (Left err, pos')
     {-- 
         > p <|> q
@@ -159,7 +163,7 @@ instance MonadAlt (Monad m) => ParserT s t m where
         
         would succeed if the input starts with 'c' or 'd'. 
     -}                
-    ParserT p <|> q = ParserT alternate
+    ParserT.P p <|> q = ParserT.P alternate
         where
             alternate pos = do
                 pi <- p pos
@@ -175,7 +179,7 @@ instance MonadAlt (Monad m) => ParserT s t m where
         otherwise that of the second one, which is applied to the
         input left over by _p_
     -}
-    ParserT p <+> q = ParserT altplus
+    ParserT.P p <+> q = ParserT.P altplus
         where
             altplus pos = do
                 pi <- p pos
@@ -191,13 +195,13 @@ instance MonadAlt (Monad m) => ParserT s t m where
     p *> q = p >> q
         
 instance MonadTrans (ParserT s t) where
-    lift c = ParserT (\s -> c >>= (\x -> return (Right x;s)))
+    lift c = ParserT.P (\s -> c >>= (\x -> return (Right x;s)))
 
 instance MonadIO (MonadIO m) =>  (ParserT s t m) where
     liftIO = lift . liftIO
     
 --- run a 'Parser' on some input and report
-parseTest :: (Show r, Show t, Stream s) => Parser s t r -> (s t) -> IO ()
+parseTest :: (Show r, Show t, TokenStream s) => Parser s t r -> (s t) -> IO ()
 parseTest p s = case runid p s of
     (Left msg, str) -> do
         print "Parse failed: "
@@ -244,7 +248,7 @@ p <?> msg = p <+> failure msg
     This parser succeeds if the input is not empty and the head
     of the input equals _t_. 
 -}            
-expect c = ParserT expect
+expect c = ParserT.P expect
     where
         expect pos = case uncons pos of
             Just (h, t) 
@@ -252,7 +256,7 @@ expect c = ParserT expect
             nothing         = return (Left (show c ++ " expected"), pos)
 
 --- The 'eos' parser suceeds if the input is empty.
-eos = ParserT eos
+eos = ParserT.P eos
     where
         eos pos = case uncons pos of
             Just _ = return (Left "end of input expected", pos)
@@ -260,8 +264,8 @@ eos = ParserT eos
 
 --- > satisfy property
 --- Suceeds if there is a next token _t_ and  _property_ _t_ is true.
-satisfy :: (Stream s,  Monad m) => (t -> Bool) -> ParserT s t m t
-satisfy p = ParserT satisfy
+satisfy :: (TokenStream s,  Monad m) => (t -> Bool) -> ParserT s t m t
+satisfy p = ParserT.P satisfy
     where 
         satisfy pos = case uncons pos of
             Just (h, t) | p h   = return (Right h, t)
@@ -271,7 +275,7 @@ satisfy p = ParserT satisfy
 --- Fails if and only if there is a next token _t_ and _prop t_ is true.
 --- Succeeds on end of stream or when the token does not staisfy the property.
 --- In other words, @exceptWhen p@ succeeds if and only if @satisfy p@ fails.
-exceptWhen pred = ParserT except
+exceptWhen pred = ParserT.P except
     where
         except pos = case uncons pos of
             Just  (h, t) | pred h    = return (Left "expected token", pos)
@@ -295,7 +299,7 @@ spaces      = skip space
 
 -- ---------------------------------------- special parsers for strings
 string :: Monad m => String -> ParserT StringJ Char m String
-string s = ParserT string
+string s = ParserT.P string
     where
         string xs = if xs.startsWith s 
             then return (Right s, strtail xs (length s))
@@ -303,7 +307,7 @@ string s = ParserT string
 
 --- This parser succeeds if the pattern matches the beginning of the string.
 --- For efficiency reasons, the pattern should start with @^@
-match r = ParserT match
+match r = ParserT.P match
     where        
         match xs = case m.find of
                 Just y | xs.startsWith y.match 
@@ -374,7 +378,7 @@ skipUntil p = skip (exceptWhen p)
 --- > look prefix p1 p2
 --- if _prefix_ succeeds, then _p1_ is run, else _p2_
 --- In no case does _prefix_ consume any tokens.
-look prefix p1 p2 = ParserT look
+look prefix p1 p2 = ParserT.P look
     where
         look pos = do
             pf <- Parser.run prefix pos
