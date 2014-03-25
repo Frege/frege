@@ -15,7 +15,7 @@ public class Javac {
 	
 	final static String fregeJavac = System.getProperty("frege.javac");
 	final static JavaCompiler compiler =
-			fregeJavac == null || fregeJavac.equalsIgnoreCase("internal") ?
+			fregeJavac == null || fregeJavac.startsWith("internal") ?
 				ToolProvider.getSystemJavaCompiler() : null;
   final static StandardJavaFileManager fileManager = 
     		compiler == null ? null : compiler.getStandardFileManager(null, null, null);
