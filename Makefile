@@ -19,11 +19,11 @@
 
 .SUFFIXES: .class .fr
 
-JAVAC = javac -encoding UTF-8
+JAVAC = javac -source 1.7 -target 1.7 -encoding UTF-8
 YACC = pbyacc
 # JAVA = java7 -XX:+TieredCompilation "-Dfrege.javac=javac -J-Xmx512m"
 # JAVA = java7 -XX:+TieredCompilation -Dfrege.javac=internal
-JAVA = java -Dfrege.javac=internal
+JAVA = java "-Dfrege.javac=internal -nowarn -source 1.7 -target 1.7"
 
 
 DOC  = ../frege.github.com/doc
@@ -53,7 +53,7 @@ TOOLSF  = $(DIR)/tools
 COMPS   = frege/compiler
 
 
-FREGE    = $(JAVA) -Xss8m -Xmx900m -cp build
+FREGE    = $(JAVA) -Xss8m -Xmx1g -cp build
 
 #	compile using the fregec.jar in the working directory
 FREGECJ  = $(FREGE)  -jar fregec.jar  -d build -fp build -nocp -hints
@@ -139,6 +139,24 @@ fregec.jar: compiler $(DIR)/check1
 	jar  -uvfe  fregec.jar frege.compiler.Main
 	cp fregec.jar fallback.jar
 
+fregec7.jar:  savejava
+	@echo The following will probably only work if you just made a compiler
+	rm -rf build7
+	mkdir build7
+	@echo You can ignore the compiler warning.
+	$(JAVAC) -J-Xmx1g -source 1.7 -target 1.7 -sourcepath save -d build7 \
+	    save/frege/compiler/Main.java
+	jar -cf   fregec7.jar -C build7 frege
+	jar -uvfe fregec7.jar frege.compiler.Main
+	@echo Looks good .... let us try to make the tools and library ... 
+	$(JAVA) -Xmx1g -Xss4m -Dfrege.javac="javac -source 1.7 -target 1.7" -jar fregec7.jar -d build7 -nocp -fp build7 -make \
+	    frege/StandardTools.fr frege/StandardLibrary.fr
+	@echo Still running? Now we have it almost .... 
+	cp frege/tools/yygenpar-fr frege/tools/YYgenparM-fr build7/frege/tools
+	jar -cf   fregec7.jar -C build7 frege
+	jar -uvfe fregec7.jar frege.compiler.Main
+	cp fregec7.jar ../eclipse-plugin/lib/fregec.jar
+ 
 fregec6.jar: fallback.jar savejava
 	@echo The following will probably only work if you just made a fregec.jar
 	@echo Adapting the sources for dumb old java6 ....
