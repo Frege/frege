@@ -3,11 +3,13 @@ module frege.tools.Splitter where
 
 import Data.List
 import Data.TreeMap as L(values, keys, each, Tree)
+import Data.Monoid
 
 import frege.compiler.types.Flags as Compilerflags(IDE)
 
 import frege.compiler.Data
 import frege.compiler.Main()
+import frege.compiler.Nice(text)
 import frege.compiler.Typecheck as T()
 import frege.compiler.Utilities as U()
 
@@ -47,7 +49,7 @@ main args = do
     scanned <- Main.scanOpts Main.stdOptions args
     case scanned  of
         Just (opts, splitargs)
-            | length splitargs == 1 
+            |      length splitargs == 1 
                 || length splitargs == 3
                 || length splitargs == 4 -> do
                     let source = head splitargs
@@ -71,14 +73,19 @@ main args = do
                 System.exit 2
         Nothing -> usage >> System.exit 1
 
-split :: [String] -> StG (String, Int)
-split args = do
-    g <- getST
-    members <- T.memberTree     -- to identify our members
-    let ours g      = (filter (flip Symbol.our g) . filter noAliases) (values g.thisTab)
+ours g      = (filter (flip Symbol.our g) . filter noAliases) (values g.thisTab)
+    where
+        noAliases SymL{name=n@VName{},alias=a@VName{}} = a.our g && n.our g
         noAliases SymL{} = false
         noAliases _      = true
-        ascending g = sortBy (comparing Symbol.pos) (ours g)
+ascending g = sortBy (comparing Symbol.pos) (ours g)
+
+split :: [String] -> StG (String, Int)
+split args = do
+    changeST _.{options <- _.{flags <- flip BitSet.differenceE IDE}} -- turn off for error reporting
+    g <- getST
+    members <- T.memberTree     -- to identify our members
+
     makeRanges (ascending g)
     -- Symbols have changed because of makeRanges
     g <- getST 
@@ -88,51 +95,177 @@ split args = do
                     (zip (map Symbol.name (ascending g)) (map keys (deps g)))
         deptree = Tree.fromList udeps
         tdeps   = U.tsort udeps
-    case args of 
-        [] -> doio $ do 
-                dot <- openWriter "deps.dot"
-                dot.println "digraph dependencies {"
-                mapM_ (dotDep dot g deptree) tdeps
-                dot.println "}"
-                dot.close
-                stderr.println "Dependency graph written to deps.dot, use"
-                stderr.println "  dot -Tsvg -O deps.dot"
-                stderr.println "to obtain a visualisation you can see in a browser."
-        [members, modul, helper] -> do
-            newMod modul >>= doio . _.close
-            return ()  
-        [members, modul]         -> do
-            newMod modul >>= doio . _.close
-            return ()  
+        asc     = ascending g
+    
+    -- see if the user arguments make sense
+    ys <- case args of
+        [] -> return []
+        (moves:_) -> mapM selectMember (´,´.splitted moves) where
+                    selectMember x = case find ((x==) . _.base . fst) udeps of
+                        Just (q, _) -> return q
+                        Nothing -> do
+                            U.error Position.null (text (x ++ " is unknown"))
+                            return (VName g.thisPack "?")
+    
+    g <- getST                    
+    when (g.errors == 0) do 
+        -- break the tdeps array into two pieces:
+        -- the left one is the minimal one that contains all user sepcified names
+        -- the right one describes the items that remain in any case in the original
+        let takeU [] left items = (reverse left, items)
+            takeU _  left []    = (reverse left, [])
+            takeU us left (xs:items) = takeU 
+                    (filter (`notElem` xs) us)
+                    (xs:left)
+                    items
+            (outitems, initems) = takeU ys [] tdeps
+            niceqs = map (flip _.nicer g) . concat
+        -- The left half may contain items or groups that are not mentioned 
+        -- in further right items, move that item or group to list of items to
+        -- retain.
+        -- This can happen when we select an 'x', and there is accidentally
+        -- some unrelated item 'z' placed left from it in the topologically
+        -- sorted list.
+        let toPurge :: [QName] -> [[QName]] -> Bool
+            toPurge xs xss = not (any (`elem` ys) xs) &&
+                             not (anyReferencedBy xss xs)
+            anyReferencedBy xss xs = any (\p -> 
+                any (\ds -> p `elem` ds) 
+                    (mapMaybe (L.lookup deptree) (concat xss)))
+                xs
+            purge [] = []
+            purge (xs:xss) = if toPurge xs purged
+                                then purged
+                                else xs:purged 
+                    where purged = purge xss
+            purgedItems = purge outitems
+            toKeep      = filter (`notElem` purgedItems) outitems ++ initems
+        -- helper items are those that are directly referenced from the rhs as well
+        let helperItems = 
+                        filter (anyReferencedBy toKeep) 
+                        . filter (not . any (`elem`  ys)) 
+                    $ purgedItems 
+        doio do
+            stderr.println ("--- Items remaining in original:" 
+                                ++ joined ", " (niceqs toKeep)) 
+            stderr.println ("--- Items moved away:"
+                                ++ joined ", " (niceqs purgedItems))
+            stderr.println ("--- Items moved to helper module:"
+                                ++ joined ", " (niceqs helperItems))
+        -- items in flat form
+        let toMove = concat purgedItems
+            toHelp = concat helperItems
+        case args of 
+            [_, modul, helper] -> doio do
+                    printMods g modul (Just helper) toMove toHelp asc
+  
+            [_, modul]         -> doio do
+                    printMods g modul Nothing toMove toHelp asc
+
+            _ -> doio $ do 
+                    dot <- openWriter "deps.dot"
+                    dot.println "digraph dependencies {"
+                    mapM_ (dotDep dot g deptree) tdeps
+                    dot.println "}"
+                    dot.close
+                    stderr.println "Dependency graph written to deps.dot, use"
+                    stderr.println "  dot -Tsvg -O deps.dot"
+                    stderr.println "to obtain a visualisation you can see in a browser."
+  
+        
     return ("items", length (ours g))
 
+printMods :: Global  
+                -- -> PrintWriter                  -- output for original source 
+                -> String                       -- module name for outsourced
+                -> Maybe String                 -- module name for helper
+                -> [QName]                      -- names to outsource 
+                -> [QName]                      -- names that go to helper
+                -> [Symbol]                     -- symbols to write
+                -> IO ()
+printMods g modul mbHelper mItems hItems syms = do
+        dat <- openReader g.options.source >>= getContentsOf
+        -- print the initial portion of the original file
+        let first = head syms
+            startoff = first.pos.first.offset
+            initialportion = substr dat 0 startoff
+        orig <- newMod g (g.thisPack.unpack g)
+        orig.println initialportion 
+        mod  <- newMod g modul
+        printHeader mod modul
+        printImports g mod
+        helper <- case mbHelper of
+            Just h -> do
+                hpw <- newMod g h
+                printHeader hpw h
+                printImports g hpw
+                orig.println
+                orig.println "-- import outsourced modules"
+                orig.println ("import  " ++ modul)
+                orig.println ("import  " ++ h)
+                orig.println
+                mod.println
+                mod.println "-- import helper modules"
+                mod.println ("import  " ++ h)
+                mod.println
+                return hpw
+            Nothing -> do
+                orig.println
+                orig.println "-- import outsourced modules"
+                orig.println ("import  " ++ modul)
+                orig.println
+                return mod
+        mapM_ (out dat orig mod helper) syms
+        orig.close
+        mod.close
+        maybe (return ()) (const helper.close) mbHelper
+        return ()
+    where
+        out :: String -> PrintWriter -> PrintWriter -> PrintWriter -> Symbol -> IO ()
+        out dat ow mw hw sym = do
+            --stderr.println (nicer sym.name g
+            --    ++ ", range=" ++ show sym.pos.first.offset ++ ".." 
+            --        ++ show sym.pos.end)
+            let src = substr dat sym.pos.first.offset end
+                end = braces sym.pos.end
+                braces e = if e >= dat.length || dat.charAt e == '}'
+                            then braces (e+1)
+                            else e
+                writer = if  sym.name `elem` mItems
+                    then if  sym.name `elem` hItems
+                        then hw
+                        else mw
+                    else ow
+            writer.println src
+            writer.println
+            writer.println
+                
 
 ---  make filename from package name  @x.y.z.Packet@ =>  @dest/x/y/z/Packet.suffix@
-targetPath path suffix = do
-    g <- getST
-    let target = g.options.dir ++ "/"
+targetPath :: Global -> String -> String -> String
+targetPath g path suffix = g.options.dir ++ "/"
                     ++ (´\.´.matcher path).replaceAll("/")
                     ++ suffix
-    stio target
+    
 
 
 --- Create a new package and return a 'PrintWriter' for it.
--- newMod :: String -> StG PrintWriter
-newMod pack = do
-    target <- targetPath pack ".fr"
-    doio do stderr.println ("target is " ++ target)
-    g <- getST
-    doio $ do
-        parent <- File.new target >>= _.getParentFile
-        case parent of
-            Just dir ->  dir.mkdirs    -- make sure all directories are there
-            Nothing  ->  return false
-        pw <- openWriter target
+newMod :: Global -> String -> IO PrintWriter
+newMod g pack = do
+    let target = targetPath g pack ".fr"
+    stderr.println ("target is " ++ target)
+    parent <- File.new target >>= _.getParentFile
+    case parent of
+        Just dir ->  dir.mkdirs    -- make sure all directories are there
+        Nothing  ->  return false
+    openWriter target
+
+printHeader :: PrintWriter -> String -> IO ()
+printHeader pw pack = do
         pw.println ("--- This is an undocumented module.")
         pw.println ("module " ++ pack  ++ " where ")
-        pw.println ("        -- generated by Splitter from " ++ g.thisPack.unpack g)
-        printImports g pw
-        return pw
+        pw.println ("        -- generated by Splitter")
+        
 
 printImports g pw = mapM_ (printImpDcl g pw)
             [ idef | idef @ImpDcl{pos, pack, as, imports} <- g.definitions ]
@@ -167,7 +300,7 @@ dotDep writer g tree qns = do
             writer.println (x ++ nicename qn1  ++ " -> " ++ nicename qn2)
         subdep q = mapM_ (singledep "\t\t" q) (filter (`elem` qns) (dep q))
         outdep q = mapM_ (singledep "\t\t" q) (filter (`notElem` qns) (dep q))
-        clusterdep q = writer.println ("\t" ++ cluster ++ " -> " ++  nicename q)
+        -- clusterdep q = writer.println ("\t" ++ cluster ++ " -> " ++  nicename q)
         nicename q = case nicer q g of
                 s@´^\w+$´   -> s
                 x           -> show x
@@ -209,7 +342,7 @@ printRange g symbol = do
     -} 
 fullRange symbol next = do
         g <- getST
-        doio $ printRange g symbol
+        -- doio $ printRange g symbol
         lower <- lowerRange symbol
         upper <- upperRange symbol next
         return (Pos lower upper)
@@ -218,7 +351,9 @@ fullRange symbol next = do
         upperRange symbol Nothing = do
             g <- getST
             let toks = g.sub.toks
-            return (elemAt toks (toks.length - 1))
+                last = elemAt toks (toks.length - 1)
+            doio $  stderr.println ("Last token: " ++ show last)
+            return last
         upperRange symbol (Just next) 
             | symbol.pos.end >= next.pos.start = do
                 g <- getST
@@ -289,8 +424,9 @@ symDep g members SymD{typ} = sigmaDep g typ
 symDep g members SymV{typ,expr} = sigmaDep g typ L.`union` maybe Tree.empty (exprDep g members) expr
 symDep g members SymL{name, alias}
     | name.our g, not (alias.our g) = nameDep g Tree.empty name    -- imported item
-    | otherwise = case alias.findit g of
-        Just sym -> symDep g members sym
+    | otherwise                     = nameDep g Tree.empty alias
+    | false = case alias.findit g of
+        Just sym -> nameDep g (symDep g members sym) alias
         Nothing  -> Tree.empty
 symDep g members SymI{clas, typ, env} = fold L.union tree (map (symDep g members) (values env))
     where
