@@ -15,6 +15,11 @@ import Control.monad.trans.MonadTrans
 import Data.List
 import Data.TreeMap (Tree, insertkv)
 
+
+
+-- import outsourced modules
+import  frege.compiler.grammar.Util
+
 --- the main program
 main args = do
     g       <- Main.standardOptions
@@ -22,6 +27,7 @@ main args = do
     case scanned  of
         Just (opts, ourargs) -> mapM_ (run g opts) ourargs
         Nothing -> return ()
+
 
 run :: Global -> Options -> String -> IO ()
 run g opts source = do                
@@ -35,6 +41,7 @@ run g opts source = do
                             when (g.errors > 0) do
                                 stderr.println "Source code has errors. See you later."
                             return ()
+
 
 runParser = do
         g      <- getST
@@ -54,139 +61,38 @@ runParser = do
         pos [] = Position.null
         pos (t:_) = Position.Pos t t
 
--- -------------------------------------------------------------------- meta
-
---- make sure item is unqualified (applies to 'operator' only)
-unqualified o = o >>= lift . U.unqualified
-
-{-
-    qvarid:  QUALIFIER QUALIFIER varop  { \n\t\v     -> With2 n t v}
-        |    QUALIFIER varop            { \t\v       -> With1 t v}
-        |    VARID                      { \v         -> Simple v }
--}
-qualified t1 t2 = do
-        q1 <- token QUALIFIER
-        do 
-                q2 <- token QUALIFIER
-                v  <- t1
-                return (With2 q1 q2 v)
-            <|> do
-                v  <- t1
-                return (With1 q1 v)
-    <|>
-        Simple <$> t2
-
---- remember the input stream. Suceeds always.
-mark   = N.getPos
---- resume parsing with a modified input stream
-resume = N.putPos 
-
-
-skipdef = do
-        pos <- mark
-        resume (skip 0 pos)
-    where
-        skip !n pos 
-            | Nothing <- uncons pos = pos
-        skip 0 pos
-            | Just (t,ts) <- u, isChar ';' t = pos
-            | Just (t,ts) <- u, isChar '}' t = pos
-            where u = uncons pos
-        skip n pos
-            | Just (t,ts) <- u, isChar '}' t = skip (n-1) ts
-            | Just (t,ts) <- u, isChar '{' t = skip (n+1) ts
-            | Just (t,ts) <- u, otherwise    = skip n ts
-            | otherwise                      = error "skip"
-            where u = uncons pos
-
---- mark begin and end of some item
-positioned p = do
-        here <- mark
-        result <- p
-        there <- mark
-        return (position here there, result)
-    where
-        position from to = case uncons from of
-            Just (f, _) -> case uncons to of
-                Just (t, _) 
-                    | t != f -> Pos f (head . takeWhile (!=t) . toList $ from)
-                    | otherwise = Pos t t
-                Nothing -> Pos f (last (toList from))
-            Nothing -> Position.null
-
-between what left right parser = do
-    tokch left
-    r <- parser
-    tokch right 
-        <|> yyerror ("missing " ++ show right ++ " after " ++ what ++ ", found ")
-    reduce what r   
-                    
-    
--- -------------------------------------------------------------------- lexical stuff
-    
-token t     = satisfy (isToken t)   >>= tracetok
-tokch c     = satisfy (isChar  c)   >>= tracetok
-keywd s     = satisfy (isKey   s)   >>= tracetok
-
-isToken x   =  (x==) . Token.tokid
-isChar  c t = isToken CHAR t  && yychar t == c
-isKey   s t = isToken VARID t && t.value == s   
 
 --- tokens allowed in package names
 allowedInPackageNames = [VARID, DATA, TYPE, NATIVE, PURE, PACKAGE, IMPORT]
+
+
 varidkw = choice (map token allowedInPackageNames)
 
+
 operator = satisfy op
-    where op x = let tid = Token.tokid x in tid >= LOP1 && tid <= NOP16 
+    where op x = let tid = Token.tokid x in tid >= LOP1 && tid <= NOP16
 
 
--- -------------------------------------------------------------------- Error handling
-yydebug = maybe false (const true) (System.getenv "YYDEBUG")
+noexpression t = Vbl{pos=yyline t, name=Simple t, typ=Nothing}
 
-tracetok t 
-    | yydebug, traceLn (show t.line ++ ": consuming " ++ yynice t) = return t
-    | otherwise = return t
 
-reduce s x 
-    | yydebug, traceLn ("reducing " ++ s) = return x
-    | otherwise = return x
-    
-yyfound bad msg = lift do 
-    U.error (yyline bad) (
-        Nice.text (msg++",") Nice.<+> Nice.nest 4 (
-            Nice.text "found: " Nice.<+> Nice.text (yynice bad)
-        )
-      )
-
-yyerror msg = do
-    pos <- mark
-    let t = errortoken pos
-    lift $ U.error (yyline t) (Nice.text msg Nice.<+> Nice.text (yynice t))
-    return t
-
---- extract the first token or EOF marker from a stream
-errortoken = maybe eof fst . uncons
-    where
-        eof = Token{tokid = COMMENT, value = "END OF INPUT", 
-                    line = maxBound, offset = maxBound, 
-                    qual=[], col=1}
-
-expecting f msg = satisfy f <|> yyerror msg
-
-noexpression t = Vbl{pos=yyline t, name=Simple t, typ=Nothing}        
 -- -------------------------------------------------------------------- Grammar
 
 --- alias name for imported item                  
 alias = token VARID <|> token CONID <|> unqualified operator
 
+
 --- some documentation comments, without separator
 docs     = joined "\n" . map _.value <$> some (token DOCUMENTATION)
+
 
 --- some documentation, separated and ended by semicolon
 docDefs  = joined "\n" <$> docs `sepEndBy1` tokch ';'
 
+
 --- > Data.List
 packagename = magicPack <$> packagename1
+
 
 --- > a.Q.x.y.Pack
 packagename1 = do 
@@ -206,8 +112,11 @@ packageclause = do
         token PACKAGE
         c <- packagename   
         reduce "packageclause" (c, doc)
-        
+
+
 memspecs = memspec `sepEndBy` tokch ','
+
+
 memspec = 
         do
             v <- alias
@@ -218,13 +127,21 @@ memspec =
             token PUBLIC
             fmap ImportItem.export memspec
 
-unop  = tokch '!' <|>  tokch '?' 
+
+unop  = tokch '!' <|>  tokch '?'
+
+
 varop = token VARID <|> unop
 
-   
+
 qvarid = qualified varop (token VARID)
+
+
 qconid = qualified (token CONID) (token CONID)
+
+
 opname = opSname <$> operator
+
 
 {-
     importitem:
@@ -244,7 +161,8 @@ importitem =
     <|> protoItem.{name=} <$> qconid
     <|> protoItem.{name=} <$> opname
     <|> protoItem.{name=} . Simple <$> unop
-         
+
+
 {-
     importspec:
     importitem                      { \s      -> ImportItem.{alias = (U.enclosed . Token.value . SName.id . ImportItem.name) s} s}
@@ -258,10 +176,11 @@ importspec =
         item  <- importitem
         ali   <- alias <|> return item.name.id
         return (ImportItem.{alias = U.enclosed ali.value} item)
-         
+
 
 --- 'importspec', 'importspec', 
 importspecs = importspec `sepEndBy` (tokch ',')
+
 
 importliste = 
                           linkNone.{items=} <$> liste
@@ -270,6 +189,7 @@ importliste =
     <|> reduce "empty import list" linkAll
   where
     liste = between "import items" '(' ')' importspecs
+
 
 importdef = do
         token IMPORT
@@ -285,22 +205,15 @@ importdef = do
                 changeST Global.{sub <- SubSt.{idKind <- insertkv (KeyTk c) (Left()) }}
             return c.value
 
+
 documentation = do
     comment <- token DOCUMENTATION
     reduce "documentation" DocDcl {pos = yyline comment, text = comment.value}
 
---- reduces a 'Token' to a 'Vbl'
-vbl p = do
-    t <- p
-    return Vbl{pos=yyline t, name=Simple t, typ=Nothing}
-
---- reduces a 'Sname' to a 'Vbl'
-vbls p = do
-    name <- p
-    return Vbl{pos = yyline (SName.id name), name, typ=Nothing}
 
 --- a term
-term = vbls qvarid 
+term = vbls qvarid
+
 
 {--
     gqual:
@@ -317,7 +230,8 @@ gqual = do
             Just x -> lift do
                 pat <- exprToPat e
                 return (Left (Just pat, x))
- 
+
+
 {--
     lcqual:
         gqual
@@ -332,7 +246,7 @@ lcqual = cond (token LET) lqual gqual
         gqual = do
             p <- expr
             pos <- mark
-            t <- pany
+            t <- pany >>= tracetok
             case t.tokid  of
                 GETS                = ege p
                 CHAR | isChar '=' t = eee p
@@ -349,6 +263,7 @@ lcqual = cond (token LET) lqual gqual
             fh <- lift do
                 funhead e
             return (Right (fundef fh x))
+
 
 {--
     primary:
@@ -392,28 +307,38 @@ lcqual = cond (token LET) lqual gqual
 -}
 primary = primary_nr
 
+
 --- the non-recursive part of a primary
 primary_nr = term
     <|> do
         d <- token DO
-        between "do block" '{' '}' dodefs >>= lift . mkMonad (yyline d)  
+        (between "do block" '{' '}' dodefs >>= lift . mkMonad (yyline d))
+            <+> (yyerror "error in do block"  >> return (noexpression d))  
     where
         dodefs = lcqual `sepEndBy1` tokch ';'
+
 
 unex = primary
     <|> liftM2 nApp (vbl unop) primary
 
+
 appex = foldl1 nApp <$> some unex
+
 
 binex = appex
 
+
 topex = binex
+
 
 expr = topex
 
+
 funlhs = binex >>= lift . funhead
 
+
 fundcl (pos, name, pats) expr = FunDcl {poss=[pos], vis=Public, name, pats, expr, doc=Nothing}
+
 
 function = do
     head <- funlhs
@@ -424,12 +349,18 @@ function = do
             return (noexpression t)
     reduce "function" (fundcl head e)
 
+
 letdef = function
+
+
 letdefs = letdef `sepEndBy1` tokch ';'
+
 
 localdef = function
 
+
 publicdefinition = localdef
+
 
 visibledefinition = do
         modifier <- optional (token PRIVATE 
@@ -440,7 +371,6 @@ visibledefinition = do
             PRIVATE     -> return (updVis Private   publicdf)
             PROTECTED   -> return (updVis Protected publicdf)
             _           -> return publicdf
-        
 
 
 definition  =
@@ -448,7 +378,9 @@ definition  =
         <|> importdef
         <|> visibledefinition
 
+
 definitions = definition `sepEndBy1` some (tokch ';')
+
 
 --- parse whole program    
 modul :: ParserT [] Token StG Program
@@ -460,4 +392,5 @@ modul = do
             t <- pany
             lift (U.warn (yyline t) (Nice.text "end of program before end of file")) 
         reduce "module" $ Program.Module (packname, defs, doc)
-        
+
+
