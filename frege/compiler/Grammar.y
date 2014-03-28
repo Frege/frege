@@ -896,7 +896,7 @@ classdef:
 
 instdef:
     INSTANCE tyname sigma wheredef {
-        \ins\t\r\defs -> InsDcl {pos = getpos r, vis = Public, clas=t, typ=r, defs=defs, doc=Nothing}
+        \ins\t\r\defs -> InsDcl {pos = yyline ins, vis = Public, clas=t, typ=r, defs=defs, doc=Nothing}
     }
     ;
 
