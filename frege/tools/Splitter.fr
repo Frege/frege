@@ -56,8 +56,9 @@ main args = do
                         sargs  = tail splitargs
                         opt'   = opts.{source}.{flags <- flip BitSet.unionE IDE}
                         g'     = g.{options = opt'}
-                        passes = takeUntil (\(_,s,_) -> s ~ ´simplify lets´) Main.passes
-                                ++ [(split sargs, "splitting", return true)]
+                        passes = takeUntil (\(_,s,_) -> s.startsWith "simplify expressions") Main.passes
+                                ++ [(ideoff, "turn IDE mode off", return true),
+                                    (split sargs, "splitting", return true)]
                     case StG.run (foreach passes Main.runpass) g' of
                         (_, g) -> do
                             when (g.errors > 0) do
@@ -72,7 +73,11 @@ main args = do
                 stderr.println "You may want to use the -help flag for usage information."
                 System.exit 2
         Nothing -> usage >> System.exit 1
-
+        
+ideoff = do
+    changeST _.{options <- _.{flags <- flip BitSet.differenceE IDE}} -- turn off for error reporting
+    return ("flags", 1)
+    
 ours g      = (filter (flip Symbol.our g) . filter noAliases) (values g.thisTab)
     where
         noAliases SymL{name=n@VName{},alias=a@VName{}} = a.our g && n.our g
@@ -82,15 +87,15 @@ ascending g = sortBy (comparing Symbol.pos) (ours g)
 
 split :: [String] -> StG (String, Int)
 split args = do
-    changeST _.{options <- _.{flags <- flip BitSet.differenceE IDE}} -- turn off for error reporting
+    
     g <- getST
-    members <- T.memberTree     -- to identify our members
+    -- members <- T.memberTree     -- to identify our members
 
     makeRanges (ascending g)
     -- Symbols have changed because of makeRanges
     g <- getST 
     -- doio $ mapM_ (printRange g) (ascending g)
-    let deps g  = map (symDep g members) (ascending g)
+    let deps g  = map (symDep g) (ascending g)
         udeps   = map (\(a,as) -> (a, filter (a!=) as))     -- eliminate self recursion
                     (zip (map Symbol.name (ascending g)) (map keys (deps g)))
         deptree = Tree.fromList udeps
@@ -422,24 +427,32 @@ makeRanges ascending = do
     mapM_ U.changeSym (zipWith Symbol.{pos=} ascending ranges)
     
 -- symDep g _ sym | traceLn ("doing symDep for " ++ nicer sym g) = undefined
-symDep g members SymA{typ} = sigmaDep g typ
-symDep g members SymT{env} = fold L.union Tree.empty (map (symDep g members) (values env))
-symDep g members SymD{typ} = sigmaDep g typ
-symDep g members SymV{typ,expr} = sigmaDep g typ L.`union` maybe Tree.empty (exprDep g members) expr
-symDep g members SymL{name, alias}
+symDep g SymA{typ} = sigmaDep g typ
+symDep g SymT{env} = fold L.union Tree.empty [ symDep g sym | 
+                                sym <- values env,
+                                not (instLink sym)]
+        where
+            instLink SymL{alias}
+                | Just SymV{name}   <- alias.findit g,
+                  MName{tynm}       <- name,
+                  Just SymI{}       <- tynm.findit g = true
+            instLink other = false
+symDep g SymD{typ} = sigmaDep g typ
+symDep g SymV{typ,expr} = sigmaDep g typ L.`union` maybe Tree.empty (exprDep g) expr
+symDep g SymL{name, alias}
     | name.our g, not (alias.our g) = nameDep g Tree.empty name    -- imported item
     | otherwise                     = nameDep g Tree.empty alias
     | false = case alias.findit g of
-        Just sym -> nameDep g (symDep g members sym) alias
+        Just sym -> nameDep g (symDep g sym) alias
         Nothing  -> Tree.empty
-symDep g members SymI{clas, typ, env} = fold L.union tree (map (symDep g members) (values env))
+symDep g SymI{clas, typ, env} = fold L.union tree (map (symDep g) (values env))
     where
         tree = nameDep g sigt clas
         sigt = sigmaDep g typ
-symDep g members SymC{supers, env} = fold L.union tree (map (symDep g members) (values env))
+symDep g SymC{supers, env} = fold L.union tree (map (symDep g) (values env))
     where
         tree = fold (nameDep g) Tree.empty supers
-symDep g members sym = error ("don't know dependencies of " ++ nicer sym g)
+symDep g sym = error ("don't know dependencies of " ++ nicer sym g)
 
 -- nameDep :: g -> tree -> QName -> tree
 nameDep g tree Local{uid, base}   = tree
@@ -447,21 +460,18 @@ nameDep g tree MName{tynm, base}  = if tynm.our g then Tree.insert tree tynm () 
 nameDep g tree name               = if name.our g then Tree.insert tree name () else tree
 
 
-exprDep g mems ex = exDep Tree.empty ex
+exprDep g ex = exDep Tree.empty ex
     where
         exDep tree Vbl{name}        = nameDep g tree name
         exDep tree Con{name}        = nameDep g tree name
         exDep tree ConFS{name}      = nameDep g tree name
         exDep tree App{fun, arg}    = exDep (exDep tree fun) arg
         exDep tree Lit{}            = tree
-        exDep tree Let{env, ex}     = fold L.union (exDep tree ex) (map (symDep g mems) syms) where
+        exDep tree Let{env, ex}     = fold L.union (exDep tree ex) (map (symDep g) syms) where
                                          syms = mapMaybe (flip QName.findit g) env 
         exDep tree Lam{pat, ex}     = exDep (patDep tree pat) ex
         exDep tree Ifte{cnd, thn, els}  = fold exDep tree [cnd, thn, els]
-        exDep tree Mem{ex, member}  = case Tree.lookupS mems member.value of
-                                        Nothing   -> exDep tree ex
-                                        Just syms -> fold (nameDep g) (exDep tree ex) nms where
-                                            nms = map Symbol.name syms  
+        exDep tree Mem{ex, member}  = exDep tree ex     -- should not happen after type check
         exDep tree Case{ex, alts}   = fold altDep (exDep tree ex) alts where
                                         altDep tree CAlt{pat, ex} = exDep (patDep tree pat) ex 
         exDep tree Ann{ex, typ}  = maybe Tree.empty (sigmaDep g) typ L.`union` exDep tree ex
