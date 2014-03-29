@@ -1308,7 +1308,7 @@ primary:
                         u x ((r::Token, false, e):xs) = u (umem x r.{value <- ("upd$" ++)} (`nApp` e))  xs;
                                 } in u x fs}
     | primary '.' '[' expr ']'      { \p\(t::Token)\_\v\_  ->
-                                        let elem = t.position.change VARID "elemAt"
+                                        let elem = (yyline t).change VARID "elemAt"
                                         in Vbl {pos=elem, name=Simple elem.first, typ=Nothing}
                                             `nApp` p
                                             `nApp` v}
@@ -1353,7 +1353,7 @@ term:
     | '[' expr '|' lcquals ']'      { \(a::Token)\e\b\qs\(z::Token) -> do {
                 let {nil = z.{tokid=CONID, value="[]"}};
                 listComprehension (yyline b) e qs
-                                            (Con {name = With1 baseToken nil, pos = nil.position, typ = Nothing})
+                                            (Con {name = With1 baseToken nil, pos = yyline nil, typ = Nothing})
                                     }}
     ;
 
