@@ -49,7 +49,7 @@ import frege.Prelude hiding(<+>)
 import Data.TreeMap(insertkv)
 import Data.List as DL(elemBy)
 
-import frege.compiler.types.Flags as Compilerflags(INPRELUDE)
+import frege.compiler.enums.Flags as Compilerflags(INPRELUDE)
 
 import frege.compiler.Data      as D
 import frege.compiler.Nice      except (group, annotation, break)

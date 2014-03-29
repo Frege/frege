@@ -254,10 +254,10 @@ $(DIR2)/Prelude.class: $(RUNTIME) $(COMPF1)/Main.class frege/Prelude.fr $(PRELUD
 
 
 SOURCES  =      $(COMPS)/Scanner.fr   $(COMPS)/Classtools.fr \
-		$(COMPS)/BaseTypes.fr $(COMPS)/types/Flags.fr \
+		$(COMPS)/BaseTypes.fr $(COMPS)/enums/Flags.fr \
 		$(COMPS)/Data.fr      $(COMPS)/Utilities.fr \
 		$(COMPS)/GUtil.fr \
-		$(COMPS)/Main.fr      $(COMPS)/Grammar.y \
+		$(COMPS)/Main.fr      $(COMPS)/Grammar.fr   $(COMPS)/Grammar.y \
 		$(COMPS)/Fixdefs.fr   $(COMPS)/Import.fr    $(COMPS)/Enter.fr \
 		$(COMPS)/TAlias.fr    \
 		$(COMPS)/Javatypes.fr $(COMPS)/Kinds.fr \
