@@ -51,6 +51,11 @@ import Data.List as DL(elemBy)
 
 import Compiler.enums.Flags as Compilerflags(INPRELUDE)
 import Compiler.enums.TokenID(TokenID)
+import Compiler.types.Positions
+import Compiler.types.Tokens
+
+
+import Compiler.types.Kinds
 
 import frege.compiler.Data      as D
 import frege.compiler.Nice      except (group, annotation, break)
