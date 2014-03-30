@@ -1,0 +1,862 @@
+{- «•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»
+
+    Copyright © 2011, Ingo Wechsung
+    All rights reserved.
+
+    Redistribution and use in source and binary forms, with or
+    without modification, are permitted provided that the following
+    conditions are met:
+
+        Redistributions of source code must retain the above copyright
+        notice, this list of conditions and the following disclaimer.
+
+        Redistributions in binary form must reproduce the above
+        copyright notice, this list of conditions and the following
+        disclaimer in the documentation and/or other materials provided
+        with the distribution. Neither the name of the copyright holder
+        nor the names of its contributors may be used to endorse or
+        promote products derived from this software without specific
+        prior written permission.
+
+    THIS SOFTWARE IS PROVIDED BY THE
+    COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR
+    IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+    WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+    PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER
+    OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+    SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+    LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
+    USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED
+    AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+    LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
+    IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
+    THE POSSIBILITY OF SUCH DAMAGE.
+
+    «•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•» -}
+
+{--
+    Provide services for documentation
+ -}
+
+
+package frege.tools.doc.Utilities where
+
+import frege.Prelude hiding(print, println, Integral, div, seq, join, break)
+
+import Data.TreeMap (Tree, keys, values, each, insertkv)
+import Data.List as DL(sortBy, groupBy, intersperse)
+import Java.Net(URI) 
+
+import Compiler.enums.Flags as Compilerflags(SPECIAL)
+
+import Compiler.types.Kinds
+import Compiler.types.Positions
+
+
+import frege.compiler.Data       as D hiding(JType)
+import frege.compiler.Import     as I()
+import frege.compiler.Utilities  as U(print, println, theClassLoader)
+import frege.compiler.Classtools as CT()
+import Test.QuickCheck      as QC(property)
+
+--- Represents an abstract HTML document.
+data Docu = Doc [Paragraph]
+-- derive Show Docu
+
+--- Represents an abstract paragraph.
+data Paragraph =
+    Par String  Text
+    | OUL Bool (Maybe String) [Paragraph]                   -- indicate whether ordered or not
+    | LI [Paragraph]
+    | DL (Maybe String) [(Text, [Paragraph])]
+-- derive Show Paragraph
+
+--- convenience function to create a heading of level 1
+h1 = Par "h1"
+--- convenience function to create a heading of level 2
+h2 = Par "h2"
+--- convenience function to create a heading of level 3
+h3 = Par "h3"
+--- convenience function to create an ordinary paragraph
+par = Par "p"
+--- convenience function to create a pseudo paragraph
+div = Par "div"
+--- convenience function to create an itemized list
+ul = OUL false
+--- convenience function to create a numbered list
+ol = OUL true
+--- convenience function to create a numbered list
+dl = DL
+
+--- Represents an abstract text sequence
+data Text =
+      P String                 --- plain text
+    | E String                 --- symbols like &forall; &rarr; ...
+    | T Attr Text              --- text with character attributes
+    | Label String Text        --- <a name="#label">text<\/a>
+    | Ref QName Text           --- <a href="...">N.n<\/a>
+    | XRef String Text         --- generic ref
+    | PRef Pack (Maybe String) Text           
+                               --- reference to a package with optional item
+    | Seq Text Text            --- concatenation of 2 texts
+    ;
+
+infixr 13 `:-`
+--- transform a string to ordinary text
+text = P
+--- transform a text to bold text
+bold = T Bold
+--- transform a text to emphasized text
+emph = T Italic
+--- transform a text to text in monospaced font
+code = T Code -- (A "code")
+code1 = T (A "code1")
+code2 = T (A "code2")
+--- a unresolved reference
+badref s = T (A "unknown") (P s)
+--- a reference to a type name
+tref tn g = Ref tn  (text $ nicer tn g)
+--- a reference to a symbol
+sref (SymL {name,alias}) g = Ref alias (text $ nicer name g)
+sref sym g = tref sym.name g
+--- a reference to a function or constructor name
+fref qn g = Ref qn  (text $ nicer qn g)
+--- makes a single text from a list of texts
+seq  = foldr Seq (P "")
+a :- b = Seq a b
+eForall = E "&forall;"
+eArrow  = E "&rarr;"
+spc     = E "&nbsp;"
+-- spaces 4 = E "<br>"
+spaces n = (seq • take n • repeat) spc
+break    = E "<br>"
+
+instance Show URI where show = URI.toString
+-- derive Show Text
+-- derive Ord Text
+
+--- attribute values for use in 'Text'
+data Attr = Normal | Bold | Italic | Code | A String
+-- derive Show Attr
+-- derive Ord Attr
+
+
+join = joined
+joint s f xs = seq (intersperse (text s) (map f xs))
+joins n f xs = seq (intersperse (spaces n :- text " ") (map f xs))
+
+docSym g (syma@SymA {name, vars, typ=ForAll _ rho, doc}) = (code title, docit g doc) where
+    title = (bold • text $ "type ")
+        :- Label (mangled (QName.base name)) (text name.base)
+        :- text " "
+        :- joint " " (dTau g) vars
+        :- text " = "
+        :- dRho g.{options <- Options.{flags <- U.flagSet SPECIAL}} rho []
+
+docSym g (SymC {name,tau,doc,supers,insts,env}) = (code title, content) where
+    title = (bold • text $ "class ")
+        :- Label (mangled (QName.base name)) (text name.base)
+        :- text " "
+        :- dCtx g (map (\c -> Ctx {pos=Position.null, cname=c, tau}) supers)
+        :- text " " :- dTau g tau
+    members = sortBy (comparing Symbol.name) (values env)
+    ki (tname, iname) = Ref iname (text (nice tname g))
+    content = [ p | d <- [docit g doc,
+                          if null insts   then []
+                          else [h3 (text "Known Instances"), par (joint ", " ki insts)],
+                          if null members then []
+                          else [h3 (text "Member Functions"),
+                                DL (Just "func") (map (docSym g) members)]],
+                    p <- d ]
+
+docSym g (SymI {name, doc, clas, typ=ForAll _ rho, env}) = (code title, content) where
+    title = (bold • text $ "instance ")
+        :- Label (mangled (QName.base name)) (text " ")
+        :- text " "
+        :- tref clas g :- text " "
+        :- dRho g rho []
+    members = sortBy (comparing Symbol.name) (values env)
+    content = [ p | d <- [docit g doc,
+                          if null members then []
+                          else [h3 (text "Member Functions"),
+                                DL (Just "func") (map (docSym g) members)]],
+                    p <- d ]
+
+docSym g (SymT {name, doc, typ=ForAll _ rho, env, nativ, pur, mutable}) = (code title, content) where
+    title = (bold • text $ "data ")
+        :- Label (mangled (QName.base name)) (text " ")
+        :- text " "
+        -- :- tref clas g :- text " "
+        :- dRho g rho []
+        :- nativetype nativ
+    nativetype Nothing   = text ""
+    nativetype (Just s)  = text " = " :- mode pur mutable :- (bold • text $ "native ") :- text s
+    mode true false = (bold . text) $ "pure "
+    mode false true = (bold . text) $ "mutable "
+    mode _ _ = text ""
+    members = sortBy (comparing Symbol.name) [ v | v@SymV {pos, name} <- values env,
+                                                    QName.base name !~ #\$#]
+    constrs = sortBy (comparing Symbol.name) [ v | v@SymD {pos} <- values env]
+    content = [ p | d <- [docit g doc,
+                          if null constrs then []
+                          else [h3 (text "Constructors"),
+                                DL (Just "func") (map (docSym g) constrs)],
+                          if null members then []
+                          else [h3 (text "Member Functions"),
+                                DL (Just "func") (map (docSym g) members)]],
+                    p <- d ]
+
+docSym g (SymD {name, doc, typ, vis, flds}) = (code title, docit g doc) where
+    title = lbl             -- label name
+        :- text " "
+        :- typeorfields
+    lbl | vis == Public = label name
+        | otherwise     = (bold . text $ show vis) :- text " " :- label name 
+    typeorfields = if (all (isJust • ConField.name) flds && not (null flds)) then fields else types
+    fields = text "{" :- joint ", " fsmap flds :- text "}"
+    types  = joins 2 (drho • ConField.typ) flds
+    fsmap (Field {name=mbs, typ=ForAll _ rho}) = text (fromMaybe "" mbs) :- text " :: " :- dRho g rho []
+    drho (ForAll _ r) = dRho2 g r []
+
+docSym g (sym@SymV {name, typ, doc, nativ, pur, strsig, over=(_:_)})
+    | sigs <- overSig g sym = (code (title sigs), docit g doc) where
+    tpur =  if pur then (bold • text $ "pure ") else text ""
+    tnat (Just s) = break :- tpur :- (bold • text $ "native ") :- text s
+    tnat Nothing  = text ""
+    tthrows []    = text ""
+    tthrows ts    = break :- spaces (6 + length name.base) :- (bold . text $ "throws ") :- joint ", " (dTau g) ts
+    tsig s        = dRho g (Sigma.rho s) (strBools strsig)
+    strBools U        = []
+    strBools (S list) = map Strictness.isStrict list
+    signature (sig, []) = tsig sig 
+    signature (sig, ts) = tsig sig :- tthrows ts
+    types  = foldl1 (:-) . intersperse (break :- spaces (2+length name.base) :- text "| ") . map signature  
+    -- tsig Nothing  = badref "no type???"
+    title sigs = label name :- text " :: " :- types sigs :- tnat nativ -- :- tthrows throwing
+
+docSym g (sym@SymV {name, typ, doc, nativ, pur, strsig, throwing}) = (code title, docit g doc) where
+    tpur =  if pur then (bold • text $ "pure ") else text ""
+    tnat (Just s) = break :- tpur :- (bold • text $ "native ") :- text s
+    tnat Nothing  = text ""
+    tthrows []    = text ""
+    tthrows ts    = spaces 2 :- (bold . text $ "throws ") :- joint ", " (dTau g) ts
+    tsig s        = dRho g (Sigma.rho s) (strBools strsig)
+    strBools U        = []
+    strBools (S list) = map Strictness.isStrict list
+    -- tsig Nothing  = badref "no type???"
+    ovl = case nativ of
+        Just _  | (o:_) <- overloadOf g sym 
+                = spaces 2 :- (bold • text $ "overloads ") :- Ref o.name (text o.name.base)
+        _       = text "" 
+    title = label name :- text " :: " :- tsig typ :- tnat nativ :- tthrows throwing :- ovl
+
+docSym g (SymL {name,alias}) = case alias.findit g of
+    Nothing -> (badref (name.nice g ++ "links to " ++ alias.nice g ++ " but not found"), [])
+    Just (vsym@SymV{})  = docSym g vsym.{name, 
+                                doc = Just ("Alias for '" ++ name.base ++ "'")}
+    Just sym -> docSym g sym
+
+--- Give the function that is overloaded with this one.
+overloadOf :: Global -> Symbol -> [Symbol]
+overloadOf g sym = [ o |    symtab <- g.packages.lookup sym.name.getpack,
+                            symbol <- values symtab,
+                            o@SymV{over=(_:_)} <- symvs symbol,
+                            sym.name `elem` o.over] 
+        where
+            symvs sym | sym.{env?} = [ sv | sv@SymV{} <- values sym.env ]
+                      | SymV{} <- sym = [sym]
+                      | otherwise = []
+
+--- Give a list of sigmas and throws clauses of the overloads for this one
+overSig g sym = [(Symbol.typ o, Symbol.throwing o) | q <- Symbol.over sym, o <- q.findit g]
+                              
+
+--- create a label  for a variable or a constructor
+label (MName (TName _ b1) b2) = Label (mangled b1 ++ "." ++ mangled b2) (text b2)
+label name                    = Label (mangled (QName.base name)) (text name.base)
+
+
+altcode xs = [ (c t, d) | (c,(t,d)) <- zip (cycle [code1,code2]) xs ]
+
+{--
+ * compile a doc comment to a list of paragraphs
+ -}
+docit g Nothing = []
+docit g (Just s) = dpars where
+        lines = map unws (unnl s)
+        pars  = lsToPs lines
+        tpars = map tagP pars
+        dpars = docpars g tpars
+
+
+{--
+ * we have the following parapgraph kinds:
+ * - plain
+ * - unordered list item
+ * - ordered list item
+ * - definition list item
+ * - preformatted
+ -}
+data PKind = Plain | UItem | OItem | DItem | Pre
+derive Eq PKind
+
+--- tag paragraph with kind, each paragraph must have at least one line
+tagP (p@s:_)
+    | pres  s = (Pre, p)
+    | ditem s = (DItem, p)
+    | uitem s = (UItem, p)
+    | oitem s = (OItem, p)
+    | otherwise = (Plain, p)
+tagP [] = error "tagP: empty paragraph list"
+
+{--
+ * create doc paragraphs from tagged paragraphs
+ -}
+docpars :: Global -> [(PKind, [String])] -> [Paragraph]
+docpars sts [] = []
+docpars sts ((Plain, ss):pss) = par (markup sts (join " " ss)) : docpars sts pss
+docpars sts (pss@(UItem,  _):_) = mkUL uis : docpars sts rest where
+    uis  = takeWhile ((UItem ==) • fst) pss
+    rest = dropWhile ((UItem ==) • fst) pss
+    mkUL uis = ul Nothing lis where
+        lis = map mkLi uis
+        mkLi (_, s:ss) = Par "LI"  (markup sts xss) where
+            xss = s' ++ " " ++ join " " ss
+            s'  = strtail s 1           -- remove '-' at front
+        mkLi _ = error "mkLi: no par"
+docpars sts (pss@(OItem,  _):_) = mkOL uis : docpars sts rest where
+    uis  = takeWhile ((OItem ==) • fst) pss
+    rest = dropWhile ((OItem ==) • fst) pss
+    mkOL uis = ol Nothing lis where
+        lis = map mkLi uis
+        mkLi (_, s:ss) = Par "LI"  (markup sts xss) where
+            xss = s' ++ " " ++ join " " ss
+            s'  = (orex.matcher s).replaceFirst ""           -- remove '(2)' at front
+        mkLi _ = error "mkLi: no par"
+docpars sts (pss@(DItem,  _):_) = mkDL uis : docpars sts rest where
+    uis  = takeWhile ((DItem ==) • fst) pss
+    rest = dropWhile ((DItem ==) • fst) pss
+    mkDL uis = dl Nothing dtdds where
+        dtdds = map mkDtdd uis
+        mkDtdd (_, s:ss) = (markup sts g1, [(div • markup sts) xss]) where
+            xss = s' ++ " " ++ join " " ss
+            g1 = fromMaybe "" ((s ~~~ drex) 1)
+            s'  = (drex.matcher s).replaceFirst ""           -- remove '[item]' at front
+        mkDtdd _ = error "mkDtdd: no par"
+docpars sts ((Pre,   ss):pss) = Par "PRE"  (P (join "\n" (map ungt ss))) : docpars sts pss
+
+ungt s = strtail s 1
+
+{--
+ * compile a string with markup to 'Text'
+ -}
+markup mbst "" = text ""
+markup mbst s
+    -- traceLn (strhead s 20) = undefined
+    | m ~ #^\\([\*_@'])# <- s,
+      Just g1 <- m.group 1 = seq [ text g1, markup mbst (strtail s 2) ]
+    | m ~ #^([^\\\*_@']+)# <- s,
+      Just g1 <- m.group 1 = seq [ text g1, markup mbst (strtail s (m.end 1))]
+    | m ~ #^_(([^_]|\\_)+)_# <- s,
+      Just g1 <- m.group 1 = seq [ (emph • markup mbst) $ g1, markup mbst (strtail s (m.end 0)) ]
+    | m ~ #^@(([^@]|\\@)+)@# <- s,
+      Just g1 <- m.group 1 = seq [ (code • markup mbst) $ g1, markup mbst (strtail s (m.end 0)) ]
+    | m ~ #^\*(([^\*]|\\\*)+)\*# <- s,
+      Just g1 <- m.group 1 = seq [ (bold • markup mbst) $ g1, markup mbst (strtail s (m.end 0)) ]
+    | m ~ ´^'([^'#\s]+)'´ <- s,
+      Just g1 <- m.group 1 = seq [ resolve g1, markup mbst (strtail s (m.end 0)) ]
+    -- 'https://foo/bar  link text'   create generic ref
+    | m ~ ´^'(\w+:[^'\s]+)\s+([^']+)'´ <- s,
+        Just g1 <- m.group 1, Just g2 <- m.group 2 = seq [XRef g1 (text g2), markup mbst (strtail s (m.end 0)) ]
+    | m ~ ´^'([^'#]+)#([^'\s]+)'´ <- s,
+        Just g1 <- m.group 1, Just g2 <- m.group 2 = seq [PRef (Pack.new g1) (Just g2) (text g2), markup mbst (strtail s (m.end 0)) ]
+    | otherwise = seq [ text (strhead s 1), markup mbst (strtail s 1) ]
+    where
+        resolve "[]" = tref (TName pPreludeBase "[]") mbst
+        resolve (s@#^\(,*\)$"#) = tref (TName pPreludeBase s) mbst
+        resolve s = resolves mbst s
+
+resolves :: Global -> String -> Text
+resolves g str = case  State.run (U.resolve (VName g.thisPack) Position.null sname) g of
+    ([],_) -> badref str
+    ([x], _) -> fref x g
+    (xs, _) -> tref (t xs) g
+  where
+    sname = case #\.#.splitted str of
+        [s]     -> Simple Position.null.first.{value=s}
+        [t,s]   -> With1  Position.null.first.{value=t} Position.null.first.{value=s}
+        [n,t,s] -> With2  Position.null.first.{value=n}
+                            Position.null.first.{value=t}
+                            Position.null.first.{value=s}
+        _       -> Simple Position.null.first.{value=str}
+    t xs = case [ x | x@TName _ _ <- xs ] of
+        y:_ -> y
+        _   -> head xs
+
+
+{--
+ * break up a long string into individual lines
+ -}
+unnl s = ´[\t\r ]*\n´.splitted s
+
+{--
+ * remove leading \"  *  \" or just leading spaces from a string
+ -}
+unws s
+    | m~#^\s+\*+\s+(.*)$# <- s, Just s <- m.group 1 = s
+    | m~#^\s+\*+$#        <- s                      = ""
+    | m~#^\s+(.*)$#       <- s, Just s <- m.group 1 = s
+    | otherwise = s
+
+{--
+ * drop empty strings from the front of a list
+ -}
+dropEmpty = dropWhile (""==)
+
+{--
+ * check if a list contains only empty lines
+ -}
+isEnd = (null • dropEmpty)
+
+{--
+ * convert a list of lines to a list of paragraphs
+ -}
+lsToPs xs
+    | null ys   = []      -- no more
+    | pres y    = takeWhile pres ys : lsToPs (dropWhile pres ys)
+    | litem y   = (y:takeWhile item (tail ys)) : lsToPs (dropWhile item (tail ys))
+    | otherwise = takeWhile item ys : lsToPs (dropWhile item ys)
+    where
+        ys = dropEmpty xs
+        y = head ys
+
+
+--- check for paragraph type
+pres s = s ~ #^>#       -- select literal lines
+uitem s = s ~ #^-#
+oitem s = s ~ orex
+orex = #^(\d+\.|\(\d+\))#
+ditem s = s ~ drex
+drex = #^\[([^\]]+)\]#
+
+--- check if this is the start of a list item
+litem s = uitem s || oitem s || ditem s
+
+--- check if this is a normal paragraph line
+item "" = false
+item s  = !(litem s) && !(pres s)
+
+{--
+ * Checks the property that, after applying 'unws',
+ * a string is either empty or it contains at least a non space character
+ -}
+prop_unws = property (\s -> let u = unws s in u == "" || u ~ #\S#)
+
+
+{--
+ * Check whether @file1@ is newer than @file2@
+ *
+ * If both files are modified at the same time, @file1@ is considered newer
+ * thus @File.new "X.class" `newer` File.new "X.java"@ works as expected.
+ *
+ * If @file1@ does not exist, it is *not* newer than any file.
+ **
+newer :: File -> File -> Bool
+newer file1 file2
+    | file1.exists = file1.lastModified >= file2.lastModified
+    | otherwise = false
+-}
+
+{-
+ * Find @file@ in @path@.
+ *
+ * This is not defined for directories.
+ *
+ * If @file@ is an absolute pathname, @file@ is returned.
+ * If @file@ does not exist in any of the paths, @file@ is returned.
+ * Otherwise, a file value is returned that denotes the first
+ * found file.
+ *
+ * Invariant:
+ * >!f.isDirectory ==> f.exists <=> (findInPath f x).exists
+ *
+findInPath :: File -> [String] -> File
+findInPath f ss | f.isDirectory = undefined (f.getPath ++ " is a directory")
+                | otherwise     = find f ps
+    where
+        ps = map File.new $ grep ("" != ) ss
+        find :: File -> [File] -> File
+        find f ps
+                  | f.isAbsolute = f
+                  | d:ds <- ps   = let it = File.newFS d f.getPath in
+                                    if it.exists then it else find f ds
+                  | otherwise    = f
+
+/// checks the invariant for 'findInPath'
+p_findInPath = forAll files proposition where
+        proposition :: File -> QC.Property
+        proposition f = collect (if f.isDirectory then "directory" else "file") (
+            collect (if f.exists then "existing" else "not existing") (
+                if f.isDirectory then true
+                else f.exists == File.exists (findInPath f [".", ".."])
+                ))
+-}
+{--
+ * given a package name and an extension, create a file name
+ * e.g.
+ * >packToFile "frege.system.IO" ".fr" == frege/system/IO.fr
+ -}
+packToFile p ext  = (f ++ ext)
+        where f = (#\.#.matcher p).replaceAll "/"             -- "foo/bar/Baz"
+
+packToFileRef :: Pack -> Global -> StG String
+packToFileRef p g = do
+        let pun  = Pack.unpack p g
+            pf   = packToFile pun ".html"
+            dpf  = g.options.dir ++ "/" ++ pf
+        let target = g.options.dir ++ "/"
+                    ++ packToFile (g.thisPack.unpack g) ".html"
+        ftarg  <- doio $ File.new target
+        parent <- doio $ ftarg.getParentFile
+        dpfFile <- doio $ File.new dpf
+        rawdir <- doio $ relPath parent (Just dpfFile)
+        let cooked = (#/\./#.matcher (rawdir)).replaceAll("/")
+        stio cooked
+
+
+
+{--
+ * given a directory name and a file or directory name,
+ * compute the name of the directory relative to that filename, e.g.
+ * > relPath "foo"   "foo"         == "."
+ * > relPath "foo"   "foo/x.html"  == "."
+ * > relPath "foo"   "bar/z.html"  == "../foo"
+ -}
+relPath :: Maybe (MutableIO File) -> Maybe (MutableIO File) -> IO String
+relPath (dir@Just d) (file@Just f) = do
+    isfile <- f.isFile
+    -- stderr << "relPath: " << d.getPath << " and " << f.getPath << " file=" << isfile << "\n";
+    if isfile
+        then do
+            p  <- f.getParentFile
+            up <- relPath dir p
+            -- stderr << "result: " << up ++ "/" ++ getName f << "\n";
+            name <- f.getName
+            IO.return (up ++ "/" ++ name)
+        else do
+            dpath <- d.getPath
+            fpath <- f.getPath
+            if dpath == fpath
+                then IO.return "."
+                else do
+                    dps <- parents dir
+                    fps <- parents file
+                    let common = [ x | x <- dps, x `elem` fps ]
+                    case common of
+                        [] -> do
+                            dpath <- d.getPath
+                            fpath <- f.getPath
+                            -- stderr << dpath << " and " << fpath << " have no common parent.\n"
+                            IO.return "."
+                        (p:_) -> do
+                            dds <- upsteps p dir
+                            com <- toCommon p file
+                            let res = if com == "." then dds else dds ++ "/" ++ com
+                            -- stderr << "common: " << res  << "\n"
+                            IO.return (res)
+  where
+        parents Nothing = IO.return []
+        parents (Just f) = do
+                parent <- File.getParentFile f
+                ps     <- parents parent
+                path   <- File.getPath f
+                IO.return (path : ps)
+
+        upsteps p (Just d) = do
+                path <- File.getPath d
+                if p == path then IO.return "." else do
+                    parent <- File.getParentFile d
+                    upp    <- upsteps p parent
+                    IO.return  ("../" ++ upp)
+        upsteps p _ = error "upsteps _ Nothing"
+
+        toCommon p (Just f) = do
+            path <- File.getPath f
+            -- stderr << "toCommon: " << p << " and " << File.getPath f << "\n"
+            if (path == p) then IO.return "."
+              else do
+                parent <- File.getParentFile f
+                x <- toCommon p parent
+                name <- File.getName f
+                IO.return (if x == "." then name else x ++ "/" ++ name)
+        toCommon p Nothing = error ("Can't reach common dir " ++ p)
+relPath _ _ = error "relPath: both args must be Just"
+
+--- create a full HTML page with CSS and documentation
+htmlDoc :: Docu -> StG ()
+htmlDoc doc = emitHtml true doc
+
+emitHtml withCss (Doc s) = do
+        println $ "<!DOCTYPE html PUBLIC "
+            ++ show "-//W3C//DTD HTML 4.01//EN" ++ " "
+            ++ show "http://www.w3.org/TR/html4/strict.dtd" ++ ">"
+        println "<HTML>"
+        println $ "<META http-equiv=" ++ show "Content-Type"
+            ++ " content=" ++ show "text/html;charset=utf-8" ++ ">"
+        when withCss emitCss
+        println  "<BODY>"
+        foreach s htmlParagraph
+        println  "</BODY>"
+        println  "</HTML>"
+
+emitCss = do
+        g <- getST
+        println $ "<TITLE>" ++ g.thisPack.un ++ " - frege documentation</TITLE>"
+        println  "<style TYPE=\"text/css\">"
+        println  "body { font-family: helvetica, arial, sans-serif }"
+        println  "pre { font-family: \"lucida console\", \"courier new\", monospaced; font-size: 100%; color: rgb(0%,0%,60%) }"
+        println  "h3  { font-weight: lighter }"
+        println  "dt.func { background: rgb(95%, 95%, 80%); margin-top: 10px }"
+        println  "dt.clas { background: rgb(80%, 95%, 95%); margin-top: 10px }"
+        println  "dt.inst { background: rgb(95%, 90%, 95%); margin-top: 10px }"
+        println  "dt.data { background: rgb(95%, 95%, 95%); margin-top: 10px }"
+        println  "span.code { font-family: \"lucida console\", \"courier new\", monospaced; font-size: 100%; color: rgb(0%,0%,60%) }"
+        -- println  "span.code1 { font-family: \"lucida console\", \"courier new\", monospaced; font-size: 100%; color: rgb(0%,0%,60%); background: rgb(92%, 92%, 67%) }"
+        -- println  "span.code2 { font-family: \"lucida console\", \"courier new\", monospaced; font-size: 100%; color: rgb(0%,0%,60%); background: rgb(96%, 96%, 72%) }"
+        println  "span.unknown { font-family: \"lucida console\", \"courier new\", monospaced; font-size: 100%; color: red }"
+        println  "a.fref { text-decoration: none; font-family: \"lucida console\", \"courier new\", monospaced; font-size: 100%; color: rgb(30%, 30%, 0%) }"
+        println  "a.tref { text-decoration: none; font-family: \"lucida console\", \"courier new\", monospaced; font-size: 100%; color: rgb(40%, 0%,  40%) }"
+        println  "</style>"
+    
+
+{--
+ * emit a HTML structure
+ -}
+htmlParagraph :: Paragraph -> StG ()
+
+htmlParagraph (Par tag text) = do
+        println $ "<" ++ tag ++ ">"
+        htmlText text
+        println $ "</" ++ tag ++ ">"
+
+
+htmlParagraph (OUL ordered clas items) = do
+        println $  "<" ++ ol ordered clas ++ ">"
+        foreach items htmlParagraph
+        println $ "</" ++ ol ordered Nothing ++ ">"
+    where
+        ol :: Bool -> Maybe String -> String
+        ol o (Just x) = (if o then "ol" else "ul") ++ " class=" ++ show x
+        ol true  Nothing = "ol"
+        ol false Nothing = "ul"
+
+
+htmlParagraph (LI pars) = do
+        println "<li>"
+        foreach pars htmlParagraph
+        println "</li>"
+
+
+htmlParagraph (DL klasse defs) = do
+        println $ dx "dl" klasse
+        foreach defs outdef
+        println "</dl>"
+    where
+        dx dd Nothing  = "<" ++ dd ++ ">"
+        dx dd (Just c) = "<" ++ dd ++ " class=" ++ show c ++ ">"
+        outdef (txt, ps) = do
+            println $ dx "dt" klasse
+            htmlText txt
+            println "</dt>"
+            println $ dx "dd" klasse
+            foreach ps htmlParagraph
+            println "</dd>"
+
+
+{-
+ * emit HTML Text
+ -}
+amper = #&#
+lt = #<#
+gt = #>#
+
+
+htmlText (E s) = print s
+htmlText (P s) = print e
+    where
+        e = (ungt • unlt • unamper) s
+        un re rep s = (Regex.matcher re s).replaceAll (String.quoteReplacement rep)
+        unlt    = un lt "&lt;"
+        ungt    = un gt "&gt;"
+        unamper = un amper "&amp;"
+htmlText (T (A c) t) = do
+        print $ "<SPAN CLASS=" ++ show c ++ ">"
+        htmlText t
+        print "</SPAN>"
+
+htmlText (T Code t) = do
+        print $ "<SPAN CLASS=" ++ show "code" ++ ">"
+        htmlText t
+        print "</SPAN>"
+        
+htmlText (T a t) = do
+        print $  "<" ++ attr a ++ ">"
+        htmlText t
+        print $ "</" ++ attr a ++ ">"
+    where
+        attr Bold = "b"
+        attr Italic = "i"
+        attr _ = "em"
+
+htmlText (Label s t) = do
+        print $ "<a name=" ++ show s ++ ">"
+        htmlText t
+        print "</a>"
+
+htmlText (Seq t1 t2) = do htmlText t1; htmlText t2
+
+htmlText (Ref (t@TName pack base) atxt) = do
+        g <- getST
+        x <- packToFileRef pack g
+        print $ "<a class=" ++ show "tref" ++ " href=" ++ show (link g x) ++ ">"
+        htmlText atxt
+        print "</a>"
+    where
+        sub x = x ++ "#" ++ mangled base
+        link :: Global -> String -> String
+        link g x
+            | pack == g.thisPack   = "#" ++ mangled base
+            | otherwise            = sub x
+
+htmlText (Ref (q@VName p base) atxt) = do
+        g <- getST
+        x <- packToFileRef p g
+        print $ "<a class=" ++ show "fref" ++ " href=" ++ show (url g x) ++ ">"
+        htmlText atxt
+        print "</a>"
+    where
+        sub x = x ++ "#" ++ mangled base
+        url :: Global -> String -> String
+        url g x
+            | p == g.thisPack = sub ""
+            | otherwise = sub x
+
+
+htmlText (Ref (q@MName (tn@TName p tb) base) atxt) = do
+        g <- getST
+        x <- packToFileRef p g
+        print $ "<a class=" ++ show "fref" ++ " href=" ++ show (link g x) ++ ">"
+        htmlText atxt
+        print "</a>"
+    where
+        sub x = x ++ "#" ++ mangled tb ++ "." ++ mangled base
+        link :: Global -> String -> String
+        link g x
+            | p == g.thisPack      = sub ""
+            | otherwise            = sub x
+
+htmlText (PRef p item txt) = do
+        g <- getST
+        pref <- packToFileRef p g
+        let link = maybe pref ((pref ++ "#") ++) item
+        print $ "<a HREF=" ++ show link ++ ">"
+        htmlText txt
+        print "</a>"
+
+htmlText (XRef link txt) = do
+        print $ "<a HREF=" ++ show link ++ ">"
+        htmlText txt
+        print "</a>"
+
+htmlText _ = error "htmlText: illegal Ref"
+
+{--
+    document a 'Sigma' type
+-}
+dSigma :: Global -> Sigma -> [Bool] -> Text
+dSigma g (ForAll [] rho) bs = dRho g rho bs
+dSigma g (ForAll xs rho) bs = Seq h drho where
+        drho = dRho g rho bs
+        h = fa :- text " " :- list
+        fa = bold (text "forall") -- eForall
+        list = text (joined " " (map fst xs)) :- text "."
+
+dRho g rho []      = dRho g rho (repeat false)
+dRho g rho (b:bs)  = dCtx g (Rho.context rho) :- docu rho where
+    bf = if b then bold else id
+    docu (RhoFun ctx sigma rho)
+        | ForAll (_:_) _ <- sigma = text "(" :- bf (dSigma g sigma []) :- text ") -> " :- dRho g rho bs
+        | U.isFun sigma g         = text "(" :- bf (dSigma g sigma []) :- text ") -> " :- dRho g rho bs
+        | otherwise               = bf (dSigma g sigma []) :- text " -> " :- dRho g rho bs
+    docu (RhoTau ctx tau)         = bf (dTau g tau)
+
+dRho2 g rho []      = dRho2 g rho (repeat false)
+dRho2 g rho (b:bs)  = xpar "(" :- dCtx g (Rho.context rho) :- docu rho :- xpar ")" where
+    bf = if b then bold else id
+    xpar s
+        | RhoFun _ _ _ <- rho = text s
+        | RhoTau [] fun <- rho, fun.isFun     = text s
+        | RhoTau [] app <- rho, normalapp app = text s
+        | otherwise = text ""
+        where
+            normalapp (app@TApp _ _)
+                | [TCon {name}, t] <- app.flat, QName.base name == "[]" = false
+                | (TCon {name}:ts) <- app.flat, QName.base name ~ #^\(,+\)$# = false
+                | otherwise = true
+            normalapp _ = false
+    docu (RhoFun ctx sigma rho)
+        | ForAll (_:_) _ <- sigma = text "(" :- bf (dSigma g sigma []) :- text ") -> " :- dRho g rho bs
+        | U.isFun sigma g         = text "(" :- bf (dSigma g sigma []) :- text ") -> " :- dRho g rho bs
+        | otherwise               = bf (dSigma g sigma []) :- text " -> " :- dRho g rho []
+    docu (RhoTau ctx tau)         = bf (dTau g tau)
+
+dCtx g [] = P ""
+dCtx g xs | [x] <- xs = single x :- text " => "
+          | otherwise = text "(" :- joint ", " single xs :- text ") => "
+          where single (Ctx {pos,cname,tau}) = dTau g (TApp (TCon {pos,name=cname}) tau)
+
+dTau g tau = showt 2 (U.unAlias g tau)
+    where
+        showt 2 x | Just (a,b) <- Tau.getFun x    = showt 1 a :- text "->" :- showt 2 b
+        showt 2 x             = showt 1 x
+        showt _ (t@TApp _ _)
+            | [TCon {name}, t] <- tflat, QName.base name == "[]"
+                              = text "[" :- showt 2 t :- text "]"
+            | (TCon {name}:ts) <- tflat, QName.base name ~ #^\(,+\)$#
+                              = text "(" :- joint ", " (showt 2) ts :- text ")"
+            | isEither tflat = text "(" :-  showEither tflat :- text ")"  
+            where
+                tflat = Tau.flat t
+                isEither [TCon{name}, a, b] = QName.base name == "Either"
+                isEither _ = false
+                showEither [_, a, b]
+                        | TApp{} <- a, isEither aflat = showEither aflat :- text " | " :- showt 2 b
+                        | otherwise =  showt 2 a :- text " | " :- showt 2 b
+                        where aflat = Tau.flat a
+                showEither _ = text "WTF??"
+        showt 1 (TApp a b)    = showt 1 a :- text " " :- showt 0 b
+        showt 1 x             = showt 0 x
+        showt 0 (TVar {var})  = text var
+        showt 0 (Meta tv)     = badref ("Meta " ++ show tv.uid)
+        showt 0 (TCon {name}) = tref name g
+        showt 0 x             = text "(" :- showt 2 x :- text ")"
+        showt _ x             = Prelude.error ("can't show type with constructor" ++ show (constructor x))
+
+
+derive Eq Sigma
+instance Ord Sigma where
+    (ForAll ts1 rho1) <=>  (ForAll ts2 rho2)
+        | Eq <- ls = rho1.<=> rho2
+        | otherwise = ls
+        where
+            ls = (length ts1).<=> (length ts2)
+
+derive Eq Context
+derive Eq Rho
+derive Eq Tau
+
+derive Ord Context
+derive Ord Rho
+derive Ord Tau
+derive Ord Kind
+
