@@ -52,6 +52,7 @@ import Data.List as DL(elemBy)
 import Compiler.enums.Flags as Compilerflags(INPRELUDE)
 import Compiler.enums.TokenID(TokenID)
 import Compiler.enums.Visibility
+import Compiler.enums.Literals
 
 import Compiler.types.Positions
 import Compiler.types.Tokens
