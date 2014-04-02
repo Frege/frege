@@ -57,6 +57,7 @@ import Compiler.enums.Literals
 import Compiler.types.Positions
 import Compiler.types.Tokens
 import Compiler.types.Kinds
+import Compiler.types.SNames
 
 import Compiler.common.Mangle
 
