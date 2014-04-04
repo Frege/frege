@@ -228,6 +228,44 @@ data Global = !Global {
             _ -> JName "unbekannte" "Klasse"    -- should not happen
         | otherwise = error ("bad package name " ++ p.un)
 
+    --- tell if a 'Qname' is from the module we're just compiling
+    our :: Global -> QName -> Bool
+    our  g   (TName p  _) = p.== (Global.thisPack g)
+    our  g   (VName p  _) = p.== (Global.thisPack g)
+    our  g   (MName t  _) = our g t
+    our  g   (Local {})   = true
+
+    --- find the 'Symbol' for a 'QName', which may be a 'SymL' (symbolic link) 
+    find :: Global -> QName  -> Maybe Symbol
+    find g (this@Local{uid}) =  g.locals.lookupI uid 
+    find g (this@TName p s) = case g.packages.lookup p of
+        Just env -> env.lookupS this.key
+        Nothing  -> Nothing
+    find g (this@VName p s) = case g.packages.lookup p of
+        Just env -> env.lookupS s
+        Nothing  -> Nothing
+    find g (MName t s) = findm g t s
+    --- find a member of a type, type class or instance  
+    findm g t s  = case findit g t  of
+        Just sy | sy.{env?} = sy.env.lookupS s
+        Just (SymA {typ}) = case instTSym typ g of
+            Just sym 
+                | Just r <- findm g sym.name s  = Just r
+                | ForAll _ (RhoTau{tau=tau1}) <- typ,       -- look if its 
+                  [TCon{name}, _, tau2] <- tau1.flat,       -- type T = Mutable s X
+                  name == TName pPreludeIO "Mutable",       -- and look into X
+                  Just other <- instTauSym tau2 g = findm g other.name s
+                | otherwise = Nothing  
+            Nothing  -> Nothing
+        _ -> Nothing
+    --- like 'Global.find', but follow symbolic links
+    findit :: Global -> QName  -> Maybe Symbol
+    findit g t  = case find g t  of
+        Just sy -> sy.follow g
+        Nothing -> Nothing
+
+
+
 
 --- the symbol table
 type Symtab = Tree String Symbol
@@ -260,7 +298,7 @@ private instTSym _ g = Nothing
 
 --- return type symbol for constructor of tau, if any
 private instTauSym tau g = case tau of
-        TCon {name} -> QName.findit name g
+        TCon {name} -> Global.findit g name
         -- TApp (TApp TCon{name} _) ty | name == TName{pack=pPreludeIO, base="Mutable"} 
         TApp a _    -> instTauSym a g
         _           -> Nothing
@@ -268,10 +306,10 @@ private instTauSym tau g = case tau of
 
 --- qualified name
 data QName =
-        !TName   { pack :: Pack,  base :: String }
-        | !VName { pack :: Pack,  base :: String }
-        | !MName { tynm :: QName, base :: String }
-        | !Local { uid  :: Int,   base :: String }
+          TName { !pack :: Pack,  !base :: String }
+        | VName { !pack :: Pack,  !base :: String }
+        | MName { !tynm :: QName, !base :: String }
+        | Local { !uid  :: Int,   !base :: String }
     where
         getpack (TName p _) = p
         getpack (VName p _) = p
@@ -282,63 +320,43 @@ data QName =
         key (TName _ s)  = "T+" ++ s
         key vmName       = vmName.base
 
-        find :: QName -> Global -> Maybe Symbol
-        find (this@Local{uid})  g =  g.locals.lookupI uid {- loop g.env where
-            loop []     = Nothing
-            loop (e:es) = case Tree.lookupS e k of
-                Nothing -> loop es
-                just    -> just-}
-        find (this@TName p s) g = case g.packages.lookup p of
-            Just env -> env.lookupS (key this)
-            Nothing  -> Nothing
-        find (this@VName p s) g = case g.packages.lookup p of
-            Just env -> env.lookupS s
-            Nothing  -> Nothing
-        find (MName t s) g = findMName t s g where
-            findMName t s g = case findit t g of
-                Just sy | sy.{env?} = sy.env.lookupS s
-                Just (SymA {typ}) = case instTSym typ g of
-                    Just sym 
-                        | Just r <- find (MName sym.name s) g = Just r
-                        | ForAll _ (RhoTau{tau=tau1}) <- typ,       -- look if its 
-                          [TCon{name}, _, tau2] <- tau1.flat,       -- type T = Mutable s X
-                          name == TName pPreludeIO "Mutable",       -- and look into X
-                          Just other <- instTauSym tau2 g = find (MName other.name s) g
-                        | otherwise = Nothing  
-                    Nothing  -> Nothing
-                _ -> Nothing
-        --- like 'QName.find', but follow aliases
-        findit :: QName -> Global -> Maybe Symbol
-        findit t g = case find t g of
-            Just sy -> sy.follow g
-            Nothing -> Nothing
+        -- find :: QName -> Global -> Maybe Symbol
+        -- find (this@Local{uid})  g =  g.locals.lookupI uid {- loop g.env where
+        --     loop []     = Nothing
+        --     loop (e:es) = case Tree.lookupS e k of
+        --         Nothing -> loop es
+        --         just    -> just-}
+        -- find (this@TName p s) g = case g.packages.lookup p of
+        --     Just env -> env.lookupS (key this)
+        --     Nothing  -> Nothing
+        -- find (this@VName p s) g = case g.packages.lookup p of
+        --     Just env -> env.lookupS s
+        --     Nothing  -> Nothing
+        -- find (MName t s) g = findMName t s g where
+        --     findMName t s g = case findit t g of
+        --         Just sy | sy.{env?} = sy.env.lookupS s
+        --         Just (SymA {typ}) = case instTSym typ g of
+        --             Just sym 
+        --                 | Just r <- find (MName sym.name s) g = Just r
+        --                 | ForAll _ (RhoTau{tau=tau1}) <- typ,       -- look if its 
+        --                   [TCon{name}, _, tau2] <- tau1.flat,       -- type T = Mutable s X
+        --                   name == TName pPreludeIO "Mutable",       -- and look into X
+        --                   Just other <- instTauSym tau2 g = find (MName other.name s) g
+        --                 | otherwise = Nothing  
+        --             Nothing  -> Nothing
+        --         _ -> Nothing
+        -- --- like 'QName.find', but follow aliases
+        -- findit :: QName -> Global -> Maybe Symbol
+        -- findit t g = case find t g of
+        --     Just sy -> sy.follow g
+        --     Nothing -> Nothing
+        --- tell if this names a tuple constructor or type
         istuple s   = QName.base s ~ #^\(,+\)$#
-        --- tell if a 'Qname' is from the module we're just compiling
-        public our :: QName -> Global -> Bool
-        our     (TName p  _) g = p.== (Global.thisPack g)
-        our     (VName p  _) g = p.== (Global.thisPack g)
-        our     (MName t  _) g = our t g
-        our     (Local {})    g = true
+        --- change the base name 
         qual    (TName p  _)   = TName p
         qual    (VName p  _)   = VName p
         qual    (MName t  _)   = MName t
         qual    (Local {uid})  = Local uid
-        nice    (TName p s)  g
-            | inPrelude p g  = s
-            | p.== (Global.thisPack g) = s
-            | otherwise = p.nice g ++ "." ++ s
-        nice    (VName p s)  g
-            | inPrelude p g  = s
-            | p.== (Global.thisPack g) = s
-            | otherwise = p.nice g ++ "." ++ s
-        nice    (MName t s)    g = t.nice g ++ "." ++ s
-        nice    (Local {uid, base}) g = base ++ "{" ++ show uid ++ "}"
-        --- 'nicer' gives a short form of a 'TName' if it can be found locally
-        nicer (Local {uid, base}) g = base
-        nicer (qn@TName p s) g
-            | findit qn g == findit (TName g.thisPack s) g = s
-        nicer    (MName t s)    g = t.nicer g ++ "." ++ s
-        nicer  qn g = nice qn g
         --- tell if this is the name of a let or lambda bound item
         isLocal (Local{}) = true
         isLocal _         = false
@@ -380,14 +398,14 @@ data Symbol =
         | !SymA  {sid::Int, pos::Position, vis::Visibility, doc::Maybe String, name ::QName,
                  kind::Kind, typ::Sigma, vars::[Tau]}                           --- type alias
     where
-        follow (ali@SymL {alias}) g = alias.findit g
+        follow (ali@SymL {alias}) g = Global.findit g alias
         follow sym g = Just sym
         category (SymT {name}) g = "data type"
         category (SymD {name}) g = "constructor"
         category (SymC {name}) g = "class"
         category (SymI {name}) g = "instance"
         category (SymV {name,nativ, expr}) g = if isJust nativ then "native " ++ fun else fun
-            where fun | MName t b <- name, Just sym <- t.find g
+            where fun | MName t b <- name, Just sym <- Global.find g t
                                           = sym.category g ++ " member " ++ funval
                       | MName _ _ <- name = "member " ++ funval
                       | otherwise         = funval
@@ -395,7 +413,7 @@ data Symbol =
                          | Just (Lam {}) <- expr = "function"
                          | otherwise = "value"
         category (SymA {name}) g = "type alias"
-        category (SymL {alias}) g = case alias.find g of
+        category (SymL {alias}) g = case g.find alias of
             Just sym -> "alias for " ++ sym.category g
             Nothing  -> "alias"
         nice (sym@SymL {alias}) g = category sym g ++ " `" ++ alias.nice g ++ "`"
@@ -406,7 +424,7 @@ data Symbol =
         sym1 <=> sym2 = (Symbol.sid sym1).<=> (Symbol.sid sym2)
         sym1 == sym2  = (Symbol.sid sym1).==  (Symbol.sid sym2)
         hashCode sym  = (Symbol.sid sym)
-        our sy g = (Symbol.name sy).our g
+        our sy g = Global.our g (Symbol.name sy)
 
 
 instance Ord Symbol
@@ -887,7 +905,24 @@ instance Nice String where
     nice s _ = s
 
 
-instance Nice QName
+instance Nice QName where
+    nice    (TName p s)  g
+        | inPrelude p g  = s
+        | p.== (Global.thisPack g) = s
+        | otherwise = p.nice g ++ "." ++ s
+    nice    (VName p s)  g
+        | inPrelude p g  = s
+        | p.== (Global.thisPack g) = s
+        | otherwise = p.nice g ++ "." ++ s
+    nice    (MName t s)    g = t.nice g ++ "." ++ s
+    nice    (Local {uid, base}) g = base ++ "{" ++ show uid ++ "}"
+    --- 'nicer' gives a short form of a 'TName' if it can be found locally
+    nicer (Local {uid, base}) g = base
+    nicer (qn@TName p s) g
+        | Global.findit g qn == Global.findit g (TName g.thisPack s) = s
+    nicer    (MName t s)    g = t.nicer g ++ "." ++ s
+    nicer  qn g = nice qn g
+
 
 
 instance Nice SName where
