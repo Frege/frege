@@ -58,6 +58,7 @@ import Compiler.types.Positions
 import Compiler.types.Tokens
 import Compiler.types.Kinds
 import Compiler.types.SNames
+import Compiler.types.Packs(magicPack)
 
 import Compiler.common.Mangle
 
