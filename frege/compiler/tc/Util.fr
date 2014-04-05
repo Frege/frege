@@ -117,8 +117,9 @@ subsCheck exp s1 s2 = do
     U.logmsg TRACET (exp.getpos) (text ("subsCheck: " ++ s1.nice g ++ " :> " ++ s2.nice g))
     (!skol_tvs, !rho2) <- skolemise s2
     subsCheckSR exp s1 rho2
-    tvs1 <- sigmaTvs s1
-    tvs2 <- sigmaTvs s2
+    g <- getST
+    let tvs1 = sigmaTvs g s1
+        tvs2 = sigmaTvs g s2
     let !esc_tvs = tvs1 ++ tvs2
         !bad_tvs = [ tv | tv <- skol_tvs, tv `elem` esc_tvs ]
     unless (null bad_tvs) do
@@ -223,65 +224,53 @@ unifyFun2 exp rho = error "unifyFun2: no rhotau"
 
 
 --- return the unbound sigma type variables
-sigmaTvs :: Sigma -> StG [MetaTv]
-sigmaTvs sig = do
-    t <- getSigmaTvs sig
-    stio (keys t)
+sigmaTvs :: Global -> Sigma -> [MetaTv]
+sigmaTvs g  = keys . getSigmaTvs g
 
-rhoTvs :: Rho -> StG [MetaTv]
-rhoTvs rho = do
-    t <- getRhoTvs rho
-    stio (keys t)
+rhoTvs :: Global -> Rho -> [MetaTv]
+rhoTvs g = keys . getRhoTvs g
 
-tauTvs tau = do
-    t <- getTauTvs tau
-    stio (keys t)
+tauTvs g = keys . getTauTvs g
 
-ctxTvs :: Context -> StG [MetaTv]
-ctxTvs ctx = tauTvs ctx.tau
+ctxTvs :: Global -> Context -> [MetaTv]
+ctxTvs g ctx = tauTvs g ctx.tau
 
-getSigmaTvs (ForAll _ rho) = getRhoTvs rho
-getRhoTvs (RhoFun cs sig rho) = do
-    csTvs <- mapSt getCtxTvs cs
-    sTvs  <- getSigmaTvs sig
-    rTvs  <- getRhoTvs rho
-    stio (fold union (sTvs `union` rTvs) csTvs)
-getRhoTvs (RhoTau cs tau) = do
-    csTvs <- mapSt getCtxTvs cs
-    tTvs  <- getTauTvs tau
-    stio (fold union tTvs csTvs)
+getSigmaTvs g (ForAll _ rho) = getRhoTvs g rho
+getRhoTvs g (RhoFun cs sig rho) = let
+        csTvs = map (getCtxTvs g) cs
+        sTvs  = getSigmaTvs g sig
+        rTvs  = getRhoTvs g rho
+    in (fold union (sTvs `union` rTvs) csTvs)
+getRhoTvs g (RhoTau cs tau) = let
+        csTvs = map (getCtxTvs g) cs
+        tTvs  = getTauTvs g tau
+    in (fold union tTvs csTvs)
 
-getCtxTvs = getTauTvs . Context.tau
+getCtxTvs g = getTauTvs g . Context.tau
 
-getTauTvs tau = getTauTvsT Tree.empty tau
+getTauTvs g tau = getTauTvsT g Tree.empty tau
 
-getTauTvsT t (TApp a b) = do
-    t <- getTauTvsT t a
-    getTauTvsT t b
--- getTauTvsT t (TFun a b) = do
---     t <- getTauTvsT t a
---     getTauTvsT t b
-getTauTvsT t (TCon {pos}) = stio t
-getTauTvsT t (TVar {pos}) = stio t
-getTauTvsT t (Meta tv) = do
-     mbt <- readTv tv
-     case mbt of
-        Just ty -> getTauTvsT t ty
-        _ -> stio (t `including` tv)
+getTauTvsT g t (TApp a b) = 
+    let ta =  getTauTvsT g t a
+    in getTauTvsT g ta b
+getTauTvsT g t (TCon {pos}) = t
+getTauTvsT g t (TVar {pos}) = t
+getTauTvsT g t (Meta tv) = 
+     case Global.bound g tv of
+        Just ty -> getTauTvsT g t ty
+        _ -> (t `including` tv)
 
 {--
  * get the type variables that are mentioned in the current environment
  * except for symbol @sid@
  -}
-envTvs sid = do
-    g <- getST
-    lsyms <- mapSt U.findV g.typEnv
-    let sigmas = [ Symbol.typ sym | sym <- lsyms,
-            sym <- (Symbol.follow sym g),    -- follow aliases
-            Symbol.{expr?} sym,
-            Symbol.sid sym != sid]
-    tvss <- mapSt sigmaTvs sigmas
-    stio (concat tvss)
+envTvs g sid = [ m |
+            q   <- g.typEnv, 
+            sym <- g.findit q,
+            sym <- (sym.follow  g),    -- follow aliases
+            sym.{expr?},
+            sym.sid != sid,
+            m   <- sigmaTvs g sym.typ ]
 
 --- warning: do you have to do this monadic?
 readTv :: MetaTv -> StG (Maybe Tau)
@@ -420,8 +409,9 @@ unifyVar ex tv lrtau = do
         Nothing -> either unbound unbound lrtau
   where
     unbound tau = do            -- unifyUnboundVar
-        tauTvs <- getTauTvs tau
         g <- getST
+        let tauTvs = getTauTvs g tau
+        
         if tauTvs `contains` tv then do
                 U.error (getpos ex) (msgdoc (tv.nicer g ++ " occurs in type " ++ tau.nicer g
                     ++ " rendering " ++ ex.is ++ " " ++ ex.nice g ++ " untypable."))
@@ -510,8 +500,9 @@ quantified = quantifiedExcept 0
  -}
 quantifiedExcept :: Int -> [Rho] -> StG [Sigma]
 quantifiedExcept exc rhos = do
-        rhosTvs <- mapSt rhoTvs rhos
-        eTvs    <- envTvs exc     -- take all symbols into account
+        g <- getST
+        let rhosTvs = map (rhoTvs g) rhos
+            eTvs    = envTvs g exc     -- take all symbols into account
         let
             -- all unbound tv used in the Rhos except those in the environment
             allTvs = unique [ tv | tvs <- rhosTvs,
@@ -584,7 +575,7 @@ contexts ex typ = do
                     rctxss = map (exContext g) subexs
                 let rctxs = [ ctx | ctxs <- rctxss, ctx <- ctxs ]
                 -- take only contexts that have at least 1 flexi tv
-                rtvss <- mapSt ctxTvs rctxs
+                    rtvss = map (ctxTvs g) rctxs
                 let ctxs =  [ ctx | (ctx,tvs) <- zip rctxs rtvss, any (MetaTv.isFlexi) tvs]
                 let merged = fold mergeCtx rho.context [ectx,ctxs]
                 simplify pos rho.{context=merged}
