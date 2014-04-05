@@ -43,7 +43,8 @@ package frege.compiler.tc.Util where
 
 import frege.Prelude hiding(<+>)
 
-import Data.TreeMap (Tree, values, lookup, insert, update, keys, including, union, contains)
+import Data.TreeMap (Tree, values, lookup, insert, update, keys, 
+                    insertkv, including, union, contains)
 import Data.List as DL(unique, uniq, sort, elemBy, partition)
 
 import frege.compiler.enums.Flags as Compilerflags(TRACET)
@@ -63,7 +64,7 @@ data Expected t = Check t | Infer (IORef (Maybe t))
 newSigmaTyVar d = do rho <- newRhoTyVar d; stio (ForAll [] rho)
 newRhoTyVar   d = do ty <- newMeta d; stio (RhoTau [] ty)
 newMeta       d = do flexi <- newFlexiTyVar d; stio (Meta flexi)
-newFlexiTyVar (t,k) = do u <- U.uniqid; ref <- doio (Ref.new Nothing); stio (Flexi u ref t k)
+newFlexiTyVar (t,k) = do u <- U.uniqid; stio (Flexi u t k)
 newRigidTyVar (n,k) = do u <- U.uniqid; stio (Rigid u n k)
 
 instSigma ex sig erho = do
@@ -144,12 +145,12 @@ subsCheckSR exp sig rho = do
 -- offered type must not be less constrained than expected
 -- which means, all contexts from the expected type must be implied by the offered ones
 checkConstraints exp s1 s2 = do
+        (_,skol) <- skolemise s2
+        offerd   <- instantiate s1
+        subsCheckRR exp offerd skol         -- unify types
         g   <- getST
-        (_,ety) <- skolemise s2
-        off <- instantiate s1
-        subsCheckRR exp off ety         -- unify types
-        off <- canonicContext off
-        ety <- canonicContext ety
+        let off = canonicContext g offerd
+            ety = canonicContext g skol
 
         let pos = getpos exp
         U.logmsg TRACET pos (text ("expr context:     "   ++ U.nicectx off.context g))
@@ -195,7 +196,7 @@ unifyFun exp (RhoFun cx (ForAll b arg) res) = do    -- assume RhoFun is canonica
         stio (ForAll b arg, res)
 unifyFun exp (RhoTau cx tau) | tau.isFun = unifyFun exp (U.rhoTau tau).{context=cx}
 unifyFun exp (rho@RhoTau cx (Meta tv)) = do
-        mbty <- tv.bound
+        mbty <- readTv tv
         case mbty of
             Just ty -> unifyFun exp (RhoTau cx ty)
             Nothing -> unifyFun2 exp rho
@@ -236,7 +237,7 @@ tauTvs tau = do
     t <- getTauTvs tau
     stio (keys t)
 
-ctxTvs :: ContextT a -> StG [MetaTvT a]
+ctxTvs :: Context -> StG [MetaTv]
 ctxTvs ctx = tauTvs ctx.tau
 
 getSigmaTvs (ForAll _ rho) = getRhoTvs rho
@@ -282,10 +283,15 @@ envTvs sid = do
     tvss <- mapSt sigmaTvs sigmas
     stio (concat tvss)
 
-readTv (Rigid{}) = stio Nothing
-readTv tv = tv.bound
+--- warning: do you have to do this monadic?
+readTv :: MetaTv -> StG (Maybe Tau)
+readTv tv = do
+    g <- getST
+    return (g.bound tv)
 writeTv :: MetaTv -> Tau -> StG ()
-writeTv (Flexi{ref}) tau = doio (ref.put (Just tau))
+writeTv (Flexi{uid}) tau = do
+    g <- getST
+    changeST _.{tySubst <- Tree.insertkvI uid tau}
 writeTv tv _ = do
     g <- getST
     U.fatal Position.null (text ("write to rigid tyvar " ++ tv.nice g))
@@ -328,40 +334,41 @@ unify ex t1 t2 = do
         part2 g = text "type is  " <+/> text (t1.nicer g)
         part3 g = text "used as  " <+/> text (t2.nicer g)
 
+
 --- resolve 'Meta' types in the argument, but only in the left part of 'TApp's 
-reduced :: Tau -> StG Tau
-reduced tau 
-    | Meta tv <- tau = do
-        mbty <- tv.bound
-        case mbty of
-            Nothing -> stio tau
-            Just ty -> reduced ty
-    | TApp t1 t2 <- tau = do
-        tr <- reduced t1
-        return (TApp tr t2)                            
-    | otherwise  = stio tau
+reduced :: Tau -> Global -> Tau
+reduced tau g 
+    | Meta tv <- tau = 
+        case g.bound tv of
+            Nothing -> tau
+            Just ty -> reduced ty g
+    | TApp t1 t2 <- tau = TApp (reduced t1 g) t2                            
+    | otherwise  = tau
 
 
 unified :: (Positioned a, Nice a) => a -> Tau -> Tau -> StG Bool
-unified ex t1 t2 = do
+unified ex tau1 tau2 = do
     g <- getST
-    U.logmsg TRACET (getpos ex) (text ("unify:  " ++ nice t1 g ++ "  and  " ++ nice t2 g))
+    U.logmsg TRACET (getpos ex) (text ("unify:  " ++ nice tau1 g ++ "  and  " ++ nice tau2 g))
 
-    t1 <- reduced t1
-    t2 <- reduced t2
+    let t1 = reduced tau1 g
+        t2 = reduced tau2 g
 
     when (badType t1 || badType t2) do
         U.fatal (getpos ex) (text "bad types in unification, turn on -xt for details")
 
     case (t1, t2) of
-        (Meta tv1, Meta tv2) | tv1 == tv2 = stio true
-        (Meta tv, ty)        | tv.isFlexi = unifyVar ex tv (Right ty)
+        (Meta tv, ty)        | Meta tv2 <- ty, tv == tv2 = return true
+                             | tv.isFlexi = unifyVar ex tv (Right ty)
         (ty, Meta tv)        | tv.isFlexi = unifyVar ex tv (Left ty)
         -- (TFun a b, TFun c d)              = liftM2 (&&) (unified ex a c) (unified ex b d)
         (TCon{}, TCon{})              = if t1.name == t2.name 
                                                 then return true 
                                                 else unifyTCon (getpos ex) t1.name t2.name
-        (TApp a b, TApp c d)              = liftM2 (&&) (unified ex a c) (unified ex b d) -- foldSt uniTs true (zip t1.flat t2.flat)
+        (TApp a b, TApp c d)              = do
+                                                left <- unified ex a c
+                                                if left then unified ex b d
+                                                else return false
         (Meta (Rigid _ s _), ty)          = do
                                             U.error (getpos ex) (msgdoc ("type  `" ++ ty.nicer g
                                                 ++ "` is not as polymorphic as suggested "
@@ -378,11 +385,13 @@ unified ex t1 t2 = do
                                             stio false
         _                                 = stio false
   where
+    badType :: Tau -> Bool
     badType (TVar {pos}) = true
     badType _            = false
     -- unifyTCon will only be called with real type names (no aliases)
     -- It returns true if both 'TCon's describe native types and the 
     -- first one is a subtype of the other
+    unifyTCon :: Position -> QName -> QName -> StG Bool
     unifyTCon pos t1 t2 = do
         sym1 <- U.findT t1
         case sym1.nativ of
@@ -403,7 +412,7 @@ unified ex t1 t2 = do
 
 unifyVar :: (Positioned a, Nice a) => a -> MetaTv -> Either Tau Tau -> StG Bool
 unifyVar ex tv lrtau = do
-    bound <- tv.bound
+    bound <- readTv tv
     case bound of
         Just ty -> case lrtau of
             Left tau  -> unified ex tau ty
@@ -422,22 +431,24 @@ unifyVar ex tv lrtau = do
                 U.logmsg TRACET (getpos ex) (text ("unifyVar: " ++ show tv.uid ++ " " ++ tv.nice g))
                 stio true
 
-zonkRho   :: Rho   -> StG Rho
-zonkSigma :: Sigma -> StG Sigma
-zonkTau   :: Tau   -> StG Tau
-zonkCtxs  :: [Context] -> StG [Context]
+
+
+
+
 {--
     eliminate any substitutions in the type
     -}
+zonkSigma :: Sigma -> StG Sigma
 zonkSigma (ForAll ns ty) = do rho <- zonkRho ty; stio (ForAll ns rho)
 cleanSigma (ForAll ns ty) = do rho <- cleanRho ty; stio (ForAll ns rho)
 
+zonkRho   :: Rho   -> StG Rho
 zonkRho (RhoFun ctxs arg res) = liftM3 RhoFun (mapSt zonkCtx ctxs) (zonkSigma arg) (zonkRho res)
 zonkRho (RhoTau ctxs tau)     = liftM2 RhoTau (mapSt zonkCtx ctxs) (zonkTau tau)
 cleanRho (RhoFun ctxs arg res) = liftM3 RhoFun (zonkCtxs ctxs) (zonkSigma arg) (zonkRho res)
 cleanRho (RhoTau ctxs tau)     = liftM2 RhoTau (zonkCtxs ctxs) (zonkTau tau)
 
-
+zonkCtxs  :: [Context] -> StG [Context]
 zonkCtxs ctxs = do
     ctxs <- mapSt zonkCtx ctxs
     return (filter withVars ctxs)
@@ -453,7 +464,7 @@ withTauVars (TCon {})  = false
 withTauVars (TApp a b) = withTauVars a || withTauVars b
 withTauVars vars       = true
 
-
+zonkTau   :: Tau   -> StG Tau
 -- zonkTau (TFun arg res)   = liftM2 TFun (zonkTau arg) (zonkTau res)
 zonkTau (TApp a b)       = liftM2 TApp (zonkTau a)   (zonkTau b)
 zonkTau (m@Meta tv)      = do
@@ -466,35 +477,29 @@ zonkTau (m@Meta tv)      = do
                             stio ty
 zonkTau other = stio other      -- TVar and TCon
 
-substRigidSigma [] sigma = stio sigma
-substRigidSigma bound (ForAll b rho) = do
-        rho <- substRigidRho (filter (`notElem` map fst b) bound) rho
-        stio (ForAll b rho)
-substRigidRho [] rho = stio rho
-substRigidRho bound (RhoFun ctxs sig rho) = do
-        ctxs <- mapSt (substRigidCtx bound) ctxs
-        sig  <- substRigidSigma bound sig
-        rho  <- substRigidRho   bound rho
-        stio (RhoFun ctxs sig rho)
-substRigidRho bound (RhoTau ctxs tau) = do
-        ctxs <- mapSt (substRigidCtx bound) ctxs
-        tau  <- substRigidTau bound tau
-        stio (RhoTau ctxs tau)
+substRigidSigma [] sigma = sigma
+substRigidSigma bound (ForAll b rho) = ForAll b
+        (substRigidRho (filter (`notElem` map fst b) bound) rho)
+        
+substRigidRho [] rho = rho
+substRigidRho bound (RhoFun ctxs sig rho) = RhoFun 
+        (map (substRigidCtx bound) ctxs)
+        (substRigidSigma bound sig)
+        (substRigidRho   bound rho)
+        
+substRigidRho bound (RhoTau ctxs tau) = 
+        RhoTau (map (substRigidCtx bound) ctxs)  (substRigidTau bound tau)
 
+substRigidCtx :: [String] -> Context -> Context
+substRigidCtx bound ctx = ctx.{tau <- substRigidTau bound}
 
-substRigidCtx bound ctx = do
-        let tau = Context.tau ctx
-        tau  <- substRigidTau bound tau
-        stio ctx.{tau}
-
-
-substRigidTau bound (TApp a b) = do
-        a  <- substRigidTau bound a
-        b  <- substRigidTau bound b
-        stio (TApp a b)
+substRigidTau bound (TApp a b) = TApp 
+        (substRigidTau bound a)
+        (substRigidTau bound b)
+        
 substRigidTau bound (meta@Meta (Rigid {hint, kind}))           -- this is what happens in the end
-    | hint `elem` bound = stio (TVar Position.null kind hint)
-substRigidTau bound tau = stio tau
+    | hint `elem` bound = (TVar Position.null kind hint)
+substRigidTau bound tau = tau
 
 
 
@@ -549,41 +554,34 @@ tyVarBndrs ty = (uniq • sort) (bndrs ty) where
  *
  * This are the contexts that have not been checked in instanceOf
  -}
-exContext ex = case Expr.typ ex of
-    Just (ForAll [] rho) -> do
-        ctxs <- reducedCtxs rho.context     -- rho is canonical
-        -- stio (filter (not • Context.checked) ctxs)     -- remove checked ctx
-        return ctxs
-    Just sig -> do
-        g <- getST
-        U.fatal (getpos ex) (text ("exContext: do not know yet what to do with  " ++ sig.nice g))
-    Nothing -> do
-        g <- getST
-        U.fatal (getpos ex) (text ("exContext: typ=Nothing in " ++ ex.nice g))
+exContext :: Global -> Expr -> [Context] 
+exContext g ex = case Expr.typ ex of
+    Just (ForAll _ rho) -> reducedCtxs g rho.context     -- rho is canonical
+    Nothing -> Prelude.error ("exContext: typ=Nothing in " ++ ex.nice g)
 
 {--
  * enrich the type by all contexts found in any subexpr
  -}
-contexts ex rho = do
-        let pos = getpos ex
-        rho <- canonicContext rho
+contexts ex typ = do
         g <- getST
+        let pos = getpos ex
+            rho = canonicContext g typ
         case ex of
             Vbl {pos} -> simplify pos rho
             Con {pos} -> simplify pos rho
             Lit {pos} -> simplify pos rho
             Ann ex ty -> do
-                ectx <- exContext ex
+                let ectx = exContext g ex
                 simplify pos rho.{context <- mergeCtx ectx}
             App fun arg _ -> do
-                fctx <- exContext fun
-                actx <- exContext arg
+                let fctx = exContext g fun
+                let actx = exContext g arg
                 simplify pos rho.{context <- mergeCtx (mergeCtx fctx actx)}
             Let {env,ex} -> do
-                ectx <- exContext ex
+                let ectx = exContext g ex
                 syms <- mapSt U.findV env
                 let subexs = [ ex | SymV {expr = Just ex} <- syms ]
-                rctxss <- mapSt exContext subexs
+                    rctxss = map (exContext g) subexs
                 let rctxs = [ ctx | ctxs <- rctxss, ctx <- ctxs ]
                 -- take only contexts that have at least 1 flexi tv
                 rtvss <- mapSt ctxTvs rctxs
@@ -591,70 +589,56 @@ contexts ex rho = do
                 let merged = fold mergeCtx rho.context [ectx,ctxs]
                 simplify pos rho.{context=merged}
             Lam {ex} -> do
-                ectx <- exContext ex
+                let ectx = exContext g ex
                 logmsg TRACET (getpos ex) (text ("contexts: lamrho="
                     ++ nicectx rho.context g
                     ++ ", ectx=" ++ nicectx ectx g))
                 simplify pos rho.{context <- mergeCtx ectx}
             Ifte c t e _ -> do
-                ctxs <- mapSt exContext [c,t,e]
+                let ctxs   = map (exContext g) [c,t,e]
                 let merged = fold mergeCtx rho.context ctxs
                 simplify pos rho.{context=merged}
             Case {ex,alts} -> do
-                ectx <- exContext ex
-                ctxs <- mapSt (exContext • CAlt.ex) alts
+                let ectx = exContext g ex
+                    ctxs = map (exContext g • CAlt.ex) alts
                 let merged = fold mergeCtx rho.context (ectx:ctxs)
                 simplify pos rho.{context=merged}
             Mem  {ex} -> do         -- can happen when x.xyz does not typecheck
-                ectx <- exContext ex
+                let ectx = exContext g ex
                 simplify pos rho.{context <- mergeCtx ectx}
             inv -> do
                 g <- getST
                 U.fatal (getpos inv) (text ("contexts: Invalid expression " ++ inv.nice g))
 
-canonicContext :: Rho -> StG Rho
-canonicContext (RhoTau ctxs tau) = do
-        rctxs <- reducedCtxs ctxs
-        stio (RhoTau rctxs tau)
-canonicContext (RhoFun ctxs (ForAll bs rho1) rho2) = do
-        rctxs <- reducedCtxs ctxs
-        rho1  <- canonicContext rho1
-        rho2  <- canonicContext rho2
-        -- let merged = mergeCtx rctxs (mergeCtx rho1.context rho2.context)
-        stio (RhoFun rctxs {-merged-} (ForAll bs rho1.{context=[]}) rho2.{context=[]})
-canonicContext r = do
-        g <- getST
-        U.fatal (rhoPos r) (text ("canonicContext: " ++ r.nice g))
+canonicContext :: Global -> Rho -> Rho
+canonicContext g (RhoTau ctxs tau) = 
+        let rctxs = reducedCtxs g ctxs
+        in (RhoTau rctxs tau)
+canonicContext g (RhoFun ctxs (ForAll bs rhoA) rhoB) = 
+        let rctxs = reducedCtxs g ctxs
+            rho1  = canonicContext g rhoA
+            rho2  = canonicContext g rhoB
+        in (RhoFun rctxs {-merged-} (ForAll bs rho1.{context=[]}) rho2.{context=[]})
 
 {--
  * Reduce a 'Tau' to a form where only unbound 'Meta's occur.
  *
  * This is different from 'zonkTau' insofar as no meta type variables are changed.
  -}
--- reducedTau (TFun a b)     = liftM2 TFun (reducedTau a) (reducedTau b)
-reducedTau (TApp a b)     = liftM2 TApp (reducedTau a) (reducedTau b)
-reducedTau (t@TVar {var}) = stio t
-reducedTau meta           = reduced meta
+reducedTau g (TApp a b)     = TApp (reducedTau g a) (reducedTau g b)
+reducedTau g (t@TVar {var}) = t
+reducedTau g meta           = reduced meta g
 
 
 {--
  * reduce a list of 'Context's, so that only unbound 'Meta' remain
  -}
-reducedCtxs ctxs = do
-    rcs <- mapSt reducedCtx ctxs
-    stio rcs
-  -- where
-  --   noVars  = noTauVars . Context.tau
-  --   noTauVars (TVar {var}) = false
-  --   -- noTauVars (TFun a b) = noTauVars a && noTauVars b
-  --   noTauVars (TApp a b) = noTauVars a && noTauVars b
-  --   noTauVars meta       = true
+reducedCtxs g ctxs = map (reducedCtx g) ctxs
 
 {-- reduce a 'Context' so that we will not see any meta variables -}
-reducedCtx ctx = do
-    let tau = Context.tau ctx 
-    tau <- reducedTau tau 
-    stio ctx.{tau}
+reducedCtx :: Global -> Context -> Context
+reducedCtx g ctx = ctx.{tau <- reducedTau g}
+
 
 {--
  * merge two already reduced 'Context's
@@ -697,7 +681,7 @@ simplify pos rho = do
         single, singler :: Context -> String
         single  ctx = nicectx  [ctx] g
         singler ctx = nicerctx [ctx] g
-    context <- reducedCtxs rho.context
+        context = reducedCtxs g rho.context
     case context of
         [] -> stio rho.{context}
         (ctx:ctxs) -> case ctx.tau.flat of
@@ -712,7 +696,7 @@ simplify pos rho = do
                             stio rho.{context <- (ctx:)}
                   | otherwise = do
                         implications <- instanceOf ctx.pos ctx.cname ctx.tau
-                        reducedctxs  <- reducedCtxs (ctx:implications)
+                        let reducedctxs = reducedCtxs g (ctx:implications)
                         let !ctx          = head reducedctxs
                             !implications = tail reducedctxs
                         logmsg TRACET pos (text ("implications of " ++ single ctx
@@ -721,7 +705,7 @@ simplify pos rho = do
                             U.explain pos (text ("the implications of " ++ singler ctx
                                 ++ "  are  " ++ joined ", " (map singler implications)))
                         rho <- simplify pos rho.{context = ctxs2 ++ implications}
-                        tau <- reducedTau ctx.tau
+                        -- tau <- reducedTau ctx.tau
                         stio rho -- .{context <- (ctx.{checked=true, tau}:)}
                   where ctxs2 = filter (not • (ctx `implies`)) ctxs
 isVarMeta (TVar {var}) = true

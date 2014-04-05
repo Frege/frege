@@ -118,6 +118,7 @@ memberTree = do
 --- collect all variable symbols and their dependencies
 pass = do
     U.logmsg TRACET Position.null (text "start type check pass")
+    changeST Global.{tySubst=empty}
     mtree <- memberTree
     g <- getST
     let ourvars = U.allourvars g
@@ -385,10 +386,10 @@ substInstMethod qname = do
 --- replace class member with instance member
 substInst (vbl@Vbl {pos, name = MName tn bs, typ = Just (ForAll [] rho)})
         -- check if vbl is instaniated to tn
-    | [ctx@Ctx {cname, tau}] <- filter ((==tn) • Context.cname) rho.context
+    | [ctx@Ctx {cname, tau=ctau}] <- filter ((==tn) • Context.cname) rho.context
     = do
         g <- getST
-        tau <- reducedTau tau
+        let tau = reducedTau g ctau
         case U.instTauSym tau g of
             Just symt -> do           -- we have a type name
                 symc <- findC tn      -- must be a class because it appears in a contexts cname
@@ -542,13 +543,13 @@ quantifyWith f nms = do
         foreach (zip qnms sigs) changeSig
         foreach asyms changeSig
     where
-        changeSig (qnm, sigma) = do
+        changeSig (qnm, sigm) = do
             sym <- findV qnm
             case sym of
                 SymV {expr = Just x} -> do
                     zex <- zonkExpr x           -- from here on no bound Meta anywhere
-                    zex <- zonkRigid (Sigma.vars sigma) zex    -- replace Rigid#nnn a where a is bound
-                    sigma <- substRigidSigma (Sigma.vars sigma) sigma
+                    zex <- zonkRigid (Sigma.vars sigm) zex    -- replace Rigid#nnn a where a is bound
+                    let sigma = substRigidSigma (Sigma.vars sigm) sigm
                     changeSym sym.{typ = sigma, expr = Just zex, anno = true}
                     g <- getST
                     U.logmsg TRACET (Symbol.pos sym) (text ("qfy: " ++ sym.nice g ++ " :: " ++ sigma.nice g))
@@ -565,7 +566,7 @@ zonkRigid bound ex = do
         symWork (symv@ SymV {pos, expr, typ = sig}) = do
                         g <- getST
                         -- U.logmsg TRACEZ (getpos ex) (text ("symWork: " ++ show (bound ++ sig.vars) ++ " " ++ nice ex g))
-                        rho   <- substRigidRho (bound ++ sig.vars) sig.rho
+                        let rho = substRigidRho (bound ++ sig.vars) sig.rho
                         expr  <- case expr of
                             Just x  -> do
                                 x <- zonkRigid (bound ++ sig.vars) x
@@ -574,8 +575,8 @@ zonkRigid bound ex = do
                         changeSym symv.{expr, typ = ForAll sig.bound rho}
         symWork _ = error "symWork: not a variable"
 
-        zonk (x@Let {env,ex,typ = Just sig}) = do
-                sig <- substRigidSigma bound sig
+        zonk (x@Let {env,ex,typ = Just sigm}) = do
+                let sig = substRigidSigma bound sigm
                 syms <- mapSt U.findV env
                 foreach syms symWork
                 ex  <- zonkRigid bound ex
@@ -584,15 +585,15 @@ zonkRigid bound ex = do
             syms <- mapSt U.findV (map U.pVarLocal (U.patVars pat))
             foreach syms symWork
             case Expr.typ x of
-                Just sigma -> do
-                    sigma <- substRigidSigma bound sigma
+                Just sigm -> do
+                    let sigma = substRigidSigma bound sigm
                     stio (Left (x.{typ = Just sigma}))
                 Nothing -> stio (Left x)
         zonk (Case {ckind,ex,alts,typ}) = do
             ex  <- zonkRigid bound ex
             typ <- case typ of
                 Just sigma -> do
-                    s <- substRigidSigma bound sigma;
+                    let s = substRigidSigma bound sigma
                     stio (Just s)
                 Nothing -> stio Nothing
             alts <- mapSt zonkAlt alts
@@ -604,8 +605,8 @@ zonkRigid bound ex = do
                 ex  <- zonkRigid bound ex
                 stio (CAlt {pat,ex})
         zonk x = case Expr.typ x of
-            Just sigma -> do
-                sigma <- substRigidSigma bound sigma
+            Just sigm -> do
+                let sigma = substRigidSigma bound sigm
                 stio (Left (x.{typ = Just sigma}))
             Nothing -> stio (Left x)
 
@@ -689,7 +690,7 @@ checkSigma1 annotated x s = do
 
         -- check constraints
         -- offered type must not be more constrained than expected in the skolemised ty vars
-        checkConstraints tvs x ety = do
+        checkConstraints tvs x expty = do
                 g    <- getST
                 x    <- resolveHas x
                 ectx <- collectConstrs x
@@ -712,7 +713,7 @@ checkSigma1 annotated x s = do
                         
                     frho = rho.{context=fctx}
                 x    <- return (x.{typ = Just sigma.{rho=frho}})                  
-                ety <- canonicContext ety
+                let ety = canonicContext g expty
                 
                 U.logmsg TRACET pos (text ("expr context:     "   ++ U.nicectx fctx g))
                 U.logmsg TRACET pos (text ("expected context: "   ++ U.nicectx ety.context g))
@@ -890,8 +891,8 @@ tcRho' (x@Mem {ex,member}) ety = do
             U.error pos (text ("primary expression  " ++ ex.nice g ++ "  must not be a function"))
             wrong <- newRhoTyVar ("wrong", KType)
             instRho x.{ex} wrong ety
-        RhoTau _ tau -> do
-            tau <- reducedTau tau
+        RhoTau _ taut -> do
+            let tau = reducedTau g taut
             let mpos = Pos member member
             case U.instTauSym tau g of
                 Just (SymT {name, env, nativ, newt})
@@ -1069,9 +1070,10 @@ private num  = TName{pack=pPreludeBase, base="Num"}
 --- Type the literals
 literalType ctxs (lit@Lit{pos, kind, value, typ=Just sigma})
     | kind != LInt, kind != LDouble = return (Left lit)
-    | kind == LInt, isDWIM LInt value, RhoTau _ tau <- sigma.rho = do
+    | kind == LInt, isDWIM LInt value, RhoTau _ taut <- sigma.rho = do
             
-            tau <- reduced tau
+            g <- getST
+            let tau = reduced taut g
             
             case tau of
                 TCon{pos, name}
@@ -1081,9 +1083,9 @@ literalType ctxs (lit@Lit{pos, kind, value, typ=Just sigma})
                     | name == rhoFloat.tau.name   = return (Right lit.{kind=LFloat, value <- (++"F")})
                     | name == rhoDouble.tau.name  = return (Right lit.{kind=LDouble, value <- (++"D")})
                     | otherwise = fromInt
-                Meta Flexi{uid, ref, hint, kind}  = do  -- unbound, because already reduced
-                        g <- getST
-                        rctxs <- reducedCtxs ctxs
+                Meta Flexi{uid, hint, kind}  = do  -- unbound, because already reduced
+                        
+                        let rctxs = reducedCtxs g ctxs
                         let qns = [ cname | 
                                     Ctx{pos, cname, tau = Meta Flexi{uid=id}} <- rctxs, 
                                     uid == id ] 
@@ -1099,9 +1101,9 @@ literalType ctxs (lit@Lit{pos, kind, value, typ=Just sigma})
                 default -> do
                     x <- checkRho lit rhoInt        -- fix unresolved to Int
                     return (Right x)                -- or force type error
-    | kind == LDouble, isDWIM LDouble value, RhoTau _ tau <- sigma.rho = do
+    | kind == LDouble, isDWIM LDouble value, RhoTau _ taut <- sigma.rho = do
             g <- getST
-            tau <- reduced tau
+            let tau = reduced taut g
             
             case tau of
                 TCon{pos, name}
@@ -1153,11 +1155,11 @@ resolveHas expr = do
                 Mem{}
                     | not flagerr = return (Left x)
                     | Just sigma <- ex.typ,
-                      RhoTau{tau} <- sigma.rho = do
-                        tau <- reduced tau
+                      RhoTau{tau=taut} <- sigma.rho = do
+                        g <- getST 
+                        let tau = reduced taut g
                         case tau.flat of
                             TCon{}:_   = do
-                                g <- getST 
                                 U.error (getpos x) (text "can't find a type for " 
                                     <+/> text (x.nicer g)
                                     <+/> text "`" <> text member.value <> text "`"
@@ -1235,17 +1237,18 @@ resolveOver v sym = do
             changeST Global.{options <- Options.{flags <- flip U.setFlag OVERLOADING}}
             tvs <- sigmaTvs sigma
             x <- checkSigma Vbl{pos, name=Symbol.name sym, typ=Nothing} sigma
-            foreach tvs unBind
-            changeST Global.{options <- Options.{flags <- flip U.clrFlag OVERLOADING}}
+            -- foreach tvs unBind
+            -- changeST Global.{options <- Options.{flags <- flip U.clrFlag OVERLOADING}}
             g <- getST
-            changeST Global.{sub <- SubSt.{numErrors = g1.sub.numErrors}}
+            -- changeST Global.{sub <- SubSt.{numErrors = g1.sub.numErrors}}
+            putST g1
             if (g.errors > g1.errors)
             then resolve pos sigma syms
             else do
                 rs <- resolve pos sigma syms
                 return (sym:rs)
-        unBind (Flexi{ref}) = doio (ref.put Nothing)
-        unBind Rigid{} = return ()    
+        -- unBind (Flexi{ref}) = doio (ref.put Nothing)
+        -- unBind Rigid{} = return ()    
         overloads g sym = case sym of
             SymV{over=[]} -> [sym]
             SymV{pos, name = MName{tynm, base}, over=(_:_)}
@@ -1264,7 +1267,7 @@ resolveOver v sym = do
 collectConstrs = U.foldEx true collC []
     where
         collC cxs x = case Expr.typ x of
-            Just sigma -> reducedCtxs cs >>= return . Left . flip mergeCtx cxs
+            Just sigma -> getST >>= (return . Left . flip mergeCtx cxs . flip reducedCtxs cs)
                             where cs = map Context.{pos=getpos x} sigma.rho.context 
             Nothing    -> return (Left cxs)  
             
