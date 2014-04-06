@@ -109,14 +109,21 @@ chgddef (d@DatDcl {pos}) = do
         g <- getST
         let dname = TName g.thisPack d.name
         dsym <- U.findT dname
-        let newdefs = work g dsym
+        let (newdefs,exports) = work g dsym
         enter (MName dname) newdefs
+        changeST _.{sub <- _.{toExport <- (exports++)}}
         stio d.{defs <- (++ newdefs)}
     where
+        work :: Global -> Symbol -> ([DefinitionT], [SName])
         work g (dsym@SymT {env}) =
                 let cons   = [ sym | sym@SymD {sid} <- values env ]
                     fields = (uniqBy (using fst) • sort) [ (f,p) | con <- cons, Field {pos = p, name = Just f} <- Symbol.flds con ]
-                in [ d | (f,p) <- fields, d <- gen g p dsym.name cons f]
+                in ([ d | (f,p) <- fields, d <- gen g p dsym.name cons f],
+                    if length cons == 1 
+                        then [ With1 (p.change CONID dsym.name.base).first 
+                                (p.change VARID (s ++ f)).first | (f, p) <- fields,
+                                                                        s <- ["chg$", "upd$"]]
+                        else [])
         work _ _ = error "work: need a SymT"
         gen :: Global -> Position -> QName -> [Symbol] -> String -> [DefinitionS]
         gen g fpos tname cons f = let
@@ -140,13 +147,16 @@ chgddef (d@DatDcl {pos}) = do
                             [] -> Just ("access field @" ++ f ++ "@")
                             xs -> Just (joined "\n" xs)
                 -- numbers = iterate (1+) 1
+                confs :: Symbol -> [Maybe String]
                 confs sym = map ConField.name (Symbol.flds sym)   -- just the names
                 -- find sub-pattern name of field f in constructor sym
                 occurs :: Symbol -> String -> [ExprS]
                 occurs sym f = (map fst • filter ((==Just f) • snd) • zip subvars) (confs sym)
                 -- arity of a constructor
+                arity :: Symbol -> Int
                 arity sym = length (Symbol.flds sym)
                 -- displayed name of a constructor
+                cname :: Symbol -> SName
                 cname sym = case Symbol.name sym of
                     MName tn base -> With1 pos.first.{tokid=CONID, value=tn.base}
                                            pos.first.{tokid=CONID, value=base}
@@ -158,21 +168,19 @@ chgddef (d@DatDcl {pos}) = do
                 -- construct pattern  Con s1 s2 s3 ... sn
                 conpat con s = PCon {qname=cname con,pos,pats}
                     where pats = take (arity con) (subpats s)
-                reppat v (pcon@PCon {}) = pcon.{pats <- map sv}
-                    where
-                        -- sv (p@PVar {var}) | var == v = PUser{pat=p, lazy=false}
-                        sv p = p
-                reppat v p = p
+                
                 -- construct simple (pattern) variables
                 pvar s = PVar {var=s,uid=0,pos}
                 var  s = Vbl  {name=Simple pos.first.{value=s},pos,typ = Nothing}
                 -- replace a variable named a with expr b in a list
+                rep :: String -> ExprS -> [ExprS] -> [ExprS]
                 rep a b vs = map (repvar a b) vs                -- replace Vbl ONLY!
                 repvar :: String -> ExprS -> ExprS -> ExprS
                 repvar a b v = if (Expr.name v).id.value == a then b else v
                 -- constructor expression
                 conval con = Con {name=cname con,pos,typ=Nothing}
                 -- make an app
+                mkApp :: ExprS -> [ExprS] -> ExprS
                 mkApp x xs = fold nApp x xs
                 this   = var "this"
                 that   = var "that"
@@ -189,8 +197,8 @@ chgddef (d@DatDcl {pos}) = do
                 chgExpr = Case CNoWarn this chgAlts Nothing
                 conChg :: Symbol -> ExprS -> ExprS
                 conChg con v = mkApp (conval con) (rep v.name.id.value (nApp that v) (take (arity con) subvars))
-                chgAlts = [ CAlt {pat=reppat (Expr.name v).id.value (conpat con "a"), ex = conChg con v}
-                                                        | con <- cons, (v::ExprS) <- occurs con f]
+                chgAlts = [ CAlt {pat=conpat con "a", ex = conChg con v}
+                                                        | con <- cons, v <- occurs con f]
                 hasExpr
                     | length cons == 1 = vTrue
                     | otherwise = Case CNoWarn this (hasAlts ++ [last]) Nothing
