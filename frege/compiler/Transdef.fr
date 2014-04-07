@@ -274,9 +274,18 @@ transdef env fname (d@DatDcl {pos}) = do
             U.logmsg TRACE5 (Symbol.pos meth) (text ("polymorphic update " ++ nice meth g))
             case find ((meth.name.base ==)•("upd$"++)•unJust•ConField.name) flds of
                 Just cf -> do
-                    let mtyp = ForAll dtyp.typ.bound rho1 where
+                    let mtyp = ForAll (dtyp.typ.bound ++ additional) rho1 where
                                 rho1 = RhoFun [] dtyp.typ.{bound=[]} rho2
-                                rho2 = RhoFun [] cf.typ dtyp.typ.rho
+                                rho2 = RhoFun [] cft ret
+                        -- freeInT = U.freeTVars dtyp.typ.rho
+                        freeInF = U.freeTVars (map fst cf.typ.bound) cf.typ.rho
+                        binders = [ b | b <- U.allBinders, b `notElem` cf.typ.vars,
+                                                           b `notElem` dtyp.typ.vars ]
+                        repl = Tree.fromList (zipWith ren freeInF binders)
+                        additional = map (\tau -> (tau.var,tau.kind)) (values repl)
+                        ren tau r = (tau.var, tau.{var=r})
+                        ret = U.substRho repl dtyp.typ.rho
+                        cft = cf.typ.{rho <- U.substRho repl} 
                     U.changeSym meth.{typ = mtyp, anno = true}
                     U.logmsg TRACE5 meth.pos (text (nice meth g ++ " :: " ++ nicer mtyp g))
                     return ()
@@ -292,20 +301,50 @@ transdef env fname (d@DatDcl {pos}) = do
             U.logmsg TRACE5 (Symbol.pos meth) (text ("polymorphic change " ++ nice meth g))
             case find ((meth.name.base ==)•("chg$"++)•unJust•ConField.name) flds of
                 Just cf -> do
-                    -- use fresh vars for substitution of field type
-                    let binders = [ (b, KVar) | b <- U.allBinders, b `notElem` cf.typ.vars,
-                                                           b `notElem` dtyp.typ.vars ]
-                        nbound = take (length cf.typ.bound) binders
-                        tvars = [ TVar meth.pos k v | (v,k) <- binders]
-                        tree  = Tree.fromList (zip cf.typ.vars tvars)
-                        rho4  = U.substRho tree cf.typ.rho                       -- [a] -> [a]
-                    let mtyp = ForAll dtyp.typ.bound rho1 where
-                                rho1 = RhoFun [] dtyp.typ.{bound=[]} rho2    --  Poly -> 
-                                rho2 = RhoFun [] funty dtyp.typ.rho          --  funty -> Poly
-                                funty = ForAll nbound rho3                   --  forall a.
-                                rho3  = RhoFun rho4.context cf.typ rho4.{context=[]}     --  (forall e.[e]->[e])->[a]->[a] 
-                    U.changeSym meth.{typ = mtyp, anno = true}
-                    U.logmsg TRACE5 meth.pos (text (nice meth g ++ " :: " ++ nicer mtyp g))
+                    -- we have:
+                    -- field (forall f.b -> f -> X)
+                    -- forall a b . T a b 
+                    -- we want:
+                    -- forall a b c . T a b -> (forall g. (forall f.b -> f -> X) -> c -> g -> X) -> T a c
+                    --        -----                                                                        outerbound
+                    --                -------------------------------------------------------------------  rho1
+                    --                ------                                                               rho2
+                    --                          ---------------------------------------------------------  rho3
+                    --                          ------------------------------------------------           sigma3
+                    --                                     ---------------------                           cf.typ
+                    --                                                                              -----  ret
+                    --                                                             -------------           rho4    
+                    let
+                        result =  ForAll outerbound                                     -- a b c
+                            RhoFun{
+                                context=[], 
+                                sigma=ForAll [] dtyp.typ.rho,                           -- T a b
+                                rho=RhoFun{
+                                    context=[], 
+                                    sigma = ForAll (map tvarbound tvars)                -- forall g
+                                        RhoFun{
+                                            context=rho4.context, 
+                                            sigma=cf.typ,                               -- forall f.b -> f -> X
+                                            rho=rho4.{context=[]}},                     -- c -> g -> X 
+                                    rho = ret}}                                         -- T a c
+                        binders1 = [ TVar{pos = meth.pos, kind = KVar, var = b} 
+                                            | b <- U.allBinders, b `notElem` cf.typ.vars,
+                                              b `notElem` dtyp.typ.vars ]
+                        tvarbound tau = (tau.var, tau.kind)
+                        freeInF = map Tau.var (U.freeTVars cf.typ.vars cf.typ.rho)      -- b
+                        replInF = take (length freeInF) binders1                        -- c
+                        additional = map tvarbound replInF
+                        outerbound = dtyp.typ.bound ++ additional                       -- a b c
+                        binders2 = drop (length freeInF) binders1
+                        tvars = take (length cf.typ.bound) binders2                     -- g
+                        treefg  = Tree.fromList (zip cf.typ.vars tvars)                 -- f -> g
+                        treebc  = Tree.fromList (zip freeInF replInF)                   -- b -> c
+                        rho4b    = U.substRho treefg cf.typ.rho                         -- b -> g -> X
+                        rho4     = U.substRho treebc rho4b                              -- c -> g -> X
+                        ret      = U.substRho treebc dtyp.typ.rho                       -- T a c
+                     
+                    U.changeSym meth.{typ = result, anno = true}
+                    U.logmsg TRACE5 meth.pos (text (nice meth g ++ " :: " ++ nicer result g))
                     return ()
                 Nothing -> U.fatal dtyp.pos (text (nice meth.name g ++ ": field not found."))
                 
