@@ -485,9 +485,10 @@ returnKind syms (sym@SymV {expr = Just x, depth = 0}) = do
         w      <- returnExprKind syms sym x
         self   <- references [sym.sid] x        -- is it self-referential?
         rec    <- references syms x             -- is it recursive
+        g      <- getST
         (_, deps) <- U.fundep sym
         let local = sym.name.isLocal                            -- is this a local item?
-        sx        <- isMeager x 
+            sx    = isMeager x 
         let fwrefs
                 | local                = self > 0
                 | MName{}  <- sym.name = not (null deps)        -- possible forward references?
@@ -519,8 +520,10 @@ returnKind syms (sym@SymV {expr = Just x, depth = 0}) = do
 
 returnKind syms (sym@SymV {expr = Just x}) = do
         w      <- returnExprKind syms sym x
-        sx     <- isSimple x
         g      <- getST
+        
+        let sx = isSimple g x
+        
         let rkind = if sx then w.unionE RSimple else w
             -- if we have proper tail calls then all functions
             -- are safe tail calls. 
@@ -971,26 +974,26 @@ recyclex expr = U.copyExpr Nothing Tree.empty expr {- case expr.typ of
  * A simple expression can be translated to a java expression and will not need
  * blocks, if-then-else constructs, auxiliary declarations etc.
  -}
-isSimple :: Expr -> StG Bool
-
-isSimple (App a b _)     = mapM isSimple [a,b]     >>= return . and
-isSimple (Ifte a b c _)  = mapM isSimple [a,b,c]   >>= return . and
-isSimple (Ann {ex})      = isSimple ex
-isSimple (Vbl {pos})     = return true
-isSimple (Lit {pos})     = return true
-isSimple (Con {pos})     = return true
-isSimple (Lam {ex})      = isEasy ex
-isSimple Mem{ex}         = isSimple ex
-isSimple _               = return false
+isSimple :: Global -> Expr -> Bool
+isSimple g (App a b _)     = isSimple g a && isSimple g b
+isSimple g (Ifte a b c _)  = isSimple g a && isSimple g b && isSimple g c
+isSimple g (Ann {ex})      = isSimple g ex
+isSimple g (Vbl {pos})     = true
+isSimple g (Lit {pos})     = true
+isSimple g (Con {pos})     = true
+isSimple g (Lam {ex})      = isEasy g ex
+isSimple g Mem{ex}         = isSimple g ex
+isSimple g _               = false
 
 --- a bit simpler than isSimple, as code duplication is avoided (no lambdas)
-isMeager (App a b _)    = mapM isMeager [a,b]   >>= return . and
-isMeager (Ifte a b c _) = mapM isMeager [a,b,c] >>= return . and
-isMeager (Ann {ex})      = isSimple ex
-isMeager (Vbl {pos})     = return true
-isMeager (Lit {pos})     = return true
-isMeager (Con {pos})     = return true
-isMeager _               = return false
+isMeager :: Expr -> Bool
+isMeager (App a b _)     = isMeager a && isMeager b
+isMeager (Ifte a b c _)  = isMeager a && isMeager b && isMeager c
+isMeager (Ann {ex})      = isMeager ex
+isMeager (Vbl {pos})     = true
+isMeager (Lit {pos})     = true
+isMeager (Con {pos})     = true
+isMeager _               = false
  
 
 mkSimple (x@Vbl {pos})     = return x
@@ -1004,8 +1007,9 @@ mkSimple (x@Ann {ex}) = do
     ex <- mkSimple ex
     return x.{ex}
 mkSimple x = do
-        is <- isSimple x
-        if is then return x
+        g <- getST
+        if isSimple g x
+        then return x
         else mkS x 
 
 {--
@@ -1052,29 +1056,16 @@ mkS x = do
  * An easy expression can be translated to a series of java statements
  * with a final return, i.e. to a valid method body.
  -}
-
-isEasy (App a b _)       = liftM2 (&&) (isSimple a) (isSimple b)
-isEasy (Let {env,ex})    = do 
-    e <- isEasy ex
-    if e 
-    then do
-        syms <- mapSt U.findV env
-        -- ssss <- mapSt isSimple [ x | s <- syms, x <- Symbol.expr s ]
-        -- relaxed a bit cause we can handle it in the backend
-        ssss <- mapSt isEasy [ x | s <- syms, x <- Symbol.expr s ]
-        return (and ssss) 
-    else return false
-isEasy (Case {ex,alts})   = do
-    e <- isSimple ex
-    if e 
-    then liftM and $ mapSt (isEasy • CAlt.ex) alts
-    else return false
-isEasy (Ifte a b c _)     = do
-    e <- isSimple a
-    if e then liftM2 (&&) (isEasy b)  (isEasy c)
-    else return false
-isEasy (Ann {ex})        = isEasy ex
-isEasy x                 = isSimple x
+isEasy :: Global -> Expr -> Bool
+isEasy g (App a b _)       = isSimple g a && isSimple g b
+isEasy g (Let {env,ex})    = isEasy g ex && all (isEasy g) xprs
+    where
+        xprs = [ ex | q <- env, sym <- g.findit q, ex <- sym.expr ]
+isEasy g (Case {ex,alts})   = isSimple g ex && all (isEasy g • _.ex) alts
+    
+isEasy g (Ifte a b c _)     = isSimple g a && isEasy g b && isEasy g c
+isEasy g (Ann {ex})        = isEasy g ex
+isEasy g x                 = isSimple g x
 
 --- tracing wrapper for 'mkEasy'
 easyExpression x = do
@@ -1211,9 +1202,10 @@ mkEasy (x@App f arg t) = do
         -- f (if a then b else c) ==> if a then f b else f c
         -- f (let a = b in c) ==> let a = b in f c  
         ea     <- mkEasy arg
-        simple <- isSimple ea
-        meager <- isMeager f
-        g <- getST
+        g      <- getST
+        let simple = isSimple g ea
+            meager = isMeager f
+        
         let !before = App f ea t
         case ea of
             Let{} -> do
@@ -1307,19 +1299,26 @@ mkEasy (x@Let{env,ex}) = do             -- TODO: handle non-recursive let/case/i
         mkEasyLet x syms
     where
         mkEasyLet (x@Let{env=[Local{uid}],ex}) [sym]
-            | Just (cas@Case{alts=[alt]}) <- Symbol.expr sym, isAtomic alt.ex = do       
+            | Just (cas@Case{alts=[alt]}) <- Symbol.expr sym = do       
                 -- handle  let a = case ... of p -> x in foo a
                 --         case ... of p -> foo x
-                g <- getST
-                U.logmsg TRACE9 (getpos x) (text("mkEasyLet before: " ++ nice x g))
-                let alt = head cas.alts
-                ex <- replSid uid alt.ex ex
-                let ck
-                     | isCaseWhen x.ex = CWhen
-                     | otherwise = cas.ckind
-                let neu = cas.{alts=[alt.{ex}], ckind = ck}
-                U.logmsg TRACE9 (getpos x) (text("mkEasyLet after:  " ++ nice neu g))
-                mkEasy neu  
+                ntimes <- references [uid] ex
+                if ntimes == 1 || isAtomic alt.ex
+                then do 
+                    g <- getST
+                    U.logmsg TRACE9 (getpos x) (text("mkEasyLet before: " ++ nice x g))
+                    let alt = head cas.alts
+                    ex <- replSid uid alt.ex ex
+                    let ck
+                         | isCaseWhen x.ex = CWhen
+                         | otherwise = cas.ckind
+                    let neu = cas.{alts=[alt.{ex}], ckind = ck}
+                    U.logmsg TRACE9 (getpos x) (text("mkEasyLet after:  " ++ nice neu g))
+                    mkEasy neu
+                else do
+                    easySym sym
+                    ex <- mkEasy ex
+                    return x.{ex}  
         mkEasyLet (x@Let{env,ex}) syms = do
             foreach syms easySym 
             ex <- mkEasy ex
@@ -1328,8 +1327,8 @@ mkEasy (x@Let{env,ex}) = do             -- TODO: handle non-recursive let/case/i
             
 mkEasy  (outer@Case{}) = do
     ea     <- mkEasy outer.ex
-    simple <- isSimple ea
     g      <- getST
+    let simple = isSimple g ea
     
     let !before = outer.{ex = ea}
     
@@ -1405,9 +1404,9 @@ mkEasy  (outer@Case{}) = do
         
 mkEasy  (Ifte a x y t) = do
     ea     <- mkEasy a
-    simple <- isSimple ea
     g      <- getST
     
+    let simple = isSimple g ea
     let !before = Ifte ea x y t
     
     case ea of
@@ -1654,7 +1653,7 @@ unLet (xlet@Let {env=letenv,ex=letex,typ=lettyp})
             g    <- getST
             ulet <- U.mapEx true unLet letex
             cx   <- U.mapEx true unLet cx
-            e    <- isSimple cx
+            let e = isSimple g cx
             U.changeSym sym.{expr = Just cx}
             self <- references [sym.sid] cx
             down <- references [sym.sid] ulet
