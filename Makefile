@@ -217,7 +217,7 @@ compiler: compiler2 $(COMPF)/Grammar.class $(COMPF)/Main.class tools
 	cp frege/tools/yygenpar-fr frege/tools/YYgenparM-fr build/frege/tools
 	@echo Compiler ready
 
-$(COMPF)/Grammar.class: frege/compiler/Grammar.fr $(COMPF)/Scanner.class $(COMPF)/GUtil.class
+$(COMPF)/Grammar.class: frege/compiler/Grammar.fr $(COMPF)/GUtil.class
 	$(FREGEC2) -v frege/compiler/Grammar.fr
 frege/compiler/Grammar.fr: frege/compiler/Grammar.y
 	@echo 1 shift/reduce conflict expected
@@ -229,8 +229,8 @@ frege/Version.fr: .git/index
 	perl scripts/mkversion.pl >frege/Version.fr
 $(COMPF)/Scanner.class: $(DIR)/Prelude.class frege/compiler/Scanner.fr
 	$(FREGEC2)  -make frege.compiler.Scanner
-$(COMPF)/GUtil.class: $(COMPF)/Scanner.class frege/compiler/GUtil.fr
-	$(FREGEC2)  frege/compiler/GUtil.fr
+$(COMPF)/GUtil.class: frege/compiler/GUtil.fr $(DIR)/Prelude.class
+	$(FREGEC2)  -make frege/compiler/GUtil.fr
 $(COMPF)/Main.class: $(DIR)/Prelude.class frege/compiler/Main.fr frege/Version.fr
 	$(FREGEC2)  -make frege.compiler.Main
 $(DIR)/Prelude.class: $(COMPF2)/Main.class $(PRELUDE)
