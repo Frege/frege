@@ -49,17 +49,18 @@ import frege.Prelude hiding(<+>, break)
 import Data.TreeMap(insertkv)
 import Data.List as DL(elemBy)
 
-import Compiler.enums.Flags as Compilerflags(INPRELUDE)
-import Compiler.enums.TokenID(TokenID)
-import Compiler.enums.Visibility
-import Compiler.enums.Literals
+import  Compiler.enums.Flags as Compilerflags(INPRELUDE)
+import  Compiler.enums.TokenID(TokenID)
+import  Compiler.enums.Visibility
+import  Compiler.enums.Literals
 
-import Compiler.types.Positions
-import Compiler.types.Tokens
-import Compiler.types.Kinds
-import Compiler.types.SNames
-import Compiler.types.Packs(magicPack)
-import Compiler.types.ImportDetails
+import  Compiler.types.Positions
+import  Compiler.types.Tokens
+import  Compiler.types.Kinds
+import  Compiler.types.SNames
+import  Compiler.types.Packs(magicPack)
+import  Compiler.types.ImportDetails
+import  Compiler.types.Types
 
 import Compiler.common.Mangle
 
@@ -165,8 +166,8 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type tauSC           [TauS]
 //%type tauSB           [TauS]
 //%type dvars           [TauS]
-//%type sigex           D.SigExs
-//%type sigexs          [D.SigExs]
+//%type sigex           SigExs
+//%type sigexs          [SigExs]
 //%type sigma           SigmaS
 //%type forall          SigmaS
 //%type rhofun          RhoS
