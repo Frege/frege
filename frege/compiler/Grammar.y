@@ -44,7 +44,7 @@ package frege.compiler.Grammar where
      * !!! DO NOT CHANGE FILE Grammar.fr, IT HAS BEEN CREATED AUTOMATICALLY !!!
      */
 
-import frege.Prelude hiding(<+>)
+import frege.Prelude hiding(<+>, break)
 
 import Data.TreeMap(insertkv)
 import Data.List as DL(elemBy)
@@ -64,7 +64,7 @@ import Compiler.types.ImportDetails
 import Compiler.common.Mangle
 
 import frege.compiler.Data      as D
-import frege.compiler.Nice      except (group, annotation, break)
+import Lib.PP (group, break, msgdoc)
 import frege.compiler.Utilities as U(
     unqualified, tuple)
 import frege.compiler.GUtil
