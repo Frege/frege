@@ -1,0 +1,171 @@
+--- The data types to represent types.
+module frege.compiler.types.Types where 
+
+import  frege.compiler.types.Kinds
+import  frege.compiler.types.Positions
+import  frege.compiler.types.SNames
+import  frege.compiler.types.Packs
+import  frege.compiler.types.QNames
+
+{--
+    Represents type variables in type checking
+    
+    A 'Rigid' type variable can not be unified with anything except itself.
+    
+    A 'Flexi' type variable can be bound to a 'Tau' type. 
+    Such a binding is represented by an entry in 'frege.compiler.Data.Global#tySubst'
+ -}
+data MetaTvT s =
+          Flexi {!uid::Int, !hint::String, !kind::Kind}
+        | Rigid {!uid::Int, !hint::String, !kind::Kind}
+        where
+            --- tell if the 'MetaTv' is flexible
+            isFlexi (Flexi{}) = true
+            isFlexi _         = false
+
+
+instance Eq MetaTvT s where
+    tv1 == tv2  = tv1.uid.== tv2.uid
+    hashCode x = x.uid
+
+
+instance Ord MetaTvT s where
+    Flexi{} <=> Rigid{}   = Lt
+    Rigid{} <=> Flexi{}   = Gt
+    tv1     <=> tv2       = tv1.uid.<=> tv2.uid
+
+--- The only variant that is ever used. 
+type MetaTv = MetaTvT QName
+
+
+{--
+ * The type for modelling tau-types.
+ -}
+data TauT s =
+      !TApp (TauT s) (TauT s)           --- type application
+    | !TCon {pos::Position, name::s}    --- type constructor
+    | !TVar {pos::Position,  kind::Kind, var::String}   --- type variable quantified over
+    | !Meta (MetaTvT s)                 --- type variable
+    where
+        varkind (TVar{var,kind}) = (var,kind)
+        varkind _ = error "varkind only applicable to TVar"
+        --- Convenience function to create a function type @a->b@
+        tfun a b = TApp (TApp (TCon Position.null (TName pPreludeBase "->")) a) b
+        --- Unpack a function type
+        getFun (TApp (TApp TCon{name = TName p "->"} a) b) | p == pPreludeBase = Just (a,b)
+        getFun _ = Nothing
+        --- Tell if this is a function type.
+        isFun    = maybe false (const true) • getFun 
+        {--
+         * Convert a flat type application to a 'TApp'
+         * obeying the law
+         > flat (mkapp con ts) == con:ts
+         -}
+        mkapp a xs = fold TApp a xs
+        {-- a nonempty list where the head element is the type constructor and the tail are the args -}
+        flat (TApp a b) = flatapp a [b] where
+            flatapp (TApp a b) ts = flatapp a (b:ts)
+            flatapp t ts          = t:ts
+        -- flat (TFun a b) = [TCon 0 (TName pPrelude "->"), a, b]
+        flat t = [t]
+
+
+--- tau types as created by parser
+type TauS = TauT SName
+
+
+--- tau types use in TC
+type Tau = TauT QName
+
+
+{--
+    The type for modelling sigma types (@forall@ types)
+ -}
+data SigmaT s = ForAll { !bound :: [(String, Kind)], !rho :: RhoT s } where
+    --- get the names of the bound type variables
+    vars  (ForAll b _)  = map fst b
+    --- get the 'Kind's of the bound type variables
+    kinds (ForAll b _)  = map snd b
+    --- get the bound type variables as list of 'TVar's.
+    tvars (ForAll b _) pos = zipWith (\(v,k)\p -> TVar p k v) b (repeat pos)
+
+
+--- sigmas after translation
+type Sigma =  SigmaT QName
+
+--- sigmas as returned from parsing
+type SigmaS = SigmaT SName
+
+{--
+    The type for modelling class assertions.
+ -}
+data ContextT s = Ctx {!pos :: Position, !cname :: s, !tau :: TauT s }
+
+
+type Context    = ContextT QName
+
+
+type ContextS   = ContextT SName
+
+
+{--
+    The type for modelling rho types,
+    which are constraint bearing types that may be functions.
+    
+    Note that the first argument of a 'RhoFun' is a 'Sigma' type,
+    this encodes type annotations like:
+    
+    > (forall a.[a] -> [a]) -> [b] -> [b]
+    >                                 ---    RhoTau
+    >                          ---           Sigma
+    >                          ----------    RhoFun
+    > ---------------------                  Sigma
+    > -----------------------------------    RhoFun
+    
+    If some function has the above type, it will compile
+    to a method with two arguments and return type @[b]@.  
+ -}
+data RhoT s =
+      !RhoFun {context::[ContextT s], sigma::SigmaT s, rho::RhoT s}
+    | !RhoTau {context::[ContextT s], tau::TauT s}
+
+
+--- rho as returned from parsing
+type RhoS = RhoT SName
+
+
+--- rho as used in typechecker
+type Rho  = RhoT QName
+
+--- A 'Sigma' followed by a number of exceptions ('Tau' types).
+--- Used to model a native function type with *throws* clause.
+type SigExs = (SigmaS, [TauS])
+
+
+instance Positioned (TauT a) where
+    is p = "tau type"
+    -- getpos (TFun a b)    = a.getpos.merge b.getpos
+    getpos (TApp a b)    = a.getpos.merge b.getpos
+    getpos t | t.{pos?}  = t.pos
+             | otherwise = Position.null
+
+
+instance Positioned (RhoT a) where
+    is p = "rho type"
+    getpos rho = case rho of
+        RhoFun{sigma,rho}  = (c.merge sigma.getpos).merge rho.getpos
+        RhoTau{tau}        = c.merge tau.getpos
+      where
+        c = Position.merges (map Context.getpos rho.context)
+
+
+instance Positioned (ContextT a) where
+    is p = "constraint"
+    getpos c = c.pos
+
+
+instance Positioned (SigmaT a) where
+    is s = "sigma type"
+    getpos s = s.rho.getpos
+
+
