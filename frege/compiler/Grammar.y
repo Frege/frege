@@ -49,7 +49,7 @@ import frege.Prelude hiding(<+>, break)
 import Data.TreeMap(insertkv)
 import Data.List as DL(elemBy)
 
-import  Compiler.enums.Flags as Compilerflags(INPRELUDE)
+import  Compiler.enums.Flags 
 import  Compiler.enums.TokenID(TokenID)
 import  Compiler.enums.Visibility
 import  Compiler.enums.Literals
@@ -461,12 +461,12 @@ packageclause:
     | docs PROTECTED PACKAGE packagename    { \docu\p\_\b   -> do {
                                                     g <- getST;
                                                     changeST Global.{options = g.options.{
-                                                        flags = U.setFlag g.options.flags INPRELUDE}};
+                                                        flags = setFlag g.options.flags INPRELUDE}};
                                                     YYM.return (fst b, Just docu, snd b) }}
     | PROTECTED PACKAGE packagename         { \p\_\b   -> do {
                                                     g <- getST;
                                                     changeST Global.{options = g.options.{
-                                                        flags = U.setFlag g.options.flags INPRELUDE}};
+                                                        flags = setFlag g.options.flags INPRELUDE}};
                                                     YYM.return (fst b, Nothing, snd b) }}
     | packageclause words '(' qvarids ')'   { \p\vs\v\qs\_ -> do {
                                                      g <- getST;
