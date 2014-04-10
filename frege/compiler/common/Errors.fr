@@ -1,0 +1,109 @@
+--- Error messages, warnings, hints and logging
+module frege.compiler.common.Errors where 
+
+import  frege.Prelude  hiding(error, print, println, break, <+>)
+import  frege.lib.PP(fill, break, pretty, text, nest, msgdoc, <+>, <>, DOCUMENT)
+import  frege.compiler.enums.Flags
+import  frege.compiler.types.Positions
+import  frege.compiler.common.Annotate(lit)
+import  frege.compiler.Data
+
+{--
+ * Format an error message, print it to stderr and update error counter in the state.
+ -}
+error :: Position -> DOCUMENT -> StG ()
+error n s = do
+    g <- getST
+    let opt = g.options
+        ns  = if n.start == maxBound then packageEnd g else n
+        is  = "E " ++ opt.source ++ ":" ++ show ns ++ ":"
+        -- ef  = if ns == ">" then id else (1+)
+    if isOn g.options.flags OVERLOADING
+    then explain n s
+    else if isOn g.options.flags IDE
+    then changeST Global.{sub <- SubSt.{messages <- (Msg {pos=ns, level=ERROR, text=pretty 64 s}:)}}
+    else doio (g.stderr.println (pretty 78 (text is <+> nest 4 s)))
+    
+    changeST Global.{sub <- SubSt.{numErrors <- (1+)}}
+
+
+native printStackTrace :: Throwable -> IO ()
+
+
+{--
+ * Emit a message and return 'undefined'.
+ * This indicates errors in the compiler, not in the source code compiled.
+ -}
+fatal :: Position -> DOCUMENT -> StG a
+fatal n s = do
+    g <- getST
+    let opt = g.options
+        ns  = if display n == display Int.maxBound then "EOF" else display n
+        is  = "F " ++ opt.source ++ ":" ++ ns ++ ": "
+    changeST Global.{sub <- SubSt.{numErrors <- (1+)}}
+    doio do
+        stderr.println (pretty 78 (text is <+> nest 8 s))
+        let ex = Undefined.new "compiler error"
+        printStackTrace ex
+        throwIO ex
+
+
+warn :: Position -> DOCUMENT -> StG ()
+warn = logmsg WARNINGS
+
+
+hint :: Position -> DOCUMENT -> StG ()
+hint = logmsg HINTS
+
+
+verb = logmsg VERBOSE
+
+
+explain = logmsg EXPLAIN
+
+
+{-- @logmsg flag n s@
+ *
+ * Print a message /s/ referring to line number /n/ if /flag/ is on
+ * The error counter remains unaffected.
+ * Can also be used for regular trace messges, which will appear as T:file:line:
+ -}
+logmsg :: Flag -> Position -> DOCUMENT -> StG ()
+logmsg f n s = do
+    global <- getST
+    let pos = if n.start < maxBound then n else packageEnd global
+    when (isOn global.options.flags f) do
+        if isOn global.options.flags IDE
+            then case f of
+                WARNINGS -> do
+                    changeST Global.{sub <- SubSt.{messages <- (Msg {pos, level=WARNING, text=pretty 40 s}:)}}
+                    stio ()
+                HINTS -> do
+                    unless (isOn global.options.flags OVERLOADING) do
+                        changeST Global.{sub <- SubSt.{messages <- (Msg {pos, level=HINT, text=pretty 40 s}:)}}
+                    stio ()
+                _ -> stio ()
+            else if f == HINTS && isOn global.options.flags OVERLOADING 
+                then return ()          -- do not print hints during overloading resolution
+                else logit f n s global
+
+
+private logit :: Flag -> Position -> DOCUMENT -> Global -> StG ()
+private logit f n s global = do
+        let !ns = if display n == display Int.maxBound then "EOF" else display n
+            epos = ns.int
+            within :: [(Int, Int)] -> Int -> Bool
+            within [] n = false
+            within ((a,b):xs) n = a <= n && n <= b || within xs n
+            cond = (f < TRACE1                            -- warning or hint or verbose
+                       || null global.tRanges              -- no ranges specified
+                       || either (const false) (within global.tRanges) epos)
+        when (cond) do
+            let
+                opt   = global.options
+                logch = if f == EXPLAIN then " " else substr (show f) 0 1
+                osrc  = if f == EXPLAIN then "explain" else opt.source
+                is = logch ++ " " ++ osrc ++ ":" ++ ns ++ ":"
+            doio  do
+                -- global.stderr.append is << fitString (length is) s
+                global.stderr.println (pretty 78 (text is <+> nest 4 s))

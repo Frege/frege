@@ -63,7 +63,8 @@ import  Compiler.types.ImportDetails
 import  Compiler.types.Types
 import  Compiler.types.Definitions
 
-import Compiler.common.Mangle
+import  Compiler.common.Mangle
+import  Compiler.common.Errors as E()
 
 import frege.compiler.Data      as D
 import Lib.PP (group, break, msgdoc)
@@ -1379,7 +1380,7 @@ fields:
     field                           { single }
     | field ',' fields              { \a\c\ls ->
                                         if elemBy (using fst) a ls then do {
-                                                U.warn (yyline c) (msgdoc ("field `" ++ fst a
+                                                E.warn (yyline c) (msgdoc ("field `" ++ fst a
                                                     ++ "` should appear only once."));
                                                 YYM.return ls
                                             } else
