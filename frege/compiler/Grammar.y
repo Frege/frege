@@ -62,11 +62,11 @@ import  Compiler.types.Packs(magicPack)
 import  Compiler.types.ImportDetails
 import  Compiler.types.Types
 import  Compiler.types.Definitions
+import  Compiler.types.Global as G
 
 import  Compiler.common.Mangle
 import  Compiler.common.Errors as E()
 
-import frege.compiler.Data      as D
 import Lib.PP (group, break, msgdoc)
 import frege.compiler.Utilities as U(tuple)
 import frege.compiler.GUtil
