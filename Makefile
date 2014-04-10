@@ -255,7 +255,7 @@ $(DIR2)/Prelude.class: $(RUNTIME) $(COMPF1)/Main.class frege/Prelude.fr $(PRELUD
 
 SOURCES  =      $(COMPS)/Scanner.fr   $(COMPS)/Classtools.fr \
 		$(COMPS)/types/Positions.fr $(COMPS)/enums/Flags.fr \
-		$(COMPS)/Data.fr      $(COMPS)/Utilities.fr \
+		$(COMPS)/types/Global.fr      $(COMPS)/Utilities.fr \
 		$(COMPS)/GUtil.fr \
 		$(COMPS)/Main.fr      $(COMPS)/Grammar.fr   $(COMPS)/Grammar.y \
 		$(COMPS)/Fixdefs.fr   $(COMPS)/Import.fr    $(COMPS)/Enter.fr \
@@ -273,7 +273,7 @@ SOURCES  =      $(COMPS)/Scanner.fr   $(COMPS)/Classtools.fr \
 
 CLASSES  =       $(COMPF1)/Scanner.class   $(COMPF1)/Classtools.class \
 		$(COMPF1)/types/Positions.class \
-		$(COMPF1)/Data.class      $(COMPF1)/Utilities.class \
+		$(COMPF1)/types/Global.class      $(COMPF1)/Utilities.class \
 		$(COMPF1)/GUtil.class	$(COMPF1)/Grammar.class \
 		$(COMPF1)/Fixdefs.class   $(COMPF1)/Import.class \
 		$(COMPF1)/gen/Const.class  $(COMPF1)/gen/Util.class \
@@ -309,13 +309,13 @@ $(COMPF1)/Classtools.class: frege/compiler/Classtools.fr
 	$(FREGEC0) -make $?
 $(COMPF1)/BaseTypes.class: frege/compiler/BaseTypes.fr
 	$(FREGEC0) $?
-$(COMPF1)/Utilities.class: $(COMPF1)/BaseTypes.class $(COMPF1)/Classtools.class $(COMPF1)/Data.class $(COMPF1)/Nice.class $(COMPS)/Utilities.fr
+$(COMPF1)/Utilities.class: $(COMPF1)/BaseTypes.class $(COMPF1)/Classtools.class $(COMPF1)/types/Global.class $(COMPF1)/Nice.class $(COMPS)/Utilities.fr
 	$(FREGEC0) $(COMPS)/Utilities.fr
 $(COMPF1)/GUtil.class: frege/compiler/GUtil.fr
 	$(FREGEC0)  -make $?
-$(COMPF1)/Data.class: 	$(COMPF1)/BaseTypes.class $(COMPS)/Data.fr
-	$(FREGEC0)  -make $(COMPS)/Data.fr
-$(COMPF1)/Nice.class: 	$(COMPS)/Nice.fr $(LIBF1)/PP.class $(COMPF1)/Data.class $(DATA1)/List.class
+$(COMPF1)/types/Global.class: 	$(COMPF1)/BaseTypes.class $(COMPS)/types/Global.fr
+	$(FREGEC0)  -make $(COMPS)/types/Global.fr
+$(COMPF1)/Nice.class: 	$(COMPS)/Nice.fr $(LIBF1)/PP.class $(COMPF1)/types/Global.class $(DATA1)/List.class
 	$(FREGEC0) $(COMPS)/Nice.fr
 $(COMPF1)/Fixdefs.class: $(COMPS)/Fixdefs.fr
 	$(FREGEC0) $?
