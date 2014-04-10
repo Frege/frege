@@ -995,8 +995,7 @@ simpledalt:
 contypes:
     simpletypes                 { \taus -> do
                                     g <- getST
-                                    let strict = U.strictMode g
-                                        field  = Field Position.null Nothing Nothing Public strict
+                                    let field  = Field Position.null Nothing Nothing Public false
                                                     . ForAll [] . RhoTau []
                                     return (map field taus)
                                 }
