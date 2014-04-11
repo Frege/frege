@@ -46,6 +46,8 @@ package frege.compiler.Grammar where
 
 import frege.Prelude hiding(<+>, break)
 
+import frege.control.monad.State(State)
+
 import Data.TreeMap(insertkv)
 import Data.List as DL(elemBy)
 
