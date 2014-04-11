@@ -66,6 +66,7 @@ import  Compiler.types.Global as G
 
 import  Compiler.common.Mangle
 import  Compiler.common.Errors as E()
+import  Compiler.common.Resolve as R(enclosed)
 
 import Lib.PP (group, break, msgdoc)
 import frege.compiler.Utilities as U(tuple)
@@ -617,16 +618,16 @@ importitem:
     ;
 
 importspec:
-    importitem                      { \s      -> ImportItem.{alias = (U.enclosed . Token.value . SName.id . ImportItem.name) s} s}
-    | importitem alias              { \s\a    -> ImportItem.{alias = U.enclosed (Token.value a)} s }
+    importitem                      { \s      -> ImportItem.{alias = (enclosed . Token.value . SName.id . ImportItem.name) s} s}
+    | importitem alias              { \s\a    -> ImportItem.{alias = enclosed (Token.value a)} s }
     | PUBLIC importspec             { \_\s    -> ImportItem.export s }
     ;
 
 memspec:
     alias               { \v     -> protoItem.{ name  = Simple v,
-                                                alias = U.enclosed (Token.value v)} }
+                                                alias = enclosed (Token.value v)} }
     | alias  alias      { \v\a   -> protoItem.{ name  = Simple v,
-                                                alias = U.enclosed (Token.value a)} }
+                                                alias = enclosed (Token.value a)} }
     | PUBLIC memspec    { \_\s   -> ImportItem.export s }
     ;
 

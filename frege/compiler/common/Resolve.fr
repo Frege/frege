@@ -1,0 +1,361 @@
+--- Name resolution.
+--- 'SName's get resolved to 'QNames'
+module frege.compiler.common.Resolve where 
+        
+import  frege.Prelude hiding(break, <+>)
+import  frege.data.TreeMap(Tree, updatekv, insertkv, lookup, each, insert, union, including, contains, keys, values, fromKeys)
+import  frege.data.List  as  DL(partitioned, sortBy, minimumBy)
+import  frege.lib.PP(break, fill, text, nest, msgdoc, <+>, <>, DOCUMENT)
+import  frege.compiler.enums.Flags
+import  frege.compiler.enums.Visibility
+import  frege.compiler.types.Positions
+import  frege.compiler.types.Tokens
+import  frege.compiler.types.NSNames
+import  frege.compiler.types.SNames
+import  frege.compiler.types.Packs
+import  frege.compiler.types.QNames
+import  frege.compiler.types.Symbols
+import  frege.compiler.types.Global  as  G
+import  frege.compiler.classes.Nice(Nice)
+import  frege.compiler.common.Errors  as  E()
+
+
+--- extract s out of `s`
+enclosed s
+    | s~ #^`.+`$# = substr s 1 (length s-1)
+    | otherwise   = s
+
+
+--- make sure only canonical names are returned from resolve
+canonical g qname = case Global.findit g qname of
+    Just sym -> sym
+    Nothing -> Prelude.error (nice qname g ++ " has no canonical name")
+
+
+-- access is forbidden to global private symbols from a different package
+accessforbidden we sym
+    | Local {}  <- Symbol.name sym = false
+    | VName p _ <- Symbol.name sym = sym.vis == Private && p != we
+    | TName p _ <- Symbol.name sym = sym.vis == Private && p != we
+    | MName (TName p _) _ <- Symbol.name sym = sym.vis == Private && p != we
+    | otherwise = Prelude.error ("Strange symbol")
+
+
+protected resolve  :: (String -> QName) -> Position -> SName -> StG [QName]
+protected resolve fname pos sname = do
+    g   <- getST
+    syms <- resolve3 fname pos sname
+    E.logmsg TRACE5 pos (text ("resolve: " ++ show sname ++ " --> " ++ show (map (flip nice g) syms)))
+    case partitioned (accessforbidden g.thisPack) syms of
+        (psyms, asyms)
+            | null psyms, null asyms = stio []      -- not found erros was flagged by resolve3
+            | null asyms = do   -- only private symbols found
+                E.error pos (msgdoc ("`" ++ show sname ++ "´ resolves to private " ++ (flip nicer g • head) psyms
+                            ++ ", access is not allowed."))
+                stio []         -- ignore private ones
+            | otherwise = do
+                let ss = reverse asyms
+                foreach ss docWarningSym
+                foreach ss (traceSym sname)
+                foreach ss registerNS
+                stio (map Symbol.name ss) -- some public ones found
+            where
+                registerNS sym = weUse sym.name 
+                docWarningSym :: Symbol -> StG ()
+                docWarningSym sym = do
+                    g <- getST
+                    docWarning pos (sym.name.nicer g) sym.doc
+                     
+                traceSym :: SName -> Symbol -> StG ()
+                traceSym sname symbol = do
+                    E.logmsg TRACE5 pos (text (show sname ++ " resolved to " ++ nice symbol g ++ " ("
+                        ++ QName.show symbol.name ++ ", " ++ show symbol.vis ++ ")"))
+
+
+{-- Note in the state that we need the import that is associated
+    with the given 'QName'. -}
+weUse :: QName -> StG ()
+weUse qn = do
+    g <- getST 
+    case qn of 
+        Local {} -> return ()
+        _        -> case g.sub.packWhy.lookup qn.getpack of
+            Just ns -> changeST _.{sub <- _.{nsUsed <- insertkv ns ()}}
+            _       -> return ()
+
+
+{-- 
+    Print the warning encoded in documentation code, if any.
+    
+    The flag @NODOCWARNNGS@ is temporarily set by import to avoid
+    warnings on names that are resolved, but not used.
+    -}
+docWarning pos msg (Just (m~´^\s*warning:\s*([^\n]+)´)) = do
+    g <- getST
+    unless (isOn g.options.flags NODOCWARNINGS) do
+        E.warn pos (msgdoc (msg ++ ": " ++ fromMaybe "?" (m.group 1)))
+docWarning pos msg _ = return ()
+
+
+-- resolve3 keeps the original name, i.e. 'Int.<=>' will not be resolved to 'Ord.<=>'
+private resolve3 :: (String -> QName) -> Position -> SName -> StG [Symbol]
+private resolve3 fname pos (Simple Token{value=qs}) = do
+    g <- getST
+    let s = enclosed qs
+    let -- local = Local s
+        mname = fname s
+        vname = VName g.thisPack s
+        tname = TName g.thisPack s
+        find  = g.findit  
+        names
+            | mname == vname = [mname, tname]           -- avoid duplicate warnings/finds
+            | otherwise      = [mname, vname, tname]
+        found = map find names
+        result = [ sym | Just sym <- found ]                -- canonical through findit
+--                                  (Symbol.name sym).base == s,
+--                                  res <- (sym.follow g).toList ]
+    case result of
+        [] -> do
+                E.error pos (msgdoc ("can't resolve `" ++ s ++ "`, did you mean `"
+                    ++ doyoumean s (scope g mname) ++ "` perhaps?"))
+                stio []
+        rs -> stio rs
+  where
+    scope g (MName t _) | Just sym <- g.findit t
+                        = scopefrom [sym.env, g.thisTab]
+    scope g _ = scopefrom [g.thisTab]
+    scopefrom envs = fold more [] envs
+        where
+            more :: [String] -> Symtab -> [String]
+            more acc env = foldr (:) acc [ v.name.base | v <- values env,
+                                    not (v::Symbol).{clas?} ]
+-- T.v  T.C  N.v  N.C N.T
+private resolve3 _ pos (snm@With1 Token{value=n} Token{value=qv}) = do
+    g <- getST
+    let v = enclosed qv
+    let tname   = TName g.thisPack n
+        mname   = MName tname v         -- T.v or T.C
+        member  = g.findit mname
+        mlist   = map (canonical g • Symbol.name) member.toList -- [MName _ _ ] or []
+        mbtsym  = g.findit tname
+        msts | Just sym <- mbtsym = ms sym
+             | otherwise          = []
+        -- mresult = [ n | (n, Just _) <- zip members (map find members) ]
+    case g.namespaces.lookup (NSX n) of
+        Just pack -> case g.packages.lookup pack of
+            Just env -> do
+              -- register qualifier as name space, and take note of usage
+              changeST Global.{sub <- SubSt.{
+                    idKind <- insertkv (KeyTk snm.ty) (Left()),
+                    nsUsed <- insertkv (NSX n) ()}}
+              case (g.findit (VName pack v), g.findit (TName pack v)) of
+                (Nothing, Nothing)
+                    | null mlist -> do
+                        E.error pos (msgdoc ("Cannot resolve `" ++ (VName pack v).nice g
+                            ++ "`, did you mean `"
+                            ++ (VName pack (doyoumean v (es env ++ msts))).nice g ++ "` perhaps?"))
+                        stio []
+                    | otherwise = do
+                        case mbtsym of
+                            -- re-register qualifier as type name
+                            Just sym -> changeST Global.{sub <- SubSt.{
+                                idKind <- insertkv (KeyTk snm.ty) (Right sym.name)}}
+                            sonst -> return ()
+                        stio mlist
+                (Just s, Nothing) -> do
+                        stio (s : mlist)
+                (Nothing, Just t) -> do
+                        stio (t : mlist)
+                (Just s,  Just t) -> do
+                        stio (s : t : mlist)
+            Nothing -> Prelude.error ("cannot happen, no symtab for " ++ show pack)
+        Nothing -> case mbtsym of
+            Nothing -> do
+                E.error pos (msgdoc ("Can't resolve `" ++ n ++ "." ++ v ++ "` because `"
+                            ++ n ++ "` is not a type, class or namespace, "
+                            ++ "did you mean `" ++ doyoumean n (tsns g) ++ "` perhaps?"))
+                stio []
+            Just sym -> do
+              -- register qualifier as type name
+              changeST Global.{sub <- SubSt.{
+                    idKind <- insertkv (KeyTk snm.ty) (Right sym.name)}}
+              weUse sym.name
+              case member of
+                Just mem -> stio [mem]
+                Nothing -> do
+                    E.error pos (msgdoc ("Can't resolve `" ++ mname.nice g ++ "`, did you mean `"
+                            ++ (MName tname (doyoumean v (ms sym))).nice g ++ "` perhaps?"))
+                    stio []
+  where
+    -- all known type and namespace names
+    tsns :: Global -> [String]
+    tsns g = [ n | NSX n <- keys g.namespaces ]
+          ++ [ s.name.base | (s::Symbol) <- values g.thisTab, isTName s.name]
+    ms :: Symbol -> [String]
+    ms s | s.{env?} = map (QName.base • Symbol.name) (values s.env)
+         | otherwise = []
+    es :: Symtab -> [String]
+    es e = map (QName.base • Symbol.name) (values e)
+
+private resolve3 _ pos (snm@With2 Token{value=n} Token{value=t} Token{value=qm}) = do
+    g <- getST
+    let m = enclosed qm
+    case g.namespaces.lookup (NSX n) of
+        Just pack -> do
+          -- register 1st qualifier as name space
+          changeST Global.{sub <- SubSt.{
+                    idKind <- insertkv (KeyTk snm.ns) (Left()),
+                    nsUsed <- insertkv (NSX n) ()}}
+          case g.packages.lookup pack of
+            Just env -> let tname = TName pack t in case g.findit tname of
+                Nothing -> do
+                    E.error pos (msgdoc ("can't resolve `" ++ tname.nice g
+                            ++ "`, did you mean `"
+                            ++ (TName pack (doyoumean t (ts env))).nice g ++ "` perhaps?"))
+                    stio []
+                Just sym -> do
+                  -- register 2nd qualifier as type name
+                  changeST Global.{sub <- SubSt.{
+                    idKind <- insertkv (KeyTk snm.ty) (Right sym.name)}}
+                  weUse sym.name
+                  let mname = MName tname m
+                  case g.findit mname of
+                    Nothing -> do
+                        E.error pos (msgdoc ("can't resolve `" ++ mname.nice g
+                            ++ "`, did you mean `"
+                            ++ (MName tname (doyoumean m (ms sym))).nice g ++ "` perhaps?"))
+                        stio []
+                    Just mem ->  stio [mem]
+            Nothing -> Prelude.error ("cannot happen, no symtab for " ++ show pack)
+        Nothing -> do
+                E.error pos (msgdoc ("can't resolve `" ++ n ++ "." ++ t ++ "." ++ m ++ "` because `"
+                            ++ n ++ "` is not a known namespace, "
+                            ++ "did you mean `" ++ doyoumean n (ns g) ++ "` perhaps?"))
+                stio []
+  where
+    -- all known namespace names
+    ns :: Global -> [String]
+    ns g = [ n | NSX n <- keys g.namespaces ]
+    ms :: Symbol -> [String]
+    ms s | s.{env?} = map (QName.base • Symbol.name) (values s.env)
+         | otherwise = []
+    -- es :: Symtab -> [String]
+    -- es e = map (QName.base • Symbol.name) (values e)
+    -- all type names from a given package
+    ts :: Symtab -> [String]
+    ts e = [ x | TName _ x <- map Symbol.name (values e) ]
+
+
+resolveVName fname pos name = do
+        qnames <- resolve fname pos name
+        g      <- getST
+        let vnames = filter (not • isTName) qnames
+        case vnames of
+            x:_
+                -- if this was a simple name and we found an instance member,
+                -- then we cheat a bit and return the corresponding class member instead
+                -- but only if it is linked from the global level.
+                | Simple{} <- name,                           -- simple name was resolved
+                  MName iname op <- x,                        -- found member name
+                  Just (SymI{}) <- g.findit iname,            -- of an instance
+                                                              -- same is known globally
+                  Just (SymV{name=cop}) <- g.findit (VName g.thisPack op),
+                  MName cname _ <- cop,                       -- and is linked to a member
+                  Just (SymC{}) <- g.findit cname = do        -- of a type class
+                    -- register id
+                    changeST Global.{sub <- SubSt.{
+                        idKind <- insertkv (KeyTk name.id) (Right cop)}}
+                    stio cop
+                | otherwise -> do
+                    -- register id
+                    changeST Global.{sub <- SubSt.{
+                        idKind <- insertkv (KeyTk name.id) (Right x)}}
+                    stio x
+            []  | null qnames = do
+                    changeST Global.{sub <- SubSt.{resErrors <- (1+)}} 
+                    return undefQ
+                | otherwise   = do
+                    g <- getST
+                    E.error pos (msgdoc ("`" ++ nice (fname name.id.value) g ++ "` is not a variable, function or constructor."))
+                    changeST Global.{sub <- SubSt.{resErrors <- (1+)}}
+                    return undefQ
+
+
+undefQ = VName{pack=pPreludeBase, base="undefined"}
+
+
+resolveTName pos name = do
+        qnames <- resolve (VName pPreludeBase) pos name
+        let tnames = filter isTName qnames
+        case tnames of
+            [x] -> do
+                -- register id as type name
+                changeST Global.{sub <- SubSt.{
+                    idKind <- insertkv (KeyTk name.id) (Right x)}}
+                stio (Just x)
+            []  -> do
+                when ((not • null) qnames) do
+                    E.error pos (msgdoc ("`" ++ show name ++ "` is not a type, class or instance."))
+                stio Nothing
+            more -> do
+                g <- getST
+                E.fatal pos (msgdoc ("ambiguous type name ++ `"
+                    ++ show name ++ "`, could be "
+                    ++ display (map (flip QName.nice g) tnames)))
+                -- stio Nothing
+
+
+defaultXName pos qname name = do            -- qname MUST resolve to something
+        g <- getST
+        it <- resolveTName pos name
+        let sym = g.findit qname
+        case it of
+            Nothing -> stio qname
+            Just it -> case sym of
+                Just sym -> do
+                    mb <- checkXName pos sym it
+                    maybe (stio qname) stio mb
+                Nothing -> do
+                    E.error pos (fill (break("default `" ++ qname.nice g ++ "` does not exist.")))
+                    stio it
+
+
+resolveXName pos sym name = do
+        it <- resolveTName pos name
+        maybe (stio Nothing) (checkXName pos sym) it
+
+
+checkXName pos sym name = do
+        g <- getST
+        case g.findit name of
+            Nothing -> stio Nothing      -- error should have come from resolve
+            Just it | constructor sym == constructor it = stio (Just it.name)
+                    | otherwise = do
+                        E.error pos (fill ([text "expected", text ((Symbol.{name=name} sym).nice g) <> text ","]
+                                    ++ break "but found " ++ [text (it.nice g)]))
+                        stio Nothing
+
+
+--- find a name one could have meant
+doyoumean s xs
+    | null xs = "?"
+    | otherwise = snd (candidate xs)
+    where
+        -- !cs = unpacked s
+        -- distance a b = fst a <= fst b
+        candidate = minimumBy (comparing fst) . map (dlDistance (unpacked s))
+
+
+--- compute the Damerau-Levenshtein-Distance of two 'String's (Optimal String Alignment Distance)
+dlDistance :: [Char] -> String -> (Int, String)
+dlDistance cs s = (levenshtein cs (unpacked s);s)
+
+
+--- haskell code from rosettacode.org
+levenshtein :: [Char] -> [Char] -> Int
+levenshtein s1 s2 = last $ fold transform [0 .. length s1] s2
+  where transform (ns@n:ns') c = scanl calc (n+1) $ zip3 s1 ns ns'
+            where calc z (c', x, y) = minimum [y+1, z+1, x + fromEnum (c' /= c)]
+        transform [] c = [2*length s2]
+
+
