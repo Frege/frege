@@ -1,0 +1,101 @@
+--- Recreate a type with type aliases from a 'Tau' type.
+
+module frege.compiler.common.UnAlias where 
+
+import  frege.Prelude  hiding(error, print, println, break, <+>)
+import  frege.data.TreeMap(Tree, updatekv, insertkv, lookup, each, insert, union, including, contains, keys, values, fromKeys)
+import  frege.compiler.enums.Flags
+import  frege.compiler.types.Kinds
+import  frege.compiler.types.Positions
+import  frege.compiler.types.Types
+import  frege.compiler.types.Symbols
+import  frege.compiler.types.Global  as  G
+import  frege.compiler.classes.QNameMatcher(QNameMatcher)
+
+{--
+    'unAlias' tries to replace a TApp with an application of 
+    some type alias that would give the same type back.
+    
+    Note that 'unAlias' returns a pseudo type that is *no good for anything* except printing!
+    
+    'unAlias' works only on _type applications_. 
+    This is because it is clearly not desirable to unalias simple types
+    like 'Int' in the presence of 
+    
+    > type Money = Int
+    > type Age   = Int
+    
+    There is no way to say whether the 'Int' in question was 'Money',
+    'Age' or just 'Int' in the original, 
+    and hence unaliasing every 'Int' to 'Money', say,
+    would produce confusing types.
+    -}
+unAlias :: QNameMatcher a => Global -> TauT a -> Tau
+unAlias g tau = if isOn g.options.flags SPECIAL then fake tau else unAlias (fake tau)
+    where
+        -- make sure we work on a 'TauT' 'QName'
+        fake (TApp a b)           = TApp (fake a) (fake b)
+        fake TVar{pos,var,kind}   = TVar pos kind var
+        fake (Meta Rigid{hint})   = TVar Position.null KVar hint
+        fake (Meta x)        = case g.bound  x of
+            Just tau      -> tau
+            otherwise     -> TVar Position.null KVar ("t" ++ show x.uid)
+        fake TCon{pos,name}  = TCon{pos, name = fakeQName name}
+
+        unAlias  tau = case tau of
+                -- TFun a b       -> TFun (unAlias a) (unAlias b)
+                TApp a b       -> case mapMaybe (aliased tau) aliases of
+                                        []      -> TApp (unAlias a) (unAlias b)
+                                        (ali:_) -> ali
+                _              -> tau
+            where
+
+                aliased (tau1@TApp a b) (SymA{pos,name,typ,vars}) = case rho of
+                        -- the expansion of the type alias must be more than a tvar 
+                        RhoTau [] tau2 | not (isTvApp tau2) -> case unify empty tau2 tau1 of
+                            Just subst -> Just (substTau env aApp)
+                                where env = Tree.fmap unAlias subst
+                            Nothing    -> Nothing
+                        _              -> Nothing
+                    where
+                        rho = typ.rho
+                        vs  = map Tau.var vars
+                        aApp :: Tau
+                        aApp = fold TApp (TCon pos name) (map (TVar pos KVar) vs)
+
+                aliased _ _ = Nothing
+
+                aliases = [ sym | any <- values g.thisTab, sym@SymA{} <- g.follow any ]
+
+
+                -- substTau env (TFun a b)  = TFun (substTau env a) (substTau env b)
+                substTau :: Tree String (TauT β) -> TauT β -> TauT β
+                substTau env (TApp a b)  = TApp (substTau env a) (substTau env b)
+                substTau env (TVar{var})
+                    | Just tau <- lookup env var = tau
+                substTau env tau         = tau
+
+
+                -- unify t (TFun a b) (TFun c d) = do
+                --         t1 <- unify t  a c
+                --         t2 <- unify t1 b d
+                --         return t2
+                unify t (Meta x) (Meta y) | x.uid == y.uid = Just t
+                unify t TCon{name=name1} TCon{name=name2} |  match g name1 name2 = Just t
+                unify t (TApp a b) (TApp c d) = do
+                        t1 <- unify t  a c
+                        t2 <- unify t1 b d
+                        return t2
+                unify t TVar{var} tau = case lookup t var of
+                        Nothing  -> Just (insert t var tau)         -- extend substitution
+                        Just old -> case unify empty old tau of       -- check if previous substitution matches current
+                            Just sub | all varSelf (each sub) = Just t
+                            _                                 = Nothing
+                    where
+                        -- checks whether each variable would be substituted by itself
+                        -- if all substitutions are of this form, then we have type equality
+                        varSelf (s, TVar{var}) = s == var
+                        varSelf _              = false
+                unify t _ _ = Nothing
+
+
