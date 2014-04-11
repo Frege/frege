@@ -98,6 +98,7 @@ import  Compiler.types.Global as G
 import  Compiler.common.Errors as E()
 import  Compiler.common.Types  as TH
 import  Compiler.common.Resolve as R(weUse)
+import  Compiler.common.SymbolTable
 
 import  Compiler.classes.Nice
 
@@ -105,7 +106,7 @@ import  Compiler.instances.Nicer
 
 import Lib.PP(text, msgdoc, nest, stack, <>, </>, <+/>, <+>)
 import frege.compiler.Utilities     as U(findC, findD, findV, findVD, symVD, freeTVars, freeTVnames,
-                                            mapEx, foldEx, changeSym)
+                                            mapEx, foldEx)
 import frege.compiler.Kinds         as K()                                            
 
 import frege.compiler.tc.Util
@@ -208,8 +209,8 @@ annotateMain = do
         Just sym | sym.name.pack == g.thisPack,
                    Just x <- sym.expr,
                    not sym.anno = if U.lambdaDepth x > 0 
-                            then U.changeSym sym.{typ = mainSigma, anno = true}
-                            else U.changeSym sym.{typ = mainSimple mainSigma, anno = true}
+                            then changeSym sym.{typ = mainSigma, anno = true}
+                            else changeSym sym.{typ = mainSimple mainSigma, anno = true}
         _ -> stio ()
 
 checkMain = do
@@ -306,7 +307,7 @@ checkKind sym = case Symbol.name sym of
     global  -> do
         (sig, _) <- K.kiSigma [] [] sym.typ
         let new = sym.{typ=sig}
-        U.changeSym new
+        changeSym new
         return new
          
 checkAmbiguous sym (ForAll bnd r) = do
@@ -371,7 +372,7 @@ resolveConstraints sym
             ctxmetas = map (ctxTvs g) rho.context
         let filteredCtx = [ ctx | (metas, ctx) <- zip ctxmetas rho.context,
                                   all (`elem` rhometas)  (filter (not . MetaTv.isFlexi) metas)]
-        U.changeSym sym.{typ <- Sigma.{rho <- rmtrailing . Rho.{context=filteredCtx}}, 
+        changeSym sym.{typ <- Sigma.{rho <- rmtrailing . Rho.{context=filteredCtx}}, 
                          expr = Just x}
     | otherwise = return ()
     where 
@@ -472,7 +473,7 @@ checkName nm = do
         case sym of
             SymV {nativ = Just _, typ = t} | not (isPSigma t) -> do
                 (sig, _) <- K.kiSigma [] [] t
-                U.changeSym sym.{typ=sig}
+                changeSym sym.{typ=sig}
                 M.sanity sym
                 return sig
             SymV {expr = Nothing, name, pos, typ = t}
@@ -480,12 +481,12 @@ checkName nm = do
                   MName c _ <- name,
                   Just (SymC {pos}) <- g.findit c = do
                     -- t <- canonicSignature t
-                    U.changeSym sym.{state=Typechecked, vis=Abstract}
+                    changeSym sym.{state=Typechecked, vis=Abstract}
                     stio t
                 | otherwise = do
                     E.error pos (msgdoc ("implementation missing for " ++ sym.nice g))
                     (sig, _) <- K.kiSigma [] [] t
-                    U.changeSym sym.{state=Typechecked, typ=sig}
+                    changeSym sym.{state=Typechecked, typ=sig}
                     stio t
             SymV {expr = Just x, typ = t}
                 | isPSigma t,
@@ -493,23 +494,23 @@ checkName nm = do
                     rho0 <- approxRho x
                     ex <- case rho0 of
                         RhoTau{} -> do
-                            U.changeSym sym.{state=Typechecking}
+                            changeSym sym.{state=Typechecking}
                             (rho, ex) <- inferRho x  -- CAF ?
                             return ex
                         RhoFun{} -> do
-                            U.changeSym sym.{state=Typechecking, typ = ForAll [] rho0}
+                            changeSym sym.{state=Typechecking, typ = ForAll [] rho0}
                             checkRho x rho0
                     sym <- findV sym.name       -- refresh, might be updated meanwhile
                     let newstate = if sym.state != Recursive then Typechecked else Recursive
                     newsig <- maybe (error "untyped after checkRho") zonkSigma ex.typ
-                    U.changeSym sym.{typ = newsig, expr=Just ex, state = newstate}
+                    changeSym sym.{typ = newsig, expr=Just ex, state = newstate}
                     stio newsig
             SymV {expr = Just x, typ = t, state, anno}
                 | not (isPSigma t), state == Unchecked  = do
                     (sig, _) <- K.kiSigma [] [] t
                     x <- checkAnnotated x sig
                     -- t <- canonicSignature t
-                    U.changeSym sym.{state = Typechecked, expr = Just x, typ = sig }
+                    changeSym sym.{state = Typechecked, expr = Just x, typ = sig }
                     stio sig
                 | not (isPSigma t), state == Typechecked && anno = stio t     -- opt: do not recheck annotated
                 | not (isPSigma t), state == Recursive || state == Typechecked = do
@@ -517,7 +518,7 @@ checkName nm = do
                     rho <- zonkRho rho
                     sym <- findV sym.name       -- refresh, might be updated meanwhile
                     let newsig   = ForAll [] rho
-                    U.changeSym sym.{typ = newsig, expr=Just ex, state = Typechecked}
+                    changeSym sym.{typ = newsig, expr=Just ex, state = Typechecked}
                     stio newsig
             wrongsy -> E.fatal wrongsy.pos (text ("checkSym: wrong symbol: " ++ wrongsy.nice g
                 ++ ", state=" ++ show wrongsy.state
@@ -833,7 +834,7 @@ tcRho' (x@Vbl {name})  ety = do
                 else if sym.state == Typechecking
                      || sym.state == Recursive then do
                                 -- unavoidable in mutual recursive definitions
-                                U.changeSym sym.{state=Recursive}
+                                changeSym sym.{state=Recursive}
                                 rho <- approxRho x
                                 instRho x rho ety
                           else do
@@ -1027,7 +1028,7 @@ tcPat' (p@PVar {uid,var}) (ety@Check sig) = do
     sym <- findV (Local{uid, base=var})
     -- E.logmsg TRACET p.pos (text("lookup PVar{uid=" ++ show uid ++ "} --> " ++ show sym.name))
     case isPSigma sym.typ of
-        true  -> do  U.changeSym sym.{typ=sig, state=Typechecked}
+        true  -> do  changeSym sym.{typ=sig, state=Typechecked}
                      instPatSigma p sig ety
         false -> instPatSigma p sym.typ ety
 
@@ -1037,7 +1038,7 @@ tcPat' (p@PVar {uid,var}) ety = do
     case isPSigma sym.typ of
         true -> do
             sig <- newSigmaTyVar (var, KType)
-            U.changeSym sym.{typ = sig, state = Typechecked}
+            changeSym sym.{typ = sig, state = Typechecked}
             instPatSigma p sig ety
         false -> instPatSigma p sym.typ ety
 

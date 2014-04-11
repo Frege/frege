@@ -73,7 +73,6 @@ import  Compiler.types.Global as G
 import  Compiler.classes.Nice(Nice)
 
 import  Compiler.common.Mangle
-import  Compiler.common.Annotate (lit)
 import  Compiler.common.Errors as E()
 import  Compiler.common.Resolve as R
 
@@ -86,6 +85,11 @@ import frege.compiler.Classtools    as CT()
 
 
 
+
+
+
+-- import outsourced modules
+import  frege.compiler.common.SymbolTable
 
 -- import outsourced modules
 
@@ -237,177 +241,6 @@ linkqvp from sym vis pos = do
     E.logmsg TRACE3 pos (text ("`" ++ from.nice g ++ "` link to " ++ sym.nice g))
     enter (SymL {sid=0, pos=pos, vis, -- doc=Nothing,
                     name=from, alias=sym.name})
-
-
-private insertGlobal p n s = enterWith insertSym p n s
-
-
-private updateGlobal p n s = enterWith updateSym p n s
-
-
-private enterWith insupd p n s = do
-        g <- getST        -- give me the state
-        case g.packages.lookup p of
-            Just tab -> do
-                    ntab <- insupd tab n s
-                    changeST Global.{packages <- updatekv p ntab}
-            Nothing  -> do
-                    let sp = g.unpack p
-                    E.error (Symbol.pos s) (fill ([text "package", text "`" <> text sp <> text "`"]
-                                                 ++  break "does not exist."))
-
-
-{-- insert symbol, but make sure it does not exist yet -}
-private insertSym :: Symtab -> String -> Symbol -> StG Symtab
-private insertSym tab key value = case tab.lookup key of
-    Nothing -> stio (tab.insert key value)
-    Just old  -> do
-        g <- getST
-        let on = Symbol.nice old g
-            qn = Symbol.nice value g
-        case value of
-            SymV {pos} -> E.error pos (msgdoc("duplicate function or pattern binding for `"
-                            ++ value.name.nice g ++ "`, already bound on line "
-                            ++ show old.pos))
-            _          -> E.error value.pos (msgdoc("redefinition of " ++ on ++ " with " ++ qn
-                                    ++ " introduced on line " ++ show old.pos))
-        stio (tab.insert key value)
-
-
-{-- update symbol, but make sure it does already exist -}
-private updateSym :: Symtab -> String -> Symbol -> StG Symtab
-private updateSym tab key value = case tab.lookup key of
-    Just _   -> stio (tab.update key value)
-    Nothing  -> do
-        g <- getST
-        let qn = Symbol.nice value g
-        E.error value.pos (fill (break ("cannot update " ++ qn ++ "  " ++ show (keys tab))))
-        stio (tab.update key value)
-
-
-{--
- * Enter symbol into appropriate symbol table.
-
- * It is an error if prerequisites like packages or namespaces are not there.
-
- * It is an error if the symbol is already there, except in the following cases:
-
- - a symbol hides a symbolic link that points in another package
- - a non native variable finds that an annotation is already there
- - an annotation finds that a non native variable is already there
- -}
-enter :: Symbol -> StG ()
-enter sym
-    | sym.{alias?}  = do
-            g <- getST
-            let asy = g.find sym.alias
-            case asy of
-                Nothing | g.our sym.alias -> do
-                    let sa  = sym.nicer g
-                        -- st  = sym.alias.nice g
-                    E.fatal sym.pos (fill (break ("can't enter " ++ sa ++ " for unknown target")))
-                sonst -> enterOrUpdate
-    | otherwise    = enterOrUpdate
-    where
-        enterOrUpdate
-            | Local{uid} <- sym.name = do
-                g <- getST
-                uid <- if uid > 0 then return uid else uniqid
-                case g.find sym.name of
-                    Nothing
-                        | uid == sym.sid  -> do
-                            E.logmsg TRACE3 sym.pos (text("enterLocal: " ++
-                                show sym.sid ++
-                                " " ++ sym.nice g ++ " :: " ++ sym.typ.nice g ++
-                                ", " ++ show sym.state))
-                            changeST Global.{locals <- Tree.insertkvI uid sym}
-                        | otherwise = E.fatal sym.pos (text ("enterLocal: uid=" ++
-                            show uid ++ ", sid=" ++ show sym.sid ++ " for " ++ show sym.name))
-                    Just that -> E.error sym.pos (text ("already entered: " ++ nice sym g ++ " with uid " ++ show uid))
-            | otherwise = do
-                g <- getST
-                case g.find sym.name of
-                    Nothing -> enterByName sym
-                    Just that
-                        | SymL {alias} <- that, alias.getpack != sym.name.getpack = do
-                                E.warn sym.pos (fill (break("hiding previously (line " ++ show that.pos
-                                    ++ ") imported "
-                                    ++ that.nice g ++ " through " ++ sym.nice g)))
-                                changeSym sym
-                        | otherwise = enterByName sym   -- error message follows
-
-
-changeSym :: Symbol ->  StG ()
-changeSym sym | sym.sid == 0 = do
-        u <- uniqid
-        changeSym sym.{sid=u}
-changeSym sym = do
-        g <- getST
-        E.logmsg TRACE3 sym.pos (fill [text "changeSym", lit sym.sid,  text (sym.nice g ++ " :: " ++
-            (if sym.{typ?}   then sym.typ.nice g else "") ++ ", " ++
-            (if sym.{state?} then show sym.state else ""))])
-        case sym.name of
-            TName p b -> updateGlobal p sym.name.key sym
-            VName p b -> updateGlobal p sym.name.key sym
-            MName t b -> do
-                g <- getST
-                let tsy = g.findit t
-                case tsy of
-                    Nothing -> do
-                        let qn =  t.nice g
-                        E.error sym.pos (fill ([text "namespace", text "`" <> text qn <> text "`"] ++ break "does not exist"))
-                    Just typ | typ.{env?} = do
-                                env <- updateSym typ.env sym.name.key sym
-                                updateGlobal t.pack t.key typ.{env}
-                             | otherwise = E.fatal sym.pos (text "no environment:" <+> text (t.nice g))
-            Local uid s -> do
-                --  g <- getST
-                when (sym.sid != uid) do
-                    E.fatal sym.pos (text("changeSym: name =" ++ show sym.name
-                        ++ ", sid=" ++ show sym.sid))
-                changeST Global.{locals <- updatekv uid sym}
-                {- case (head g.env).lookup k of
-                    Just found -> do
-                        env <- updateSym (head g.env) k sym
-                        changeST Global.{env = env : tail g.env}
-                        -- changeTop (const env)
-                    Nothing -> without (changeSym sym) -}
-
-
-private enterByName :: Symbol -> StG ()
-private enterByName sym | sym.sid == 0 = do
-        u <- uniqid
-        enterByName sym.{sid=u}
-private enterByName sym = do
-    g <- getST
-    E.logmsg TRACE3 sym.pos (fill (break ("enterByName " ++ sym.nice g ++ " " ++ show sym.sid ++ " "
-        ++ (if sym.{expr?} && not (isPSigma sym.typ)
-                then " :: " ++ sym.typ.nicer g else ""))))
-    case sym.name of
-        TName p b -> insertGlobal p sym.name.key sym
-        VName p b -> insertGlobal p sym.name.key sym
-        MName t b -> do
-            g <- getST
-            let tsy = g.findit t
-            case tsy of
-                Nothing -> do
-                    let qn = t.nice g
-                    E.error sym.pos (msgdoc("namespace `" ++ qn ++ "` does not exist"))
-                Just typ | typ.{env?} = do
-                            env <- insertSym typ.env sym.name.key sym
-                            updateGlobal t.pack (t.key) typ.{env}
-                         | otherwise = E.fatal sym.pos (msgdoc ("no environment: " ++ t.nice g))
-        Local {} -> do
-            g <- getST
-            E.fatal sym.pos (text ("local passed to enterbyname " ++ nice sym g))
-            -- env <- insertSym (head g.env) sym.name.key sym
-            {-
-            logmsg TRACE3 sym.pos ("length env: " ++ show (length g.env)
-                                   ++ ", keys oldtop: " ++ show (keys (head g.env))
-                                   ++ ", keys newtop: " ++ show (keys env))
-                                   -}
-            -- changeST Global.{env = env : tail g.env}
-            -- changeTop (const env)
 
 
 --- Associate a java class name with a type
