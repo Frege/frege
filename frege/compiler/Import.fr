@@ -96,71 +96,94 @@ post = do
             -- && (not • isEmpty • unJust • global.packages.lookup) pPrelude
 
 --- import pass, set up environment and do imports
-pass :: StG (String, Int)
+pass :: StIO (String, Int)
 pass = do
-            (g::Global) <- getST
+            g <- getSTT
             initenv g.thisPack
-            (g::Global) <- getST
-            U.debugST TRACE2 (show g.namespaces.each)
-            stio ("packages", length (keys g.packages))
+            g <- getSTT
+            liftStG (U.debugST TRACE2 (show g.namespaces.each))
+            return ("packages", length (keys g.packages))
     where
         initenv p
             | p == pPreludeBase = do
                                      mkSymtabs
-                                     g <- getST
+                                     g <- getSTT
                                      -- add alias "PreludeBase" for namespace
-                                     changeST Global.{namespaces <- insertkv (NSX "PreludeBase") g.thisPack}
-                                     preludeBasics
+                                     changeSTT Global.{namespaces <- insertkv (NSX "PreludeBase") g.thisPack}
+                                     liftStG preludeBasics
             | otherwise         = do mkSymtabs; doImports
             where
                 -- make sure we find our own symtab
                 mkSymtabs = do
-                    g <- getST
+                    g <- getSTT
                     let
                         newn = (Tree.empty :: Tree NSName Pack).insert g.thisPack.nsName g.thisPack
                         newp = (Tree.empty :: Tree Pack Symtab).insert g.thisPack        (Tree.empty::Symtab)
-                    changeST Global.{namespaces = newn}
-                    changeST Global.{packages = newp}
+                    changeSTT Global.{namespaces = newn}
+                    changeSTT Global.{packages = newp}
+
+--- Go through the definitions and find out what needs to be imported.
+--- Add an
+--- > import frege.Prelude
+--- unless there is an explicit import already or this is a prelude package.
+importsFor :: Global -> [Definition]
+importsFor g = if noPreludeNeeded 
+                then imports 
+                else fakePreludeImport : imports
+    where
+        -- frege.Prelude needs not get added if one of the following holds:
+        -- • This is a prelude package
+        -- • There is an explicit frege.Prelude import
+        noPreludeNeeded = 
+                isOn g.options.flags INPRELUDE                      
+                || any ((pPrelude==) . Pack.new . _.pack) imports   
+        imports = if isOff g.options.flags INPRELUDE
+                    then G.importAlways ++ importDefs
+                    else importDefs
+        importDefs = [ imp | imp@ImpDcl{} <- g.definitions ]
+        -- import frege.Prelude
+        fakePreludeImport  = ImpDcl {pos=Position.null, 
+                                pack=Pack.un pPrelude, 
+                                as=Just "Prelude", imports = linkAll}  
+
+--- Find the packages this one depends upon.
+dependsOn g = [ Pack.new pack | ImpDcl{pack} <- importsFor g ]                
 
 {--
  * check definitions for Prelude import.
  * if not there, prepend an automatic @import frege.Prelude@
  -}
 doImports = do
-    (g::Global) <- getST
-    let imports0 = alwaysImport ++ [ imp | imp@ImpDcl {pos} <- g.definitions]
-        alwaysImport = if inPrelude g.thisPack g then [] else G.importAlways
-        -- check if prelude needs not be imported
-        prelimp  = g.thisPack == pPrelude || inPrelude g.thisPack g || any (isPimport) imports0
-        isPimport (ImpDcl {pack}) = pPrelude == (Pack.new pack)
-        isPimport _               = false
-        preldef  = ImpDcl {pos=Position.null, pack=Pack.un pPrelude, as=Just "Prelude", imports = linkAll}  -- import frege.Prelude
-        imports = if prelimp then imports0 else preldef : imports0
+    g <- getSTT
+    let imports = importsFor g
     forsome imports importHere
-    stio ()
+    return ()
 
+importHere :: Definition -> StIO ()
 importHere (imp@ImpDcl {pos,imports}) = do
-        g <- getST
+        g <- getSTT
         let pack = Pack.new imp.pack
             as   = maybe pack.nsName NSX imp.as
             exists = g.namespaces.lookup as
-        changeST Global.{sub <- SubSt.{nsPos <- insertkv as imp.pos}}
-        changeST _.{sub <- _.{packWhy <- insertkv pack as}}
-        maybe (newns imp pack as) (oldns imp pack as) exists
+        liftStG do
+            changeST Global.{sub <- SubSt.{nsPos <- insertkv as imp.pos}}
+            changeST _.{sub <- _.{packWhy <- insertkv pack as}}
+        maybe (newns imp pack as) (liftStG . oldns imp pack as) exists
     where
         newns imp pack as = do
                 importClass pos as pack        -- make sure g.packages pack exists when no error
-                g <- getST
+                g <- getSTT
                 case g.packages.lookup pack of
                     Just env -> do
-                        changeST Global.{namespaces <- insertkv as pack}
+                        changeSTT Global.{namespaces <- insertkv as pack}
                         mbfp <- getFP (g.unpack pack)
                         case mbfp of
-                            Right (Just fp) -> docWarning pos ("module " ++ g.unpack pack)
+                            Right (Just fp) -> liftStG do
+                                    docWarning pos ("module " ++ g.unpack pack)
                                                     (Just fp.doc) 
                             nothing  -> return ()
-                        importEnvSilent pos env as imports
-                    Nothing -> stio ()      -- importClass did the error logging
+                        liftStG (importEnvSilent pos env as imports)
+                    Nothing -> return ()      -- importClass did the error logging
         oldns imp pack as oldp = do
                 g <- getST
                 let old = g.unpack oldp
@@ -175,7 +198,7 @@ importHere (imp@ImpDcl {pos,imports}) = do
                         Just env -> importEnvSilent pos env as imports
                         Nothing -> E.fatal pos (text ("package " ++ g.unpack pack ++ " should be here?"))
                 stio ()
-importHere d = E.fatal d.pos (text ("must be an import definition, not " ++ show (constructor d)))
+importHere d = liftStG $ E.fatal d.pos (text ("must be an import definition, not " ++ show (constructor d)))
 
 
 --- Avoid warnings when we resolve items in the imported package
@@ -315,29 +338,33 @@ linkItem ns (item@Item {publik,name,members,alias}) = do
 
 
 
-importClass :: Position -> NSName -> Pack -> StG ()
+importClass :: Position -> NSName -> Pack -> StIO ()
 importClass pos why pack = do
-    g <- getST
-    maybe (importClassData pos why pack >> stio ()) (const (stio ())) (g.packages.lookup pack)
+    g <- getSTT
+    case g.packages.lookup pack of
+        Just{} -> return ()         -- is already here
+        _      -> do
+            importClassData pos why pack
+            return ()
 
 {-- 
     Get the frege package that is named in the argument
     from the cache or through the global loader.
     -}
-
+getFP :: String -> StIO (ClassNotFoundException | Maybe CT.FregePackage)
 getFP !clname = do
-    g <- getST
-    cache <- doio g.cache.get
+    g <- getSTT
+    cache <- liftIO g.cache.get
     case cache.lookup clname of
         Nothing -> do
-            exmb <- doio (CT.getFrege g.sub.loader clname >>= return . Right 
+            exmb <- liftIO (CT.getFrege g.sub.loader clname >>= return . Right 
                             `catch` notfound)
             case exmb of
                 Right (Just fp) -> do
-                        doio (g.cache.put (cache.insert clname fp)) -- remember me
-                        stio exmb
-                _  ->   stio exmb
-        just    -> stio (Right just)
+                        liftIO (g.cache.put (cache.insert clname fp)) -- remember me
+                        return exmb
+                _  ->   return exmb
+        just    -> return (Right just)
 
 notfound :: ClassNotFoundException -> IO (ClassNotFoundException | Maybe CT.FregePackage)
 notfound = return . Left            
@@ -364,11 +391,11 @@ notfound = return . Left
  * whether or not the 'MAKE' option is set. This avoids construction of a class loader
  * also in cases when multiple source files are compiled.
  -}
-importClassData :: Position -> NSName -> Pack -> StG (Maybe CT.FregePackage)
+importClassData :: Position -> NSName -> Pack -> StIO (Maybe CT.FregePackage)
 importClassData pos why pack = do
-    g <- getST
+    g <- getSTT
     let clname = g.unpack pack
-    E.logmsg TRACE2 pos (text ("importing " ++ clname))
+    liftStG $ E.logmsg TRACE2 pos (text ("importing " ++ clname))
     let mkpos off nm = Pos t t where
             t :: Token
             t = Token {tokid=VARID, value=nm, line=1, col=1, offset=off, qual= []}
@@ -380,24 +407,24 @@ importClassData pos why pack = do
             | inPrelude g.thisPack g, inPrelude pack g = do
                 -- a prelude package may miss a name space, but must then not use
                 -- the syntactic sugar that is provided through it
-                stio Nothing
+                return Nothing
             | otherwise = do
-                E.error pos (msgdoc ("Could not import package "
+                liftStG $ E.error pos (msgdoc ("Could not import package "
                                             ++ clname
                                             ++ " (" ++ exc.show ++ ")"))
-                stio Nothing
+                return Nothing
         Right Nothing -> do
-            E.error pos (msgdoc ("`" ++ clname ++ "` is not a frege package"))
-            stio Nothing
+            liftStG $ E.error pos (msgdoc ("`" ++ clname ++ "` is not a frege package"))
+            return Nothing
         Right (Just fp) -> do
-            g <- getST
+            g <- getSTT
             let packs = [ Pack.new p | 
                             p <- map fp.imps.elemAt (enumFromTo 0 (fp.imps.length-1)) ]
-            foreach packs (importClass pos why)
+            forM_ packs (importClass pos why)
             -- now everything is in place for making the new symtab
-            changeST Global.{packages <- insertkv pack Tree.empty}
+            changeSTT Global.{packages <- insertkv pack Tree.empty}
             -- tell why we imported this
-            changeST _.{sub <- _.{packWhy <- insertkv pack why}}
+            changeSTT _.{sub <- _.{packWhy <- insertkv pack why}}
             let itree = fold rebuildTau Tree.empty (enumFromTo 0 (fp.taus.length-1))
                 -- Relies on the property that there may be no forward references.
                 -- The function that builds it must guarantee this. see GenMeta.tauIndex
@@ -515,9 +542,9 @@ importClassData pos why pack = do
                             sonst -> error ("x2p: illegal expr " ++ nice app g)
                         x2p ex = error("x2p: illegal expr " ++ nice ex g)
                         pref i = x2p (xref i)
-            xtree <- foldM rebuildEx Tree.empty (enumFromTo 1 (fp.exprs.length-1))
-            E.logmsg TRACE2 pos (text ("reconstructed " ++ show fp.taus.length ++ " tau types"))
-            E.logmsg TRACE2 pos (text ("reconstructed " ++ show fp.rhos.length ++ " rho types"))
+            xtree <- liftStG $ foldM rebuildEx Tree.empty (enumFromTo 1 (fp.exprs.length-1))
+            liftStG $ E.logmsg TRACE2 pos (text ("reconstructed " ++ show fp.taus.length ++ " tau types"))
+            liftStG $ E.logmsg TRACE2 pos (text ("reconstructed " ++ show fp.rhos.length ++ " rho types"))
             let nExpr i = maybe abort id (xtree.lookup i)
                     where abort = error ("unknown expr index " ++ show i)
             let strMB "" = Nothing
@@ -618,13 +645,14 @@ importClassData pos why pack = do
                         nothing    -> return ()
 
 
-            forsome (enumFromTo 0 (fp.symas.length-1)) (enter • rbSymA)
-            forsome (enumFromTo 0 (fp.symcs.length-1)) rebuildClass
-            forsome (enumFromTo 0 (fp.symis.length-1)) rebuildInst
-            forsome (enumFromTo 0 (fp.symts.length-1)) rebuildTyp
-            forsome (enumFromTo 0 (fp.symvs.length-1)) (enter • rbSymV fp.symvs)
-            forsome (enumFromTo 0 (fp.symls.length-1)) (enter • rbSymL fp.symls)
-            stio (Just fp)
+            liftStG do
+                foreach [0 .. (fp.symas.length-1)] (enter • rbSymA)
+                foreach [0 .. (fp.symcs.length-1)] rebuildClass
+                foreach [0 .. (fp.symis.length-1)] rebuildInst
+                foreach [0 .. (fp.symts.length-1)] rebuildTyp
+                foreach [0 .. (fp.symvs.length-1)] (enter • rbSymV fp.symvs)
+                foreach [0 .. (fp.symls.length-1)] (enter • rbSymL fp.symls)
+            return (Just fp)
 
 rebuildQN :: CT.QName -> QName
 rebuildQN qn = case qn.kind of

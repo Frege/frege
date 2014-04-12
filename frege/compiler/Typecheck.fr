@@ -129,47 +129,51 @@ memberTree = do
             where b = (Symbol.name sy).base
     stio mems
 
+fundep mtree (SymV {name, expr=Just x})  = do
+    g <- getST
+    deptree <- U.ourGlobalFuns mtree x
+    let dep = [ Symbol.name sy | sy <- keys deptree, g.ourSym sy,
+                    -- leave annotated symbols and symbols with sigmas out
+                    sy.{expr?} && isPSigma sy.typ || not sy.{expr?}   ]
+    stio (name, dep)
+fundep mtree (SymV {name, expr=Nothing}) = stio (name, [])
+fundep mtree other = do
+    g <- getST
+    E.fatal other.pos (text ("fundep: strange symbol: " ++ other.nice g))
+
+
 --- collect all variable symbols and their dependencies
 pass = do
-    E.logmsg TRACET Position.null (text "start type check pass")
-    changeST Global.{tySubst=empty}
-    mtree <- memberTree
-    g <- getST
-    let ourvars = U.allourvars g
+    names <- liftStG do
+        E.logmsg TRACET Position.null (text "start type check pass")
+        changeST Global.{tySubst=empty}
+        mtree <- memberTree
+        g <- getST
+        let ourvars = U.allourvars g
 
-    let
-        fundep (SymV {name, expr=Just x})  = do
-            g <- getST
-            deptree <- U.ourGlobalFuns mtree x
-            let dep = [ Symbol.name sy | sy <- keys deptree, g.ourSym sy,
-                            -- leave annotated symbols and symbols with sigmas out
-                            sy.{expr?} && isPSigma sy.typ || not sy.{expr?}   ]
-            stio (name, dep)
-        fundep (SymV {name, expr=Nothing}) = stio (name, [])
-        fundep other = do
-            g <- getST
-            E.fatal other.pos (text ("fundep: strange symbol: " ++ other.nice g))
-
-    names <- mapSt fundep ourvars
+        mapSt (fundep mtree) ourvars
 
     let groups = tsort names
 
-    g <- getST
-    E.logmsg TRACET Position.null (text  ("names: " ++ joined " " (map (flip QName.nice g • fst) names)))
-    E.logmsg TRACET Position.null (text ("groups: " ++ display (map (map (flip QName.nice g)) groups)))
+    liftStG do
+        g <- getST
+        E.logmsg TRACET Position.null (text  ("names: " ++ joined " " (map (flip QName.nice g • fst) names)))
+        E.logmsg TRACET Position.null (text ("groups: " ++ display (map (map (flip QName.nice g)) groups)))
 
-    annotateMain
+        annotateMain
 
-    checkgroups groups
+    forsome groups (liftStG . checkgroup)
 
-    g <- getST
-    when (g.errors == 0) checkMain      -- look if there is a main function and check if the type is ok
+    liftStG do
+        g <- getST
+        when (g.errors == 0) do
+            checkMain      -- look if there is a main function and check if the type is ok
 
-    changeST Global.{sub <- SubSt.{resErrors = 0}}  -- so that subsequent passes do not run accidentaly
+        changeST Global.{sub <- SubSt.{resErrors = 0}}  -- so that subsequent passes do not run accidentaly
     
-    unusedImports
+        unusedImports
     
-    stio ("functions", length names)
+    return ("functions", length names)
 
 --- e.g. @tc "Int"@ is the 'Tau' with type constructor for @PreludeBase.Int@
 tc n = TCon {pos=Position.null, name=TName pPreludeBase n}
@@ -229,19 +233,34 @@ checkMain = do
             when (g.errors == gnew.errors && not (null sym.typ.rho.context)) do
                 E.error sym.pos (msgdoc ("The main function type must not have type class constraints."))
         _ -> stio ()
---- type check one group after the other as long as there are fewer than 7 errors
-checkgroups [] = stio ()
-checkgroups (g1:gs) = do
-    g <- getST
-    cancel <- doio g.sub.cancelled
-    when (not cancel && g.errors < 7) do
-        E.logmsg TRACEZ Position.null (text ("typechecking group: " ++ joined " " (map (flip QName.nice g) g1)))
-        -- E.logmsg TRACET Position.null (text ("typechecking group: " ++ joined " " (map (flip QName.nice g) g1)))
-        checkgroup  g1
-        checkgroups gs
+-- type check one group after the other as long as there are fewer than 7 errors
+-- checkgroups [] = stio ()
+-- checkgroups (g1:gs) = do
+--     g <- getST
+--     cancel <- doio g.sub.cancelled
+--     when (not cancel && g.errors < 7) do
+--         
+--         -- E.logmsg TRACET Position.null (text ("typechecking group: " ++ joined " " (map (flip QName.nice g) g1)))
+--         checkgroup  g1
+--         checkgroups gs
 
-checkgroup nms = do
-    -- g <- getST
+{-- 
+    We continue type checking only as long as we have less than 7 errors.
+    The reason is that a type error may trigger a lot of follow up errors
+    that may obscure the true origin.
+    
+    Experience shows that the _first_ few error messages are the best,
+    yet not all programmers seem to know this.
+    
+    -}
+checkgroup  nms = do
+    g <- getST
+    when (g.errors < 7) (checkgroup7 nms)
+
+--- Type check a group of top level functions that depend on each other.        
+checkgroup7 nms = do
+    g <- getST
+    E.logmsg TRACEZ Position.null (text ("typechecking group: " ++ joined " " (map (flip QName.nice g) nms)))
     syms <- mapSt findV nms
     -- we set up typEnv with the names of the group members so that 'envTvs' will find them
     changeST Global.{typEnv <- (nms ++)}
@@ -257,8 +276,9 @@ checkgroup nms = do
     g <- getST
     when (length g.typEnv == 0)  do
         quantifyMany nms
-    when (length g.typEnv > 0 && length nms == 1) do
-        quantifyOne nms
+    -- DO NOT quantify let
+    -- when (length g.typEnv > 0 && length nms == 1) do
+    --     quantifyOne nms
     foreach nms verbose
     foreach nms typeSanity 
     g <- getST

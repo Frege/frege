@@ -348,11 +348,11 @@ genAnonLams = do
          
  
  
-pass :: StG (String, Int)
+pass :: StIO (String, Int)
 pass = do
     setupLambdas
     -- changeST Global.{unique <- (*100000) . succ . (`quot` 100000)}
-    g <- getST
+    g <- getSTT
     U.print "final public class "
     U.print (mainClass g).base
     U.println " {"
@@ -365,34 +365,38 @@ pass = do
             init = Just (JNew cType []) }
         cType = Ref (JName "" (constClass g)) []
     pp (anno cClass)
--- 
-    mapSt (symCode Tree.empty) (sortBy (comparing Symbol.name) [ s | s@SymT {sid} <- vals ])
+ 
+    liftStG (mapSt (symCode Tree.empty) (sortBy (comparing Symbol.name) [ s | s@SymT {sid} <- vals ]))
         >>= ppSSC
-    mapSt (symCode Tree.empty) (sortBy (comparing Symbol.name) [ s | s@SymC {sid} <- vals ])
+    liftStG (mapSt (symCode Tree.empty) (sortBy (comparing Symbol.name) [ s | s@SymC {sid} <- vals ]))
         >>= ppSSC
-    mapSt (symCode Tree.empty) (sortBy (comparing Symbol.name) [ s | s@SymI {sid} <- vals ])
+    liftStG (mapSt (symCode Tree.empty) (sortBy (comparing Symbol.name) [ s | s@SymI {sid} <- vals ]))
         >>= ppSSC
     -- do variables in dependency order, this is so that CAFs refer only to CAFs
     -- whose java initialization occurs earlier
     let vars = [ s | s@SymV {} <- vals ]
     -- names   <- mapSt U.fundep vars
     -- varsyms <- mapSt U.findV (concat (U.tsort names))
-    mapSt U.fundep vars >>= mapSt U.findV . concat . tsort >>= mapSt (symCode Tree.empty) >>= ppSSC 
+    liftStG (
+            mapSt U.fundep vars 
+            >>= mapSt U.findV . concat . tsort 
+            >>= mapSt (symCode Tree.empty))
+        >>= ppSSC 
     -- mapSt (symCode Tree.empty) varsyms >>= ppSS
 
     -- constants
-    reqMain                 -- make sure main class is made
+    liftStG reqMain                 -- make sure main class is made
     makeConstants
  
     -- lazy lambda classes
-    g <- getST 
+    g <- getSTT 
 
     let toMaybe = [
             "final public static TMaybe _toMaybe(Object it) {",
             "   return it == null ? TMaybe.DNothing.it : TMaybe.DJust.mk(it);",
             "}",
             ]
-    when (g.thisPack == pPreludeBase) (foreach toMaybe U.println)
+    when (g.thisPack == pPreludeBase) (forM_ toMaybe U.println)
     let toList = [ 
              "final public static<T> TList _toList(T[] arr) {",
              "   if (arr == null) return PreludeBase.TList.DList.it;",
@@ -424,22 +428,22 @@ pass = do
              "   }).apply(iter.iterator()).<TList>forced();",
              "}" ]                
  
-    when (g.thisPack == pPreludeBase) (foreach toList U.println)
+    when (g.thisPack == pPreludeBase) (forM_ toList U.println)
     case haveMain g of
-        Just sym -> foreach (mainCode g sym) U.println
+        Just sym -> forM_ (mainCode g sym) U.println
         Nothing  -> return ()
     U.println "}"
  
-    stio ("java7 class", 1)
+    return ("java7 class", 1)
  
 --- print lists of lists of annotatable items
-ppSS xss = foreach (concat xss) (pp • anno)
+ppSS xss = forM_ (concat xss) (pp • anno)
 
 unCommentG g gs = if Compilerflags.isOn (Global.options g).flags COMMENTS 
                     then gs else unComment gs
 
 ppSSC xss = do
-    g <- getST
+    g <- getSTT
     ppSS (map (unCommentG g)  xss)
 
 --- the java code to run the main function
@@ -482,9 +486,9 @@ reqMain = getST >>= maybe (return ()) ensureLam . haveMain
     
 
 makeConstants = do
-         g <- getST
-         lams   <- genAnonLams 
-         consts <- mapSt genConst (keys g.gen.consts)
+         g <- getSTT
+         lams   <- liftStG $ genAnonLams 
+         consts <- liftStG $ mapSt genConst (keys g.gen.consts)
          let ccType = (Ref (JName "" (constClass g)) [])
              constclass = JClass   { attr = attrs [JPublic, JStatic],
                                      jtype = ccType,
@@ -503,7 +507,7 @@ makeConstants = do
                 ("jnames", anno jnames),
             ])                                     
          pp (anno constclass)
-         stio ()
+         return ()
      where
          
          genConst (kind,value) = do

@@ -92,15 +92,14 @@ main args = do
                         opt'   = opts.{source}.{flags <- flip BitSet.unionE IDETOKENS}
                                                 .{flags <- flip BitSet.unionE NOUNLET}
                         g'     = g.{options = opt'}
-                        passes = takeUntil (\(_,s,_) -> s.startsWith "simplify expressions") Main.passes
-                                ++ [(ideoff, "turn IDE mode off", return true),
-                                    (split sargs, "splitting", return true)]
-                    case StG.run (foreach passes Main.runpass) g' of
-                        (_, g) -> do
-                            when (g.errors > 0) do
-                                stderr.println "Source code has errors. See you later."
-                                (System.exit 3)
-                            return ()
+                        passes = takeUntil (\(_,s,) -> s.startsWith "simplify expressions") Main.passes
+                                ++ [(ideoff, "turn IDE mode off"),
+                                    (split sargs, "splitting")]
+                    (_, g) <- StIO.run (forM_ passes Main.runpass) g' 
+                    when (g.errors > 0) do
+                        stderr.println "Source code has errors. See you later."
+                        System.exit 3
+                    
             | otherwise = do
                 stderr.println ("Please give filename, "
                     ++ "or filename, items and one or two module names.")
@@ -111,7 +110,7 @@ main args = do
         Nothing -> usage >> System.exit 1
         
 ideoff = do
-    changeST _.{options <- _.{flags <- flip BitSet.differenceE IDETOKENS}} -- turn off for error reporting
+    changeSTT _.{options <- _.{flags <- flip BitSet.differenceE IDETOKENS}} -- turn off for error reporting
     return ("flags", 1)
 
 ours :: Global -> [Symbol]        
@@ -122,15 +121,15 @@ ours g      = (filter (g.ourSym) . filter noAliases) (values g.thisTab)
         noAliases _      = true
 ascending g = sortBy (Prelude.comparing Symbol.pos) (ours g)
 
-split :: [String] -> StG (String, Int)
+split :: [String] -> StIO (String, Int)
 split args = do
     
-    g <- getST
+    g <- getSTT
     -- members <- T.memberTree     -- to identify our members
 
     makeRanges (ascending g)
     -- Symbols have changed because of makeRanges
-    g <- getST 
+    g <- getSTT 
     -- doio $ mapM_ (printRange g) (ascending g)
     let deps g  = map (symDep g) (ascending g)
         udeps   = map (\(a,as) -> (a, filter (a!=) as))     -- eliminate self recursion
@@ -146,10 +145,10 @@ split args = do
                     selectMember x = case find ((x==) . _.base . fst) udeps of
                         Just (q, _) -> return q
                         Nothing -> do
-                            E.error Position.null (text (x ++ " is unknown"))
+                            liftStG $ E.error Position.null (text (x ++ " is unknown"))
                             return (VName g.thisPack "?")
     
-    g <- getST                    
+    g <- getSTT                    
     when (g.errors == 0) do 
         -- break the tdeps array into two pieces:
         -- the left one is the minimal one that contains all user sepcified names
@@ -187,7 +186,7 @@ split args = do
                         filter (anyReferencedBy toKeep) 
                         . filter (not . any (`elem`  ys)) 
                     $ purgedItems 
-        when (length args > 0) $ doio do
+        when (length args > 0) $ liftIO do
             stderr.println ("--- Items remaining in original:  " 
                                 ++ joined ", " (niceqs toKeep)) 
             stderr.println ("--- Items moved away:  "
@@ -198,10 +197,10 @@ split args = do
         let toMove = concat purgedItems
             toHelp = concat helperItems
         case args of 
-            [_, modul, helper] -> doio do
+            [_, modul, helper] -> liftIO do
                     printMods g modul (Just helper) toMove toHelp asc
   
-            [_, modul]         -> doio do
+            [_, modul]         -> liftIO do
                     printMods g modul Nothing toMove toHelp asc
 
             _ -> do 
@@ -224,7 +223,7 @@ split args = do
                             stderr.println "Dependency graph written to deps.dot, use"
                             stderr.println "  dot -Tsvg deps.dot"
                             stderr.println "to obtain a visualisation you can view in a browser."
-                doio $ do
+                liftIO $ do
                         tmp   <- File.createTempFile "graph" ".svg" 
                         dotPB <- ProcessBuilder.new ["dot" , "-Tsvg"]
                         dotPB <- dotPB.redirectOutput tmp
@@ -449,7 +448,7 @@ printRange g symbol = do
     there is no next, the last token in the file.
     -} 
 fullRange symbol next = do
-        g <- getST
+        -- g <- getST
         -- doio $ printRange g symbol
         lower <- lowerRange symbol
         upper <- upperRange symbol next
@@ -459,25 +458,26 @@ fullRange symbol next = do
         --        ++ " .. "  ++ upper.value)
         return (Pos lower upper)
     where
-        upperRange :: Symbol -> Maybe Symbol -> StG Token
+        upperRange :: Symbol -> Maybe Symbol -> StIO Token
         upperRange symbol Nothing = do
-            g <- getST
+            g <- getSTT
             let toks = g.sub.toks
                 last = elemAt toks (toks.length - 1)
             -- doio $  stderr.println ("Last token: " ++ show last)
             return last
         upperRange symbol (Just next) 
             | symbol.pos.end >= next.pos.start = do
-                g <- getST
-                doio $ stderr.println "I am sorry, but I can't continue."
-                doio $ stderr.println ("The definitions of " 
+                g <- getSTT
+                liftIO do
+                    stderr.println "I am sorry, but I can't continue."
+                    stderr.println ("The definitions of " 
                         ++ nicer symbol g ++ "  and  "
                         ++ nicer next g   ++ "  do overlap, ")
-                doio $ stderr.println "probably because of annotations detached from their definitions."
-                doio $ System.exit 4
+                    stderr.println "probably because of annotations detached from their definitions."
+                    System.exit 4
                 return symbol.pos.first
             | otherwise = do
-                g     <- getST
+                g     <- getSTT
                 lower <- lowerRange next
                 let toks = g.sub.toks
                 case lower `indexIn` toks of
@@ -502,9 +502,9 @@ fullRange symbol next = do
             where 
                 !this = elemAt arr n
                 !prev = elemAt arr (n-1)
-        lowerRange :: Symbol -> StG Token
+        lowerRange :: Symbol -> StIO Token
         lowerRange symbol = do 
-            g <- getST
+            g <- getSTT
             let toks = g.sub.toks
                 this = symbol.pos.first `indexIn` toks
             case this of
@@ -537,7 +537,7 @@ makeRanges ascending = do
     let nextTokens = map Just (tail ascending) ++ [Nothing]
         ranges = zipWith fullRange ascending nextTokens
     ranges <- sequence ranges
-    mapM_ changeSym (zipWith Symbol.{pos=} ascending ranges)
+    mapM_ (liftStG . changeSym) (zipWith Symbol.{pos=} ascending ranges)
     
 -- symDep g _ sym | traceLn ("doing symDep for " ++ nicer sym g) = undefined
 symDep g SymA{typ} = sigmaDep g typ
