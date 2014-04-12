@@ -224,6 +224,7 @@ public class Meta {
         boolean  publik()       default true;       // will it be imported by default
         int[]	throwing()		default {};			// index of taus this function throws
         QName[] over()			default {};			// names of members this one overloads
+        int		 op()			default 0;	   		// operator associativity and precedence (TokenID.ord)
     }
 
     /**
@@ -266,6 +267,7 @@ public class Meta {
         // String   stri();                      // strictness encoded as string
         boolean  priv()         default false; // constructor is private
         boolean  publik()       default true;  // will it be imported by default
+        int		 op()			default 0;	   // operator
     }
 
     /*
