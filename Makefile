@@ -194,6 +194,7 @@ fregec6.jar: fallback.jar savejava
 #
 test-jar: fallback.jar
 	$(FREGEC2) -make frege.compiler.Main
+	$(FREGEC2) -make frege.ide.Utilities
 	jar  -cf    fregec.jar -C build frege
 	jar  -uvfe  fregec.jar frege.compiler.Main
 	cp fregec.jar  ../eclipse-plugin/lib/fregec.jar
@@ -217,6 +218,14 @@ compiler: compiler2 $(COMPF)/Grammar.class $(COMPF)/Main.class tools
 	cp frege/tools/yygenpar-fr frege/tools/YYgenparM-fr build/frege/tools
 	@echo Compiler ready
 
+$(COMPF)/grammar/Frege.class: frege/compiler/grammar/Frege.fr $(COMPF)/common/Desugar.class
+	$(FREGEC2) -v frege/compiler/grammar/Frege.fr
+frege/compiler/grammar/Frege.fr: frege/compiler/grammar/Frege.y
+	@echo 1 shift/reduce conflict expected
+	$(YACC) -v frege/compiler/grammar/Frege.y
+	$(FREGE) -cp fregec.jar frege.tools.YYgen -m State  frege/compiler/grammar/Frege.fr
+	$(FREGE) -cp fregec.jar frege.tools.LexConvt frege/compiler/grammar/Frege.fr
+	rm -f frege/compiler/grammar/Frege.fr.bak
 $(COMPF)/Grammar.class: frege/compiler/Grammar.fr $(COMPF)/GUtil.class
 	$(FREGEC2) -v frege/compiler/Grammar.fr
 frege/compiler/Grammar.fr: frege/compiler/Grammar.y
@@ -229,6 +238,8 @@ frege/Version.fr: .git/index
 	perl scripts/mkversion.pl >frege/Version.fr
 $(COMPF)/Scanner.class: $(DIR)/Prelude.class frege/compiler/Scanner.fr
 	$(FREGEC2)  -make frege.compiler.Scanner
+$(COMPF)/common/Desugar.class: frege/compiler/common/Desugar.fr $(DIR)/Prelude.class
+	$(FREGEC2)  -make frege/compiler/common/Desugar.fr
 $(COMPF)/GUtil.class: frege/compiler/GUtil.fr $(DIR)/Prelude.class
 	$(FREGEC2)  -make frege/compiler/GUtil.fr
 $(COMPF)/Main.class: $(DIR)/Prelude.class frege/compiler/Main.fr frege/Version.fr

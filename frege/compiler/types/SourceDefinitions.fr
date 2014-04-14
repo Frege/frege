@@ -1,0 +1,170 @@
+--- The content of a source file in parsed form.
+module frege.compiler.types.SourceDefinitions where 
+
+import  frege.compiler.enums.TokenID(TokenID)
+import  frege.compiler.types.Positions
+import  frege.compiler.types.Tokens
+import  frege.compiler.enums.Visibility
+import  frege.compiler.enums.Literals
+import  frege.compiler.types.SNames
+import  frege.compiler.types.ImportDetails
+import  frege.compiler.types.Types
+
+--- a constructor fieled
+data ConField s = !Field { pos :: Position,   name, doc :: Maybe String, 
+                           vis :: Visibility, strict :: Bool,   typ :: SigmaT s }
+
+--- create 'App' 
+nApp a b = App a b 
+
+infixl 16 `App` `nApp`  `TApp`  
+infixr 16 `TFun`
+
+
+{--
+ * definitions
+ -}
+data DefinitionT =
+      ImpDcl    {pos::Position, pack::String, as::Maybe String,
+                    imports::ImportList}
+    | FixDcl    {pos::Position, opid::TokenID, ops::[String]}
+    | DocDcl    {pos::Position, text::String}
+    | TypDcl    {pos::Position, vis::Visibility, name::String,
+                    vars::[TauS], typ::SigmaS, doc::Maybe String}
+    | ClaDcl    {pos::Position, vis::Visibility, name::String,
+                    clvar::TauS, supers::[SName],
+                    defs::[DefinitionT], doc::Maybe String}
+    | InsDcl    {pos::Position, vis::Visibility,
+                    clas::SName, typ::SigmaS,
+                    defs::[DefinitionT], doc::Maybe String}
+    | DrvDcl    {pos::Position, vis::Visibility,
+                    clas::SName, typ::SigmaS,
+                    doc::Maybe String}
+    | AnnDcl    {pos::Position, vis::Visibility, name::String, typ::SigmaS, doc::Maybe String}
+    | NatDcl    {pos::Position, vis::Visibility, name::String, txs::[SigExs],
+                    meth::String, isPure::Bool, doc::Maybe String}
+    | FunDcl    {poss::[Position]            --- because of multiple clauses
+                    vis::Visibility, name::String,
+                    pats::[ExprS], expr::ExprS,
+                    doc::Maybe String}
+    | DatDcl    {pos::Position, vis::Visibility, name::String,
+                    vars::[TauS], ctrs::[DCon], defs::[DefinitionT],
+                    doc::Maybe String}
+    | JavDcl    {pos::Position, vis::Visibility, name::String, isPure::Bool, isMutable::Bool,
+                    jclas::String, vars::[TauS], defs::[DefinitionT],
+                    doc::Maybe String}
+
+
+type DefinitionS = DefinitionT
+type Definition  = DefinitionT
+
+
+{--
+    Alternatives (constructors) in a data declaration.
+    
+    Note: every field has its own strictness information, the overall strictness 
+    of the data constructor is derived from that.
+ -}
+data DCon = DCon {pos::Position, vis::Visibility, name::String,
+                  flds::[ConField SName], doc::Maybe String}
+
+
+type DConS = DCon
+
+
+{--
+    Source expressions are untyped and contain some constructs
+    that will get desugared later.
+    
+    In addition, contrary to the desugared forms they don't have 
+    patterns yet. They, too, are represented by 'ExprS'. 
+    
+    Infix operator application is parsed as if all operators
+    were right associative and had the same precedence:
+    
+    > a * b + c
+    
+    results in 
+    
+    > Infx(*, a, Infx(+, b, c))
+    
+    This will be desugared later into plain function applications ('App')
+    when the precedence and associativity of the operators is known.
+    
+    In order to distinguish the above from
+    
+    > a * (b + c)
+    
+    we have the 'Term' variant, which keeps track of parentheses.
+    Hence the above is parsed as:
+    
+    > Infx(*, a, Term(Infx(+,b,c)))
+    
+    and operator desugaring will not be able to see through the 'Term'.   
+ -}
+data ExprS =
+      !Vbl      { pos::Position, name::SName }              --- variable
+    | !Lit      { pos::Position, kind::Literalkind, 
+                    value::String }                         --- > 123 "string" 'c' ´regex´
+    | !Con      { pos::Position, name::SName }              --- data constructor
+    | !ConFS    { pos::Position, name::SName, 
+                    fields::[(String, ExprS)] }             --- > Con{field1 = ex1, field2 = ex2}
+    | !App      { fun, arg::ExprS }                         --- > fun arg
+    | !Let      { defs::[Definition], ex::ExprS }           --- > let {defs} in ex
+    | !Lam      { pat, ex::ExprS }                          --- > \pat -> ex
+    | !Ifte     { cnd, thn, els::ExprS }                    --- > if cnd then thn else els
+    | !Mem      { ex::ExprS, member::Token }                --- > ex.member
+    | !Case     { ckind::CKind, ex::ExprS, alts::[CAltS] }  --- > case ex of { alts }
+    | !Ann      { ex::ExprS, typ::SigmaT SName}     --- > ex :: typ
+    | !Term     { ex::ExprS }                               --- > ( ex )
+    | !Infx     { pos::Position, name::SName,
+                    left, right :: ExprS }                  --- > left × right
+
+
+flats x = reverse (go x)
+    where
+        go (App a b) = b : go a
+        go x         = [x] 
+
+{--
+    case alternative 
+ -}
+data CAltS = CAlt {!pat::ExprS, !ex::ExprS}                 --- > pat -> ex
+
+
+{--
+    case kind
+ -}
+data CKind =
+      CNormal       --- normal case
+    | CWhen         --- case that falls through
+    | CNoWarn       --- compiler generated, do not emit warnings
+
+
+derive Eq CKind
+
+
+derive Enum CKind
+
+
+instance Positioned ExprS where
+    is x = "source expression"
+    --- get the line number of an expression
+    getpos (App a b)    = (getpos a).merge (getpos b)
+    getpos (Mem {ex})     = getpos ex
+    getpos (Lam p x)    = p.getpos.merge x.getpos
+    getpos (Case _ e alts) = (getpos e).merge (Position.merges (map Positioned.getrange alts))
+    getpos (Let _ x)  = getpos x
+    getpos (Ifte c a b) = Position.merges (map getpos [c, a, b])
+    getpos (Ann e s)      = (getpos e).merge (s.getpos)
+    getpos (Term e)       = getpos e
+    getpos e | e.{pos?}   = e.pos
+             | otherwise  = Prelude.error ("can't determine expr pos " ++ show (constructor e))
+    getrange x = getpos x
+
+
+instance Positioned (CAltS) where
+    is _ = "case alternative"
+    getpos   c = c.pat.getpos.merge   c.ex.getpos
+    getrange c = c.pat.getrange.merge c.ex.getrange
+
