@@ -41,7 +41,7 @@
 
 package frege.compiler.Import where
 
--- import frege.IO(stderr `<<`)
+
 import frege.data.Tuples()
 import Data.TreeMap(Tree, keys, insertkv, each, values, lookup, insert)
 import Data.List as DL(sortBy, zipWith4)
@@ -101,6 +101,7 @@ pass = do
             g <- getSTT
             initenv g.thisPack
             g <- getSTT
+            changeSTT Global.{sub <- _.{localSV = g.locals}}
             liftStG (U.debugST TRACE2 (show g.namespaces.each))
             return ("packages", length (keys g.packages))
     where
@@ -118,9 +119,10 @@ pass = do
                     g <- getSTT
                     let
                         newn = (Tree.empty :: Tree NSName Pack).insert g.thisPack.nsName g.thisPack
-                        newp = (Tree.empty :: Tree Pack Symtab).insert g.thisPack        (Tree.empty::Symtab)
                     changeSTT Global.{namespaces = newn}
-                    changeSTT Global.{packages = newp}
+                    -- in iDE mode, we may have previously imported packages
+                    -- we want to keep, otherwise it is empty anyways
+                    changeSTT Global.{packages <- insertkv g.thisPack empty}
 
 --- Go through the definitions and find out what needs to be imported.
 --- Add an
@@ -343,9 +345,11 @@ importClass pos why pack = do
     g <- getSTT
     case g.packages.lookup pack of
         Just{} -> return ()         -- is already here
-        _      -> do
-            importClassData pos why pack
-            return ()
+        _  |  isOn g.options.flags TRACE2, 
+              traceLn ("import: need to import " ++ g.unpack pack) = undefined
+           | otherwise  -> do
+                importClassData pos why pack
+                return ()
 
 {-- 
     Get the frege package that is named in the argument
@@ -356,14 +360,17 @@ getFP !clname = do
     g <- getSTT
     cache <- liftIO g.cache.get
     case cache.lookup clname of
-        Nothing -> do
-            exmb <- liftIO (CT.getFrege g.sub.loader clname >>= return . Right 
+        Nothing 
+            | isOn g.options.flags TRACE2, 
+              traceLn ("import: need to load " ++ clname) = undefined 
+            | otherwise  -> do
+                exmb <- liftIO (CT.getFrege g.sub.loader clname >>= return . Right 
                             `catch` notfound)
-            case exmb of
-                Right (Just fp) -> do
+                case exmb of
+                    Right (Just fp) -> do
                         liftIO (g.cache.put (cache.insert clname fp)) -- remember me
                         return exmb
-                _  ->   return exmb
+                    _  ->   return exmb
         just    -> return (Right just)
 
 notfound :: ClassNotFoundException -> IO (ClassNotFoundException | Maybe CT.FregePackage)
@@ -425,62 +432,59 @@ importClassData pos why pack = do
             changeSTT Global.{packages <- insertkv pack Tree.empty}
             -- tell why we imported this
             changeSTT _.{sub <- _.{packWhy <- insertkv pack why}}
-            let itree = fold rebuildTau Tree.empty (enumFromTo 0 (fp.taus.length-1))
+            let -- itree = fold rebuildTau Tree.empty (enumFromTo 0 (fp.taus.length-1))
                 -- Relies on the property that there may be no forward references.
                 -- The function that builds it must guarantee this. see GenMeta.tauIndex
-                rebuildTau t n = case tau.kind of
-                        0 -> insert t n tapp
-                        1 -> insert t n tfun
-                        2 -> insert t n (TCon pos (rebuildQN (elemAt tau.tcon 0)))
-                        3 -> insert t n (TVar pos (nKind tau.suba) tau.tvar)
+                
+                -- Tau
+                iarray = arrayCache rebuildTau fp.taus.length
+                rebuildTau n t = case tau.kind of
+                        0 -> tapp
+                        1 -> tfun
+                        2 -> (TCon pos (rebuildQN (elemAt tau.tcon 0)))
+                        3 -> (TVar pos (nKind tau.suba) tau.tvar)
                         k -> error ("illegal tau kind " ++ show k ++ " in tau# " ++ show n)
                     where
-                        bad = error ("illegal subreferences in tau# " ++ show n)
                         tau = elemAt fp.taus n
-                        ab = do
-                            a <- lookup t tau.suba
-                            b <- lookup t tau.subb
-                            Just (a,b)
-                        tapp = maybe bad (uncurry TApp) ab
-                        tfun = maybe bad (uncurry Tau.tfun) ab
-                nTau i = maybe abort id (itree.lookup i)
-                    where abort = error ("unknown tau index " ++ show i)
-                ktree = fold rebuildKind Tree.empty (enumFromTo 0 (fp.kinds.length-1))
-                rebuildKind t n = case kind.kind of
-                        0 -> insert t n KType
-                        1 -> insert t n KGen
-                        2 -> insert t n KVar
-                        3 -> insert t n kapp
+                        tapp = TApp     (elemAt t tau.suba) (elemAt t tau.subb) -- maybe bad (uncurry TApp) ab
+                        tfun = Tau.tfun (elemAt t tau.suba) (elemAt t tau.subb) -- maybe bad (uncurry Tau.tfun) ab
+                nTau i = elemAt iarray i
+                
+                -- Kinds
+                karray = arrayCache rebuildKinds fp.kinds.length
+                rebuildKinds n arr = case kind.kind of
+                        0 -> KType
+                        1 -> KGen
+                        2 -> KVar
+                        3 -> KApp (kref kind.suba) (kref kind.subb)
                         k -> error ("illegal kind " ++ show k ++ " in kind# " ++ show n)
                     where
-                        bad = error ("illegal subreferences in kind#" ++ show n)
                         kind = elemAt fp.kinds n
-                        ab = do
-                            a <- lookup t kind.suba
-                            b <- lookup t kind.subb
-                            return (a,b)
-                        kapp = maybe bad (uncurry KApp) ab
-                nKind i = maybe abort id (ktree.lookup i)
-                    where abort = error ("unknown kind index " ++ show i) 
-                rtree = fold rebuildRho Tree.empty (enumFromTo 0 (fp.rhos.length-1))
-                rebuildCtx (ctx::CT.Context) = Ctx pos (rebuildQN ctx.clas) (nTau ctx.tau)
-                rebuildRho t n = case rho.rhofun of
-                        false -> insert t n (RhoTau ctx (nTau rho.rhotau))
-                        true  -> insert t n (RhoFun ctx (nSig t rho.sigma) (nR t rho.rhotau))                                
+                        kref i = elemAt arr i
+                nKind i = elemAt karray i
+                     
+                -- Rhos
+                rarray = arrayCache rebuildRhos fp.rhos.length
+                rebuildRhos n arr = case rho.rhofun of
+                        false -> RhoTau ctx (nTau rho.rhotau)
+                        true  -> RhoFun ctx (nSig rho.sigma) (nR rho.rhotau)
                     where
                         rho = elemAt fp.rhos n 
                         ctx = [ rebuildCtx ctx | ctx <- rho.cont ]
-                        nR :: Tree Int β -> Int -> β
-                        nR rtree i = maybe abort id (rtree.lookupI i)
-                            where abort = error ("unknown rho index " ++ show i)
-                        nSig rtree i = ForAll bnd (nR rtree sig.rho)
-                            where sig = elemAt fp.sigmas i
-                                  bnd = zip sig.bound.toList (map nKind sig.kinds.toList)
-                nRho i = maybe abort id (rtree.lookup i)
-                    where abort = error ("unknown rho index " ++ show i)
+                        nR i   = elemAt arr i
+                        nSig i = ForAll bnd (nR sig.rho) 
+                            where
+                                sig = elemAt fp.sigmas i
+                                bnd = zip sig.bound.toList (map nKind sig.kinds.toList)
+                nRho i = elemAt rarray i
+                        
+                rebuildCtx (ctx::CT.Context) = Ctx pos (rebuildQN ctx.clas) (nTau ctx.tau)
+                
+                -- Sigmas    
                 nSigma i = ForAll bnd (nRho sig.rho)
                     where sig = elemAt fp.sigmas i
                           bnd = zip sig.bound.toList (map nKind sig.kinds.toList)
+                
                 rebuildEx t n = res >>= stio • insert t n
                     where
                         !res = case exa.xkind of
