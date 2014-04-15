@@ -38,7 +38,7 @@
 /**
 *   This is the grammar for the Frege language.
 */
-package frege.compiler.common.Frege where
+package frege.compiler.grammar.Frege where
 
     /*
      * !!! DO NOT CHANGE FILE Frege.fr, IT HAS BEEN CREATED AUTOMATICALLY !!!
@@ -73,6 +73,8 @@ import  Compiler.common.Resolve as R(enclosed)
 import Lib.PP (group, break, msgdoc)
 import frege.compiler.Utilities as U(tuple)
 import frege.compiler.common.Desugar
+
+import frege.compiler.grammar.Lexer (substQQ)
 
 
 // this will speed up the parser by a factor of 70, cause yyprods comes out monotyped.
@@ -1255,7 +1257,7 @@ binex:
     | binex ROP4  binex                 { mkapp }
     | binex LOP4  binex                 { mkapp }
     | binex '-'   binex                 { mkapp }
-    | '-' binex                         { \m\x -> nApp (Vbl (yyline m) (With1 baseToken m.{tokid=VARID, value="negate"})) x}
+    | '-' binex                         { \m\x -> nApp (Vbl (With1 baseToken m.{tokid=VARID, value="negate"})) x}
     | binex NOP4  binex                 { mkapp }
     | binex ROP3  binex                 { mkapp }
     | binex LOP3  binex                 { mkapp }
@@ -1280,7 +1282,7 @@ appex:
 
 unex:
     primary
-    | unop unex                        { \u\p -> nApp (Vbl {pos=yyline u, name=Simple u}) p}
+    | unop unex                        { \u\p -> nApp (Vbl {name=Simple u}) p}
     ;
 
 qualifiers:
@@ -1296,21 +1298,21 @@ primary:
                                                     YYM.return (umem p v id)}}
     | primary   '.' unop              { \p\_\v -> umem p v id}
     | qualifiers    '{' VARID '?' '}' { \q\_\(v::Token)\_\_ ->
-                                            Vbl (yyline v) (q v.{value <- ("has$" ++)}) }
+                                            Vbl  (q v.{value <- ("has$" ++)}) }
     | qualifiers    '{' VARID '=' '}' { \q\_\(v::Token)\_\_ ->
-                                            Vbl (yyline v) (q v.{value <- ("upd$" ++)}) }
+                                            Vbl  (q v.{value <- ("upd$" ++)}) }
     | qualifiers    '{' VARID GETS '}' { \q\_\(v::Token)\_\_ ->
-                                            Vbl (yyline v) (q v.{value <- ("chg$" ++)}) }
+                                            Vbl  (q v.{value <- ("chg$" ++)}) }
     | qualifiers    '{' getfields '}' { \q\(p::Token)\fs\_ -> let {
                         // n   = Simple q;
-                        flp = Vbl (yyline p) (wellKnown p "flip");
-                        bul = Vbl (yyline p) (contextName p "•");
+                        flp = Vbl (wellKnown p "flip");
+                        bul = Vbl (contextName p "•");
                         c []     = undefined;
                         c (f:fs) = fold cex (chup f) fs where {
                             cex x f = bul `nApp` x `nApp` chup f;
                             chup :: (Token, Bool, Exp) -> Exp;
-                            chup (r, true, e)  = flp `nApp` Vbl (yyline r) (q r.{value <- ("chg$"++)}) `nApp` e;
-                            chup (r, false, e) = flp `nApp` Vbl (yyline r) (q r.{value <- ("upd$"++)}) `nApp` e;
+                            chup (r, true, e)  = flp `nApp` Vbl  (q r.{value <- ("chg$"++)}) `nApp` e;
+                            chup (r, false, e) = flp `nApp` Vbl  (q r.{value <- ("upd$"++)}) `nApp` e;
                                       }} in c fs }
     | primary   '.' '{' VARID '?' '}' { \p\_\_\(v::Token)\_\_ -> umem p v.{value <- ("has$"++)} id}
     | primary   '.' '{' VARID '=' '}' { \p\_\_\(v::Token)\_\_ -> umem p v.{value <- ("upd$"++)} id}
@@ -1321,53 +1323,54 @@ primary:
                         u x ((r::Token, true , e):xs) = u (umem x r.{value <- ("chg$" ++)} (`nApp` e))  xs;
                         u x ((r::Token, false, e):xs) = u (umem x r.{value <- ("upd$" ++)} (`nApp` e))  xs;
                                 } in u x fs}
-    | primary '.' '[' expr ']'      { \p\(t::Token)\_\v\_  ->
-                                        let elem = (yyline t).change VARID "elemAt"
-                                        in Vbl {pos=elem, name=Simple elem.first}
+    | primary '.' '[' expr ']'      { \p\t\_\v\_  ->
+                                        let elem = t.{tokid = VARID, value = "elemAt"}
+                                        in Vbl {name=Simple elem}
                                             `nApp` p
                                             `nApp` v}
     ;
 
 term:
-    qvarid                          { \x   -> Vbl {pos=yyline (SName.id x), name=x} }
+    qvarid                          { \x   -> Vbl {name=x} }
     | literal
-    | '_'                           { \t   -> Vbl {pos = yyline t, name = Simple t.{tokid=VARID, value="_"}} }  // only valid as pattern
-    | qconid                        { \qc  -> Con {pos=yyline (SName.id qc), name=qc} }
-    | qconid '{'        '}'         { \qc\_\z    -> ConFS {pos=Pos (SName.id qc) z, name=qc, fields=[]}}
-    | qconid '{' fields '}'         { \qc\_\fs\z -> ConFS {pos=Pos (SName.id qc) z, name=qc, fields=fs}}
-    | '(' ')'                       { \z\_   -> Con (yyline z) (With1 baseToken z.{tokid=CONID, value="()"})}
-    | '(' commata ')'               { \z\n\_ -> Con (yyline z) (With1 baseToken z.{tokid=CONID, value=tuple (n+1)})}
-    | '(' unop ')'                  { \_\x\_ -> Vbl {pos=yyline x, name=Simple x} }
-    | '(' operator ')'              { \_\o\_ -> (varcon o) (yyline o) (opSname o)}
-    | '(' '-' ')'                   { \_\m\_ -> (Vbl (yyline m) (With1 baseToken m)) }
+    | '_'                           { \t   -> Vbl {name = Simple t.{tokid=VARID, value="_"}} }  // only valid as pattern
+    | qconid                        { \qc  -> Con {name=qc} }
+    | qconid '{'        '}'         { \qc\_\z    -> ConFS {name=qc, fields=[]}}
+    | qconid '{' fields '}'         { \qc\_\fs\z -> ConFS {name=qc, fields=fs}}
+    | '(' ')'                       { \z\_   -> Con (With1 baseToken z.{tokid=CONID, value="()"})}
+    | '(' commata ')'               { \z\n\_ -> Con (With1 baseToken z.{tokid=CONID, value=tuple (n+1)})}
+    | '(' unop ')'                  { \_\x\_ -> Vbl {name=Simple x} }
+    | '(' operator ')'              { \_\o\_ -> (varcon o) (opSname o)}
+    | '(' '-' ')'                   { \_\m\_ -> (Vbl (With1 baseToken m)) }
     | '(' operator expr ')'         { \z\o\x\_ ->  let // (+1) --> flip (+) 1
-                                        flp = Vbl (yyline z) (With1 baseToken z.{tokid=VARID, value="flip"}) 
-                                        op  = (varcon o) (yyline o) (opSname o)
+                                        flp = Vbl (With1 baseToken z.{tokid=VARID, value="flip"}) 
+                                        op  = (varcon o) (opSname o)
                                         ex = nApp (nApp flp op) x
                                     in ex}
     | '(' binex operator ')'        { \_\x\o\_ ->  // (1+) --> (+) 1
-                                        nApp ((varcon o) (yyline o) (opSname o)) x}
+                                        nApp ((varcon o) (opSname o)) x}
     | '(' binex '-' ')'             { \_\x\o\_ ->  // (1+) --> (+) 1
-                                        nApp ((varcon o) (yyline o) (Simple o)) x}
-    | '(' expr ',' exprSC ')'       { \a\e\(x::Token)\es\_ -> fold nApp (Con (yyline a)
+                                        nApp ((varcon o) (Simple o)) x}
+    | '(' expr ',' exprSC ')'       { \a\e\x\es\_ -> fold nApp (Con 
                                                                    (With1 baseToken x.{tokid=CONID, value=tuple (1+length es)})
                                                                    )
                                                               (e:es)}
-    | '(' expr ';' exprSS ')'       { \a\e\(x::Token)\es\_ -> fold nApp (Vbl (yyline a)
+    | '(' expr ';' exprSS ')'       { \a\e\(x::Token)\es\_ -> fold nApp (Vbl 
                                                                    (With1 baseToken x.{tokid=VARID, value="strictTuple" ++ show (1+length es)})
                                                                     )
                                                               (e:es)}
     | '(' expr ')'                  { \_\x\_ -> Term x }
-    | '[' ']'                       { \a\z ->  Con (Pos a z) (With1 baseToken z.{tokid=CONID, value="[]"})}
-    | '[' exprSC ']'                { \b\es\z -> foldr (\a\as -> nApp (nApp (Con (yyline b) (With1 baseToken b.{tokid=CONID, value=":"})) a) as)
-                                                       (Con (yyline z)  (With1 baseToken z.{tokid=CONID, value="[]"}))
+    | '[' ']'                       { \a\z ->  Con (With1 baseToken z.{tokid=CONID, value="[]"})}
+    | '[' exprSC ']'                { \b\es\z -> 
+                                                foldr (\a\as -> nApp (nApp (Con (With1 baseToken b.{tokid=CONID, value=":"})) a) as)
+                                                       (Con (With1 baseToken z.{tokid=CONID, value="[]"}))
                                                        es}
     | '[' exprSC DOTDOT ']'         { \a\b\c\d   -> do mkEnumFrom   a b c d}
     | '[' exprSC DOTDOT expr ']'    { \a\b\c\d\e -> do mkEnumFromTo a b c d e}
     | '[' expr '|' lcquals ']'      { \(a::Token)\e\b\qs\(z::Token) -> do {
                 let {nil = z.{tokid=CONID, value="[]"}};
                 listComprehension (yyline b) e qs
-                                            (Con {name = With1 baseToken nil, pos = yyline nil})
+                                            (Con {name = With1 baseToken nil})
                                     }}
     ;
 
@@ -1398,12 +1401,12 @@ getfields:
 getfield:
       VARID GETS expr               { \s\_\x ->  (s, true,  x) }
     | VARID '=' expr                { \s\_\x ->  (s, false, x) }
-    | VARID                         { \s     ->  (s, false, Vbl (yyline s) (Simple s)) }
+    | VARID                         { \s     ->  (s, false, Vbl (Simple s)) }
     ;
 
 field:
     varid '='  expr                  { \s\_\x ->  (Token.value s, x) }
-    | varid                          { \s     ->  (s.value, Vbl (yyline s) (Simple s)) }
+    | varid                          { \s     ->  (s.value, Vbl (Simple s)) }
     ;
 
 exprSC :
@@ -1423,4 +1426,4 @@ exprSS:
  * the parser pass
  */
 pass :: [Token] -> StG (Maybe ParseResult) // Global -> IO (Maybe ParseResult, Global)
-pass = yyparse
+pass = yyparse . substQQ
