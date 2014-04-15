@@ -915,27 +915,64 @@ tcRho' (lam@Lam {}) ety = do
     instRho (x.{ex}) (RhoFun [] sigma rho) ety
 
 tcRho' (x@Mem {ex,member}) ety = do
-    (rho, ex) <- inferRho ex
-    g <- getST
-    let pos = getpos x
-    case rho of
-        RhoFun _ _ _ -> do
-            E.error pos (text ("primary expression  " ++ ex.nice g ++ "  must not be a function"))
-            wrong <- newRhoTyVar ("wrong", KType)
-            instRho x.{ex} wrong ety
-        RhoTau _ taut -> do
-            let tau = reducedTau g taut
+        (rho, ex) <- inferRho ex
+        g <- getST
+        
+        {-
+        case ety  of
+            Check RhoTau{tau=fun}
+                | TApp a b <- reduced fun g,
+                  TApp f _ <- reduced a g,
+                  TCon{name=TName{base="->"}} <- reduced f g,
+                  member.value.startsWith "upd$" || member.value.startsWith "chg$" -> do
+                    let r = RhoTau [] b
+                    ex <- checkRho ex r
+                    return ((unJust ex.typ).rho, ex)
+            _ -> inferRho ex
+    
+        -- (rho, ex) <- inferRho ex -}
+        
+        let pos = getpos x
+        case rho of
+            RhoFun _ _ _ -> do
+                E.error pos (text ("primary expression  " ++ ex.nice g ++ "  must not be a function"))
+                wrong <- newRhoTyVar ("wrong", KType)
+                instRho x.{ex} wrong ety
+            RhoTau _ taut -> do
+                let tau = reducedTau g taut
+                let expected ety
+                        | Check RhoTau{tau=fun} <- ety,
+                          TApp a b <- reduced fun g,
+                          TApp f _ <- reduced a g,
+                          TCon{name=TName{pack,base="->"}} <- reduced f g,
+                          pack == pPreludeBase,
+                          member.value.startsWith "upd$" || member.value.startsWith "chg$"
+                        = [reducedTau g b]
+                        | otherwise = []
+                tcMem pos ex member (tau:expected ety) ety
+    where
+        tcMem :: Position -> Expr -> Token -> [Tau] -> Expected Rho -> StG Expr
+        tcMem pos ex member [] ety = do
+            resolveme <- newRhoTyVar ("unresolved", KType)
+            instRho Mem{ex, member, typ=Nothing} resolveme ety
+        tcMem pos ex member (tau:taus) ety = do
+            g <- getST
             let mpos = Pos member member
+                original = if member.value.startsWith "upd$"
+                                || member.value.startsWith "chg$" 
+                            then member.{value <- flip strtail 4}
+                            else member
+                      
             case instTauSym tau g of
                 Just (SymT {name, env, nativ, newt})
                     | Just (SymV {name}) <- env.lookup member.value = do
                             changeST Global.{sub <- SubSt.{
-                                idKind <- insertkv (KeyTk member) (Right name)}}
+                                idKind <- insertkv (KeyTk original) (Right name)}}
                             weUse name
                             tcRho (nApp (Vbl mpos name Nothing) ex) ety
                     | Just (SymL {alias}) <- env.lookup member.value = do
                             changeST Global.{sub <- SubSt.{
-                                idKind <- insertkv (KeyTk member) (Right alias)}}
+                                idKind <- insertkv (KeyTk original) (Right alias)}}
                             weUse alias
                             tcRho (nApp (Vbl mpos alias Nothing) ex) ety
                     | Just s <- nativ,          -- it's a native type
@@ -950,7 +987,7 @@ tcRho' (x@Mem {ex,member}) ety = do
                                         SymL {alias} -> alias
                                         _ -> error "no symbol or alias"
                             changeST Global.{sub <- SubSt.{
-                                idKind <- insertkv (KeyTk member) (Right m)}}
+                                idKind <- insertkv (KeyTk original) (Right m)}}
                             weUse m
                             tcRho (nApp (Vbl mpos m Nothing) ex) ety
                     | newt,
@@ -963,18 +1000,16 @@ tcRho' (x@Mem {ex,member}) ety = do
                                                 h <- g.findit (MName q member.value) ]                    
                       = do
                             changeST Global.{sub <- SubSt.{
-                                idKind <- insertkv (KeyTk member) (Right m)}}
+                                idKind <- insertkv (KeyTk original) (Right m)}}
                             weUse m
                             tcRho (nApp (Vbl mpos m Nothing) ex) ety
                 other | Just (m@SymV {name=MName clas _}) <- g.findit (VName g.thisPack member.value),
                         Just (SymC {tau}) <- g.findit clas = do
                             changeST Global.{sub <- SubSt.{
-                                idKind <- insertkv (KeyTk member) (Right m.name)}}
+                                idKind <- insertkv (KeyTk original) (Right m.name)}}
                             weUse m.name
                             tcRho (nApp (Vbl mpos m.name Nothing) ex) ety
-                sonst -> do
-                    resolveme <- newRhoTyVar ("unresolved", KType)
-                    instRho x.{ex} resolveme ety
+                sonst -> tcMem pos ex member taus ety
 
 tcRho' (x@Ifte a b c _) (ety@Infer _) = do
     a <- checkRho a (rhoBool)
