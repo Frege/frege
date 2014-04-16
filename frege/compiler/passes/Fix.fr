@@ -1,0 +1,205 @@
+-- enable UTF-8: «««««••••••••••••»»»»»»
+{--
+ * This package implements the first compiler pass after lexical analysis.
+ * It fixes the list of definitions by incorporating document comments into
+ * definitions, and joining separate equations of functions that come out as
+ * separate 'FunDcl' definitions from parsing.
+
+ * The function 'fixdefs' will also be used from other modules for fixing
+ * sub definitions.
+ -}
+
+
+package frege.compiler.passes.Fix where
+
+import frege.Prelude hiding(<+>, break)
+
+import Lib.PP (break, group, msgdoc)
+import frege.compiler.Utilities   as U()
+
+import  Compiler.enums.TokenID(VARID, CONID)
+
+import  Compiler.types.SNames(Simple, With1)
+import  Compiler.types.Tokens(baseToken)
+import  Compiler.types.Positions(Position, Positioned)
+import  Compiler.types.SourceDefinitions
+import  Compiler.types.Global as G
+
+import Compiler.common.Errors as E()
+
+
+pass :: StG (String, Int)
+pass = do
+    g <- getST
+    newdefs <- fixdefs g.sub.sourcedefs
+    changeST Global.{sub <- _.{sourcedefs = newdefs}}
+    return ("definitions", length g.sub.sourcedefs)
+
+
+{--
+    transform definitions by first 'unDoc'ing, then 'funJoin'ing, 
+    then desugaring pattern bindings
+ -}
+fixdefs :: [DefinitionS] -> StG [DefinitionS]
+fixdefs defs = do
+    ds <- unDoc defs
+    fs <- funJoin ds
+    ls <- unlet fs
+    checkUniq [ name | dcl@FunDcl {lhs} <- ls, name <- funbinding dcl ]
+    return ls
+
+checkUniq [] = return ()
+checkUniq (name:as) = do
+    let other = [ same | same <- as, same.value == name.value ]
+    unless (null other) do
+        E.error (Pos (head other) (head other)) (msgdoc ("redefinition of  `"
+                                                ++ name.value
+                                                ++ "` introduced line " ++ show name.line))
+    checkUniq as
+
+{--
+    Desugar pattern bindings
+    > (a,b) = expr
+    that come as pseudo function bindings
+    > let (a, b) = expr
+    to
+    > let = expr
+    > a = case let of (a,b) -> a
+    > b = case let of (a,b) -> b
+    -}
+unlet :: [DefinitionS] -> StG [DefinitionS]
+unlet (f:fs)
+    | FunDcl{vis, lhs, pats, expr, doc} <- f,
+      patbinding f = do
+        let pos = getpos lhs
+            name = "gen$" ++ show pos.first.offset
+            vlet = Vbl (Simple pos.first.{tokid=VARID, value=name})
+            -- gen$12345 = expr  
+            it = f.{lhs=vlet, pats=[]}
+            -- restore orginal pattern
+            pat = fold App lhs pats
+            -- for each variable in pat a, b, ...
+            -- a = case gen$12345 of pat -> a
+            -- b = case gen$12345 of pat -> b
+            ds  = map mkFun (exvars pat)
+             
+            mkFun (var@Vbl{}) = f.{lhs=var, pats=[], 
+                     expr=Case CNormal vlet [CAlt{pat, ex=var}]}
+            mkFun _ = error "mkFun"
+        fs <- unlet fs
+        return ((it:ds) ++ fs)
+    | otherwise = do
+        fs <- unlet fs
+        return (f:fs)                                      
+unlet [] = return []
+
+--- Is this a function binding?
+--- If so, return the identifier.
+funbinding FunDcl{lhs = Vbl{name=Simple{id}}}
+    | id.value != "!" && id.value != "?" = Just id
+funbinding _ = Nothing
+
+--- Is this a real pattern, not just 
+--- > !name
+patbinding FunDcl{lhs = Con{}} = true
+patbinding _                   = false
+
+{--
+ * apply a series of docs to a subsequent definition
+ -}
+unDoc :: [DefinitionS] -> StG [DefinitionS]
+unDoc [] = stio []
+unDoc (defs@(d:ds))
+    | DocDcl {pos} <- d      = do r <- apply doc rest; unDoc r
+    | d.{defs?}              = do ndefs <- fixdefs d.defs
+                                  liftM2 (:) (stio d.{defs=ndefs}) (unDoc ds)
+    | otherwise              = liftM2 (:) (stio d) (unDoc ds)
+    where
+        pos  = d.pos
+        docs = takeWhile isDoc defs
+        rest = dropWhile isDoc defs
+        isDoc (DocDcl {pos}) = true
+        isDoc _              = false
+        doc  = joined "\n\n" (map DefinitionS.text docs)
+        apply :: String -> [DefinitionS] -> StG [DefinitionS]
+        apply str []     = do E.warn pos (msgdoc ("documentation at end of file")); stio []
+        apply str (d:ds) = case d of
+            ImpDcl {pos=p} -> do
+                E.warn p (msgdoc ("there is no point in documenting an import, documentation from line "
+                    ++ show pos ++ " ignored."))
+                stio (d:ds)
+            FixDcl {pos=p} -> do
+                E.warn p (msgdoc ("there is no point in documenting a fixity declaration, documentation from line "
+                    ++ show pos ++ " ignored."))
+                stio (d:ds)
+            def | Just s <- def.doc = stio (def.{doc = Just (str ++ "\n\n" ++ s)}  : ds)
+                | otherwise         = stio (def.{doc = Just str} : ds)
+
+{--
+ * look for adjacent function definitions with same name and join them
+ -}
+funJoin :: [DefinitionS] -> StG [DefinitionS]
+funJoin [] = return []
+funJoin (defs@(d:ds))
+    | FunDcl {lhs} <- d, Just name <- funbinding d 
+    = do 
+        joined <- joinFuns (getpos lhs) (funs name)
+        rest   <- funJoin  (next name)
+        return (joined:rest)
+    | otherwise = do
+        rest   <- funJoin ds
+        return (d:rest)
+    where
+        funs name = takeWhile (sameFun name) defs
+        next name = dropWhile (sameFun name) defs
+        sameFun name fundcl | Just n <- funbinding fundcl = n.value == name.value
+        sameFun name _ = false
+        joinFuns :: Position -> [DefinitionS] -> StG DefinitionS
+        joinFuns _ [f] = return f
+        joinFuns pos (fs@(f:_))
+            | null f.pats = do
+                    E.error pos (msgdoc "function binding without patterns must have only a single equation")
+                    return f
+            | (g:_) <- filter (\x -> DefinitionS.vis x != f.vis) fs = do
+                    E.error (getpos g.lhs) (msgdoc ("the visibility of " ++ g.name ++
+                                    " must match that of the equation in line " ++ show pos))
+                    stio f
+            | (g:_) <- filter (\x -> length (DefinitionS.pats x) != length f.pats) fs = do
+                    E.error (getpos g.lhs) (msgdoc ("number of patterns (" ++ show (length g.pats) ++
+                                   ") must be the same as in previous equations (" ++
+                                   show (length f.pats)))
+                    return f
+            | otherwise = stio result  -- all equations have same # of patterns and visibility
+            where
+                arity  = length f.pats
+                poss   = map (getpos . _.lhs) fs
+                pos    = head poss
+                result = f.{pats = newvars, expr = newexpr, doc = newdoc}
+                newvars = [ Vbl  (Simple pos.first.{tokid=VARID, value="_" ++ i})  | i <- take arity U.allBinders]
+                -- newpats = [ PVar (pos.change VARID ("_"++i)) 0 ("_" ++ i) | i <- take arity U.allBinders]
+                newexpr = Case CNormal (mkTuple Con pos newvars) alts 
+                alts    = [ CAlt {pat=mkpTuple (getpos g.lhs) g.pats, ex = g.expr} |
+                             (g::DefinitionS) <- fs ]
+                olddoc  = [ s | Just s <- map DefinitionS.doc fs ]
+                newdoc  = if null olddoc then Nothing else Just (joined "\n\n" olddoc)
+        joinFuns _ [] = error "fatal compiler error: joinFuns []"
+
+--- create a constructor for an n-tuple
+tuple n = let
+        i = n-1
+        commas = repeat ","
+        string = "(" ++ fold (++) "" (take i commas) ++ ")"
+    in string
+
+
+tupleName i t = With1 baseToken baseToken.{tokid=CONID, value=tuple i}
+
+
+mkTuple con (pos::Position) [x] = x
+mkTuple con pos xs = fold App (con (tupleName n pos.first)) xs
+    where !n = length xs
+
+
+mkpTuple (pos::Position) [p] = p
+mkpTuple pos xs = fold App  (Con (tupleName n pos.first)) xs
+    where !n = length xs
