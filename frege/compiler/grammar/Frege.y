@@ -750,7 +750,7 @@ forall:
 
 mbdot:
     '.'
-    | ROP1                         { \dot -> do
+    | SOMEOP                        { \dot -> do
                                         when (Token.value dot != "•") do
                                             yyerror (yyline dot)
                                                 ("'.' expected instead of " ++ show dot.value)
