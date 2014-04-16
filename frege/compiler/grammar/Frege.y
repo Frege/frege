@@ -195,7 +195,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type exprSC          [Exp]
 //%type exprSS          [Exp]
 //%type pattern         Pat
-//%type funhead         (Position, String, [Pat])
+//%type funhead         (Exp, [Pat])
 //%type confld          [ConField SName]
 //%type conflds         [ConField SName]
 //%type contypes        [ConField SName]
@@ -355,62 +355,14 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 %token ROP1 ROP2 ROP3 ROP4 ROP5 ROP6 ROP7 ROP8 ROP9 ROP10 ROP11 ROP12 ROP13 ROP14 ROP15 ROP16
 %token NOP1 NOP2 NOP3 NOP4 NOP5 NOP6 NOP7 NOP8 NOP9 NOP10 NOP11 NOP12 NOP13 NOP14 NOP15 NOP16
 %token NOP0 LOP0 ROP0       /*** pseudo tokens never seen by parser */
+%token SOMEOP
 %token INTERPRET
 
 %start package
 
 %right      ARROW
-%right      ROP16           /*** Operators & Precedence ***/
-%left       LOP16
-%nonassoc   NOP16
-%right      ROP15
-%left       LOP15
-%nonassoc   NOP15
-%right      ROP14
-%left       LOP14
-%nonassoc   NOP14
-%right      ROP13
-%left       LOP13
-%nonassoc   NOP13
-%right      ROP12
-%left       LOP12
-%nonassoc   NOP12
-%right      ROP11
-%left       LOP11
-%nonassoc   NOP11
-%right      ROP10
-%left       LOP10
-%nonassoc   NOP10
-%right      ROP9
-%left       LOP9
-%nonassoc   NOP9
-%right      ROP8
-%left       LOP8
-%nonassoc   NOP8
-%right      ROP7
-%left       LOP7
-%nonassoc   NOP7
-%right      ROP6
-%left       LOP6
-%nonassoc   NOP6
-%right      ROP5
-%left       LOP5
-%nonassoc   NOP5
-%right      ROP4
-%left       LOP4 '-'
-%nonassoc   NOP4
-%right      ROP3
-%left       LOP3
-%nonassoc   NOP3
-%right      ROP2
-%left       LOP2
-%nonassoc   NOP2
-%right      ROP1
-%left       LOP1
-%nonassoc   NOP1
-%right      ROP0
-%left       LOP0
-%nonassoc   NOP0
+%right      SOMEOP
+%right      '-'
 
 %%
 
@@ -684,9 +636,7 @@ qvarop:  QUALIFIER QUALIFIER varop  { \n\t\v     -> With2 n t v}
     ;
 
 operator:
-      LOP1 | LOP2 | LOP3 | LOP4 | LOP5 | LOP6 | LOP7 | LOP8 | LOP9 | LOP10 | LOP11 | LOP12 | LOP13 | LOP14 | LOP15 | LOP16
-    | ROP1 | ROP2 | ROP3 | ROP4 | ROP5 | ROP6 | ROP7 | ROP8 | ROP9 | ROP10 | ROP11 | ROP12 | ROP13 | ROP14 | ROP15 | ROP16
-    | NOP1 | NOP2 | NOP3 | NOP4 | NOP5 | NOP6 | NOP7 | NOP8 | NOP9 | NOP10 | NOP11 | NOP12 | NOP13 | NOP14 | NOP15 | NOP16
+      SOMEOP
     ;
 
 unop: '!' | '?' ;
@@ -1082,8 +1032,8 @@ wherelet:
 
 
 fundef:
-    funhead '=' expr        { \fh\eq\expr -> fundef fh expr }
-    | funhead guards        { \fh\gds -> fungds fh gds }
+    funhead '=' expr        { \(ex,pats)\eq\expr -> fundef ex pats expr }
+    | funhead guards        { \(ex,pats)\gds -> fungds ex pats gds }
     | fundef wherelet       { \fdefs\defs ->
         case fdefs of
             [fd@FunDcl {expr=x}] -> YYM.return [fd.{expr = nx}] where
@@ -1130,7 +1080,7 @@ aeq: ARROW | '=';                   // we can make grammar conflict free if case
 
 lcqual:
     gqual
-    |expr '=' expr                  { \e\t\x -> do { fh <- funhead e; YYM.return (Right (fundef fh x)) }}
+    |expr '=' expr                  { \e\t\x -> do { (ex,pat) <- funhead e; YYM.return (Right (fundef ex pat x)) }}
     | LET '{' letdefs '}'           { \_\_\ds\_ -> Right ds }
     ;
 
@@ -1218,59 +1168,9 @@ topex:
     ;
 
 binex:
-    binex ROP16 binex                   { mkapp }
-    | binex LOP16 binex                 { mkapp }
-    | binex NOP16 binex                 { mkapp }
-    | binex ROP15 binex                 { mkapp }
-    | binex LOP15 binex                 { mkapp }
-    | binex NOP15 binex                 { mkapp }
-    | binex ROP14 binex                 { mkapp }
-    | binex LOP14 binex                 { mkapp }
-    | binex NOP14 binex                 { mkapp }
-    | binex ROP13 binex                 { mkapp }
-    | binex LOP13 binex                 { mkapp }
-    | binex NOP13 binex                 { mkapp }
-    | binex ROP12 binex                 { mkapp }
-    | binex LOP12 binex                 { mkapp }
-    | binex NOP12 binex                 { mkapp }
-    | binex ROP11 binex                 { mkapp }
-    | binex LOP11 binex                 { mkapp }
-    | binex NOP11 binex                 { mkapp }
-    | binex ROP10 binex                 { mkapp }
-    | binex LOP10 binex                 { mkapp }
-    | binex NOP10 binex                 { mkapp }
-    | binex ROP9  binex                 { mkapp }
-    | binex LOP9  binex                 { mkapp }
-    | binex NOP9  binex                 { mkapp }
-    | binex ROP8  binex                 { mkapp }
-    | binex LOP8  binex                 { mkapp }
-    | binex NOP8  binex                 { mkapp }
-    | binex ROP7  binex                 { mkapp }
-    | binex LOP7  binex                 { mkapp }
-    | binex NOP7  binex                 { mkapp }
-    | binex ROP6  binex                 { mkapp }
-    | binex LOP6  binex                 { mkapp }
-    | binex NOP6  binex                 { mkapp }
-    | binex ROP5  binex                 { mkapp }
-    | binex LOP5  binex                 { mkapp }
-    | binex NOP5  binex                 { mkapp }
-    | binex ROP4  binex                 { mkapp }
-    | binex LOP4  binex                 { mkapp }
-    | binex '-'   binex                 { mkapp }
+      binex SOMEOP binex                { mkapp }
+    | binex '-'    binex                { mkapp }
     | '-' binex                         { \m\x -> nApp (Vbl (With1 baseToken m.{tokid=VARID, value="negate"})) x}
-    | binex NOP4  binex                 { mkapp }
-    | binex ROP3  binex                 { mkapp }
-    | binex LOP3  binex                 { mkapp }
-    | binex NOP3  binex                 { mkapp }
-    | binex ROP2  binex                 { mkapp }
-    | binex LOP2  binex                 { mkapp }
-    | binex NOP2  binex                 { mkapp }
-    | binex ROP1  binex                 { mkapp }
-    | binex LOP1  binex                 { mkapp }
-    | binex NOP1  binex                 { mkapp }
-    | binex ROP0  appex                 { mkapp }   // we need this only for precedence trickery
-    | appex LOP0  binex                 { mkapp }
-    | appex NOP0  appex                 { mkapp }
     | appex
     ;
 
