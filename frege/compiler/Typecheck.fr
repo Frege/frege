@@ -129,9 +129,9 @@ memberTree = do
             where b = (Symbol.name sy).base
     stio mems
 
-fundep mtree (SymV {name, expr=Just x})  = do
+fundep mtree (SymV {name, expr=Just dx})  = do
     g <- getST
-    deptree <- U.ourGlobalFuns mtree x
+    deptree <- dx >>= U.ourGlobalFuns mtree
     let dep = [ Symbol.name sy | sy <- keys deptree, g.ourSym sy,
                     -- leave annotated symbols and symbols with sigmas out
                     sy.{expr?} && isPSigma sy.typ || not sy.{expr?}   ]
@@ -211,8 +211,10 @@ annotateMain = do
     g <- getST
     case g.findit (VName g.thisPack "main") of
         Just sym | sym.name.pack == g.thisPack,
-                   Just x <- sym.expr,
-                   not sym.anno = if U.lambdaDepth x > 0 
+                   Just dx <- sym.expr,
+                   not sym.anno = do
+                        x <- dx 
+                        if U.lambdaDepth x > 0 
                             then changeSym sym.{typ = mainSigma, anno = true}
                             else changeSym sym.{typ = mainSimple mainSigma, anno = true}
         _ -> stio ()
@@ -252,10 +254,13 @@ checkMain = do
     Experience shows that the _first_ few error messages are the best,
     yet not all programmers seem to know this.
     
+    Yet, we must continue with local definitions, or otherwise
+    we encounter untyped expressions later.
+    
     -}
 checkgroup  nms = do
     g <- getST
-    when (g.errors < 7) (checkgroup7 nms)
+    when (g.errors < 7 || length g.typEnv > 0) (checkgroup7 nms)
 
 --- Type check a group of top level functions that depend on each other.        
 checkgroup7 nms = do
@@ -306,14 +311,15 @@ checkgroup7 nms = do
                     -- Hence, all constraints on local functions must be removed
                     case sym.expr of
                         Nothing -> return ()
-                        Just x   -> do
+                        Just dx   -> do
+                            x  <- dx
                             ex <- U.mapEx false removeCtx x
-                            changeSym sym.{expr = Just ex} 
+                            changeSym sym.{expr = Just (return ex)} 
               where
                     scrapCtx it = do
                         let sig = (Symbol.typ it).{rho <- Rho.{context=[]}}
                         nex <- case it.expr of
-                            Just x  -> U.mapEx false removeCtx x >>= (return . Just)
+                            Just x  -> x >>= U.mapEx false removeCtx >>= (return . Just . return)
                             Nothing -> return Nothing
                         changeSym it.{typ=sig, expr = nex}
                     removeCtx (it@Let{env}) = do
@@ -378,7 +384,7 @@ removeCheckedCtx sym sigma
 resolveConstraints :: Symbol -> StG ()
 resolveConstraints sym
     | SymV{typ, expr=Just x, anno=false, state} <- sym, state != Recursive = do
-        x   <- resolveHas x
+        x   <- x >>= resolveHas 
         cxs <- collectConstrs x
         rho <- simplify sym.pos typ.rho.{context=cxs}
                 >>= simplify sym.pos        -- remove duplicates 
@@ -393,7 +399,7 @@ resolveConstraints sym
         let filteredCtx = [ ctx | (metas, ctx) <- zip ctxmetas rho.context,
                                   all (`elem` rhometas)  (filter (not . MetaTv.isFlexi) metas)]
         changeSym sym.{typ <- Sigma.{rho <- rmtrailing . Rho.{context=filteredCtx}}, 
-                         expr = Just x}
+                         expr = Just (return x)}
     | otherwise = return ()
     where 
         rmtrailing rho 
@@ -414,9 +420,10 @@ substInstMethod qname = do
         sym <- findV qname
         case sym.expr of
             Nothing -> stio ()
-            Just x -> do
+            Just dx -> do
+                x <- dx
                 x <- mapEx true substInst x
-                changeSym sym.{expr = Just x}
+                changeSym sym.{expr = Just (return x)}
 
 --- replace class member with instance member
 substInst (vbl@Vbl {pos, name = MName tn bs, typ = Just (ForAll [] rho)})
@@ -508,10 +515,11 @@ checkName nm = do
                     (sig, _) <- K.kiSigma [] [] t
                     changeSym sym.{state=Typechecked, typ=sig}
                     stio t
-            SymV {expr = Just x, typ = t}
+            SymV {expr = Just dx, typ = t}
                 | isPSigma t,
                   sym.state `elem` [Unchecked, Typechecking, Recursive] = do
-                    rho0 <- approxRho x
+                    x <- dx
+                    rho0 <- approxRho x 
                     ex <- case rho0 of
                         RhoTau{} -> do
                             changeSym sym.{state=Typechecking}
@@ -523,22 +531,24 @@ checkName nm = do
                     sym <- findV sym.name       -- refresh, might be updated meanwhile
                     let newstate = if sym.state != Recursive then Typechecked else Recursive
                     newsig <- maybe (error "untyped after checkRho") zonkSigma ex.typ
-                    changeSym sym.{typ = newsig, expr=Just ex, state = newstate}
+                    changeSym sym.{typ = newsig, expr=Just (return ex), state = newstate}
                     stio newsig
-            SymV {expr = Just x, typ = t, state, anno}
+            SymV {expr = Just dx, typ = t, state, anno}
                 | not (isPSigma t), state == Unchecked  = do
+                    x <- dx
                     (sig, _) <- K.kiSigma [] [] t
                     x <- checkAnnotated x sig
                     -- t <- canonicSignature t
-                    changeSym sym.{state = Typechecked, expr = Just x, typ = sig }
+                    changeSym sym.{state = Typechecked, expr = Just (return x), typ = sig }
                     stio sig
                 | not (isPSigma t), state == Typechecked && anno = stio t     -- opt: do not recheck annotated
                 | not (isPSigma t), state == Recursive || state == Typechecked = do
+                    x <- dx
                     (rho, ex) <- inferRho x
                     rho <- zonkRho rho
                     sym <- findV sym.name       -- refresh, might be updated meanwhile
                     let newsig   = ForAll [] rho
-                    changeSym sym.{typ = newsig, expr=Just ex, state = Typechecked}
+                    changeSym sym.{typ = newsig, expr=Just (return ex), state = Typechecked}
                     stio newsig
             wrongsy -> E.fatal wrongsy.pos (text ("checkSym: wrong symbol: " ++ wrongsy.nice g
                 ++ ", state=" ++ show wrongsy.state
@@ -581,11 +591,12 @@ quantifyWith f nms = do
         changeSig (qnm, sigm) = do
             sym <- findV qnm
             case sym of
-                SymV {expr = Just x} -> do
+                SymV {expr = Just dx} -> do
+                    x <- dx
                     zex <- zonkExpr x           -- from here on no bound Meta anywhere
                     zex <- zonkRigid (Sigma.vars sigm) zex    -- replace Rigid#nnn a where a is bound
                     let sigma = substRigidSigma (Sigma.vars sigm) sigm
-                    changeSym sym.{typ = sigma, expr = Just zex, anno = true}
+                    changeSym sym.{typ = sigma, expr = Just (return zex), anno = true}
                     g <- getST
                     E.logmsg TRACET (Symbol.pos sym) (text ("qfy: " ++ sym.nice g ++ " :: " ++ sigma.nice g))
                     E.explain (Symbol.pos sym) (text (sym.nice g ++ " :: " ++ sigma.nicer g))
@@ -603,10 +614,11 @@ zonkRigid bound ex = do
                         -- E.logmsg TRACEZ (getpos ex) (text ("symWork: " ++ show (bound ++ sig.vars) ++ " " ++ nice ex g))
                         let rho = substRigidRho (bound ++ sig.vars) sig.rho
                         expr  <- case expr of
-                            Just x  -> do
+                            Just dx  -> do
+                                x <- dx
                                 x <- zonkRigid (bound ++ sig.vars) x
-                                stio (Just x)
-                            Nothing -> stio Nothing
+                                return (Just (return x))
+                            Nothing -> return Nothing
                         changeSym symv.{expr, typ = ForAll sig.bound rho}
         symWork _ = error "symWork: not a variable"
 
@@ -654,10 +666,11 @@ zonkExpr x = mapEx false zonk x
                 foreach syms symWork
                 stio (Left x.{typ = Just sig})
             where
-                symWork (symv@ SymV {pos, expr = Just ex, typ = sig}) = do
+                symWork (symv@ SymV {pos, expr = Just dex, typ = sig}) = do
                         sig <- zonkSigma sig
+                        ex <- dex
                         ex  <- zonkExpr ex
-                        changeSym symv.{expr = Just ex, typ = sig}
+                        changeSym symv.{expr = Just (return ex), typ = sig}
                 symWork _ = error "symWork: not a variable"
         zonk x
             | Just sig <- Expr.typ x = do

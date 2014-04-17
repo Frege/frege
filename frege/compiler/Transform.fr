@@ -197,15 +197,15 @@ pass9 = do
 
 easySym (vsym@SymV {pos})
     
-    | Just x <- vsym.expr = do
+    | Just dx <- vsym.expr = do
         g <- getST
-        
+        x <- dx
         if isOn g.options.flags INLINE && not (defaultMethod vsym.name g) then do
             ux <- inlined x >>= easyExpression
-            changeSym vsym.{expr = Just ux}
+            changeSym vsym.{expr = Just (return ux)}
         else do
             nx <- easyExpression x
-            changeSym vsym.{expr = Just nx}
+            changeSym vsym.{expr = Just (return nx)}
     
     | otherwise = stio ()
     
@@ -222,8 +222,8 @@ easySym sym = do
 
 simpleSym (vsym@SymV {pos})
     | Just x <- vsym.expr = do
-        nx <- mkSimple x
-        changeSym vsym.{expr = Just nx}
+        nx <- x >>= mkSimple
+        changeSym vsym.{expr = Just (return nx)}
     | otherwise = stio ()
 simpleSym sym = do
     g <- getST
@@ -250,7 +250,8 @@ simpleSym sym = do
     > method a' b' = anon a' b'   
     -}
 easyClassMethodSym :: Symbol -> StG ()
-easyClassMethodSym (sym@SymV{expr = Just x, typ}) = do
+easyClassMethodSym (sym@SymV{expr = Just dx, typ}) = do
+        x <- dx
         easy <- goodClassMethod x
         unless ( easy ) do
             g <- getST
@@ -262,12 +263,12 @@ easyClassMethodSym (sym@SymV{expr = Just x, typ}) = do
             
             nx <- replName sym.sid name x
             
-            let anon = sym.{sid=0, name, vis = Protected, expr = Just nx}
+            let anon = sym.{sid=0, name, vis = Protected, expr = Just (return nx)}
                 vbl = Vbl{name, pos=anon.pos.change VARID name.base, typ=Just (ForAll [] sym.typ.rho)}
                 rk = (sym.rkind.unionE RSafeTC).differenceE RTailRec
             enter anon  
             x <- etaExpand vbl
-            changeSym sym.{expr = Just x, rkind = rk}
+            changeSym sym.{expr = Just (return x), rkind = rk}
     where
         -- goodClassMethod :: Expr -> StG Bool
         goodClassMethod x = do
@@ -351,7 +352,8 @@ classMethodOfInstMethod pos inst base = do
             
 
 depthSym (vsym@SymV {pos})
-    | Just x <- vsym.expr = do
+    | Just dx <- vsym.expr = do
+        x  <- dx
         nx <- depthExpr x
         let depth = U.lambdaDepth nx
         when (depth > length sigmas) do
@@ -363,7 +365,7 @@ depthSym (vsym@SymV {pos})
                     ++ ") of its type " ++ nicer typ g))
                 E.hint vsym.pos (msgdoc ("This is probably a compiler error."))
         if (depth >= length sigmas)
-            then changeSym vsym.{expr = Just nx, typ, depth}       -- fine, unless error
+            then changeSym vsym.{expr = Just (return nx), typ, depth}       -- fine, unless error
             else do
                 g <- getST                                      -- depth < sigmas, eta expand it
                 newx <- etaExpand nx
@@ -375,7 +377,7 @@ depthSym (vsym@SymV {pos})
                         ++ maybe "nix" (flip nice g) nx.typ))
                 E.logmsg TRACE9 vsym.pos (text ("new expr: " ++ nice newx g
                         ++ " :: " ++ maybe "nix" (flip nice g) nx.typ))
-                changeSym vsym.{expr = Just newx, typ, depth = newd}
+                changeSym vsym.{expr = Just (return newx), typ, depth = newd}
                 when (newd != (length sigmas)) do
                     E.fatal vsym.pos (text (nice vsym g ++ ": after eta expansion depth="
                         ++ show newd ++ ", length sigmas=" ++ show (length sigmas)
@@ -491,7 +493,8 @@ returnKind syms (sym@SymV {nativ = Just _}) = do
         -- jt <- U.isJavaType ((fst • U.returnType) sym.typ.rho)
         changeSym sym.{rkind = RState.fromList [RSafeTC, RValue]}
 
-returnKind syms (sym@SymV {expr = Just x, depth = 0}) = do
+returnKind syms (sym@SymV {expr = Just dx, depth = 0}) = do
+        x      <- dx
         w      <- returnExprKind syms sym x
         self   <- references [sym.sid] x        -- is it self-referential?
         rec    <- references syms x             -- is it recursive
@@ -528,7 +531,8 @@ returnKind syms (sym@SymV {expr = Just x, depth = 0}) = do
                 | otherwise                 = stricter
         changeSym sym.{rkind, strsig = stri}
 
-returnKind syms (sym@SymV {expr = Just x}) = do
+returnKind syms (sym@SymV {expr = Just dx}) = do
+        x      <- dx
         w      <- returnExprKind syms sym x
         g      <- getST
         
@@ -589,7 +593,7 @@ references sids x = U.foldEx true refs 0 x
             stio (Right (n + lrefs))
         refs n (Let {env,ex}) = do
             syms  <- mapSt U.findV env
-            srefs <- mapSt (references sids) [ subex | SymV{expr = Just subex} <- syms ]
+            srefs <-sequence [ subex | SymV{expr = Just subex} <- syms ] >>= mapSt (references sids) 
             lrefs <- references sids ex
             stio (Right (n + 2*sum srefs + lrefs))             
         refs n x = do
@@ -625,7 +629,7 @@ returnExprKind syms sym (x@Ann {ex})  = returnExprKind syms sym ex
 returnExprKind syms sym (x@Vbl {name}) = do
     symv <- U.findV name
     g    <- getST
-    case symv.expr of
+    case symv.gExpr g of
         Nothing -> case symv.name of
             Local{} -> stio (RState.fromList [RSafeTC, RValue])
             _ -> case U.returnType symv.typ.rho of
@@ -750,8 +754,8 @@ returnNames sids nms = do
 
 unrollSym (vsym@SymV {pos})
     | Just x <- vsym.expr = do
-        nx <- unrollExpr x
-        changeSym vsym.{expr = Just nx}
+        nx <- x >>= unrollExpr 
+        changeSym vsym.{expr = Just (return nx)}
     | otherwise = stio ()       -- do nothing
 unrollSym sym = do
     g <- getST
@@ -759,8 +763,8 @@ unrollSym sym = do
 
 unLetSym (vsym@SymV {pos})
     | Just x <- vsym.expr = do
-        nx <- unLetExpr x
-        changeSym vsym.{expr = Just nx}
+        nx <- x >>= unLetExpr
+        changeSym vsym.{expr = Just (return nx)}
     | otherwise = stio ()       -- do nothing
 unLetSym sym = do
     g <- getST
@@ -779,8 +783,8 @@ singleLetSym sym = do
 
 closedLambdaSym (vsym@SymV {pos})
     | Just x <- vsym.expr = do
-        nx <- U.mapExBody true closedLambda x
-        changeSym vsym.{expr = Just nx}
+        nx <- x >>= U.mapExBody true closedLambda
+        changeSym vsym.{expr = Just (return nx)}
     | otherwise = stio ()
 closedLambdaSym sym = do
     g <- getST
@@ -867,21 +871,17 @@ unrollLet (x@Let {env,ex}) = do
         E.logmsg TRACE7 (getpos x) (text ("unrollLet: " ++ x.nice g))
         -- first do the subexpressions
         let mapsub (sy@SymV {expr=Just x}) = do
-                    x <- unrollExpr x
-                    changeSym sy.{expr=Just x}
+                    x <- x >>= unrollExpr
+                    changeSym sy.{expr=Just (return x)}
             mapsub sy = error "mapsub: no var"
         ex  <- unrollExpr ex
         syms <- mapSt U.findV env
         foreach syms mapsub
         let -- kvs =  each env
             xdep k = do sym <- U.findV k; ldep (k, sym)
-            ldep (k, SymV {expr=Just (Lam {ex})})
-                | ´^.?let\$\d+$´ <- QName.base k = do
-                    deps <- letlocals ex
-                    stio (k, deps)
             ldep (k, SymV {expr=Nothing}) = stio (k, [])
             ldep (k, SymV {expr=Just ex}) = do
-                    deps <- letlocals ex
+                    deps <- ex >>= letlocals
                     stio (k, deps)
             ldep (_,_) = error "ldep: no var"
         kdeps  <- mapSt xdep env
@@ -1029,6 +1029,7 @@ mkSimple x = do
     
     where @ux@ is the result of @f@ applied to the fresh pattern @p@
     -}
+mkLet :: Expr -> (Expr -> Expr) -> StG Expr
 mkLet ex f = do
     uid    <- uniqid
     let pos = getpos ex
@@ -1036,7 +1037,7 @@ mkLet ex f = do
         pat = PVar{pos, uid, var="tmp"}
         var = Vbl{pos, name=sym.name, typ=ex.typ}
         aex = f var
-        sym = patsym.{typ = fromMaybe pSigma ex.typ, expr = Just ex} 
+        sym = patsym.{typ = fromMaybe pSigma ex.typ, expr = Just (return ex)} 
     enter sym
     return $! Let{env=[sym.name], defs=[], ex=aex, typ=aex.typ}
 
@@ -1070,7 +1071,7 @@ isEasy :: Global -> Expr -> Bool
 isEasy g (App a b _)       = isSimple g a && isSimple g b
 isEasy g (Let {env,ex})    = isEasy g ex && all (isEasy g) xprs
     where
-        xprs = [ ex | q <- env, sym <- g.findit q, ex <- sym.expr ]
+        xprs = [ ex | q <- env, sym <- g.findit q, ex <- sym.gExpr g]
 isEasy g (Case {ex,alts})   = isSimple g ex && all (isEasy g • _.ex) alts
     
 isEasy g (Ifte a b c _)     = isSimple g a && isEasy g b && isEasy g c
@@ -1128,7 +1129,7 @@ inlined = U.mapEx true inline
                 sym <- U.findV name
                 -- E.logmsg TRACE9 (getpos v) (text ("can we inline " ++ nicer sym g ++ "?"))
                 case sym.expr of 
-                    Just x 
+                    Just dx 
                     -- we can't inline any class methods
                     -- because, for example 
                     -- (display x) would be replaced by (show x)
@@ -1142,6 +1143,7 @@ inlined = U.mapEx true inline
                             d >= sym.depth-1 && sym.name `elem` superOpt = do
                                 E.logmsg TRACE9 (getpos fun) (text ("replace " 
                                     ++ nice fun g  ++ " :: " ++ nicer sig g))
+                                x <- dx
                                 x <- recycle newpos x sig.rho
                                 return . Left . U.unflatx $ (x,t):rest
                     _ -> return (Left app)
@@ -1150,11 +1152,12 @@ inlined = U.mapEx true inline
                 g <- getST
                 sym <- U.findV name
                 case sym.expr of
-                    Just x | MName tname _ <- name,
+                    Just dx | MName tname _ <- name,
                              Just SymC{} <- g.findit tname = return (Left vbl)
-                           | sym.exported, sym.depth == 0 = do
+                            | sym.exported, sym.depth == 0 = do
                                 E.logmsg TRACE9 pos (text ("replace " 
                                     ++ nice vbl g  ++ " :: " ++ nicer sig g))
+                                x <- dx
                                 x <- recycle pos x sig.rho
                                 return . Left $ x
                     nothing -> return (Left vbl)
@@ -1312,11 +1315,12 @@ mkEasy (x@App f arg t) = do
 
             
 mkEasy (x@Let{env,ex}) = do             -- TODO: handle non-recursive let/case/if
+        g <- getST
         syms <- mapSt U.findV env
-        mkEasyLet x syms
+        mkEasyLet g x syms
     where
-        mkEasyLet (x@Let{env=[Local{uid}],ex}) [sym]
-            | Just (cas@Case{alts=[alt]}) <- Symbol.expr sym = do       
+        mkEasyLet g (x@Let{env=[Local{uid}],ex}) [sym]
+            | Just (cas@Case{alts=[alt]}) <- Symbol.gExpr sym g = do       
                 -- handle  let a = case ... of p -> x in foo a
                 --         case ... of p -> foo x
                 ntimes <- references [uid] ex
@@ -1336,11 +1340,11 @@ mkEasy (x@Let{env,ex}) = do             -- TODO: handle non-recursive let/case/i
                     easySym sym
                     ex <- mkEasy ex
                     return x.{ex}  
-        mkEasyLet (x@Let{env,ex}) syms = do
+        mkEasyLet g (x@Let{env,ex}) syms = do
             foreach syms easySym 
             ex <- mkEasy ex
             return x.{ex}
-        mkEasyLet _ _ = undefined
+        mkEasyLet g _ _ = undefined
             
 mkEasy  (outer@Case{}) = do
     ea     <- mkEasy outer.ex
@@ -1560,13 +1564,13 @@ unusedLet x = stio (Left x)
 unLet (x@Let {env,ex}) 
     | length env > 1 = do
         vals <- mapSt U.findV env
+        g <- getST
         if (any Symbol.anno vals)
-            then unLetMutual vals x
+            then unLetMutual g vals x
             else return (Left x) 
   where
-    unLetMutual :: [Symbol] -> Expr -> StG (Either Expr Expr)
-    unLetMutual vals (x@Let {env,ex}) = do
-        g <- getST
+    unLetMutual :: Global -> [Symbol] -> Expr -> StG (Either Expr Expr)
+    unLetMutual g vals (x@Let {env,ex}) = do
         freevbls <- toPass
         case freevbls of
             [] -> do
@@ -1594,7 +1598,7 @@ unLet (x@Let {env,ex})
         pos = getpos x
 
         exprs :: [Expr]
-        exprs = map (unJust • Symbol.expr) vals
+        exprs = map (unJust • flip Symbol.gExpr g) vals
 
         freeSym :: Expr -> StG [Symbol]             -- free variables in expression
         freeSym x = do
@@ -1621,7 +1625,7 @@ unLet (x@Let {env,ex})
 
         mkGlobal :: [(Symbol, Symbol)] -> (Symbol,Symbol) -> StG Symbol
         mkGlobal vgs (sym,gsym) = do
-            let ex = unJust sym.expr
+            let ex = unJust (sym.gExpr g)
             ex <- foldSt replsym ex vgs
             -- sym <- globalize sym
             g <- getST
@@ -1630,12 +1634,12 @@ unLet (x@Let {env,ex})
             let typ = ForAll vks sym.typ.rho
             changeST Global.{sub <- SubSt.{
                                 idKind <- insertkv (KeyTk gsym.pos.first) (Right gsym.name)}}
-            stio gsym.{expr = Just ex, typ}
+            stio gsym.{expr = Just (return ex), typ}
 
         unLetName nm = do
             symv <- U.findV nm
             unLetSym symv
-    unLetMutual vals x = error "unLetMutual"
+    unLetMutual g vals x = error "unLetMutual"
 
 unLet (xlet@Let {env=letenv,ex=letex,typ=lettyp})
         | [x] <- letenv = do                  -- let x = ... in ex
@@ -1643,7 +1647,7 @@ unLet (xlet@Let {env=letenv,ex=letex,typ=lettyp})
     g <- getST
     sym <- U.findV x
 
-    case sym.expr of
+    case sym.gExpr g of
         Just (Lam {pat,ex,typ}) = do           -- let x = \_ -> ... in ex
             ex    <- U.mapEx true unLet ex
             used  <- U.localSyms ex
@@ -1660,14 +1664,14 @@ unLet (xlet@Let {env=letenv,ex=letex,typ=lettyp})
                 let lamx = Lam {pat,ex,typ}
                 let vks  = map Tau.varkind (U.freeTVars [] sym.typ.rho)
                 let typ  = ForAll vks sym.typ.rho
-                enter sym.{sid = 0, name, expr = Just lamx, vis = Private, typ}
+                enter sym.{sid = 0, name, expr = Just (return lamx), vis = Private, typ}
                 changeST Global.{sub <- SubSt.{
                                 idKind <- insertkv (KeyTk sym.pos.first) (Right name)}}
                 E.logmsg TRACE7 sym.pos (text ("let " ++ nice x g ++ " = " ++ nice lamx g ++ " in ... replaced with " ++ nice letex2 g))
                 E.logmsg TRACE7 sym.pos (text ("new function is " ++ name.nice g))
                 unLet letex2       -- other opportunities possible here
               else do
-                changeSym sym.{expr = Just (Lam {pat,ex,typ})}
+                changeSym sym.{expr = Just (return  Lam{pat,ex,typ})}
                 letex <- U.mapEx true unLet letex
                 stio (Right (Let {env=letenv,ex=letex,typ=lettyp,defs=[]}))
         -- a local non function stays local only if it uses other local symbols
@@ -1677,7 +1681,7 @@ unLet (xlet@Let {env=letenv,ex=letex,typ=lettyp})
             ulet <- U.mapEx true unLet letex
             cx   <- U.mapEx true unLet cx
             let e = isSimple g cx
-            changeSym sym.{expr = Just cx}
+            changeSym sym.{expr = Just (return cx)}
             self <- references [sym.sid] cx
             down <- references [sym.sid] ulet
             -- E.logmsg TRACE7 sym.pos (text ("UNLET: " ++ nice x g
@@ -1709,7 +1713,7 @@ unLet (xlet@Let {env=letenv,ex=letex,typ=lettyp})
                      letex2 <- replName sym.sid name ulet  -- in the inner of the lambda or the let ex
                      let vks  = map Tau.varkind (U.freeTVars [] sym.typ.rho)
                      let typ  = ForAll vks sym.typ.rho
-                     enter sym.{sid = 0, name, expr = Just ex, vis = Private, typ}
+                     enter sym.{sid = 0, name, expr = Just (return ex), vis = Private, typ}
                      changeST Global.{sub <- SubSt.{
                                      idKind <- insertkv (KeyTk sym.pos.first) (Right name)}}
                      E.logmsg TRACE7 sym.pos (text ("let " ++ nice x g ++ " = " ++ nice cx g ++ " in ... replaced with " ++ nice letex2 g))
@@ -1853,6 +1857,7 @@ closedLambda (letex@Let{env,ex}) = do       -- now we can lift harmless inner la
             sym <- U.findV qn
             case sym.expr of
                 Just def -> do
+                    def <- def
                     constr <- TC.collectConstrs def
                     if null constr
                     then do
@@ -1862,7 +1867,7 @@ closedLambda (letex@Let{env,ex}) = do       -- now we can lift harmless inner la
                                 nex <- replName sym.sid name ex
                                 return (env, nex)
                             sonst -> do
-                                changeSym sym.{expr = Just ndef}
+                                changeSym sym.{expr = Just (return ndef)}
                                 return (qn:env, ex)
                     else return (qn:env, ex)
                 sonst -> return (qn:env, ex) 
@@ -1978,24 +1983,24 @@ strictName sids nm = do
                                     ++ show strsig))
             changeSym v.{strsig, state = StrictChecked}
             stio []
-        SymV {expr = Just (x@Lam {ex})} -> do
+        SymV {} | Just (x@Lam{ex}) <- v.gExpr g -> do
             (x, syms) <- strictness (v.sid:sids) x
             s <- lambdaStrictness x     -- collect strictness from patterns
             E.logmsg TRACES v.pos (text ("strictness for " ++ v.name.nice g ++ " is "
                                     ++ show (S s)
                                     ++ " ignoring "
                                     ++ joined ", " (map (flip nice g • Symbol.name) syms)))
-            changeSym v.{expr = Just x, strsig = S s, state = StrictChecked}
+            changeSym v.{expr = Just (return x), strsig = S s, state = StrictChecked}
             stio syms
         SymV {expr = Just x} | ari > 0 = do
-                y <- eta ari x
+                y <- x >>= eta ari 
                 (y, syms) <- strictness (v.sid:sids) y
                 s <- lambdaStrictness y
                 let x  = uneta ari y
                     rs = if null s then v.strsig else S s
                 E.logmsg TRACES v.pos (text ("strictness for " ++ v.name.nice g ++ " is "
                                     ++ show rs))
-                changeSym v.{expr = Just x, strsig = rs, state = StrictChecked}
+                changeSym v.{expr = Just (return x), strsig = rs, state = StrictChecked}
                 stio syms
             where
                 eta 0 x = stio x
@@ -2197,7 +2202,8 @@ strictness sids x = do
                     stio (napp, fsym)
             case v of
                 SymV {state = Typechecked, expr = Nothing} = mkAll
-                SymV {state = Typechecked, expr = Just (Lam {})} = if v.sid `elem` sids
+                SymV {state = Typechecked, expr = Just _}
+                    | Just (Lam{}) <- v.gExpr g = if v.sid `elem` sids
                         then do
                             -- assume all are strict
                             asx <- mapSt (strictness sids) (map fst as)
@@ -2205,9 +2211,10 @@ strictness sids x = do
                         else do
                             strictName sids v.name
                             appstr app              -- repeat
-                SymV {state = Typechecked, expr = Just x}
+                SymV {state = Typechecked, expr = Just dx}
                     | v.sid `notElem` sids = do
                             -- inline pointless
+                            x <- dx
                             let fx = flatx x
                             (fxas, syms) <- appstr (fx ++ as)
                             let as = drop (length fx) fxas
