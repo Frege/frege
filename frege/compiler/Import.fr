@@ -42,7 +42,6 @@
 package frege.compiler.Import where
 
 
-import frege.data.Tuples()
 import Data.TreeMap(Tree, keys, insertkv, each, values, lookup, insert)
 import Data.List as DL(sortBy, zipWith4)
 import Data.Bits(BitSet.BitSet)
@@ -62,7 +61,6 @@ import  Compiler.types.Packs
 import  Compiler.types.ImportDetails
 import  Compiler.types.QNames
 import  Compiler.types.Types
-import  Compiler.types.Patterns
 import  Compiler.types.Definitions
 import  Compiler.types.Symbols
 import  Compiler.types.Global as G
@@ -70,6 +68,7 @@ import  Compiler.types.Global as G
 import  Compiler.common.Errors as E()
 import  Compiler.common.Resolve as R(docWarning, resolve)
 import  Compiler.common.SymbolTable
+import  Compiler.common.ImpExp
 
 import  Compiler.classes.Nice
 
@@ -458,130 +457,33 @@ importClassData pos why pack = do
                 -- The function that builds it must guarantee this. see GenMeta.tauIndex
                 
                 -- Tau
-                iarray = arrayCache rebuildTau fp.taus.length
-                rebuildTau n t = case tau.kind of
-                        0 -> tapp
-                        1 -> tfun
-                        2 -> (TCon pos (rebuildQN (elemAt tau.tcon 0)))
-                        3 -> (TVar pos (nKind tau.suba) tau.tvar)
-                        k -> error ("illegal tau kind " ++ show k ++ " in tau# " ++ show n)
-                    where
-                        tau = elemAt fp.taus n
-                        tapp = TApp     (elemAt t tau.suba) (elemAt t tau.subb) -- maybe bad (uncurry TApp) ab
-                        tfun = Tau.tfun (elemAt t tau.suba) (elemAt t tau.subb) -- maybe bad (uncurry Tau.tfun) ab
-                nTau i = elemAt iarray i
+                tarray = arrayCache rebuildTau fp.taus.length
+                rebuildTau n t = tauFromA karray (ctTau fp.taus.[n]) t
+                nTau i = elemAt tarray i
                 
                 -- Kinds
-                karray = arrayCache rebuildKinds fp.kinds.length
-                rebuildKinds n arr = case kind.kind of
-                        0 -> KType
-                        1 -> KGen
-                        2 -> KVar
-                        3 -> KApp (kref kind.suba) (kref kind.subb)
-                        k -> error ("illegal kind " ++ show k ++ " in kind# " ++ show n)
-                    where
-                        kind = elemAt fp.kinds n
-                        kref i = elemAt arr i
+                karray = arrayCache rebuildKind fp.kinds.length
+                rebuildKind n arr = kindFromA (ctKind fp.kinds.[n]) arr
                 nKind i = elemAt karray i
                      
                 -- Rhos
-                rarray = arrayCache rebuildRhos fp.rhos.length
-                rebuildRhos n arr = case rho.rhofun of
-                        false -> RhoTau ctx (nTau rho.rhotau)
-                        true  -> RhoFun ctx (nSig rho.sigma) (nR rho.rhotau)
-                    where
-                        rho = elemAt fp.rhos n 
-                        ctx = [ rebuildCtx ctx | ctx <- rho.cont ]
-                        nR i   = elemAt arr i
-                        nSig i = ForAll bnd (nR sig.rho) 
-                            where
-                                sig = elemAt fp.sigmas i
-                                bnd = zip sig.bound.toList (map nKind sig.kinds.toList)
-                nRho i = elemAt rarray i
-                        
-                rebuildCtx (ctx::CT.Context) = Ctx pos (rebuildQN ctx.clas) (nTau ctx.tau)
+                saarr  = arrayMap ctSigma fp.sigmas
+                rarray = arrayCache rebuildRho fp.rhos.length
+                rebuildRho n arr = rhoFromA karray tarray saarr (ctRho fp.rhos.[n]) arr
+                -- nRho i = elemAt rarray i
                 
-                -- Sigmas    
-                nSigma i = ForAll bnd (nRho sig.rho)
-                    where sig = elemAt fp.sigmas i
-                          bnd = zip sig.bound.toList (map nKind sig.kinds.toList)
                 
-                rebuildEx :: Int -> ExprD Global 
-                rebuildEx  n = res
-                    where
-                        !res = case exa.xkind of
-                            0 -> do
-                                ex <- xref exa.subx1
-                                stio Ann {ex, typ = Just (nSigma exa.lkind)}
-                            1 -> do
-                                x1 <- xref exa.subx1
-                                x2 <- xref exa.subx2
-                                stio (App x1 x2 Nothing)
-                            2 -> do
-                                alts <- mapSt calt (zip pats exps)
-                                ex   <- xref exa.subx1
-                                stio Case {ckind = from exa.lkind, ex,
-                                            typ = Nothing, alts}
-                            3 -> stio Con {pos = Position.null, typ = Nothing, name = rebuildQN (elemAt exa.name 0)}
-                            4 -> do
-                                x1 <- xref exa.subx1
-                                x2 <- xref exa.subx2
-                                x3 <- xref exa.subx3
-                                stio (Ifte x1 x2 x3 Nothing)
-                            5 -> do
-                                alts <- mapSt calt (zip pats exps)
-                                let alt = head alts
-                                stio Lam {pat = alt.pat, ex = alt.ex, typ = Nothing}
-                            6 -> stio Lit {pos=Position.null, typ=Nothing, kind = from exa.lkind, value = exa.varval}
-                            7 -> stio Vbl {pos=Position.null, typ=Nothing, name=Local 0 exa.varval}
-                            8 -> stio Vbl {pos=Position.null, typ=Nothing, name=rebuildQN (elemAt exa.name 0)}
-                            w -> error ("bad expra id: " ++ show w)
-                        exa = elemAt fp.exprs n
-                        x0 = exa.alts.length `quot` 2
-                        pats = [ pref (elemAt exa.alts i) | i <- enumFromTo 0  (x0-1) ]
-                        exps = [ xref (elemAt exa.alts i) | i <- enumFromTo x0 (exa.alts.length-1) ]
-                        calt (dpat, dex) = do
-                                pat <- dpat
-                                ex  <- dex
-                                pat <- U.pReturn pat        -- make sure it has numbers
-                                syms <- mapSt U.mkLocal (U.patVars pat)
-                                mkStrictPVars pat
-                                ex <- U.mapEx true (U.replaceLocals syms) ex
-                                stio CAlt {pat, ex}
-                        mkStrictPVars PCon{pats} = foreach pats mkStrictPVars
-                        mkStrictPVars PUser{pat,lazy}
-                            | PVar{pos,uid,var} <- pat = do
-                                sym <- U.findV (Local {base=var, uid})
-                                changeSym sym.{state=StrictChecked, strsig=if lazy then U else S[]}
-                            | otherwise          = mkStrictPVars pat
-                        mkStrictPVars PAnn{pat}  = mkStrictPVars pat
-                        mkStrictPVars PAt{pat}   = mkStrictPVars pat
-                        mkStrictPVars PLit{}     = return ()
-                        mkStrictPVars PVar{}     = return ()
-                        mkStrictPVars PMat{}     = return ()
-                        mkStrictPVars PConFS{}   = undefined
-                        xref = rebuildEx
-                        x2p :: Expr -> Pattern
-                        x2p (Vbl {pos, name = Local u n}) = PVar {pos, uid = u, var = n}
-                        x2p (Lit {pos, kind, value})    = PLit {pos, kind, value}
-                        x2p (Con {pos, name})           = PCon {pos, qname = name, pats=[]}
-                        x2p (Ann {ex,typ=Just sig}) = PAnn {pat = x2p ex, typ = sig}
-                        x2p (app@App _ _ _) = case map fst (flatx app) of
-                            (Con {name}:args) -> PCon {pos=Position.null, qname=name, pats = map x2p args}
-                            [Vbl {name=VName _ "!"}, x] -> PUser {pat=x2p x, lazy = false}
-                            [Vbl {name=VName _ "?"}, x] -> PUser {pat=x2p x, lazy = true}
-                            [Vbl {name=VName _ "@"}, v1, v2] -> PAt {pos=Position.null, uid = 0, var=p1.var, pat=p2}
-                                where p1 = x2p v1; p2 = x2p v2
-                            [Vbl {name=VName _ "~"}, v1, v2] -> PMat {pos=Position.null, uid = 0, var=p1.var, value}
-                                where p1 = x2p v1; value = v2.value
-                            sonst -> error ("x2p: illegal expr " ++ nice app g)
-                        x2p ex = error("x2p: illegal expr " ++ nice ex g)
-                        pref i = rebuildEx i >>= return . x2p 
-            -- let xtree = fold rebuildEx Tree.empty (enumFromTo 1 (JArray.length (CT.FregePackage.exprs fp) - 1))
-            -- liftStG $ E.logmsg TRACE2 pos (text ("reconstructed " ++ show fp.taus.length ++ " tau types"))
-            -- liftStG $ E.logmsg TRACE2 pos (text ("reconstructed " ++ show fp.rhos.length ++ " rho types"))
-            -- let nExpr i = maybe abort id (Tree.lookup xtree i)
-            --         where abort = error ("unknown expr index " ++ show i)
+                -- Sigmas
+                sarray = arrayMap (sigmaFromA karray rarray) saarr    
+                nSigma i = sarray.[i]
+                
+                -- Exprs
+                eaarr = arrayMap ctExpr fp.exprs
+                rbExpr :: Int -> Maybe (ExprD Global)
+                rbExpr 0 = Nothing
+                rbExpr ix = Just (exprFromA sarray eaarr eaarr.[ix])
+
+                
             let strMB "" = Nothing
                 strMB s  = Just s
             let rbSymA n = SymA {sid=0, pos=mkpos sym.offset sym.name.base, vis, 
@@ -605,9 +507,6 @@ importClassData pos why pack = do
                     op = if sym.op == 0 then NOP1 else from sym.op}
                   where sym = elemAt arr n
                         v = if sym.abst then Abstract else if sym.publik then Public else Protected
-                rbExpr :: Int -> Maybe (ExprD Global)
-                rbExpr 0 = Nothing
-                rbExpr ix = Just (rebuildEx ix)
                 rbSymD :: CT.SymDArr -> Int -> Symbol
                 rbSymD arr n = SymD {sid=0, pos=mkpos sym.offset sym.name.base, vis, doc=strMB sym.doc,
                     name = rebuildQN sym.name, cid = sym.cid,
@@ -692,14 +591,6 @@ importClassData pos why pack = do
                 foreach [0 .. (fp.symls.length-1)] (enter • rbSymL fp.symls)
             return (Just fp)
 
-rebuildQN :: CT.QName -> QName
-rebuildQN qn = case qn.kind of
-    0 -> tname
-    1 -> VName (Pack.new qn.pack) qn.base
-    2 -> MName tname qn.member
-    k -> error ("illegal QName kind in CT:QName " ++ show (k, qn.pack, qn.base, qn.member))
-  where
-    tname = TName (Pack.new qn.pack) qn.base
 
 
 mapqs :: CT.QNameArr -> [QName]

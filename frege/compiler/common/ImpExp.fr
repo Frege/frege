@@ -37,11 +37,17 @@ module frege.compiler.common.ImpExp
 import Compiler.types.External as E
 import Compiler.Classtools as CT()
 import Compiler.types.Definitions
+import Compiler.types.Patterns
 import Compiler.types.Types
 import Compiler.types.Positions
 import Compiler.types.QNames
 import Compiler.types.Packs
 import Compiler.types.Kinds
+import Compiler.types.Global
+import Compiler.enums.SymState
+import Compiler.types.Strictness
+import Compiler.Utilities as U()
+import Compiler.common.SymbolTable
 
 --- rebuild a 'QName' from meta form
 rebuildQN :: CT.QName -> QName
@@ -78,14 +84,15 @@ ctTau ct = TauA{kind=ct.kind, tcon=maybeQN ct.tcon,
                     suba=ct.suba, subb=ct.subb, tvar=ct.tvar}
 
 --- reconstruct a 'Tau' from a 'TauA'
-tauFromA :: Position -> JArray Kind -> TauA -> JArray Tau -> Tau
-tauFromA pos karray ta tarray = case ta.kind of
+tauFromA :: JArray Kind -> TauA -> JArray Tau -> Tau
+tauFromA karray ta tarray = case ta.kind of
         0 -> tapp
         1 -> tfun
         2 | Just qn <- ta.tcon = TCon pos qn
         3 -> TVar pos (elemAt karray ta.suba) ta.tvar
         k -> error ("illegal tau kind " ++ show k ++ " in tau")
     where
+        pos  = Position.null
         tapp = TApp     (elemAt tarray ta.suba) (elemAt tarray ta.subb) 
         tfun = Tau.tfun (elemAt tarray ta.suba) (elemAt tarray ta.subb) 
 
@@ -93,9 +100,9 @@ tauFromA pos karray ta tarray = case ta.kind of
 ctContext :: CT.Context -> ContextA
 ctContext ct = CtxA{clas=rebuildQN ct.clas, tau=ct.tau}
 
-ctxFromA :: Position -> JArray Tau -> ContextA -> Context
-ctxFromA pos tarray CtxA{clas, tau} 
-    = Ctx{pos, cname = clas, tau = tarray.[tau]}
+ctxFromA :: JArray Tau -> ContextA -> Context
+ctxFromA tarray CtxA{clas, tau} 
+    = Ctx{pos=Position.null, cname = clas, tau = tarray.[tau]}
 
 --- translate a 'CT.Rho' to a 'RhoA'
 ctRho :: CT.Rho -> RhoA
@@ -106,12 +113,12 @@ ctRho ct = RhoA{rhofun=ct.rhofun,
                 
 --- reconstrcut a 'Rho' from a 'RhoA'
 --- At this point we don't have a sigma array yet, hence we use an array of 'SigmaA'
-rhoFromA :: Position -> JArray Kind -> JArray Tau -> JArray SigmaA -> RhoA -> JArray Rho -> Rho
-rhoFromA pos karray tarray sarray ra rarray = case ra of
+rhoFromA :: JArray Kind -> JArray Tau -> JArray SigmaA -> RhoA -> JArray Rho -> Rho
+rhoFromA karray tarray sarray ra rarray = case ra of
         RhoA{rhofun=false} = RhoTau{context, tau}
         RhoA{rhofun=true}  = RhoFun{context, sigma, rho}
     where
-        context = map (ctxFromA pos tarray) ra.cont
+        context = map (ctxFromA tarray) ra.cont
         tau     = tarray.[ra.rhotau]
         rho     = rarray.[ra.rhotau]
         sigma   = sigmaFromA karray rarray sarray.[ra.sigma] 
@@ -129,3 +136,87 @@ ctSigma ct = SigmaA{bound=toList ct.bound, kinds=toList ct.kinds, rho=ct.rho}
 sigmaFromA :: JArray Kind -> JArray Rho -> SigmaA -> Sigma
 sigmaFromA karray rarray SigmaA{bound, kinds, rho} 
     = ForAll (zip bound (map (elemAt karray) kinds)) rarray.[rho] 
+    
+--- translate a 'CT.Expr' to an 'ExprA'
+ctExpr :: CT.Expr -> ExprA
+ctExpr ct = ExprA{xkind  = ct.xkind, 
+                    name = maybeQN ct.name, 
+                    lkind = ct.lkind, 
+                    varval = if null ct.varval then Nothing else Just ct.varval, 
+                    alts = toList ct.alts, 
+                    subx1 = ct.subx1, 
+                    subx2 = ct.subx2, 
+                    subx3 = ct.subx3}
+{---
+    reconstruct an 'Expr' from a 'ExprA'
+    -}
+exprFromA :: JArray Sigma -> JArray ExprA -> ExprA -> StG Expr 
+exprFromA  sarray earray exa = case exa.xkind of
+            0 -> do
+                ex <- xref exa.subx1
+                stio Ann {ex, typ = Just (nSigma exa.lkind)}
+            1 -> do
+                x1 <- xref exa.subx1
+                x2 <- xref exa.subx2
+                stio (App x1 x2 Nothing)
+            2 -> do
+                alts <- mapSt calt (zip pats exps)
+                ex   <- xref exa.subx1
+                stio Case {ckind = from exa.lkind, ex,
+                            typ = Nothing, alts}
+            3 | Just qn <- exa.name = stio Con {pos = Position.null, typ = Nothing, name = qn}
+            4 -> do
+                x1 <- xref exa.subx1
+                x2 <- xref exa.subx2
+                x3 <- xref exa.subx3
+                stio (Ifte x1 x2 x3 Nothing)
+            5 -> do
+                alts <- mapSt calt (zip pats exps)
+                let alt = head alts
+                stio Lam {pat = alt.pat, ex = alt.ex, typ = Nothing}
+            6 | Just s  <- exa.varval = return Lit {pos=Position.null, typ=Nothing, kind = from exa.lkind, value = s}
+            7 | Just s  <- exa.varval = return Vbl {pos=Position.null, typ=Nothing, name = Local 0 s}
+            8 | Just qn <- exa.name   = return Vbl {pos=Position.null, typ=Nothing, name = qn}
+            w -> error ("bad expra id: " ++ show w)
+    where
+        nSigma n = sarray.[n]
+        x0 = exa.alts.length `quot` 2
+        pats = map pref (take x0 exa.alts)
+        exps = map xref (drop x0 exa.alts)
+        calt (dpat, dex) = do
+                pat <- dpat
+                ex  <- dex
+                pat <- U.pReturn pat        -- make sure it has numbers
+                syms <- mapSt U.mkLocal (U.patVars pat)
+                mkStrictPVars pat
+                ex <- U.mapEx true (U.replaceLocals syms) ex
+                stio CAlt {pat, ex}
+        mkStrictPVars PCon{pats} = foreach pats mkStrictPVars
+        mkStrictPVars PUser{pat,lazy}
+            | PVar{pos,uid,var} <- pat = do
+                sym <- U.findV (Local {base=var, uid})
+                changeSym sym.{state=StrictChecked, strsig=if lazy then U else S[]}
+            | otherwise          = mkStrictPVars pat
+        mkStrictPVars PAnn{pat}  = mkStrictPVars pat
+        mkStrictPVars PAt{pat}   = mkStrictPVars pat
+        mkStrictPVars PLit{}     = return ()
+        mkStrictPVars PVar{}     = return ()
+        mkStrictPVars PMat{}     = return ()
+        mkStrictPVars PConFS{}   = undefined
+        xref i = exprFromA sarray earray earray.[i]
+        x2p :: Expr -> Pattern
+        x2p (Vbl {pos, name = Local u n}) = PVar {pos, uid = u, var = n}
+        x2p (Lit {pos, kind, value})    = PLit {pos, kind, value}
+        x2p (Con {pos, name})           = PCon {pos, qname = name, pats=[]}
+        x2p (Ann {ex,typ=Just sig}) = PAnn {pat = x2p ex, typ = sig}
+        x2p (app@App _ _ _) = case map fst (flatx app) of
+            (Con {name}:args) -> PCon {pos=Position.null, qname=name, pats = map x2p args}
+            [Vbl {name=VName _ "!"}, x] -> PUser {pat=x2p x, lazy = false}
+            [Vbl {name=VName _ "?"}, x] -> PUser {pat=x2p x, lazy = true}
+            [Vbl {name=VName _ "@"}, v1, v2] -> PAt {pos=Position.null, uid = 0, var=p1.var, pat=p2}
+                where p1 = x2p v1; p2 = x2p v2
+            [Vbl {name=VName _ "~"}, v1, v2] -> PMat {pos=Position.null, uid = 0, var=p1.var, value}
+                where p1 = x2p v1; value = v2.value
+            sonst -> error ("x2p: illegal expr ")
+        x2p ex = error("x2p: illegal expr ")
+        pref i = xref i >>= return . x2p 
