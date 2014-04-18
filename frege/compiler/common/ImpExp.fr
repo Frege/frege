@@ -1,0 +1,131 @@
+{-- 
+    Conversions between external, meta and internal data structures
+    
+    Used in import to translate annotation data to types and expressions.
+    
+    The parts play together like this for 'Expr's
+    
+    1. In GenMeta, items for export are selected. This are
+    functions from the @inline@ pragma and default class operations.
+    
+    2. The expressions of those symbols are serialized into 'E.ExprA' form.
+    
+    3. The serialized expressions are written to the Java file as annotations,
+    using the annotation interface type 'CT.Expr',
+    which is isomorphic with 'ExprA'.
+    
+    4. On import, the 'CT.Expr's first will be translated back to 'E.ExprA'.
+    
+    5. The imported symbols with expressions get a state transformer
+    in their 'Symbol.expr' field that reconstructs a normal 'Expr' from 'ExprA'.
+    In this way, inlineable or reusable expressions do not contain
+    'Local' variables with @uid@s that are meaningless outside of
+    their context.
+    
+    6. In build mode, we want to re-use the symbol table of compiled modules,
+    without first java compiling them and then loading the class file.
+    Hence, in this case, we also put the state transformer in the symbols
+    after code generation.
+    This way the symbol table appears like one that was just reconstrcuted
+    from class files.  
+-}
+
+module frege.compiler.common.ImpExp 
+        inline (maybeQN)
+    where
+
+import Compiler.types.External as E
+import Compiler.Classtools as CT()
+import Compiler.types.Definitions
+import Compiler.types.Types
+import Compiler.types.Positions
+import Compiler.types.QNames
+import Compiler.types.Packs
+import Compiler.types.Kinds
+
+--- rebuild a 'QName' from meta form
+rebuildQN :: CT.QName -> QName
+rebuildQN qn = case qn.kind of
+    0 -> tname
+    1 -> VName (Pack.new qn.pack) qn.base
+    2 -> MName tname qn.member
+    k -> error ("illegal QName kind in CT:QName " ++ show (k, (qn.pack, qn.base, qn.member)))
+  where
+    tname = TName (Pack.new qn.pack) qn.base
+
+--- reconstuct a 'Kind' from a 'KindA'
+kindFromA :: KindA -> JArray Kind -> Kind
+kindFromA ka karray = case ka.kind of
+        0 -> KType
+        1 -> KGen
+        2 -> KVar
+        3 -> KApp (elemAt karray ka.suba) (elemAt karray ka.subb)
+        k -> error ("illegal kind " ++ show k ++ " in KindA")
+
+--- translate a 'CT.Kind' to a 'KindA'
+ctKind :: CT.Kind -> KindA
+ctKind ct = KindA{kind=ct.kind, suba=ct.suba, subb=ct.subb}
+
+--- get a 'QName' from a 'CT.QNameArr', if possible
+maybeQN :: CT.QNameArr -> Maybe QName
+maybeQN qna = if qna.length == 0 
+                then Nothing
+                else (Just . rebuildQN . elemAt qna) 0 
+
+--- translate a 'CT.Tau' to a 'TauA'
+ctTau :: CT.Tau -> TauA
+ctTau ct = TauA{kind=ct.kind, tcon=maybeQN ct.tcon, 
+                    suba=ct.suba, subb=ct.subb, tvar=ct.tvar}
+
+--- reconstruct a 'Tau' from a 'TauA'
+tauFromA :: Position -> JArray Kind -> TauA -> JArray Tau -> Tau
+tauFromA pos karray ta tarray = case ta.kind of
+        0 -> tapp
+        1 -> tfun
+        2 | Just qn <- ta.tcon = TCon pos qn
+        3 -> TVar pos (elemAt karray ta.suba) ta.tvar
+        k -> error ("illegal tau kind " ++ show k ++ " in tau")
+    where
+        tapp = TApp     (elemAt tarray ta.suba) (elemAt tarray ta.subb) 
+        tfun = Tau.tfun (elemAt tarray ta.suba) (elemAt tarray ta.subb) 
+
+--- translate a 'CT.Context' to a 'ContextA'
+ctContext :: CT.Context -> ContextA
+ctContext ct = CtxA{clas=rebuildQN ct.clas, tau=ct.tau}
+
+ctxFromA :: Position -> JArray Tau -> ContextA -> Context
+ctxFromA pos tarray CtxA{clas, tau} 
+    = Ctx{pos, cname = clas, tau = tarray.[tau]}
+
+--- translate a 'CT.Rho' to a 'RhoA'
+ctRho :: CT.Rho -> RhoA
+ctRho ct = RhoA{rhofun=ct.rhofun, 
+                cont  = [ ctContext cx | cx <- ct.cont ], 
+                sigma =ct.sigma, 
+                rhotau=ct.rhotau}                
+                
+--- reconstrcut a 'Rho' from a 'RhoA'
+--- At this point we don't have a sigma array yet, hence we use an array of 'SigmaA'
+rhoFromA :: Position -> JArray Kind -> JArray Tau -> JArray SigmaA -> RhoA -> JArray Rho -> Rho
+rhoFromA pos karray tarray sarray ra rarray = case ra of
+        RhoA{rhofun=false} = RhoTau{context, tau}
+        RhoA{rhofun=true}  = RhoFun{context, sigma, rho}
+    where
+        context = map (ctxFromA pos tarray) ra.cont
+        tau     = tarray.[ra.rhotau]
+        rho     = rarray.[ra.rhotau]
+        sigma   = sigmaFromA karray rarray sarray.[ra.sigma] 
+
+--- translate a 'CT.Sigma' to a 'SigmaA'
+ctSigma :: CT.Sigma -> SigmaA
+ctSigma ct = SigmaA{bound=toList ct.bound, kinds=toList ct.kinds, rho=ct.rho}
+
+{-- 
+    reconstruct a 'Sigma' from a 'RhoA'
+
+    Because 'RhoA' reference the sigma table and 'SigmaA' reference
+    the rho table, we never build a 'Sigma' array.
+-}
+sigmaFromA :: JArray Kind -> JArray Rho -> SigmaA -> Sigma
+sigmaFromA karray rarray SigmaA{bound, kinds, rho} 
+    = ForAll (zip bound (map (elemAt karray) kinds)) rarray.[rho] 
