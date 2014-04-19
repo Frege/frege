@@ -14,13 +14,16 @@ package frege.compiler.passes.Fix where
 
 import frege.Prelude hiding(<+>, break)
 
+import Data.TreeMap(insertkv)
+
 import Lib.PP (break, group, msgdoc)
 import frege.compiler.Utilities   as U()
 
 import  Compiler.enums.TokenID(VARID, CONID)
 
 import  Compiler.types.SNames(Simple, With1)
-import  Compiler.types.Tokens(baseToken)
+import  Compiler.types.QNames
+import  Compiler.types.Tokens(baseToken, KeyTk)
 import  Compiler.types.Positions(Position, Positioned)
 import  Compiler.types.SourceDefinitions
 import  Compiler.types.Global as G
@@ -42,11 +45,11 @@ pass = do
  -}
 fixdefs :: [DefinitionS] -> StG [DefinitionS]
 fixdefs defs = do
-    ds <- unDoc defs
+    ds <- unDoc defs >>= unlet
     fs <- funJoin ds
-    ls <- unlet fs
-    checkUniq [ name | dcl@FunDcl {lhs} <- ls, name <- funbinding dcl ]
-    return ls
+    checkUniq [ name | dcl@FunDcl {lhs} <- fs, name <- funbinding dcl ]
+    return fs
+
 
 checkUniq [] = return ()
 checkUniq (name:as) = do
@@ -75,7 +78,7 @@ unlet (f:fs)
             name = "gen$" ++ show pos.first.offset
             vlet = Vbl (Simple pos.first.{tokid=VARID, value=name})
             -- gen$12345 = expr  
-            it = f.{lhs=vlet, pats=[]}
+            it = f.{lhs=vlet, pats=[], positions=[vlet.name.id]}
             -- restore orginal pattern
             pat = fold App lhs pats
             -- for each variable in pat a, b, ...
@@ -89,8 +92,9 @@ unlet (f:fs)
             -- a = case something of Just a -> a
             cex = if length vars == 1 then expr else vlet
             res = if length vars == 1 then ds   else it:ds  
-            mkFun (var@Vbl{}) = f.{lhs=var, pats=[], 
-                     expr=Case CNormal cex [CAlt{pat, ex=var}]}
+            mkFun (var@Vbl{}) = f.{lhs=var, pats=[],
+                    positions = [var.name.id], 
+                    expr=Case CNormal cex [CAlt{pat, ex=var}]}
             mkFun _ = error "mkFun"
         fs <- unlet fs
         return (res ++ fs)
@@ -108,21 +112,6 @@ unlet (f:fs)
         return (f:fs)                                      
 unlet [] = return []
 
---- Is this a function binding?
---- If so, return the identifier.
-funbinding FunDcl{lhs = Vbl{name=Simple{id}}}
-    | id.value != "!", 
-      id.value != "?",
-      id.value != "@",
-      id.value != "~" = Just id
-funbinding _ = Nothing
-
---- Is this a real pattern, not just 
---- > !name
-patbinding FunDcl{lhs = Con{}} = true
-patbinding FunDcl{lhs = Vbl{name=Simple{id}}}
-                               = id.value == "@" || id.value == "~"
-patbinding _                   = false
 
 {--
  * apply a series of docs to a subsequent definition
@@ -163,7 +152,7 @@ funJoin [] = return []
 funJoin (defs@(d:ds))
     | FunDcl {lhs} <- d, Just name <- funbinding d 
     = do 
-        joined <- joinFuns (getpos lhs) (funs name)
+        joined <- joinFuns (Pos name name) (funs name)
         rest   <- funJoin  (next name)
         return (joined:rest)
     | otherwise = do
@@ -175,7 +164,7 @@ funJoin (defs@(d:ds))
         sameFun name fundcl | Just n <- funbinding fundcl = n.value == name.value
         sameFun name _ = false
         joinFuns :: Position -> [DefinitionS] -> StG DefinitionS
-        joinFuns _ [f] = return f
+        joinFuns pos [f] = return f.{positions=[pos.first]}
         joinFuns pos (fs@(f:_))
             | null f.pats = do
                     E.error pos (msgdoc "function binding without patterns must have only a single equation")
@@ -192,9 +181,9 @@ funJoin (defs@(d:ds))
             | otherwise = stio result  -- all equations have same # of patterns and visibility
             where
                 arity  = length f.pats
-                poss   = map (getpos . _.lhs) fs
-                pos    = head poss
-                result = f.{pats = newvars, expr = newexpr, doc = newdoc}
+                
+                result = f.{pats = newvars, expr = newexpr, doc = newdoc,
+                            positions = mapMaybe funbinding fs}
                 newvars = [ Vbl  (Simple pos.first.{tokid=VARID, value="_" ++ i})  | i <- take arity U.allBinders]
                 -- newpats = [ PVar (pos.change VARID ("_"++i)) 0 ("_" ++ i) | i <- take arity U.allBinders]
                 newexpr = Case CNormal (mkTuple Con pos newvars) alts 

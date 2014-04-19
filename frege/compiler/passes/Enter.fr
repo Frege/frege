@@ -1,0 +1,337 @@
+--- This is an undocumented module.
+module frege.compiler.passes.Enter where 
+
+import  frege.data.TreeMap(Tree, keys, values, insertkv)
+import  frege.data.List  as  DL(uniqBy, sort, sortBy)
+import  frege.compiler.enums.Flags  as  Compilerflags(TRACE3, TRACE4)
+import  frege.compiler.enums.TokenID
+import  frege.compiler.enums.Visibility
+import  frege.compiler.types.Kinds
+import  frege.compiler.types.Positions
+import  frege.compiler.types.Tokens
+import  frege.compiler.types.Strictness
+import  frege.compiler.types.SNames
+import  frege.compiler.types.Packs
+import  frege.compiler.types.QNames
+import  frege.compiler.types.Types
+import  frege.compiler.types.SourceDefinitions
+import  frege.compiler.types.ConstructorField
+import  frege.compiler.types.Symbols
+import  frege.compiler.types.Global  as  G
+import  frege.compiler.common.Errors  as  E()
+import  frege.compiler.common.Resolve  as  R(defaultXName)
+import  frege.compiler.common.SymbolTable  as  ST()
+import  frege.compiler.classes.Nice
+import  frege.compiler.instances.NiceExprS
+import  frege.lib.PP(text, msgdoc)
+import  frege.compiler.Utilities  as  U(vSym, linkq)
+
+{--
+ * In this pass, we insert placeholders in the symbol table
+ * and create source code for derived instances.
+ *
+ * Instance declarations come later in 'pass2', because references to
+ * classes and data types must be resolved.
+ * Likewise derive declarations, they are transformed to instance
+ * declarations.
+ -}
+pass = do
+    g <- getST
+    let defs = filter (not • isInstOrDerive) g.sub.sourcedefs
+    enter (VName g.thisPack) defs
+    g <- getST
+    stio ("symbols", symbols g.thisTab)
+  
+
+symbols :: Symtab -> Int
+symbols tree = fold (+) 0 (map oneSym (values tree))
+
+
+oneSym :: Symbol -> Int
+oneSym sym
+    | sym.{env?} = 1 + symbols sym.env
+    | otherwise  = 1
+
+
+isInstOrDerive (InsDcl {pos}) = true
+isInstOrDerive (DrvDcl {pos}) = true
+isInstOrDerive _              = false
+
+
+transTVar :: TauS -> Tau
+transTVar (TVar {var,pos,kind}) = TVar {var,pos,kind}
+transTVar _ = error "transTVar: no TVar"
+
+
+{-- create a symbolic link to given variable or constructor symbol in the global namespace -}
+link :: Symbol -> StG ()
+link sym = do
+    g <- getST
+    E.logmsg TRACE3 sym.pos (text ("`" ++ sym.name.base ++ "` link to " ++ sym.nice g))
+    ST.enter (SymL {sid=0, pos=sym.pos, vis=sym.vis, -- doc=Nothing,
+                   name=VName g.thisPack sym.name.base, alias=sym.name})
+
+
+--- reorder definitions so that annotations come last
+annosLast defs = nannos ++ annos where
+    (annos, nannos) = DL.partition isAnno defs
+    isAnno (AnnDcl {pos}) = true
+    isAnno _              = false
+
+
+{--
+    Create provisional symbols for many definitions in the symbol table.
+    Takes care that annotations are processed after their implemetations
+    so that 'changeSym' will work.
+    -}
+enter fname defs = foreach (annosLast defs) (enter1 fname)
+
+
+{-- create provisional symbol for 1 definition in the symbol table -}
+enter1 :: (String -> QName) -> DefinitionS -> StG ()
+enter1 fname (d@FunDcl {positions}) = case funbinding d of
+        Just name -> do
+            let qname = fname name.value
+            foreach positions (register qname)
+            ST.enter (vSym (positionOf name) qname).{vis=d.vis, doc=d.doc}
+            
+        sonst 
+            | not (patbinding d),
+              Vbl{name=Simple excl} <- d.lhs,
+              excl.value == "!" || excl.value=="?",
+              [pat] <- d.pats,
+              Just name <- funbinding d.{lhs=pat, pats=[]} -> do
+                let !qname = fname name.value
+                register qname name
+                ST.enter (vSym (positionOf name) qname).{vis=d.vis, doc=d.doc, 
+                    strsig = if excl.value == "!" then S[] else U}
+            | otherwise = do
+                g <- getST
+                E.error (getpos d.lhs) (msgdoc ("Strange declaration: " 
+                        ++ nicer d.lhs g))
+    where
+        register :: QName -> Token -> StG ()
+        register qname tok =  
+                         changeST Global.{
+                            sub <- SubSt.{
+                            idKind <- insertkv (KeyTk tok) (Right qname)}}
+        
+enter1 fname (d@NatDcl {pos}) = do
+        let !qname = fname d.name
+        changeST Global.{
+          sub <- SubSt.{
+          idKind <- insertkv (KeyTk pos.first) (Right qname)}}
+        ST.enter (vSym pos qname).{vis=d.vis, doc=d.doc,
+                                                nativ=Just d.meth, pur=d.isPure}
+enter1 fname (d@AnnDcl {pos}) = do
+        g <- getST
+        let qname = fname d.name
+            merge Nothing _ b _ = b
+            merge a _ Nothing _ = a
+            merge (Just a) apos (Just b) bpos = if Position.start apos < Position.start bpos
+                then Just (a ++ "\n\n" ++ b)
+                else Just (b ++ "\n\n" ++ a)
+        case g.findit qname of
+            Just (sym@SymV {nativ = Nothing, anno = false}) -> do
+                when (sym.vis != d.vis) do
+                    E.error pos (msgdoc ("Visibility of annotation and implementation must match,"
+                        ++ " implementation was announced as " ++ show sym.vis
+                        ++ " at line " ++ show sym.pos))
+                ST.changeSym sym.{pos <- d.pos.merge,
+                                 doc = merge sym.doc sym.pos d.doc d.pos,
+                                 anno = true}
+                changeST Global.{
+                    sub <- SubSt.{
+                        idKind <- insertkv (KeyTk pos.first) (Right sym.name)}}
+            Just (sym@SymV {anno = true}) ->
+                E.error pos (msgdoc ("cannot annotate " ++ sym.nice g ++ " again"))
+            Just sym ->
+                E.error pos (msgdoc ("cannot annotate " ++ sym.nice g))
+            Nothing -> do -- either class method or implementation missing.
+                ST.enter (vSym d.pos qname).{vis=d.vis, doc=d.doc, anno = true}
+                changeST Global.{
+                    sub <- SubSt.{
+                        idKind <- insertkv (KeyTk pos.first) (Right qname)}}
+
+
+enter1 fname (d@ClaDcl {pos}) = do
+        g <- getST
+        let tname = TName g.thisPack d.name
+        changeST Global.{sub <-
+            SubSt.{idKind <- insertkv (KeyTk pos.first) (Right tname)}}
+        ST.enter (SymC {sid=0, pos=d.pos, vis=d.vis, doc=d.doc, name=tname,
+                       tau=transTVar d.clvar, supers=[], insts=[], env=Tree.empty})
+
+        let vdefs = map DefinitionS.{vis <- max d.vis} d.defs
+            xdefs = filter ((>d.vis) • DefinitionS.vis) d.defs
+
+        -- complain about class members that are more visible than the class
+        foreach xdefs (\(def::DefinitionS) -> E.error def.pos (msgdoc (
+                                d.name ++ "."  ++ def.name ++ " is " ++ show def.vis
+                                ++ " while the enclosing class is only "
+                                ++ show d.vis)))
+
+        enter (MName tname) vdefs
+        {-
+            all entries from the env of the symbol that is named by 'tname'
+            except those whose name is found in the global package and the
+            associated symbol is already a link
+            (Because, for instance, class Ord may have a default definition
+            of function != that conflicts with Eq.!=)
+            (We must check later for the case that 2 unrelated classes
+            define a method with the same name.)
+         -}
+        g <- getST
+        let vs = (filter (maybe true (not • Symbol.{alias?})
+                                    • g.find • VName g.thisPack
+                                    • QName.base • Symbol.name)
+                            • values • maybe Tree.empty Symbol.env) (g.findit tname)
+        E.logmsg TRACE3 pos (text ("enter1: ClaDcl: vs=" ++ show (map (flip nice g) vs)))
+        foreach (vs) link
+
+enter1 !fname (!d@InsDcl {pos = !pos}) = do
+        g <- getST
+
+        let tname = TName g.thisPack (insName d)
+        ST.enter (SymI  {pos=d.pos, vis=d.vis, doc=d.doc, name=tname,
+                 sid=0, clas=fname "", typ=pSigma, env=Tree.empty})
+        enter (MName tname) d.defs
+
+        !typ  <- U.transSigma d.typ
+        !clas <- defaultXName (Pos d.clas.id d.clas.id) (TName pPreludeBase "Eq") d.clas
+
+        case instTSym typ g of
+            Just (SymT {name=typnm}) -> do
+                 foreach d.defs (mklinkd typnm (MName tname))
+                 case g.findit clas of
+                    Just (SymC {name,env}) -> do
+                        return ()
+                        -- let cmeths = [ sym.name.base | sym@SymV{anno=true} <- values env ] 
+                        -- foreach (map (QName.base • Symbol.name) (values env)) (mklink typnm (MName name))
+                    _  ->  E.error pos (msgdoc ("`" ++ clas.nice g ++ "` does not name a class."))
+            Just sym -> E.error pos (msgdoc ("can't make instance for " ++ sym.nice g
+                            ++ ", it's not a type at all."))
+            Nothing  -> E.error pos (msgdoc ("can't make instance for " ++ typ.nicer g
+                            ++ ", there is no type constructor."))
+    where
+        mklinkd !tname !mname !d = mklink tname mname (DefinitionS.name d)
+        mklink  !tname !mname !nm = do
+            g <- getST
+            let !mem = mname nm
+                !rem = MName tname nm
+            case g.findit mem of
+                Just !sym -> case g.findit rem of
+                    Just _  -> stio ()              -- already there
+                    Nothing -> linkq rem sym
+                Nothing  -> E.fatal d.pos (text ("FATAL, can't find " ++ mem.nice g ++ " again"))
+
+enter1 fname (d@DrvDcl {pos}) = E.fatal pos (text "FATAL: cannot enter a derive definition")
+
+enter1 fname (d@DatDcl {pos}) = do
+        g <- getST
+        let dname = TName g.thisPack d.name
+            kind  = foldr KApp KType dsig.kinds
+            dtcon = TCon {pos=d.pos, name=dname}
+            dtau  = if null d.vars then dtcon else dtcon.mkapp (map transTVar d.vars)
+            drho  = RhoTau [] dtau
+            dsig  = ForAll (map Tau.varkind d.vars) drho
+            dsym  = SymT {sid=0, pos=d.pos, vis=d.vis, doc=d.doc, name=dname, typ=dsig,
+                            product = length d.ctrs == 1, mutable = false,
+                            enum = null d.vars && all (0==) (map (length • DCon.flds) d.ctrs),
+                            nativ = Nothing, pur = false, kind,
+                            newt = length d.ctrs == 1 && 1 == (length • DCon.flds • head) d.ctrs,
+                            env=Tree.empty}
+        ST.enter dsym
+        changeST Global.{
+            sub <- SubSt.{
+                idKind <- insertkv (KeyTk pos.first) (Right dname)}}
+        foreach (zip U.numbers d.ctrs) (mkCon (MName dname))
+        enter (MName dname) d.defs
+    where
+        mkCon :: (String -> QName) -> (Int, DConS) -> StG ()
+        mkCon mname (cid, dcon) = do
+            g <- getST
+            {-
+             * information about fields of a constructor are essential
+             * when translating patterns in pass 5
+            -}
+            let fs = map ConField.{typ = pSigma} dcon.flds  -- zip (map fst dcon.flds) (repeat pSigma)
+                fnms = [ n | Field {name = Just n} <- dcon.flds ]
+                fnps = [ (p, n) | Field {pos=p, name = Just n} <- dcon.flds ]
+                ssig = S [ if ConField.strict f then S[] else U | f <- dcon.flds]
+                !cqname = mname dcon.name
+                register (p, n) = changeST Global.{sub <- SubSt.{
+                    idKind <- insertkv (KeyTk (Position.first p)) (Right (mname n))}}
+            foreach fnms (checkunique dcon.pos (mname dcon.name) fnms)
+            ST.enter (SymD {name = mname dcon.name, typ=pSigma, flds = fs,
+                cid=cid, sid=0, strsig = ssig, op = NOP1,
+                pos=dcon.pos, vis=dcon.vis, doc=dcon.doc})
+            changeST Global.{
+                sub <- SubSt.{
+                    idKind <- insertkv (KeyTk dcon.pos.first) (Right cqname)}}
+            foreach fnps register 
+            when (dcon.vis == Public)
+                (ST.enter (SymL {name = VName g.thisPack dcon.name, alias = cqname,
+                    sid=0, pos=dcon.pos, vis=dcon.vis, {-doc=dcon.doc-}}))
+        checkunique :: Position -> QName -> [String] -> String -> StG ()
+        checkunique pos con fs f = do
+            when (1 < (length • filter (f==)) fs) do
+                g <- getST
+                E.error pos (msgdoc ("Field `" ++ f ++ "' in constructor " ++ QName.nice con g ++
+                    " must occur only once."))
+            stio ()
+
+
+enter1 fname (d@JavDcl {pos}) = do
+        g <- getST
+        let !dname = TName g.thisPack d.name
+            dtcon = TCon {pos=d.pos, name=dname}
+            dtau  = dtcon.mkapp (map transTVar d.vars)
+            primitive = d.jclas `elem` primitiveTypes
+            ktype = if primitive then KType else KGen
+            kind  = foldr KApp ktype dsig.kinds 
+            dsig  = ForAll (map Tau.varkind d.vars) (RhoTau [] dtau)
+        ST.enter (SymT {sid=0, pos=d.pos, vis=d.vis, doc=d.doc, name=dname,
+                       product = false, enum = false, newt = false, pur = d.isPure,
+                       typ=dsig, mutable = d.isMutable,
+                       kind, nativ = Just d.jclas, env=Tree.empty})
+        changeST Global.{
+            sub <- SubSt.{
+                idKind <- insertkv (KeyTk pos.first) (Right dname)}}
+        enter (MName dname) d.defs
+
+enter1 fname (d@TypDcl {pos}) = do
+        g <- getST
+        let !dname = TName g.thisPack d.name
+            kind = KVar
+        changeST Global.{
+            sub <- SubSt.{
+                idKind <- insertkv (KeyTk pos.first) (Right dname)}}
+        ST.enter (SymA {sid=0, pos=d.pos, vis=d.vis, doc=d.doc,
+                       name = dname, typ = pSigma, kind,
+                       vars = map transTVar d.vars})
+
+
+enter1 fname (ImpDcl {pos})   = stio ()
+enter1 fname (FixDcl {pos})   = stio ()
+enter1 fname (DocDcl {pos})   = stio ()
+
+
+insName :: DefinitionS -> String
+insName idcl | idcl.{clas?}, idcl.{typ?} = clas ++ "_" ++ tcon idcl.typ where
+    clas = idcl.clas.id.value
+    tcon (ForAll _ rho) = rhoTcon rho
+    rhoTcon (RhoFun _ _ _)  = "->"
+    rhoTcon (RhoTau _ tau)  = tauTcon tau
+    -- tauTcon (TCon {name=m~#^PreludeBase\.(\S+)$#}) = unJust (m.group 1)
+    tauTcon (TCon {name}) = case name of
+        Simple t = t.value
+        With1{}
+            | name.ty.value == "PreludeBase" = name.id.value
+            | otherwise  = name.ty.value ++ "_" ++ name.id.value
+        With2{}  = error ("insName: should not happen " ++ show name)
+    tauTcon (TApp a _)     = tauTcon a
+    tauTcon (TVar {var})   = var     -- undefined
+    tauTcon (Meta _)       = "meta"  -- undefined
+    -- tauTcon (TFun _ _)    = "->"
+insName _ = error "not an instance"
