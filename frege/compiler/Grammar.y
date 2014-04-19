@@ -64,6 +64,7 @@ import  Compiler.types.Packs(magicPack)
 import  Compiler.types.ImportDetails
 import  Compiler.types.Types
 import  Compiler.types.Definitions
+import  Compiler.types.ConstructorField
 import  Compiler.types.Global as G
 
 import  Compiler.common.Mangle
