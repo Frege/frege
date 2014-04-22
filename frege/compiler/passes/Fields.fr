@@ -1,0 +1,146 @@
+--- Generate functions for field access/update/change
+module frege.compiler.passes.Fields where
+
+import  frege.data.TreeMap(Tree, keys, values, insertkv)
+import  frege.data.List  as  DL(uniqBy, sort, sortBy)
+import  frege.compiler.enums.TokenID
+import  frege.compiler.enums.Visibility
+import  Compiler.enums.Literals
+import  frege.compiler.types.Positions
+import  frege.compiler.types.Tokens
+import  frege.compiler.types.SNames
+import  frege.compiler.types.QNames
+import  frege.compiler.types.SourceDefinitions
+import  frege.compiler.types.ConstructorField
+import  frege.compiler.types.Symbols
+import  frege.compiler.types.Global  as  G
+
+import  Compiler.passes.Enter(enter)
+
+import  frege.compiler.Utilities  as  U(vSym, linkq)
+
+{--
+ * This pass creates the field definitions.
+ *
+ * requires: data types and constructors are entered
+ *
+ * ensures: for each type _T_, for each field _f_ in _T_ there will be
+ * 4 corresponding functions @T.f@, @T.upd$f@, @T.chg$f@
+ * and @T.has$f@
+ -}
+pass = do
+    g <- getST
+    definitions <- mapSt chgddef g.sub.sourcedefs
+    changeST Global.{sub <- SubSt.{sourcedefs = definitions}}
+    return ("fields", (count definitions - count g.sub.sourcedefs ) `quot` 4)
+
+count :: [DefinitionS] -> Int
+count = sum . map subdefs
+    where
+        subdefs d | d.{defs?} = length d.defs
+                  | otherwise = 0
+        
+
+chgddef (d@DatDcl {pos}) = do
+        g <- getST
+        let dname = TName g.thisPack d.name
+        dsym <- U.findT dname
+        let (newdefs,exports) = work g dsym
+        enter (MName dname) newdefs
+        changeST _.{sub <- _.{toExport <- (exports++)}}
+        stio d.{defs <- (++ newdefs)}
+    where
+        work :: Global -> Symbol -> ([DefinitionS], [SName])
+        work g (dsym@SymT {env}) =
+                let cons   = [ sym | sym@SymD {sid} <- values env ]
+                    fields = (uniqBy (using fst) • sort) [ (f,p) | con <- cons, Field {pos = p, name = Just f} <- Symbol.flds con ]
+                in ([ d | (f,p) <- fields, d <- gen g p dsym.name cons f],
+                    if length cons == 1 
+                        then [ With1 (p.change CONID dsym.name.base).first 
+                                (p.change VARID (s ++ f)).first | (f, p) <- fields,
+                                                                        s <- ["chg$", "upd$"]]
+                        else [])
+        work _ _ = error "work: need a SymT"
+        gen :: Global -> Position -> QName -> [Symbol] -> String -> [DefinitionS]
+        gen g fpos tname cons f = let
+                pos   = fpos.{first <- Token.{offset <- succ}}
+                model = FunDcl {vis = Public, positions = [fpos.first], 
+                                lhs = var ("_"), pats=[var "this"], expr = var "x", doc=Nothing}
+                symf =  model.{lhs = var f, expr = getExpr,
+                                doc = getdoc}   -- Just ("access field @" ++ f ++ "@")}
+                symu =  model.{lhs = var ("upd$" ++ f), expr = updExpr,  positions = [pos.first],
+                                pats=[var "this", var "that"],
+                                doc = Just ("update field @" ++ f ++ "@")}
+                symc =  model.{lhs = var ("chg$" ++ f), expr = chgExpr,  positions = [pos.first], 
+                                pats=[var "this", var "that"],
+                                doc = Just ("change field @" ++ f ++ "@")}
+                symh =  model.{lhs = var ("has$" ++ f), expr = hasExpr,  positions = [pos.first],
+                                doc = Just ("check if constructor has field @" ++ f ++ "@")}
+                -- -------------- utility functions ---------------
+                -- get the doc for field f
+                getdoc = case [ d | con <- cons,
+                                    Field {name = Just g, doc = Just d} <- Symbol.flds con,
+                                    f == g ] of
+                            [] -> Just ("access field @" ++ f ++ "@")
+                            xs -> Just (joined "\n" xs)
+                -- numbers = iterate (1+) 1
+                confs :: Symbol -> [Maybe String]
+                confs sym = map ConField.name (Symbol.flds sym)   -- just the names
+                -- find sub-pattern name of field f in constructor sym
+                occurs :: Symbol -> String -> [ExprS]
+                occurs sym f = (map fst • filter ((==Just f) • snd) • zip subvars) (confs sym)
+                -- arity of a constructor
+                arity :: Symbol -> Int
+                arity sym = length (Symbol.flds sym)
+                -- displayed name of a constructor
+                cname :: Symbol -> SName
+                cname sym = case Symbol.name sym of
+                    MName tn base -> With1 pos.first.{tokid=CONID, value=tn.base}
+                                           pos.first.{tokid=CONID, value=base}
+                    _ -> error "constructor must be a member"
+                -- [PVar c1, PVar c2, PVar c3, ...]
+                -- subpats "_" = repeat (PVar {name="_",pos})
+                subpats c = [ var  (c   ++ show a)   | a <- enumFromTo 1 1000 ]
+                subvars   = [ var  ("a" ++ show a)   | a <- enumFromTo 1 1000 ]
+                -- construct pattern  Con s1 s2 s3 ... sn
+                conpat con s = fold App Con{name=cname con} pats
+                    where pats = take (arity con) (subpats s)
+                
+                -- construct simple (pattern) variables
+                var  s = Vbl  {name=Simple pos.first.{value=s, tokid = VARID}}
+                -- replace a variable named a with expr b in a list
+                rep :: String -> ExprS -> [ExprS] -> [ExprS]
+                rep a b vs = map (repvar a b) vs                -- replace Vbl ONLY!
+                repvar :: String -> ExprS -> ExprS -> ExprS
+                repvar a b v = if v.name.id.value == a then b else v
+                -- constructor expression
+                conval con = Con {name=cname con}
+                -- make an app
+                mkApp :: ExprS -> [ExprS] -> ExprS
+                mkApp x xs = fold nApp x xs
+                this   = var "this"
+                that   = var "that"
+                vFalse = Lit {kind=LBool, value="false", pos}
+                vTrue  = Lit {kind=LBool, value="true", pos}
+                getExpr = Case CNoWarn this getAlts
+                getAlts = [ CAlt {pat=conpat con "a", ex=v}
+                                                        | con <- cons, v <- occurs con f]
+                updExpr = Case CNoWarn this updAlts
+                conUpd :: Symbol -> ExprS -> ExprS
+                conUpd con v = mkApp (conval con) (rep v.name.id.value that (take (arity con) subvars))
+                updAlts = [ CAlt {pat=conpat con "a", ex = conUpd con v}
+                                                        | con <- cons, v <- occurs con f]
+                chgExpr = Case CNoWarn this chgAlts
+                conChg :: Symbol -> ExprS -> ExprS
+                conChg con v = mkApp (conval con) (rep v.name.id.value (nApp that v) (take (arity con) subvars))
+                chgAlts = [ CAlt {pat=conpat con "a", ex = conChg con v}
+                                                        | con <- cons, v <- occurs con f]
+                hasExpr
+                    | length cons == 1 = vTrue
+                    | otherwise = Case CNoWarn this (hasAlts ++ [last])
+                hasAlts = [ CAlt {pat=conpat con "_", ex = vTrue}
+                                                        | con <- cons, v <- occurs con f]
+                last = CAlt {pat=var "_", ex = vFalse}
+            in [symf, symu, symc, symh]
+chgddef d = stio d      -- leave others unchanged
+
