@@ -55,6 +55,7 @@ import  Compiler.enums.Flags
 import  Compiler.enums.TokenID(TokenID)
 import  Compiler.enums.Visibility
 import  Compiler.enums.Literals
+import  Compiler.enums.CaseKind
 
 import  Compiler.types.Positions
 import  Compiler.types.Tokens
