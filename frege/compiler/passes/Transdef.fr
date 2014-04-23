@@ -536,7 +536,7 @@ transPatUnique fname pat = do
                         <+> text " is not allowed in patterns.")
                     return (PVar {pos=getpos pat, uid=0, var="_"})  
             Term p -> transPat fname p
-            Infx{name, left, right} -> infx fname name left right >>= transPat fname
+            Infx{} -> infx fname pat >>= transPat fname
             Lit p k v      -> return (PLit p k v)
             Ann{ex, typ}   -> do
                 pat <- transPat fname ex
@@ -622,7 +622,7 @@ transExpr env fname ex = do
                             stio (D.App a b Nothing)
         Lit p k v   -> return  (D.Lit p k v Nothing)
         Term e      -> transExpr env fname e
-        Infx{name, left, right} -> infx fname name left right >>= transExpr env fname
+        Infx{name, left, right} -> infx fname ex >>= transExpr env fname
         Case {ckind,ex,alts} -> do
                     ex   <- transExpr env fname ex
                     alts <- mapSt transAlt alts
@@ -722,29 +722,69 @@ transExpr env fname ex = do
 --- to
 --- > (op) a b
 --- taking the operator of @b@ into account, if any
-infx :: (String -> QName) -> SName -> ExprS -> ExprS -> StG ExprS
-infx fname name left right 
-    | Infx{} <- right = do      -- left op1 r.left op2 r.right
+infx :: (String -> QName) -> ExprS -> StG ExprS
+infx fname = fmap unInfix . ordInfix fname
+
+--- make 'Con' or 'Vbl' from 'SName'
+vbl :: SName -> ExprS
+vbl name = Des.varcon name.id name
+
+{-- 
+    Order an infix expression according to associativity and precedence
+    > a : (m ~ (s : rest))
+    > a : ((m ~ s) : rest)
+    > a : (m ~s) : rest
+    by first ordering the right hand side.
+    
+    Then, if the operator binds more than the topmost 
+    of the ordered right hand side:
+    > m ~ (s : rest)
+    build a new infix expression from the left hand sides:
+    > (m ~ s)
+    and order it. This is then the new left hand side.
+    
+    Another example:
+    
+    > 3 * 2 / 6
+    The ordered right hand side is
+    > 2 / 6
+    Now, @*@ binds more than @/@, because it is left associative,
+    hence:
+    > (3 * 2) / 6
+    
+    *Invariant* : If you pass an infix expression, you also get one back.
+    -} 
+ordInfix :: (String -> QName) -> ExprS -> StG ExprS
+ordInfix fname (orig@Infx{name, left, right})
+    | Infx{} <- right = do
+        right <- ordInfix fname right
         g <- getST
         let pos = positionOf name.id
         op1 <- resolveVName fname pos name
         op2 <- resolveVName fname (positionOf right.name.id) right.name
         case (g.findit op1, g.findit op2) of
             (Just sym1, Just sym2) = if sym1.op `bindsmore` sym2.op
-                then infx fname right.name (vbl name `App` left `App` right.left) right.right -- (left op1 r.left) op2 r.right
-                else return (vbl name `App` left `App`right)
+                then do
+                    left <- ordInfix fname Infx{name, left, right=right.left}
+                    return Infx{name=right.name, left, right=right.right}
+                else return Infx{name, left, right}
             (Nothing, _) = do
                 E.error pos (text("cannot find " ++ nice op1 g)) 
-                return (vbl name `App` left `App`right)
+                return orig
             (_, Nothing) = do
                 E.error pos (text("cannot find " ++ nice op2 g)) 
-                return (vbl name `App` left `App`right)
-    | otherwise =     -- the right hand side is not itself an infix construct
-        return (vbl name `App` left `App`right)
-    where
-        vbl :: SName -> ExprS
-        vbl name = Des.varcon name.id name
+                return orig
+ordInfix fname expr = return expr
 
+--- Translate infix expression to application.
+--- The infix expression should have been ordered before, see 'ordInfix'.
+unInfix :: ExprS -> ExprS
+unInfix Infx{name, left, right} = vbl name `App` unInfix left `App` unInfix right
+unInfix x                       = x
+
+
+--- > bindsmore left other
+--- check if left token binds more than the other
 bindsmore :: TokenID -> TokenID -> Bool
 bindsmore t1 t2 = if p1 != p2 
                 then p1 > p2 
