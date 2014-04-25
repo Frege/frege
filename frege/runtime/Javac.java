@@ -31,7 +31,7 @@ public class Javac {
 			for (int i=0; i<options.length; i++) options[i] = cmd[i+1];
 		    Iterable<? extends JavaFileObject> compilationUnits1 =
 		               fileManager.getJavaFileObjectsFromFiles(Arrays.asList(files));
-		    System.out.println("calling: " + sb.toString());
+		    System.err.println("calling: " + sb.toString());
 		    CompilationTask task = compiler.getTask(null, 
 		    		fileManager, null, 
 		    		Arrays.asList(options), 
@@ -52,7 +52,7 @@ public class Javac {
 			// String cmd = "javac -cp " + cp + " -d " + d + " " + src;
 			int cex = 0;
 			
-			System.out.println("running: " + sb.toString());
+			System.err.println("running: " + sb.toString());
 			Process jp = java.lang.Runtime.getRuntime().exec(cmd);
 			// if (Common.verbose)
 				
