@@ -1,0 +1,256 @@
+--- The compiler driver & builder
+package frege.compiler.Build
+
+    where
+
+import  frege.Prelude hiding(<+>)
+import  Lib.PP(msgdoc, text, <+>)
+import  Control.monad.State
+
+import  frege.Version(version)
+
+import  Compiler.enums.Flags
+import  Compiler.types.Global
+import  Compiler.common.Desugar
+import  Compiler.common.CompilerOptions (standardGlobal, getOpts)
+import  Compiler.common.Errors as E()
+import  Compiler.types.Tokens
+import  Compiler.types.Packs
+import  Compiler.types.Positions
+import  Compiler.Utilities as U()
+
+import  Compiler.grammar.Lexer as L()
+import  Compiler.grammar.Frege as F()
+import  Compiler.passes.Fix()
+import  Compiler.passes.Imp()
+import  Compiler.passes.Enter()
+import  Compiler.passes.Fields()
+import  Compiler.passes.TypeAlias()
+import  Compiler.passes.Instances()
+import  Compiler.passes.Transdef()
+import  Compiler.Classes()
+import  Compiler.Typecheck as TC()
+import  Compiler.Transform as TF()
+import  Compiler.GenMeta   as GM()
+import  Compiler.GenJava7  as G7()
+import  Compiler.passes.Final as FI()
+
+
+main :: [String] -> IO Bool
+main args = do
+    stdg    <- standardGlobal
+    scanned <- getOpts args
+    case scanned  of
+        Just (opts, fs) = do
+                    let g = stdg.{options = opts}
+                    (result, g) <- StateT.run (compiler fs) g
+                    return result
+        Nothing -> CompilerOptions.usage >> return false
+
+compiler fs = do
+    changeSTT Global.{options <- _.{source = "command line"}}
+    files <- processDirs fs
+    g <- getSTT
+    if (g.errors > 0) 
+    then do
+        liftIO (forM_ (reverse g.sub.messages) (g.stderr.println . Message.text))
+        return false
+    else do
+        liftStG (E.verb Position.null (msgdoc ("compiling: " ++ joined ", " files)))
+        results <- liftIO $ mapM (compileFile g.options) files 
+        return (and results)
+
+compileFile opts f = do
+    newg <- standardGlobal
+    let g = newg.{options = opts.{source = f}}
+    -- StateT.put newg.{options = g.options.{source = f}}
+    -- changeSTT Global.{options <- _.{source = f}}
+    (_, g) <- StateT.run (forM_ passes runpass) g
+    return (g.errors == 0)
+
+
+passes = [ (lexPass, "lexer"),
+           (liftStG parsePass, "parser"),
+           (liftStG Fix.pass, "join definitions"),
+           (Imp.pass, "import packages"),
+           (liftStG (Classes.passI true), "verify imported instances"),
+           (liftStG Enter.pass, "enter definitions"),
+           (liftStG Fields.pass, "field definitions"),
+           (liftStG TypeAlias.pass, "process type aliases"), 
+           (liftStG Instances.pass, "derive and enter instances"),
+           (Transdef.pass, "resolve names"),
+            (liftStG Classes.passC,          "verify class definitions"),        -- TRACE6
+            (liftStG $ Classes.passI false,  "verify own instances"),            -- TRACE6
+            (liftStG TF.pass7,          "simplify lets"),                   -- TRACE7
+            (TC.pass,                   "type check"),                      -- TRACET, TRACEO
+            (liftStG TF.pass9,          "simplify expressions"),            -- TRACE9
+            (liftStG TF.pass8,          "globalize anonymous lambdas"),     -- TRACE8
+            (liftStG TF.pass10,         "strictness analysis"),             -- TRACES
+            (openPrinter,     "open file"),
+            (GM.genmeta,      "generate meta data"),   -- none
+            (G7.pass,         "generate java code"),   -- TRACEG
+            (javac,           "run java compiler"),
+            (liftStG FI.cleanSymtab,  "clean up"),
+        ]
+
+
+lexPass = do
+    g <- getSTT
+    result <- L.pass
+    -- changeSTT Global.{sub <- _.{toks = arrayFromList result}}
+    return ("tokens", length result)
+ 
+
+parsePass = do
+        g       <- getST
+        result <- F.pass (filter Token.noComment g.sub.toks.toList)
+        case result of
+            Just (Program.Module (packname, defs, doc)) -> do
+                changeST Global.{sub <-  SubSt.{thisPack = Pack.new packname}}
+                changeST Global.{sub <- (SubSt.{sourcedefs = defs}
+                                         • SubSt.{packageDoc = doc})}
+                stio ("tokens",  g.sub.toks.length)
+            nothing -> stio ("tokens", g.sub.toks.length)
+  
+
+---  make filename from package name  @x.y.z.Packet@ =>  @dest/x/y/z/Packet.java@
+targetPath :: Global -> String -> String
+targetPath g suffix = 
+                g.options.dir ++ "/"
+                    ++ (´\.´.matcher (g.unpack g.thisPack)).replaceAll("/")
+                    ++ suffix
+
+
+
+openPrinter = do
+    g <- getSTT
+    case g.options.source of
+        "-" -> do
+            GM.banner version
+            return ("standard output", 1)
+        _   -> do
+            openFilePrinter ".java"
+            GM.banner version
+            return ("file", 1)
+
+
+openFilePrinter suffix = do
+    g <- getSTT
+    let target = targetPath g suffix
+    pw <- liftIO do
+        file <- File.new target
+        parentFile <- file.getParentFile
+        case parentFile of
+            Just dir ->  dir.mkdirs    -- make sure all directories are there
+            Nothing -> return false
+        PrintWriter.new file "UTF-8"
+    changeSTT Global.{gen <- GenSt.{printer=pw}}
+
+
+--- utility function to run a command.
+--- takes a command line and produces an exit code
+native runJavac frege.runtime.Javac.runJavac :: MutableIO (JArray String) -> IO Int
+
+
+--- run the java compiler
+javac :: StIO (String, Int)
+javac = do
+    g <- getSTT
+    liftIO g.printer.close        -- flush output before compiling
+    let target = targetPath g ".java"
+    let command = maybe ["javac"] ´\s+´.splitted  (System.getProperty "frege.javac")
+        arguments = ["-cp", joined U.pathSep (U.ourPath g.options),
+                    "-d",  g.options.dir,
+                    "-sourcepath", joined U.pathSep g.options.sourcePath,
+                    "-encoding", "UTF-8",
+                    target]
+    when (isOn g.options.flags RUNJAVAC) do
+        rc <- liftIO (JArray.fromList (command ++ arguments) >>= runJavac)
+        when (rc != 0) do
+            liftStG $ E.error (packageEnd g) 
+                        (msgdoc "java compiler errors are most likely caused by erronous native definitions")
+    -- from now on, we are printing to stdout again
+    -- printer <- doio stdoutPrinter
+    changeSTT Global.{gen <- GenSt.{printer = stdout}}
+    return ("source file", 1)
+
+
+runpass :: (StIO (String, Int), String) -> StIO  ()
+runpass (pass,description) = do
+    state <- getSTT
+    when (state.errors == 0) do
+        now   <- liftIO $ System.currentTimeMillis()
+        (itemnm, items) <- pass
+        state <- getSTT
+        later <- liftIO $ System.currentTimeMillis()
+        when (isOff state.options.flags IDEMODE) do
+            liftIO (forM_ (reverse state.sub.messages) (state.stderr.println . Message.text))
+            changeSTT _.{sub <- _.{messages = []}}
+        when (state.errors > 0) (liftIO $ state.printer.close)
+        when (length description > 0 && isOn state.options.flags VERBOSE) do
+            liftIO $ do  
+                state.stderr.printf
+                    "%-40.40s  took %7.3fs, %d %s (%d %s/s)"
+                    description
+                    ((later-now+1).float / 1e3f)
+                    items
+                    itemnm
+                    ((Int.long (max 1 items)*1000L) `quot` max 1L (later-now))
+                    itemnm
+                state.stderr.println
+
+--- Process the list of file arguments
+--- Regular files are taken over
+--- Directories are walked and found source files returned
+--- Module names are translated to file names through the source path
+processDirs :: [String] -> StIO [String] 
+processDirs fs = concat <$> mapM process fs
+    where
+        process :: String -> StIO [String]
+        process f = do
+            file    <- liftIO $ File.new f
+            regular <- liftIO $ file.isFile
+            dir     <- liftIO $ file.isDirectory
+            if regular then return [f]
+            else if dir then liftIO $ walk f file
+            else do
+                g <- getSTT
+                -- f could be a path relative to a source directory
+                -- or a package name
+                let fpath = if f ~ ´\.fr$´ then f
+                            else (´\.´.matcher f).replaceAll "/" ++ ".fr"
+                    sp = [ s ++ "/" ++ fpath | s <- g.options.sourcePath ]
+                found <- filterM (liftIO . packfile) sp
+                case found of
+                    [] -> liftStG do
+                        changeST Global.{options <- _.{source = f}}
+                        E.error Position.null (msgdoc (
+                            "could not find source file in source path")) 
+                        return []
+                    (it:_) -> return [it]
+        -- check if argument is a file
+        packfile :: String -> IO Bool
+        packfile f = do
+            is <- File.new f
+            r  <- is.isFile
+            return r
+             
+        walk :: String -> MutableIO File -> IO [String]
+        walk stem file = do
+            isd      <- file.isDirectory
+            if isd
+            then do
+                subfiles <- file.list
+                case subfiles of
+                    Just files -> do
+                        ls <- readonly toList files
+                        let subwalk f = File.new file f >>= walk (stem ++ "/" ++ f)
+                        concat <$> mapM subwalk ls
+                    Nothing    -> return []
+            else do
+                regular  <- file.isFile
+                readable <- file.canRead
+                if regular && readable && stem ~ ´\.fr´
+                then return [stem]
+                else return [] 
+     
