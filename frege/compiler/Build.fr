@@ -6,6 +6,7 @@ package frege.compiler.Build
 import  frege.Prelude hiding(<+>)
 import  Lib.PP(msgdoc, text, <+>)
 import  Control.monad.State
+import  Data.TreeMap(Tree, each)
 
 import  frege.Version(version)
 
@@ -57,8 +58,13 @@ compiler fs = do
         return false
     else do
         liftStG (E.verb Position.null (msgdoc ("compiling: " ++ joined ", " files)))
-        results <- liftIO $ mapM (compileFile g.options) files 
-        return (and results)
+        if isOn g.options.flags MAKE
+        then do
+            liftIO $ parseAll g empty files
+            return false
+        else do
+            results <- liftIO $ mapM (compileFile g.options) files 
+            return (and results)
 
 compileFile opts f = do
     newg <- standardGlobal
@@ -111,7 +117,13 @@ parsePass = do
                                          • SubSt.{packageDoc = doc})}
                 stio ("tokens",  g.sub.toks.length)
             nothing -> stio ("tokens", g.sub.toks.length)
-  
+
+    
+-- lexparse :: Global -> String -> Global
+lexparse g p = do
+    let g0 = g.{options <- _.{source = p}}
+    (_, g) <- StateT.run (L.pass >> liftStG parsePass) g0
+    return g  
 
 ---  make filename from package name  @x.y.z.Packet@ =>  @dest/x/y/z/Packet.java@
 targetPath :: Global -> String -> String
@@ -263,3 +275,38 @@ fileForPack g pack = do
     let path = (´\.´.matcher pack).replaceAll "/" ++ ".fr"
     paths <- filterM packfile [ s ++ "/" ++ path | s <- g.options.sourcePath ]
     return (listToMaybe paths)
+
+data CState = UnParsed | Parsed | Submitted | Compiled | Failed 
+
+--- package state
+data PState = PS {
+        cstate   :: CState      --- what has been found about this
+        fileName :: String      --- file name, may or may not exits
+        global   :: Global      --- global state for this package
+    }
+
+--- build tree
+type TodoList = Tree String PState 
+
+{-- 
+    Parse the files found on the command line,
+    as well as the ones identified as dependencies through parsing.
+-}
+parseAll :: Global -> TodoList -> [String] -> IO TodoList
+parseAll g tree [] = return tree
+parseAll g tree (p:ps) = do
+    when (isOn g.options.flags VERBOSE) do
+        stderr.println ("parsing " ++ p)
+    gc <- lexparse g p
+    if gc.errors > 0 
+    then return empty       -- no more processing
+    else do
+        let state = PS{cstate=Parsed, fileName=p, global=gc}
+            tnew = tree.insert (gc.unpack gc.sub.thisPack) state
+            depp = [ gc.unpack p |  p <- Imp.dependsOn gc ]
+        deps <- mapM (fileForPack g) depp
+        let already = [ f | (_, PS{cstate=Parsed, fileName=f}) <- each tnew ]
+            nps = [ f | Just f <- deps, f `notElem` ps, f `notElem` already ] 
+        parseAll g tnew (ps ++ nps) 
+
+     
