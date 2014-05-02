@@ -1,3 +1,6 @@
+![http://jax.de/awards2014/](https://github.com/Frege/frege/wiki/JAX-Button.gif)
+
+
 What is Frege?
 ==============
 
