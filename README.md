@@ -1,3 +1,7 @@
+[![Vote for us](https://github.com/Frege/frege/wiki/JAX-Button.gif)](http://jax.de/awards2014/)
+If you like it, please [vote for us](http://jax.de/awards2014/)! (no registration required)
+
+
 What is Frege?
 ==============
 
