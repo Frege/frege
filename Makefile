@@ -14,7 +14,7 @@
 # YACC should be a BSD compatible yacc. This can be obtained from the net at various places.
 # Windows users look for pbyacc.exe, Ubuntu users use
 #
-#	sudo apt-get install byaccj  # byacc and pbyacc should also work
+#	sudo apt-get install byacc-j  # byacc and pbyacc should also work
 #
 
 .SUFFIXES: .class .fr
