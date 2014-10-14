@@ -86,7 +86,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 
 /*
  The following definitions are not strictly necessary, but they help
- to avoid truly crazy type signatures for parse stack itmes and
+ to avoid truly crazy type signatures for parse stack items and
  considerably speed up type checking in giving the result types of
  certain nonterminal reduction rules.
  Note that you cannot lie about the type of nonterminal reduction rules.
