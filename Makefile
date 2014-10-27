@@ -8,7 +8,7 @@
 #
 #   - put the JDK7 in your PATH after other JDKs, and make java7 a symbolic link to
 #     the JDK7 java binary. (On Windows, just copy java.exe to java7.exe)
-#   - For UNIX users: make the follwoing alias:
+#   - For UNIX users: make the following alias:
 #         alias fmake='make JAVA="/path/to/jdk7/java" -f frege.mk '
 #
 # YACC should be a BSD compatible yacc. This can be obtained from the net at various places.
@@ -20,7 +20,7 @@
 .SUFFIXES: .class .fr
 
 JAVAC = javac -source 1.7 -target 1.7 -encoding UTF-8
-YACC = pbyacc
+YACC = /Developer/usr/bin/yacc
 # JAVA = java7 -XX:+TieredCompilation "-Dfrege.javac=javac -J-Xmx512m"
 # JAVA = java7 -XX:+TieredCompilation -Dfrege.javac=internal
 JAVA = java "-Dfrege.javac=internal -nowarn -source 1.7 -target 1.7"
