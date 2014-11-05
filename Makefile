@@ -59,7 +59,7 @@ FREGE    = $(JAVA) -Xss8m -Xmx1g -cp build
 FREGECJ  = $(FREGE)  -jar fregec.jar  -d build -fp build -nocp -hints
 
 #	compile compiler1 with fregec.jar, uses prelude sources from shadow/
-FREGEC0  = $(FREGECJ) -prefix a -sp shadow;.
+FREGEC0  = $(FREGECJ) -prefix a -sp shadow:.
 
 #	compile compiler2 with compiler1
 FREGEC1  = $(FREGE) afrege.compiler.Main -d build -hints -inline -prefix b
