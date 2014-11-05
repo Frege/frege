@@ -20,7 +20,7 @@
 .SUFFIXES: .class .fr
 
 JAVAC = javac -source 1.7 -target 1.7 -encoding UTF-8
-YACC = /Developer/usr/bin/yacc
+YACC = byacc
 # JAVA = java7 -XX:+TieredCompilation "-Dfrege.javac=javac -J-Xmx512m"
 # JAVA = java7 -XX:+TieredCompilation -Dfrege.javac=internal
 JAVA = java "-Dfrege.javac=internal -nowarn -source 1.7 -target 1.7"
