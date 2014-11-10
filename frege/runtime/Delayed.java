@@ -317,4 +317,17 @@ public abstract class Delayed implements Lazy, Applicable {
 	        return super.item;
         }
 	}
+	
+	/***
+	 * <p>Utility function to get some value and clearing it at the same time.</p>
+	 * <p>Use like</p>
+	 * <code>
+	 * Delayed.once(v, v = null)
+	 * </code>
+	 * @param obj the desired value, usually given as a nonfinal variable
+	 * @param nul this argument is ignored, usually used to assign null to the variable
+	 * @return the first argument
+	 * 
+	 */
+	static public<X> X once(X obj, X nul) { return obj; }
 }

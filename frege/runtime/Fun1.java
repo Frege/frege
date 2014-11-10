@@ -58,8 +58,9 @@ public abstract class Fun1<X> extends Lambda {
      */
     final public Delayed apply(final Object arg1) {
         return new Delayed () {
+        	Object darg1 = arg1;
             final public Object eval() {
-                return Fun1.this.eval(arg1);
+                return Fun1.this.eval(Delayed.once(darg1, darg1=null));
             }
         };
     }
