@@ -1,5 +1,5 @@
 %{
-/* «•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»
+{- 
 
     Copyright © 2011, Ingo Wechsung
     All rights reserved.
@@ -33,7 +33,7 @@
     IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
     THE POSSIBILITY OF SUCH DAMAGE.
 
-    «•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•» */
+     -}
 
 /**
 *   This is the grammar for the Frege language.
@@ -360,7 +360,6 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 
 %start package
 
-%right      ARROW
 %right      SOMEOP
 %right      '-'
 
@@ -759,22 +758,21 @@ mbdot:
     ;
 
 rho:
-    tapp EARROW rhofun              { \tau\t\rho -> do
+    tapp EARROW rhofun               { \tau\t\rho -> do
                                         context <- U.tauToCtx tau
                                         YYM.return (Rho.{context} rho)
-                                    }
-    | rhofun
+                                     }
+    | rhofun              
     ;
 
 rhofun:
-    '(' forall ')'  ARROW rhofun            { \_\a\_\_\b -> RhoFun [] a b }
-    | rhotau        ARROW rhofun            { \a\_\b     -> RhoFun [] (ForAll [] a) b }
-    | rhotau
+    rhotau
+    | rhotau  ARROW rhofun           { \a\_\b     -> RhoFun [] (ForAll [] a) b }
     ;
 
 rhotau:
-    tapp                                    { RhoTau [] }
-
+    tapp                             { RhoTau [] }
+    ;
 
 
 tau:
