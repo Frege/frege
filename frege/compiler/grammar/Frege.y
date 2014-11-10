@@ -165,7 +165,6 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type visibledefinition [Def]
 //%type wheredef        [Def]
 //%type tyvar           TauS
-//%type tv              TauS
 //%type tvapp           TauS
 //%type tau             TauS
 //%type tapp            TauS
@@ -266,7 +265,6 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%explain definitions  declarations
 //%explain opstring     an operator
 //%explain tyvar        a type variable
-//%explain tv           a type variable
 //%explain tvapp        a type variable application
 //%explain dvars        a sequence of type variables
 //%explain tyname       a type constructor
