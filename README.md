@@ -1,23 +1,64 @@
 What is Frege?
 ==============
 
-Frege is a [non-strict](http://en.wikipedia.org/wiki/Non-strict_programming_language), 
-pure functional programming language in the spirit of Haskell. 
-It enjoys a strong static type system with type inference. 
-Higher rank types are supported, though type annotations are required for that.
+Frege is a *pure* functional programming language in the spirit of Haskell.
+It enjoys a strong static type system with powerful type inference and
+[non-strict](http://en.wikipedia.org/wiki/Non-strict_programming_language) - also known as _lazy_ - evaluation.
 
-Frege programs are compiled to Java and run in a JVM. Existing Java Classes and Methods can be used seamlessly from Frege.
+Frege programs are compiled to Java and run on the JVM.
 
-The Frege programming language is named after and in honor of Gottlob Frege. (This is surprisingly hard for english speakers to pronounce, but [you can use this translator page](http://translate.google.de/#de/en/Frege) to get it right. Just click the audio symbol in the left (german) part.)
+The connection to Haskell is so strong that many users call it "_a_ Haskell for the JVM".
 
 Motivation
 ----------
+*For the Java programmer:* Frege offers you the opportunity to *learn and use a new programming paradigm*
+that shines with
+* a solid mathematical foundation,
+* pure functions,
+* immutability by default,
+* side-effects only when declared,
+* robustness under composition and concurrency,
+* and a type system that is unparalleled on the JVM with its combination of power, simplicity and expressiveness.
 
-There have been attempts to [port Haskell to the JVM](http://www.haskell.org/haskellwiki/GHC/FAQ#Why_isn.27t_GHC_available_for_.NET_or_on_the_JVM.3F), though said projects seem failed or stuck. The common wisdom suggests that it is not easily possible.
+You can still reuse your existing knowledge of the Java platform and its vast set of libraries.
+Frege interoperates with Java such that you can easily call Frege from Java code and vice versa.
+But unlike other approaches, calling Java from Frege doesn't undermine the language guarantees.
+
+When calling Java from Frege, you have to declare the Java types in rigid Frege terms in order to
+preserve the Frege language characteristics, especially purity, thread safety, and lazy evaluation.
+
+Learning Frege essentially means that you will also learn Haskell and thus your effort pays of twice, since
+you also get to know a very popular non-JVM language with 25+ years of development, a great community,
+many (free) books, publications, tutorials, online courses, and considerable industry demand.
+
+
+*For the Haskell programmer*: Frege gives you the opportunity to *use your skills on the JVM*.
+Most idiomatic Haskell code will run in Frege unmodified or with only minimal, obvious adaptions.
+Even more important: you can bring your purely functional problem solution strategies to your Java projects.
+
+From now on you can also enjoy on the JVM:
+* the terse Haskell syntax
+* typeclasses
+* powerful type inference
+* higher rank types (type markers are required for those)
+* lazy evaluation on infinite data structures
+* functors, monoids, semigroups, monads, and all your other beloved mathematical abstractions.
+
+There have been attempts to [port Haskell to the JVM](http://www.haskell.org/haskellwiki/GHC/FAQ#Why_isn.27t_GHC_available_for_.NET_or_on_the_JVM.3F) before,
+though said projects seem failed or stuck. The common wisdom suggests that it is not easily possible.
 
 Frege is thought as a substitute for this missing GHC port. 
-While not derived from any existing Haskell implementation, it is more or less equivalent to Haskell 2010. 
+While not derived from any existing Haskell implementation, it is pretty much equivalent to Haskell 2010.
 Please see the [wiki page that details the differences](https://github.com/Frege/frege/wiki/Differences-between-Frege-and-Haskell).
+
+The Name
+--------
+The Frege programming language is named after and in honor of Gottlob Frege
+who published the ideas of higher-order functions, partial function application, and many more concepts of formal logic
+that we now take for granted back in the 19th century.
+
+If you are curious how this name is pronounced, [you can use this translator page](http://translate.google.de/#de/en/Frege) to get it right.
+Just click the audio symbol in the left (german) part.
 
 Project State
 -------------
@@ -33,6 +74,8 @@ getting started at the command-line or read the [Eclipse plugin](https://github.
 
 There is also an [interpreter (REPL)](https://github.com/Frege/frege-repl). 
 An online version of the REPL is available [here](http://try.frege-lang.org/).
+
+The Frege standard library and the Frege compiler are themselves fully written in Frege.
 
 Contributions
 -------------
