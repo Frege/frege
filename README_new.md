@@ -2,7 +2,7 @@
 What is Frege?
 ==============
 
-Frege is a **pure** functional programming language in the spirit of Haskell.
+Frege is a **pure** functional programming language for the JVM in the spirit of Haskell.
 It enjoys a strong static type system with powerful type inference and
 [non-strict](http://en.wikipedia.org/wiki/Non-strict_programming_language) - also known as _lazy_ - evaluation.
 
@@ -22,8 +22,11 @@ that shines with
 * and a type system that is unparalleled on the JVM with its combination of power, simplicity and expressiveness.
 
 You can still reuse your existing knowledge of the Java platform and its vast set of libraries.
-Frege interoperates with Java such that you can easily call Frege from Java code and vice versa.
-But unlike other approaches, calling Java from Frege doesn't undermine the language guarantees.
+Frege interoperates with Java such that you can easily
+[call Frege from Java code](https://github.com/Frege/frege/wiki/Calling-Frege-Code-from-Java) and vice versa.
+But unlike other approaches,
+[calling Java from Frege](http://mmhelloworld.github.io/blog/2013/07/10/frege-hello-java/)
+doesn't undermine the language guarantees.
 
 When calling Java from Frege, you have to declare the Java types in rigid Frege terms in order to
 preserve the Frege language characteristics, especially purity, thread safety, and lazy evaluation.
@@ -39,10 +42,12 @@ Even more important: you can bring your purely functional problem solution strat
 
 From now on you can also enjoy on the JVM:
 * the terse Haskell syntax
-* typeclasses
+* pure functions and lambdas
+* algebraic data types and typeclasses with parametric polymorphism
 * powerful type inference
-* higher rank types (type markers are required for those)
+* higher rank types
 * lazy evaluation on infinite data structures
+* pattern matching, list comprehensions, do-notation, point-free style, operators, modules
 * functors, monoids, semigroups, monads, and all your other beloved mathematical abstractions.
 
 There have been attempts to [port Haskell to the JVM](http://www.haskell.org/haskellwiki/GHC/FAQ#Why_isn.27t_GHC_available_for_.NET_or_on_the_JVM.3F) before,
@@ -72,9 +77,14 @@ It already supports important parts of the Haskell 2010 standard library.
 
 See the [Getting Started](https://github.com/Frege/frege/wiki/Getting-Started) page for 
 getting started at the command-line or read the [Eclipse plugin](https://github.com/Frege/eclipse-plugin) page.
+You can develop [Frege inside Intellij IDEA](https://github.com/Frege/frege/wiki/Using-Frege-in-Intellij-IDEA)
+and there is build automation support for
+Maven, Gradle, and Leinigen.
 
 There is also an [interpreter (REPL)](https://github.com/Frege/frege-repl). 
 An online version of the REPL is available [here](http://try.frege-lang.org/).
+
+The awesome QuickCheck library for advanced unit testing comes bundled with the language.
 
 The Frege standard library and the Frege compiler are themselves fully written in Frege.
 
@@ -106,13 +116,14 @@ Please understand that the issue tracker is neither a discussion forum nor a pla
 
 Links
 ----
+* [Frege Wiki](https://github.com/Frege/frege/wiki/_pages)
+* [Language reference](http://www.frege-lang.org/doc/Language.pdf)
+* [Author's Blog](http://fregepl.blogspot.com/)
 
-[Frege Wiki](https://github.com/Frege/frege/wiki/_pages)
 
-[Author's Blog](http://fregepl.blogspot.com/)
+API Docs
+--------
+* [Standard library (prelude)]( http://www.frege-lang.org/doc/frege/Prelude.html)
+* [Online Docs (Frege)](http://www.frege-lang.org/doc/index.html)
+* [Online Docs (Runtime Javadoc)](http://www.frege-lang.org/doc/index.html)
 
-[Language reference](http://www.frege-lang.org/doc/Language.pdf)
-
-[Online Docs (Runtime Javadoc)](http://www.frege-lang.org/doc/index.html)
-
-[Online Docs (Frege)](http://www.frege-lang.org/doc/index.html)
