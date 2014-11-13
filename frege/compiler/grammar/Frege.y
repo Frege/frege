@@ -35,14 +35,14 @@
 
      -}
 
-/**
-*   This is the grammar for the Frege language.
-*/
+{--
+    This is the grammar for the Frege language.
+-}
 package frege.compiler.grammar.Frege where
 
-    /*
-     * !!! DO NOT CHANGE FILE Frege.fr, IT HAS BEEN CREATED AUTOMATICALLY !!!
-     */
+    {-
+       !!! DO NOT CHANGE FILE Frege.fr, IT HAS BEEN CREATED AUTOMATICALLY !!!
+    -}
 
 import frege.Prelude hiding(<+>, break)
 
@@ -79,19 +79,19 @@ import frege.compiler.common.Desugar
 import frege.compiler.grammar.Lexer (substQQ)
 
 
-// this will speed up the parser by a factor of 70, cause yyprods comes out monotyped.
+-- this will speed up the parser by a factor of 70, cause yyprods comes out monotyped.
 private yyprod1 :: [(Int, YYsi ParseResult Token)]
     -> StG (YYsi ParseResult Token, [(Int, YYsi ParseResult Token)])
 
 
-/*
+{-
  The following definitions are not strictly necessary, but they help
  to avoid truly crazy type signatures for parse stack items and
  considerably speed up type checking in giving the result types of
  certain nonterminal reduction rules.
  Note that you cannot lie about the type of nonterminal reduction rules.
  Note that types like "Maybe x" on the RHS must be given like so: (Maybe x)
- */
+ -}
 //%type package         ParseResult
 //%type script          ParseResult
 //%type varop           Token
@@ -1073,7 +1073,7 @@ pattern:
     binex                           
     ;
 
-aeq: ARROW | '=';                   // we can make grammar conflict free if case pat -> ex is forbidden
+aeq: ARROW | '=';                   
 
 
 lcqual:
@@ -1202,7 +1202,7 @@ primary:
     | qualifiers    '{' VARID GETS '}' { \q\_\(v::Token)\_\_ ->
                                             Vbl  (q v.{value <- ("chg$" ++)}) }
     | qualifiers    '{' getfields '}' { \q\(p::Token)\fs\_ -> let {
-                        // n   = Simple q;
+                        -- n   = Simple q;
                         flp = Vbl (wellKnown p "flip");
                         bul = Vbl (contextName p "•");
                         c []     = undefined;
@@ -1231,7 +1231,7 @@ primary:
 term:
     qvarid                          { \x   -> Vbl {name=x} }
     | literal
-    | '_'                           { \t   -> Vbl {name = Simple t.{tokid=VARID, value="_"}} }  // only valid as pattern
+    | '_'                           { \t   -> Vbl {name = Simple t.{tokid=VARID, value="_"}} }  
     | qconid                        { \qc  -> Con {name=qc} }
     | qconid '{'        '}'         { \qc\_\z    -> ConFS {name=qc, fields=[]}}
     | qconid '{' fields '}'         { \qc\_\fs\z -> ConFS {name=qc, fields=fs}}
@@ -1240,14 +1240,14 @@ term:
     | '(' unop ')'                  { \_\x\_ -> Vbl {name=Simple x} }
     | '(' operator ')'              { \_\o\_ -> (varcon o) (opSname o)}
     | '(' '-' ')'                   { \_\m\_ -> (Vbl (With1 baseToken m)) }
-    | '(' operator expr ')'         { \z\o\x\_ ->  let // (+1) --> flip (+) 1
+    | '(' operator expr ')'         { \z\o\x\_ ->  let -- (+1) --> flip (+) 1
                                         flp = Vbl (With1 baseToken z.{tokid=VARID, value="flip"}) 
                                         op  = (varcon o) (opSname o)
                                         ex = nApp (nApp flp op) x
                                     in ex}
-    | '(' binex operator ')'        { \_\x\o\_ ->  // (1+) --> (+) 1
+    | '(' binex operator ')'        { \_\x\o\_ ->  -- (1+) --> (+) 1
                                         nApp ((varcon o) (opSname o)) x}
-    | '(' binex '-' ')'             { \_\x\o\_ ->  // (1+) --> (+) 1
+    | '(' binex '-' ')'             { \_\x\o\_ ->  -- (1+) --> (+) 1
                                         nApp ((varcon o) (Simple o)) x}
     | '(' expr ',' exprSC ')'       { \a\e\x\es\_ -> fold nApp (Con 
                                                                    (With1 baseToken x.{tokid=CONID, value=tuple (1+length es)})
@@ -1320,8 +1320,8 @@ exprSS:
     
 
 %%
-/**
- * the parser pass
- */
-pass :: [Token] -> StG (Maybe ParseResult) // Global -> IO (Maybe ParseResult, Global)
+{--
+    the parser pass
+ -}
+pass :: [Token] -> StG (Maybe ParseResult) -- Global -> IO (Maybe ParseResult, Global)
 pass = yyparse . substQQ
