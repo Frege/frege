@@ -224,8 +224,6 @@ frege/compiler/grammar/Frege.fr: frege/compiler/grammar/Frege.y
 	@echo 1 shift/reduce conflict expected
 	$(YACC) -v frege/compiler/grammar/Frege.y
 	$(FREGE) -cp fregec.jar frege.tools.YYgen -m State  frege/compiler/grammar/Frege.fr
-	$(FREGE) -cp fregec.jar frege.tools.LexConvt frege/compiler/grammar/Frege.fr
-	rm -f frege/compiler/grammar/Frege.fr.bak
 $(COMPF)/Grammar.class: frege/compiler/Grammar.fr $(COMPF)/GUtil.class
 	$(FREGEC2) -v frege/compiler/Grammar.fr
 frege/compiler/Grammar.fr: frege/compiler/Grammar.y
