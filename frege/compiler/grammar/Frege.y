@@ -362,6 +362,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 
 %right      SOMEOP
 %right      '-'
+%right      ARROW
 
 %%
 
@@ -758,7 +759,7 @@ mbdot:
     ;
 
 rho:
-    tapp EARROW rhofun               { \tau\t\rho -> do
+    tau EARROW rhofun               { \tau\t\rho -> do
                                         context <- U.tauToCtx tau
                                         YYM.return (Rho.{context} rho)
                                      }
@@ -766,18 +767,22 @@ rho:
     ;
 
 rhofun:
-    rhotau
-    | rhotau  ARROW rhofun           { \a\_\b     -> RhoFun [] (ForAll [] a) b }
+    tau                            { RhoTau [] }
+    | tau  ARROW rhofun            { \a\_\b     -> case a of
+                                            TSig s -> RhoFun [] s b 
+                                            _ -> RhoFun [] (ForAll [] (RhoTau [] a)) b }
     ;
 
+/*
 rhotau:
     tapp                             { RhoTau [] }
-    ;
+    ; */
 
 
 tau:
     tapp
-    | tapp ARROW tau    { \a\f\b ->  TApp (TApp (TCon (yyline f) (With1 baseToken f.{tokid=CONID, value="->"})) a) b }
+    //  sigma              { TSig }
+    // tapp ARROW tau    { \a\f\b ->  TApp (TApp (TCon (yyline f) (With1 baseToken f.{tokid=CONID, value="->"})) a) b }
     ;
 
 tauSC:
@@ -798,6 +803,7 @@ simpletype:
     tyvar
     | tyname            { \(tn::SName) -> TCon (yyline tn.id) tn}
     | '(' tau ')'       { \_\t\_ -> t }
+    | '(' sigma ')'     { \_\s\_ -> TSig s }
     | '(' tau ',' tauSC ')'
                         {\_\t\(c::Token)\ts\_ ->
                             let

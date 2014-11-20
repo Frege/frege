@@ -1,0 +1,253 @@
+--- Evolution of a Haskell/Frege programmer
+--- Doing everything with SKI combinators
+module examples.CombinatorEvolution
+        inline (decode)
+    where
+
+import frege.Prelude hiding (*>, pred, succ, zero, one) 
+
+infixl 15 `*>`
+infixl 15 `:>`
+
+data Combinator = Fun { f :: Combinator -> Combinator } | T | F
+instance Show Combinator where
+    show (Fun{}) = "Fun"
+    show T       = "T"
+    show F       = "F"
+
+--- > Kab = a
+k = Fun (\a -> Fun (\b -> a))
+
+--- > Ia = a
+i = Fun (\a -> a)
+
+--- > Sfgx = fx(gx)
+s = Fun (\f -> Fun (\g -> Fun (\x -> f *> x *> (g *> x))))
+
+--- > a *> b
+--- is the 'Combinator' that results from applying _a_ to _b_
+left *> right = case left of
+    Fun f   -> f right
+    _       -> error ((show left) ++ " applied to " ++ show right)       
+
+{--
+
+    Because we don't want to write crazy expressions like
+    
+    > s *> (s *> (k *> s) *> (s *> (k *> k) *> (s *> (k *> s) *> (s *> (k *> (s *> i)) *> k)))) *> (k *> k)
+    
+    we devise a data type from which we can create any combinator we want.
+    
+    We also allow variables, yet those must all get eliminated before we generate actual code
+    (as the calculus is finally variable free).
+     
+-}
+
+data Expr = S | K | I | Var Char | App Expr Expr
+instance Show Expr where
+    show S = "S"
+    show K = "K"
+    show I = "I"
+    show (Var c) = display c
+    show (App a b) = show a ++ showsub b
+    showsub (x@App{}) = "(" ++ show x ++ ")"
+    showsub x = show x
+
+
+(:>) = App
+
+gen S = s
+gen K = k
+gen I = i
+gen (App a b) = gen a *> gen b
+gen (Var c) = error ("Can't generate variable " ++ display c)
+
+{--
+    Elimination
+    
+    If we have a formula like
+    
+    > Bfgx = f(gx)
+    
+    we need to eliminate all variables from both sides to get a 'Combinator'
+    that consists only of S, K and I
+    
+    For this we define alpha elimination as follows:
+    
+    The elimination of variable v from expression x is an expression y such
+    that yv is equivalent to x.
+    
+    This can be done by applying the following rules:
+    
+    1. If x does not contain v, the v-elimination of x is Kx (because Kxv = x)
+    2. If x is just v, the v-elimination is I (because Iv = v = x)
+    3. If x is of the form ev and  e  does not contain v, the v-elimination
+       is just e (because ev = x)
+    4. Otherwise, x is of the form ab, and the v-elimination is Scd, where
+       c is the v-elimination of a and d is the v-elimination of b (because
+       Scdv = cv(dv) and cv = a and dv = b and a(b) = ab = x
+    
+    The variables are eliminated starting with the rightmost variable of 
+    the left hand side, until none are left. Note that this way, we can always
+    apply rule 3 to the left hand side, and when the right hand side did not
+    contain any free variables, we will get a variable-free expression.
+    
+    Here is the elimination of the B combinator in detail:
+    
+    > Bfgx = f(gx)   -- for x apply rule 4, then 1 on f and 3 on gx
+    > Bfg  = S(Kf)g  -- for g apply rule 3
+    > Bf   = S(Kf)   -- for f apply rule 4, then 1 on S and 3 on Kf
+    > B    = S(KS)K
+-}
+v `elim` x
+    | not (x `contains` v) = K :> x         -- rule 1
+    | Var c <- x, c == v   = I              -- rule 2
+    | App e (Var c) <- x,
+      c == v,
+      not (e `contains` v) = e              -- rule 3
+    | App a b <- x         = S :> (v `elim` a) :> (v `elim` b)  -- rule 4
+    | otherwise            = undefined      -- cannot happen, rules 1&2
+                                            -- already eliminate S, K, I and Var
+    where
+        Var c   `contains` a = c == a
+        App x y `contains` a = x `contains` a || y `contains` a
+        _       `contains` a = false 
+
+--- eliminate all given variables from an expression 
+--- Use like
+--- > make (Var 'f' :> Var 'b' :> Var 'a') "fab"
+make x = foldr elim x . _.toList
+
+
+--- > Vabf = f a b
+--- > V    = S(S(KS)(S(KK)(S(KS)(S(K(SI))K))))(KK)
+{--
+    This 'Combinator' is used to construct numbers.
+    
+    A number is a 'Combinator' with the following properties:
+    - Let _n_ be a number. Then _n_ '*>' 'k' is 'k' if and only if _n_ 
+    represents 0. Otherwise, the result is 'k' '*>' 'i'.
+    - Let _n_ be a number that is not 0. Then _n_ '*>' ('k' *> 'i') is the
+    predecessor of _n_.
+    
+    The encoding for 0 is
+    > v *> k *> k
+    The successor function is
+    > v *> (k *> i)
+    and all numbers that have a predecessor _p_ are encoded as 
+    > v *> (k *> i) *> p 
+-}
+xV = make (Var 'f' :> Var 'a' :> Var 'b') "abf"
+v  = gen xV
+
+--- The number 0. See also 'xV'
+x0 = xV :> K :> K
+zero = gen x0
+
+--- The successor of some number, see also 'xV' and 'x0'
+xN = xV :> (K :> I)
+succ = gen xN
+
+---- Null test.
+--- > Z n f g = n K f g
+--- > Z       = SI(KK)
+--- will be _f_ if and only if _n_ is 0, otherwise _g_
+xZ = S :> I :> (K :> K)
+ifnull = gen xZ
+
+--- Predecessor of a number, or 'zero' if it has none
+--- > pred n = ifnull *> n *> zero *> (n *> ki)
+--- > pred   = S(S(SI(KK))(K(VKK)))(SI(K(KI)))
+xP = make (xZ :> Var 'n' :> x0 :> (Var 'n' :> (K :> I))) "n"
+pred = gen xP 
+
+--- The @U@ combinator, aka Turing bird
+--- > Uuf = f(uuf)
+--- > U   = S(K(SI))(SII)
+xU = S :> (K :> (S :> I)) :> (S :> I :> I)
+
+--- The @Y@ combinator, provides recursion
+--- > Yf = f(Yf)
+--- > Y  = UU
+xY = xU :> xU
+
+x1 = xN :> x0
+x6 = xN :> (xN :> (xN :> (xN :> (xN :> (xN :> x0)))))
+
+{---
+    Addition is a primitive recursive function, like this:
+    
+    > add a b = if a==0 then b else add (pred a) (succ b)
+    
+    Since there is no direct recursion, we need an extra argument for the recursion:
+    
+    > add' r a b = if a==0 then b else r (pred a) (succ b)
+    > add = Y add'
+-}
+xA = xY :> make (xZ :> Var 'a' :> Var 'b' :> (Var 'r' :> (xP :> Var 'a') :> (xN :> Var 'b'))) "rab"
+
+{--
+    Even scarier is multiplication. We use the formula
+    
+    mul r a b = if a == 0 then 0 else if pred a == 0 then b else b + mul (pred a) b
+-}
+xT = xY :> make (xZ :> Var 'a' 
+              :> x0 
+              :> (xZ :> (xP :> Var 'a') 
+                     :> Var 'b'
+                     :> (xA :> Var 'b' :> (Var 'r' :> (xP :> Var 'a') :> Var 'b'))))
+        "rab"
+
+{--
+    Now the fac!
+    
+    F r n = if n == 0 then 1 else n * r (pred n)
+--}
+xF = xY :> make (xZ :> Var 'n'
+                    :> x1
+                    :> (xT :> Var 'n' :> (Var 'r' :> (xP :> Var 'n')))) "rn" 
+ 
+{--
+    Tries to apply first 'T' and then 'F' to a 'Combinator'.
+    If the result is 'Just' 'T', the 'Combinator' was 'k',
+    if it is 'Just' 'F', the 'Combinator' was 'k' '*>' 'i'
+    and if it is 'Nothing' or 'Just' 'Fun', the 'Combinator' was something else.
+    If the answer is 'Just' 'Fun', we had a 'Combinator' that took more than 2 arguments,
+    such as 's' or 'v'.
+    
+    This is a meta function to look inside the calculus.
+-}    
+tell (x@Fun{}) = case x *> T of
+    y@Fun{} -> Just (y *> F)
+    _ -> Nothing
+tell _ = Nothing 
+
+--- fold a numeric combinator
+--- This should return 'Nothing' if the combinator is not numeric
+--- Otherwise, it replaces 'zero' with the accumulator and applies the given function for every 'succ'
+--- > foldv (1+) 0 c  -- decodes a numeric combinator 
+--- > foldv (true:) [] (succ *> (succ *> zero)) == Just [true, true]
+foldv :: (a -> a) -> a -> Combinator -> Maybe a
+foldv f !a comb = case tell (ifnull *> comb) of
+    Just T -> Just a
+    Just F -> foldv f (f a) (pred *> comb)
+    _      -> Nothing
+    
+--- decode a numeric 'Combinator'
+--- This is a meta function to look inside the calculus.
+decode :: Combinator -> Maybe Integer
+decode = foldv (1+) 0
+        
+--- Encode an 'Integral' number as a 'Combinator' expression
+encode :: Integer -> Combinator
+encode 0 = zero
+encode n = succ *> encode (n-1)
+
+
+main [arg] = case arg.integer of
+    Left _ -> stderr.println "usage: java -Xss100m examples.CombinatorEvolution number # give plenty of stack space!"
+    Right n -> println . decode . (gen xF *>) . encode  $ n
+main _    = do
+    println ("The combinator: " ++ show xF) 
+    print "6! is "
+    println . decode . gen $ (xF :> x6)
