@@ -780,8 +780,8 @@ rhotau:
 
 
 tau:
-    tapp
-    //  sigma              { TSig }
+    simpletypes          { \taus -> Tau.mkapp (head taus) (tail taus) }
+    //  sigma            { TSig }
     // tapp ARROW tau    { \a\f\b ->  TApp (TApp (TCon (yyline f) (With1 baseToken f.{tokid=CONID, value="->"})) a) b }
     ;
 
@@ -795,9 +795,9 @@ tauSB:
     | tau '|' tauSB     { liste  }
     ;
 
-tapp:
-    simpletypes         { \taus -> Tau.mkapp (head taus) (tail taus) }
-    ;
+// tapp:
+//    simpletypes         { \taus -> Tau.mkapp (head taus) (tail taus) }
+//    ;
 
 simpletype:
     tyvar
@@ -856,7 +856,7 @@ classdef:
         \_\i\(tv::TauS)\defs -> ClaDcl {pos = yyline i, vis = Public, name = Token.value i,
                         clvar=tv, supers=[], defs = defs, doc = Nothing}
     }
-    | CLASS CONID tapp EARROW varid wheredef {
+    | CLASS CONID tau EARROW varid wheredef {
         \_\i\tau\_\v\defs -> do
             ctxs <- U.tauToCtx tau
             sups <- classContext (Token.value i) ctxs (v.value)
@@ -1084,7 +1084,7 @@ aeq: ARROW | '=';
 
 lcqual:
     gqual
-    |expr '=' expr                  { \e\t\x -> do { (ex,pat) <- funhead e; YYM.return (Right (fundef ex pat x)) }}
+    | binex '=' expr                { \e\t\x -> do { (ex,pat) <- funhead e; YYM.return (Right (fundef ex pat x)) }}
     | LET '{' letdefs '}'           { \_\_\ds\_ -> Right ds }
     ;
 
@@ -1103,8 +1103,8 @@ dodefs:
 
 
 gqual:
-    expr                            { \e     ->  Left (Nothing, e) }
-    | expr GETS expr                { \p\g\e ->  Left (Just p,  e) }
+    binex                           { \e     ->  Left (Nothing, e) }
+    | binex GETS binex              { \p\g\e ->  Left (Just p,  e) }
     ;
 
 gquals:
@@ -1142,13 +1142,13 @@ calts:
 
 lambda:
       '\\' pattern lambda           { \_\p\l   -> Lam p l}
-    | '\\' pattern ARROW  topex     { \_\p\_\x -> Lam p x}
+    | '\\' pattern ARROW  expr      { \_\p\_\x -> Lam p x}
     ;
 
 
 expr:
-    topex DCOLON sigma               { \x\_\t  -> Ann {ex = x, typ=t} }
-    | topex
+    binex DCOLON sigma               { \x\_\t  -> Ann {ex = x, typ=t} }
+    | binex
     ;
 
 thenx:
@@ -1162,20 +1162,21 @@ elsex:
     ;
 
 
-topex:
-      IF expr thenx expr elsex topex   { \_\c\_\t\_\e  -> Ifte c t e}
-    | CASE  expr OF '{' calts   '}'    { \_\e\_\_\as\_ -> Case CNormal e as}
-    | LET '{' letdefs '}' IN  topex    { \_\_\ds\_\_\e -> Let ds e}
-    | lambda
-    | binex
-
-    ;
-
 binex:
       binex SOMEOP binex                { mkapp }
     | binex '-'    binex                { mkapp }
     | '-' binex                         { \m\x -> nApp (Vbl (With1 baseToken m.{tokid=VARID, value="negate"})) x}
+    | topex
+    ;
+
+
+topex:
+      IF expr thenx expr elsex expr    { \_\c\_\t\_\e  -> Ifte c t e}
+    | CASE  expr OF '{' calts   '}'    { \_\e\_\_\as\_ -> Case CNormal e as}
+    | LET '{' letdefs '}' IN  expr     { \_\_\ds\_\_\e -> Let ds e}
+    | lambda
     | appex
+
     ;
 
 appex:
