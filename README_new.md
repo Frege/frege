@@ -10,8 +10,8 @@ Frege programs are compiled to Java and run on the JVM.
 
 The similarity to Haskell is actually strong enough that many users call it "_a_ Haskell for the JVM".
 
-Examples
---------
+A Taste of Frege
+----------------
 
 **1. Hello World**
 
@@ -154,11 +154,11 @@ Contributions
 
 If you are interested in contributing, here are some hot topics:
 
-* write Frege code to support more of the Java API
-* port Haskell libraries or tools
-* open issues on the Issues page if you find bugs, errors in documentation, etc.
-* help make Frege popular by writing code for projects like Rosetta Stone or Computer Language Shootout.
-* contribute to [Real World Frege](https://github.com/Dierk/Real_World_Frege/)
+* Write Frege code to support more of the Java API.
+* Port Haskell libraries or tools.
+* Open issues in the issues tracker if you find bugs, errors in documentation, etc.
+* Help make Frege popular by writing code for projects like Rosetta Stone or Computer Language Shootout.
+* Contribute to [Real World Frege](https://github.com/Dierk/Real_World_Frege/).
 
 Contact
 -------
@@ -189,7 +189,7 @@ Links
 * [Language reference](http://www.frege-lang.org/doc/Language.pdf)
 * [Author's Blog](http://fregepl.blogspot.com/)
 * [edX Functional Programming course FP101x](https://www.edx.org/course/introduction-functional-programming-delftx-fp101x) with exercises in Frege
-* Introduction to Frege:[video](https://www.parleys.com/play/543fa326e4b06e1184ae41e6/chapter44/about), [slides](http://de.slideshare.net/Mittie/frege-purely-functional-programming-on-the-jvm)
+* Introduction to Frege: [video](https://www.parleys.com/play/543fa326e4b06e1184ae41e6/chapter44/about), [slides](http://de.slideshare.net/Mittie/frege-purely-functional-programming-on-the-jvm)
 
 Recommended reading
 * [Phil Wadler: Why functional programming matters](http://www.cs.kent.ac.uk/people/staff/dat/miranda/whyfp90.pdf)
