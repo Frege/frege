@@ -65,8 +65,8 @@ The code is most likely incomprehensible for a Frege/Haskell newcomer at first b
 obvious and straightforward it is once you know the parts.
 * `cs` is an _infinite_ list (a stream in Java terms) of cosine values that starts with `cos 1.0` and then `iterate`s to `cos(cos(1.0)`, `cos(cos(cos(1.0))`, and so forth.
 * `zip cs (tail cs)` produces an infinite list of pairs of any two adjacent values in `cs`.
-* `uncurry` holds onto each element of a given pair and the function `(!=)` (a so-called sectioning) compares these elements for in-equality
-* `dropWhile` reads from the infinite list as long as the cosine values in each pair are not equal
+* `uncurry` holds onto each element of a given pair and the function `(!=)` (a so-called sectioning) compares these elements for in-equality.
+* `dropWhile` reads from the infinite list as long as the cosine values in each pair are not equal.
 * The remaining list (the infinite list of pairs of equal cosine values) has a first pair called `head` and `fst` returns the first element of that pair, which yields the final result.
 
 This code is **pure**. The inferred type is `Double`.
@@ -112,13 +112,6 @@ From now on you can also enjoy on the JVM:
 * pattern matching, list comprehensions, do-notation, point-free style, operators, modules
 * functors, monoids, semigroups, monads, and all your other beloved mathematical abstractions.
 
-There have been attempts to [port Haskell to the JVM](http://www.haskell.org/haskellwiki/GHC/FAQ#Why_isn.27t_GHC_available_for_.NET_or_on_the_JVM.3F) before,
-though said projects seem failed or stuck. The common wisdom suggests that it is not easily possible.
-
-Frege is thought as a substitute for this missing GHC port. 
-While not derived from any existing Haskell implementation, it is pretty much equivalent to Haskell 2010.
-Please see the [wiki page that details the differences](https://github.com/Frege/frege/wiki/Differences-between-Frege-and-Haskell).
-
 The Name
 --------
 The Frege programming language is named after and in honor of Gottlob Frege
@@ -134,8 +127,12 @@ Project State
 The compiler, an Eclipse plugin and a provisional version of the documentation can be [downloaded](https://github.com/Frege/frege/releases). 
 Note that Frege requires JDK 7 to compile and run programs.
 
-The compiler and the documentation tool are quite stable, the documentation provisional and the library is evolving. 
-It already supports important parts of the Haskell 2010 standard library.
+The compiler, the standard library, and the documentation tool are **themselves written in Frege**.
+This should speak for itself regarding stability, functional completeness and performance of the language.
+
+The documentation is provisional and the library supports almost all of the Haskell 2010 standard library
+with the remaining [known differences](https://github.com/Frege/frege/wiki/Differences-between-Frege-and-Haskell)
+being there for good reason.
 
 See the [Getting Started](https://github.com/Frege/frege/wiki/Getting-Started) page for 
 getting started at the command-line or read the [Eclipse plugin](https://github.com/Frege/eclipse-plugin) page.
@@ -147,8 +144,6 @@ There is also an [interpreter (REPL)](https://github.com/Frege/frege-repl).
 An online version of the REPL is available [here](http://try.frege-lang.org/).
 
 The awesome QuickCheck library for advanced unit testing comes bundled with the language.
-
-The Frege standard library and the Frege compiler are themselves fully written in Frege.
 
 Contributions
 -------------
@@ -164,28 +159,42 @@ If you are interested in contributing, here are some hot topics:
 Contact
 -------
 
+**For discussions**
+
 You can contact the project members through the
 [discussion group](http://groups.google.com/group/frege-programming-language)
 devoted to the Frege programming language.
+
+**For questions**
+
 Specific programming problems are best solved on
 [Stack Overflow](http://stackoverflow.com/questions/tagged/frege),
 we check questions tagged "frege" on a regular basis.
 
-If you find a bug or have an idea for enhancements, please let us know by opening an issue in the issue tracker.
+**For issues only**
+If you find a bug or have an idea for enhancements, please let us know by opening an issue in the
+[issue tracker](https://github.com/Frege/frege/issues).
 (You'll need a GitHub account to do this.)
-
-Please understand that the issue tracker is neither a discussion forum nor a place to ask questions.
+_Please keep discussions to the [forum](http://groups.google.com/group/frege-programming-language)
+and questions to [Stack Overflow](http://stackoverflow.com/questions/tagged/frege)._
 
 Links
 ----
 * [Frege Wiki](https://github.com/Frege/frege/wiki/_pages)
 * [Language reference](http://www.frege-lang.org/doc/Language.pdf)
 * [Author's Blog](http://fregepl.blogspot.com/)
+* [edX Functional Programming course FP101x](https://www.edx.org/course/introduction-functional-programming-delftx-fp101x) with exercises in Frege
+* [slides: intro to Frege](http://de.slideshare.net/Mittie/frege-purely-functional-programming-on-the-jvm)
+* [video: intro to Frege](https://www.parleys.com/play/543fa326e4b06e1184ae41e6/chapter44/about)
 
+Recommended reading
+* [Phil Wadler: Why functional programming matters](http://www.cs.kent.ac.uk/people/staff/dat/miranda/whyfp90.pdf)
+* [Book: Real-World Haskell](http://book.realworldhaskell.org/read/) (free online)
+* [Book: Learn you a Haskell](http://learnyouahaskell.com/chapters) (free online)
+* [Book: Programming in Haskell](http://www.amazon.com/Programming-Haskell-Graham-Hutton/dp/0521692695/)
 
 API Docs
 --------
 * [Standard library (prelude)]( http://www.frege-lang.org/doc/frege/Prelude.html)
 * [Online Docs (Frege)](http://www.frege-lang.org/doc/index.html)
 * [Online Docs (Runtime Javadoc)](http://www.frege-lang.org/doc/index.html)
-
