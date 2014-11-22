@@ -57,6 +57,66 @@ Frege is thought as a substitute for this missing GHC port.
 While not derived from any existing Haskell implementation, it is pretty much equivalent to Haskell 2010.
 Please see the [wiki page that details the differences](https://github.com/Frege/frege/wiki/Differences-between-Frege-and-Haskell).
 
+Examples
+--------
+
+**1. Hello World**
+
+This is the classic starter with a slight extension to show the fluent usage from Java and the benefits
+of having a type system that can recognize purity.
+
+```frege
+module Hello where
+
+greeting friend = "Hello, " ++ friend ++ "!"
+
+main args = do
+    println (greeting "World")
+```
+
+This code will compile to `Hello.class` and `Hello.java` with a regular Java main method that one can start the usual Java way.
+
+Moreover, the `Hello.class` will have a method
+
+    public static String greeting(String ...) {...}
+that one can call from Java or any other JVM language.
+
+The `greeting` function is pure, meaning it is stateless and free of side effects.
+Therefore, it is threadsafe and its results may be automatically cached since given the same argument, the result will always be the same.
+
+The `main` function is impure. It takes a list of Strings and does not return just "void" as in most other JVM languages but the
+type `IO ()`, telling that it may produce side effects like printing to the console. The Frege type system guarantees
+that any caller of `main` must also be of some `IO` type and is thus also marked as impure.
+
+HelloWorld already shows the tenet of "islands of purity" (greeting) in a "sea of imperative code" (main).
+
+Since the purity information is carried through the type system, they compiler can use it for many possible
+optimizations such as deferred execution or pre-calculation, parallel execution, caching, and elimination of common subexpressions.
+
+**2. An interesting two-liner**
+
+Much can be achvied in Frege in one line and here is an example that you may want to paste into the
+[Online REPL](https://github.com/Frege/frege-repl)
+
+    import frege.prelude.Math (cos)
+    (fst . head . dropWhile (uncurry (!=))) (zip cs (tail cs)) where cs = iterate cos 1.0
+
+After execution it should show you
+
+     0.7390851332151607
+which is the fixpoint of the cosine function, i.e. the value where [`cos(x) == x`](http://www.wolframalpha.com/input/?i=cos+0.7390851332151607).
+
+The code is most likely totally incomprehensible for a Frege/Haskell newcomer but you would not believe how
+obvious and straightforward it is once you know the parts.
+* `cs` is an _infinite_ list (a __stream__ in Java terms) of cosine values that starts with `cos 1.0` and then iterates to `cos(cos(1.0)`, `cos(cos(cos(1.0))`, and so forth.
+* `zip cs (tail cs)` produces an infinite list of pairs of any two adjacent values in `cs`
+* `uncurry` holds onto each element of the pair and `(!=)` (a so-called sectioning) compares these elements for in-equality
+* `dropWhile` reads from the infinite list as long as the cosine values in each pair are not equal
+* The remaining list (the infinite list of pairs of equal cosine values) has a first pair called `head` and `fst` returns the first element of that pair.
+
+This code is pure. The inferred type is `Double` - it is not even a function but a constant.
+The code does not rely on any mutable state - not even internally. Therefore it is threadsafe and the result can be cached.
+
 The Name
 --------
 The Frege programming language is named after and in honor of Gottlob Frege
