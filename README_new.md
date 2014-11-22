@@ -38,18 +38,21 @@ The `greeting` function is *pure*, meaning it is _stateless_ and _free of side e
 Therefore, it is _threadsafe_ and its results may be _automatically cached_ since given the same argument, the result will always be the same.
 
 The `main` function is *impure*. It takes a list of Strings and does not return just "void" as in most other JVM languages but the
-type `IO ()`, telling that it may produce side effects like printing to the console. The Frege *type system* guarantees
+type `IO ()`, telling that it may produce side effects like printing to the console. The Frege **type system** guarantees
 that any caller of `main` must also be of some `IO` type and is thus also marked as impure. That way, the lack of purity percolates up the whole call chain.
 
 "Hello World" already shows the tenet of _"islands of purity"_ (greeting) in a _"sea of imperative code"_ (main).
 
-Since the purity information is carried through the *type system*, they compiler can use it for many possible
-*optimizations* such as pre-calculation, deferred execution, parallel execution, caching, and elimination of common subexpressions.
+Since the purity information is carried through the **type system**, they compiler can use it for many possible
+**optimizations** such as pre-calculation, deferred execution, parallel execution, caching, and elimination of common subexpressions.
 
 **2. A small idiomatic example**
 
 Much can be achieved in Frege in one line of code and here is an example that you can paste into the
-[Online REPL](https://github.com/Frege/frege-repl)
+[Online REPL](https://github.com/Frege/frege-repl). It calculates the fixpoint of the cosine function, i.e. the
+value where [`cos(x) == x`](http://www.wolframalpha.com/input/?i=cos+0.7390851332151607).
+
+Implementations in imperative languages usually involve introducing local mutable state. Not so in Frege:
 
     import frege.prelude.Math (cos)
     (fst . head . dropWhile (uncurry (!=))) (zip cs (tail cs)) where cs = iterate cos 1.0
@@ -57,17 +60,16 @@ Much can be achieved in Frege in one line of code and here is an example that yo
 After execution it should show you the value
 
      0.7390851332151607
-which is the fixpoint of the cosine function, i.e. the value where [`cos(x) == x`](http://www.wolframalpha.com/input/?i=cos+0.7390851332151607).
 
 The code is most likely incomprehensible for a Frege/Haskell newcomer at first but you would not believe how
 obvious and straightforward it is once you know the parts.
 * `cs` is an _infinite_ list (a stream in Java terms) of cosine values that starts with `cos 1.0` and then iterates to `cos(cos(1.0)`, `cos(cos(cos(1.0))`, and so forth.
 * `zip cs (tail cs)` produces an infinite list of pairs of any two adjacent values in `cs`.
-* `uncurry` holds onto each element of the pair and the function `(!=)` (a so-called sectioning) compares these elements for in-equality
+* `uncurry` holds onto each element of a given pair and the function `(!=)` (a so-called sectioning) compares these elements for in-equality
 * `dropWhile` reads from the infinite list as long as the cosine values in each pair are not equal
 * The remaining list (the infinite list of pairs of equal cosine values) has a first pair called `head` and `fst` returns the first element of that pair, which yields the final result.
 
-This code is *pure*. The inferred type is `Double`: a constant value.
+This code is *pure*. The inferred type is `Double`.
 The code does not rely on any mutable state (not even internally). Therefore it is _threadsafe_ and the result can be _automatically cached_.
 
 Motivation
