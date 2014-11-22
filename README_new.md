@@ -175,6 +175,13 @@ Specific programming problems are best solved on
 [Stack Overflow](http://stackoverflow.com/questions/tagged/frege),
 we check questions tagged "frege" on a regular basis.
 
+**For casual chat (and quick questions)**
+
+There's a #frege channel on [Freenode IRC](https://freenode.net) where
+some project members and Frege users hang out. You can use any IRC client
+you like or Freenode's [WebChat interface](https://webchat.freenode.net)
+if you don't want to install IRC software.
+
 **For issues only**
 
 If you find a bug or have an idea for enhancements, please let us know by opening an issue in the
