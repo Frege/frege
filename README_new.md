@@ -72,9 +72,11 @@ obvious and straightforward it is once you know the parts.
 This code is **pure**. The inferred type is `Double`.
 The code does not rely on any mutable state (not even internally). Therefore it is _threadsafe_ and the result can be _automatically cached_.
 
-Motivation
-----------
-**For the Java programmer:** Frege offers you the opportunity to **learn and use a new programming paradigm**
+What's in for me?
+-----------------
+**For the Java programmer**
+
+Frege offers you the opportunity to **learn and use a new programming paradigm**
 that shines with
 * a solid mathematical foundation,
 * **pure** functions,
@@ -90,15 +92,17 @@ But unlike other approaches,
 [calling Java from Frege](http://mmhelloworld.github.io/blog/2013/07/10/frege-hello-java/)
 doesn't undermine the language guarantees.
 
-When calling Java from Frege, you have to declare the Java types in rigid Frege terms in order to
-preserve the Frege language characteristics, especially purity, thread safety, and lazy evaluation.
+> When calling Java from Frege, you have to declare the Java types in rigid Frege terms in order to
+> preserve the Frege language characteristics, especially purity, thread safety, and lazy evaluation.
 
 Learning Frege essentially means that **you will also learn Haskell** and thus your effort pays off twice, since
 you also get to know a very popular non-JVM language with 25+ years of development, a great community,
 many (free) books, publications, tutorials, online courses, and considerable industry demand.
 
 
-**For the Haskell programmer**: Frege gives you the opportunity to **use your skills on the JVM**.
+**For the Haskell programmer**
+
+Frege gives you the opportunity to **use your skills on the JVM**.
 Most idiomatic Haskell code will run in Frege unmodified or with only minimal, obvious adaptions.
 Even more important: you can bring your purely functional problem solution strategies to your Java projects.
 
