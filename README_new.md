@@ -77,11 +77,11 @@ Motivation
 **For the Java programmer:** Frege offers you the opportunity to **learn and use a new programming paradigm**
 that shines with
 * a solid mathematical foundation,
-* pure functions,
-* immutability by default,
+* **pure** functions,
+* **immutability** by default,
 * side-effects only when declared,
-* robustness under composition and concurrency,
-* and a type system that is unparalleled on the JVM with its combination of power, simplicity and expressiveness.
+* **robustness** under composition and concurrency,
+* and a **type system** that is unparalleled on the JVM with its combination of power, simplicity and expressiveness.
 
 You can still reuse your existing knowledge of the Java platform and its vast set of libraries.
 Frege interoperates with Java such that you can easily
@@ -93,7 +93,7 @@ doesn't undermine the language guarantees.
 When calling Java from Frege, you have to declare the Java types in rigid Frege terms in order to
 preserve the Frege language characteristics, especially purity, thread safety, and lazy evaluation.
 
-Learning Frege essentially means that you will also learn Haskell and thus your effort pays off twice, since
+Learning Frege essentially means that **you will also learn Haskell** and thus your effort pays off twice, since
 you also get to know a very popular non-JVM language with 25+ years of development, a great community,
 many (free) books, publications, tutorials, online courses, and considerable industry demand.
 
@@ -105,9 +105,9 @@ Even more important: you can bring your purely functional problem solution strat
 From now on you can also enjoy on the JVM:
 * the terse Haskell syntax
 * pure functions and lambdas
-* algebraic data types and typeclasses with parametric polymorphism
+* algebraic data types and **typeclasses** with parametric polymorphism
 * powerful type inference
-* higher rank types
+* **higher rank types**
 * lazy evaluation on infinite data structures
 * pattern matching, list comprehensions, do-notation, point-free style, operators, modules
 * functors, monoids, semigroups, monads, and all your other beloved mathematical abstractions.
