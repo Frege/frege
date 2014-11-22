@@ -1,7 +1,7 @@
 What is Frege?
 ==============
 
-<img style="float: right" src="resources/Frege_logo.png">
+<img align="right" src="resources/Frege_logo.png"/>
 Frege is a **pure** functional programming language for the JVM in the spirit of Haskell.
 It enjoys a strong static type system with powerful type inference and
 [non-strict](http://en.wikipedia.org/wiki/Non-strict_programming_language) - also known as _lazy_ - evaluation.
