@@ -176,6 +176,7 @@ Specific programming problems are best solved on
 we check questions tagged "frege" on a regular basis.
 
 **For issues only**
+
 If you find a bug or have an idea for enhancements, please let us know by opening an issue in the
 [issue tracker](https://github.com/Frege/frege/issues).
 (You'll need a GitHub account to do this.)
@@ -188,8 +189,7 @@ Links
 * [Language reference](http://www.frege-lang.org/doc/Language.pdf)
 * [Author's Blog](http://fregepl.blogspot.com/)
 * [edX Functional Programming course FP101x](https://www.edx.org/course/introduction-functional-programming-delftx-fp101x) with exercises in Frege
-* [slides: intro to Frege](http://de.slideshare.net/Mittie/frege-purely-functional-programming-on-the-jvm)
-* [video: intro to Frege](https://www.parleys.com/play/543fa326e4b06e1184ae41e6/chapter44/about)
+* Introduction to Frege:[video](https://www.parleys.com/play/543fa326e4b06e1184ae41e6/chapter44/about), [slides](http://de.slideshare.net/Mittie/frege-purely-functional-programming-on-the-jvm)
 
 Recommended reading
 * [Phil Wadler: Why functional programming matters](http://www.cs.kent.ac.uk/people/staff/dat/miranda/whyfp90.pdf)
