@@ -209,3 +209,12 @@ API Docs
 * [Standard library (prelude)]( http://www.frege-lang.org/doc/frege/Prelude.html)
 * [Online Docs (Frege)](http://www.frege-lang.org/doc/index.html)
 * [Online Docs (Runtime Javadoc)](http://www.frege-lang.org/doc/index.html)
+
+Copyright and License
+---------
+Copyright (c) Ingo Wechsung, 2011-2014. All rights reserved.
+The use and distribution terms for this software are covered by the
+[BSD 3-clause license](http://opensource.org/licenses/BSD-3-Clause)
+which can be found in the file LICENSE.txt at the root of this distribution.
+By using this software in any fashion, you are agreeing to be bound by the terms of this license.
+You must not remove this notice, or any other, from this software.
