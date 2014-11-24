@@ -759,7 +759,7 @@ mbdot:
     ;
 
 rho:
-    tau EARROW rhofun               { \tau\t\rho -> do
+    tapp EARROW rhofun               { \tau\t\rho -> do
                                         context <- U.tauToCtx tau
                                         YYM.return (Rho.{context} rho)
                                      }
@@ -767,8 +767,8 @@ rho:
     ;
 
 rhofun:
-    tau                            { RhoTau [] }
-    | tau  ARROW rhofun            { \a\_\b     -> case a of
+    tapp                            { RhoTau [] }
+    | tapp  ARROW rhofun            { \a\_\b     -> case a of
                                             TSig s -> RhoFun [] s b 
                                             _ -> RhoFun [] (ForAll [] (RhoTau [] a)) b }
     ;
@@ -780,9 +780,12 @@ rhotau:
 
 
 tau:
-    simpletypes          { \taus -> Tau.mkapp (head taus) (tail taus) }
-    //  sigma            { TSig }
-    // tapp ARROW tau    { \a\f\b ->  TApp (TApp (TCon (yyline f) (With1 baseToken f.{tokid=CONID, value="->"})) a) b }
+    tapp                 
+    | forall             { TSig }
+    | tapp ARROW tau     { \a\f\b ->  case a of
+                            TSig s -> TSig (ForAll [] (RhoFun [] s (RhoTau [] b))) 
+                            _      -> TApp (TApp (TCon (yyline f) (With1 baseToken f.{tokid=CONID, value="->"})) a) b 
+                         }
     ;
 
 tauSC:
@@ -795,15 +798,15 @@ tauSB:
     | tau '|' tauSB     { liste  }
     ;
 
-// tapp:
-//    simpletypes         { \taus -> Tau.mkapp (head taus) (tail taus) }
-//    ;
+tapp:
+    simpletypes         { \taus -> Tau.mkapp (head taus) (tail taus) }
+    ;
 
 simpletype:
     tyvar
     | tyname            { \(tn::SName) -> TCon (yyline tn.id) tn}
     | '(' tau ')'       { \_\t\_ -> t }
-    | '(' sigma ')'     { \_\s\_ -> TSig s }
+    // '(' sigma ')'     { \_\s\_ -> TSig s }
     | '(' tau ',' tauSC ')'
                         {\_\t\(c::Token)\ts\_ ->
                             let
@@ -1076,7 +1079,7 @@ literal:
     ;
 
 pattern:
-    binex                           
+    expr                           
     ;
 
 aeq: ARROW | '=';                   
@@ -1084,7 +1087,7 @@ aeq: ARROW | '=';
 
 lcqual:
     gqual
-    | binex '=' expr                { \e\t\x -> do { (ex,pat) <- funhead e; YYM.return (Right (fundef ex pat x)) }}
+    | expr '=' expr                { \e\t\x -> do { (ex,pat) <- funhead e; YYM.return (Right (fundef ex pat x)) }}
     | LET '{' letdefs '}'           { \_\_\ds\_ -> Right ds }
     ;
 
@@ -1103,8 +1106,8 @@ dodefs:
 
 
 gqual:
-    binex                           { \e     ->  Left (Nothing, e) }
-    | binex GETS binex              { \p\g\e ->  Left (Just p,  e) }
+    expr                           { \e     ->  Left (Nothing, e) }
+    | expr GETS expr               { \p\g\e ->  Left (Just p,  e) }
     ;
 
 gquals:
