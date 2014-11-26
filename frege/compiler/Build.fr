@@ -57,7 +57,7 @@ compiler fs = do
         liftIO (forM_ (reverse g.sub.messages) (g.stderr.println . Message.text))
         return false
     else do
-        liftStG (E.verb Position.null (msgdoc ("compiling: " ++ joined ", " files)))
+        -- liftStG (E.verb Position.null (msgdoc ("compiling: " ++ joined ", " files)))
         if isOn g.options.flags MAKE
         then do
             liftIO $ parseAll g empty files
@@ -66,8 +66,9 @@ compiler fs = do
             results <- liftIO $ mapM (compileFile g.options) files 
             return (and results)
 
-compileFile opts f = do
+compileFile opts ef = do
     newg <- standardGlobal
+    let f = either snd id ef
     let g = newg.{options = opts.{source = f}}
     -- StateT.put newg.{options = g.options.{source = f}}
     -- changeSTT Global.{options <- _.{source = f}}
@@ -215,36 +216,52 @@ runpass (pass,description) = do
 --- Regular files are taken over
 --- Directories are walked and found source files returned
 --- Module names are translated to file names through the source path
-processDirs :: [String] -> StIO [String] 
+processDirs :: [String] -> StIO [Either (Pack, String) String] 
 processDirs fs = concat <$> mapM process fs
     where
-        process :: String -> StIO [String]
+        process :: String -> StIO [Either (Pack, String) String]
         process f = do
             file    <- liftIO $ File.new f
             regular <- liftIO $ file.isFile
             dir     <- liftIO $ file.isDirectory
             absolut <- liftIO $ file.isAbsolute
-            if regular then return [f]
-            else if dir then liftIO $ walk file
+            if regular then return [Right f]
+            else if dir then liftIO $ fmap Right <$> walk file
             else do
                 g <- getSTT
                 -- f could be a path relative to a source directory
                 -- or a package name
-                let fpath = if f ~ ´\.fr$´ then f
-                            else (´\.´.matcher f).replaceAll "/" ++ ".fr"
-                    indir s = do
-                        parent <- File.new s
-                        File.new parent fpath
-                sp    <- if absolut then return [file]
-                            else liftIO $ sequence [ indir s | s <- g.options.sourcePath ]
-                found <- filterM (liftIO . _.isFile) sp >>= mapM (liftIO . _.getPath) 
-                case found of
-                    [] -> liftStG do
-                        changeST Global.{options <- _.{source = f}}
+                if f ~ ´\.fr$´
+                then do
+                    -- it looks like a file name
+                    -- if it is an absolute one, then it doesn't exist
+                    -- otherwise 'regular' would be true
+                    if absolut then liftStG do
+                        changeST Global.{options <- _.{source = "-"}}
                         E.error Position.null (msgdoc (
-                            "could not find source file in source path")) 
-                        return []
-                    (it:_) -> return [it]
+                            "could not read `" ++ f ++ "`")) 
+                        return [] 
+                    else do
+                        -- resolve the path against the source path
+                        rslvd <- liftIO $ resolveSP g f
+                        case rslvd of 
+                            Nothing -> liftStG do
+                                changeST Global.{options <- _.{source = "-"}}
+                                E.error Position.null (msgdoc (
+                                    "could not find `" ++ f ++ "` in source path."))
+                                return []
+                            Just p -> return [Right p] 
+                else do
+                    -- take it as a path name
+                    let pack = Pack.new (magicPack f)
+                    rslvd <- liftIO $ resolvePackSP g pack.raw
+                    case rslvd of 
+                        Nothing -> liftStG do
+                            changeST Global.{options <- _.{source = "-"}}
+                            E.error Position.null (msgdoc (
+                                "could not find a file corresponding to module `" ++ f ++ "` in source path."))
+                            return []
+                        Just p -> return [Left (pack, p)]
 
                                         
 --- check if argument is a file
@@ -306,9 +323,10 @@ type TodoList = Tree Pack PState
     Parse the files found on the command line,
     as well as the ones identified as dependencies through parsing.
 -}
-parseAll :: Global -> TodoList -> [String] -> IO TodoList
+parseAll :: Global -> TodoList -> [Either (Pack, String) String] -> IO TodoList
 parseAll g tree [] = return tree
-parseAll g tree (p:ps) = do
+parseAll g tree (ep:ps) = do
+    let p = either snd id ep
     when (isOn g.options.flags VERBOSE) do
         stderr.println ("parsing " ++ p)
     gc <- lexparse g p
@@ -319,7 +337,7 @@ parseAll g tree (p:ps) = do
             tnew = tree.insert gc.sub.thisPack state
         deps <- sequence [ resolvePackSP g p.raw |  p <- Imp.dependsOn gc ]
         let already = [ f | (_, PS{cstate=Parsed, fileName=f}) <- each tnew ]
-            nps = [ f | Just f <- deps, f `notElem` ps, f `notElem` already ] 
+            nps = [ Right f | Just f <- deps, Right f `notElem` ps, f `notElem` already ] 
         parseAll g tnew (ps ++ nps) 
 
      
