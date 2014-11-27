@@ -35,6 +35,7 @@ import  Compiler.Transform as TF()
 import  Compiler.GenMeta   as GM()
 import  Compiler.GenJava7  as G7()
 import  Compiler.passes.Final as FI()
+import  Control.Concurrent as C()
 
 
 main :: [String] -> IO Bool
@@ -48,24 +49,41 @@ main args = do
                     return result
         Nothing -> CompilerOptions.usage >> return false
 
+instance Cloneable (JArray String)
+
+{-- 
+    Provide an entry point whose name is *not* 'main' and that takes
+    a 'String' array.
+    -}
+runcompiler :: ArrayOf RealWorld String -> IO Bool
+runcompiler args = Mutable.freeze args >>=  main . _.toList
+
 compiler fs = do
-    changeSTT Global.{options <- _.{source = "command line"}}
+    changeSTT Global.{options <- _.{source = "-"}}
     files <- processDirs fs
     g <- getSTT
     if (g.errors > 0) 
     then do
-        liftIO (forM_ (reverse g.sub.messages) (g.stderr.println . Message.text))
+        printErrors
         return false
     else do
         -- liftStG (E.verb Position.null (msgdoc ("compiling: " ++ joined ", " files)))
         if isOn g.options.flags MAKE
         then do
-            liftIO $ parseAll g empty files
+            todo <- parseAll empty files
+            mvar <- liftIO C.MVar.newEmpty
+            -- result <- make mvar 0 todo
             return false
         else do
             results <- liftIO $ mapM (compileFile g.options) files 
             return (and results)
 
+--- output error messages without clearing them
+printErrors = do
+    g <- getSTT
+    liftIO (forM_ (reverse g.sub.messages) (g.stderr.println . Message.text))
+
+--- Compile a single file with given options 
 compileFile opts ef = do
     newg <- standardGlobal
     let f = either snd id ef
@@ -75,7 +93,7 @@ compileFile opts ef = do
     (_, g) <- StateT.run (forM_ passes runpass) g
     return (g.errors == 0)
 
-
+--- All the passes that must normally be run
 passes = [ (lexPass, "lexer"),
            (liftStG parsePass, "parser"),
            (liftStG Fix.pass, "join definitions"),
@@ -95,11 +113,20 @@ passes = [ (lexPass, "lexer"),
             (liftStG TF.pass10,         "strictness analysis"),             -- TRACES
             (openPrinter,     "open file"),
             (GM.genmeta,      "generate meta data"),   -- none
-            (G7.pass,         "generate java code"),   -- TRACEG
+            (G7.pass,         "generate java7 code"),  -- TRACEG
+            (closePrinter,    "close java file"),
             (javac,           "run java compiler"),
             (liftStG FI.cleanSymtab,  "clean up"),
         ]
 
+{-- 
+    When we @-make@, we don't need the java compiler pass,
+    because java compiling is done at the end.
+    
+    And we don't need the lexer and parser pass, because parsing is done
+    separatly in 'lexparse' 
+    -}
+makepasses = filter ((!~ ´run java´) . snd) (drop 2 passes)
 
 lexPass = do
     g <- getSTT
@@ -121,10 +148,11 @@ parsePass = do
 
     
 -- lexparse :: Global -> String -> Global
-lexparse g p = do
-    let g0 = g.{options <- _.{source = p}}
-    (_, g) <- StateT.run (L.pass >> liftStG parsePass) g0
-    return g  
+lexparse p = do
+    changeSTT _.{options <- _.{source = p}}
+    L.pass
+    liftStG parsePass
+    
 
 ---  make filename from package name  @x.y.z.Packet@ =>  @dest/x/y/z/Packet.java@
 targetPath :: Global -> String -> String
@@ -159,6 +187,12 @@ openFilePrinter suffix = do
         PrintWriter.new file "UTF-8"
     changeSTT Global.{gen <- GenSt.{printer=pw}}
 
+--- close the current file printer and continue to print to 'stdout' 
+closePrinter = do
+    g <- getSTT
+    liftIO g.printer.close
+    changeSTT _.{gen <- _.{printer = stdout}}
+    return ("file", 1) 
 
 --- utility function to run a command.
 --- takes a command line and produces an exit code
@@ -169,7 +203,6 @@ native runJavac frege.runtime.Javac.runJavac :: MutableIO (JArray String) -> IO 
 javac :: StIO (String, Int)
 javac = do
     g <- getSTT
-    liftIO g.printer.close        -- flush output before compiling
     let target = targetPath g ".java"
     let command = maybe ["javac"] ´\s+´.splitted  (System.getProperty "frege.javac")
         arguments = ["-cp", joined U.pathSep (U.ourPath g.options),
@@ -182,9 +215,6 @@ javac = do
         when (rc != 0) do
             liftStG $ E.error (packageEnd g) 
                         (msgdoc "java compiler errors are most likely caused by erronous native definitions")
-    -- from now on, we are printing to stdout again
-    -- printer <- doio stdoutPrinter
-    changeSTT Global.{gen <- GenSt.{printer = stdout}}
     return ("source file", 1)
 
 
@@ -197,7 +227,7 @@ runpass (pass,description) = do
         state <- getSTT
         later <- liftIO $ System.currentTimeMillis()
         when (isOff state.options.flags IDEMODE) do
-            liftIO (forM_ (reverse state.sub.messages) (state.stderr.println . Message.text))
+            printErrors
             changeSTT _.{sub <- _.{messages = []}}
         when (state.errors > 0) (liftIO $ state.printer.close)
         when (length description > 0 && isOn state.options.flags VERBOSE) do
@@ -292,7 +322,7 @@ walk file = do
         then return [name]
         else return [] 
 
---- look up an external, package name in source path
+--- look up an external package name in source path
 resolvePackSP :: Global -> String -> IO (Maybe String)
 resolvePackSP g pack = do
     let path = (´\.´.matcher (magicPack pack)).replaceAll "/" ++ ".fr"
@@ -307,37 +337,65 @@ resolveSP g path = do
             >>= mapM    _.getPath
     return (listToMaybe paths)
 
-data CState = UnParsed | Parsed | Submitted | Compiled | Failed 
-
---- package state
-data PState = PS {
-        cstate   :: CState      --- what has been found about this
-        fileName :: String      --- file name, may or may not exits
-        global   :: Global      --- global state for this package
+ 
+--- to do item
+data Todo = 
+    --- file has been parsed and dependencies added to tree
+    CompileAfterDeps {
+        global  :: Global       --- global state for this package
+        reason  :: Maybe Pack   --- 'Nothing' means command line
+    }                       
+    | 
+    --- module was found as dependency of some other, or was asked for on command line
+    CheckUpdate {
+        pack    :: Pack         --- build the package if needed
+        reason  :: Maybe Pack   --- 'Nothing' means command line
     }
 
 --- build tree
-type TodoList = Tree Pack PState 
+type TodoList = Tree Pack Todo 
 
+--- Take over errors of another state
+mergeErrors :: Global -> StIO ()
+mergeErrors gc = changeSTT _.{sub <- _.{numErrors <- (gc.errors+)} • 
+                                     _.{messages  <- (gc.sub.messages++)}}
+
+--- Replace the state with the argument, return the old state
+switchState :: Global -> StIO Global
+switchState new = do
+    old <- getSTT
+    StateT.put new
+    return old
+    
 {-- 
-    Parse the files found on the command line,
-    as well as the ones identified as dependencies through parsing.
+    Parse the files found on the command line
 -}
-parseAll :: Global -> TodoList -> [Either (Pack, String) String] -> IO TodoList
-parseAll g tree [] = return tree
-parseAll g tree (ep:ps) = do
-    let p = either snd id ep
-    when (isOn g.options.flags VERBOSE) do
-        stderr.println ("parsing " ++ p)
-    gc <- lexparse g p
-    if gc.errors > 0 
-    then return empty       -- no more processing
-    else do
-        let state = PS{cstate=Parsed, fileName=p, global=gc}
-            tnew = tree.insert gc.sub.thisPack state
-        deps <- sequence [ resolvePackSP g p.raw |  p <- Imp.dependsOn gc ]
-        let already = [ f | (_, PS{cstate=Parsed, fileName=f}) <- each tnew ]
-            nps = [ Right f | Just f <- deps, Right f `notElem` ps, f `notElem` already ] 
-        parseAll g tnew (ps ++ nps) 
+parseAll :: TodoList -> [Either (Pack, String) String] -> StIO TodoList
+parseAll tree [] = return tree
 
-     
+-- Take a note that we need to re-build the module, if necessary
+parseAll tree (Left (p,_):ps) = do
+        parseAll tnew ps 
+    where
+        tnew = tree.insert p CheckUpdate{pack=p, reason=Nothing}
+
+-- Parse the file, find the module name and dependencies
+parseAll tree (Right p:ps) = do
+    g <- getSTT
+    when (isOn g.options.flags VERBOSE) do
+        liftIO $ stderr.println ("parsing " ++ p)
+    lexparse p
+    printErrors
+    gc <- switchState g
+    mergeErrors gc
+    
+    if gc.errors > 0 
+    then parseAll tree ps 
+    else do
+        let 
+            tree' = tree.insert gc.thisPack CompileAfterDeps{global=gc, reason=Nothing}
+            deps = Imp.dependsOn gc
+            checkUpdate t p = t.insert p CheckUpdate{pack=p, reason=Just gc.thisPack}
+            tnew = fold checkUpdate tree' deps  
+        parseAll tnew ps 
+ 
