@@ -43,7 +43,7 @@ that any caller of `main` must also be of some `IO` type and is thus also marked
 
 "Hello World" already shows the tenet of _"islands of purity"_ (greeting) in a _"sea of imperative code"_ (main).
 
-Since the purity information is carried through the **type system**, they compiler can potentially use it for many
+Since the purity information is carried through the **type system**, the compiler can potentially use it for many
 **optimizations** such as pre-calculation, deferred execution, parallel execution, caching, and elimination of common subexpressions.
 
 > Frege is **strongly** and **statically** typed, even though we haven't declared any types in the code above.
