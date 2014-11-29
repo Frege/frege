@@ -66,7 +66,7 @@ After execution it should show you the value
 
 The code is most likely incomprehensible for a Frege/Haskell newcomer at first but you would not believe how
 obvious and straightforward it is once you know the parts.
-* `cs` is an _infinite_ list (a stream in Java terms) of cosine values that starts with `cos 1.0` and then `iterate`s to `cos(cos(1.0)`, `cos(cos(cos(1.0))`, and so forth.
+* `cs` is an _infinite_ list (a stream in Java terms) of cosine values that starts with `cos 1.0` and then `iterate`s to `cos(cos(1.0))`, `cos(cos(cos(1.0)))`, and so forth.
 * `zip cs (tail cs)` produces an infinite list of pairs of any two adjacent values in `cs`.
 * `uncurry` holds onto each element of a given pair and the `(!=)` function compares these elements for in-equality.
 * `dropWhile` reads from the infinite list as long as the cosine values in each pair are not equal.
