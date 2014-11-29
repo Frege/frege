@@ -202,7 +202,7 @@ Links
 * Introduction to Frege: [video](https://www.parleys.com/play/543fa326e4b06e1184ae41e6/chapter44/about), [slides](http://de.slideshare.net/Mittie/frege-purely-functional-programming-on-the-jvm)
 
 Recommended reading
-* [Phil Wadler: Why functional programming matters](http://www.cs.kent.ac.uk/people/staff/dat/miranda/whyfp90.pdf)
+* [John Hughes: Why functional programming matters](http://www.cs.kent.ac.uk/people/staff/dat/miranda/whyfp90.pdf)
 * [Book: Real-World Haskell](http://book.realworldhaskell.org/read/) (free online)
 * [Book: Learn you a Haskell](http://learnyouahaskell.com/chapters) (free online)
 * [Book: Programming in Haskell](http://www.amazon.com/Programming-Haskell-Graham-Hutton/dp/0521692695/)
