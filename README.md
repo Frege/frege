@@ -43,7 +43,7 @@ that any caller of `main` must also be of some `IO` type and is thus also marked
 
 "Hello World" already shows the tenet of _"islands of purity"_ (greeting) in a _"sea of imperative code"_ (main).
 
-Since the purity information is carried through the **type system**, they compiler can potentially use it for many
+Since the purity information is carried through the **type system**, the compiler can potentially use it for many
 **optimizations** such as pre-calculation, deferred execution, parallel execution, caching, and elimination of common subexpressions.
 
 > Frege is **strongly** and **statically** typed, even though we haven't declared any types in the code above.
@@ -66,7 +66,7 @@ After execution it should show you the value
 
 The code is most likely incomprehensible for a Frege/Haskell newcomer at first but you would not believe how
 obvious and straightforward it is once you know the parts.
-* `cs` is an _infinite_ list (a stream in Java terms) of cosine values that starts with `cos 1.0` and then `iterate`s to `cos(cos(1.0)`, `cos(cos(cos(1.0))`, and so forth.
+* `cs` is an _infinite_ list (a stream in Java terms) of cosine values that starts with `cos 1.0` and then `iterate`s to `cos(cos(1.0))`, `cos(cos(cos(1.0)))`, and so forth.
 * `zip cs (tail cs)` produces an infinite list of pairs of any two adjacent values in `cs`.
 * `uncurry` holds onto each element of a given pair and the `(!=)` function compares these elements for in-equality.
 * `dropWhile` reads from the infinite list as long as the cosine values in each pair are not equal.
@@ -202,7 +202,7 @@ Links
 * Introduction to Frege: [video](https://www.parleys.com/play/543fa326e4b06e1184ae41e6/chapter44/about), [slides](http://de.slideshare.net/Mittie/frege-purely-functional-programming-on-the-jvm)
 
 Recommended reading
-* [Phil Wadler: Why functional programming matters](http://www.cs.kent.ac.uk/people/staff/dat/miranda/whyfp90.pdf)
+* [John Hughes: Why functional programming matters](http://www.cs.kent.ac.uk/people/staff/dat/miranda/whyfp90.pdf)
 * [Book: Real-World Haskell](http://book.realworldhaskell.org/read/) (free online)
 * [Book: Learn you a Haskell](http://learnyouahaskell.com/chapters) (free online)
 * [Book: Programming in Haskell](http://www.amazon.com/Programming-Haskell-Graham-Hutton/dp/0521692695/)
