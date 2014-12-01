@@ -76,8 +76,8 @@ SPRELUDE  =  shadow/frege/prelude/PreludeBase.fr \
 		shadow/frege/prelude/PreludeList.fr shadow/frege/prelude/PreludeMonad.fr \
 		shadow/frege/prelude/Maybe.fr \
 		shadow/frege/prelude/PreludeIO.fr \
-		shadow/frege/java/Lang.fr \
 		shadow/frege/prelude/PreludeArrays.fr \
+    shadow/frege/java/Lang.fr \
 		shadow/frege/java/util/Regex.fr \
 		shadow/frege/prelude/PreludeText.fr \
 		shadow/frege/prelude/Math.fr shadow/frege/prelude/Floating.fr
@@ -87,8 +87,8 @@ PRELUDE  =  frege/prelude/PreludeBase.fr \
 		frege/prelude/PreludeList.fr frege/prelude/PreludeMonad.fr \
 		frege/prelude/Maybe.fr \
 		frege/prelude/PreludeIO.fr \
-		frege/java/Lang.fr \
 		frege/prelude/PreludeArrays.fr \
+    frege/java/Lang.fr \
 		frege/java/util/Regex.fr \
 		frege/prelude/PreludeText.fr \
 		frege/prelude/Math.fr frege/prelude/Floating.fr
