@@ -221,7 +221,7 @@ compiler: compiler2 $(COMPF)/Grammar.class $(COMPF)/Main.class tools
 $(COMPF)/grammar/Frege.class: frege/compiler/grammar/Frege.fr $(COMPF)/common/Desugar.class
 	$(FREGEC2) -v frege/compiler/grammar/Frege.fr
 frege/compiler/grammar/Frege.fr: frege/compiler/grammar/Frege.y
-	@echo 1 shift/reduce conflict expected
+	@echo We should have 6 shift/reduce conflicts in the grammar.
 	$(YACC) -v frege/compiler/grammar/Frege.y
 	$(FREGE) -cp fregec.jar frege.tools.YYgen -m State  frege/compiler/grammar/Frege.fr
 $(COMPF)/Grammar.class: frege/compiler/Grammar.fr $(COMPF)/GUtil.class
