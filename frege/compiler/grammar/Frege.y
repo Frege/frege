@@ -1168,7 +1168,7 @@ elsex:
 binex:
       binex SOMEOP binex                { mkapp }
     | binex '-'    binex                { mkapp }
-    | '-' binex                         { \m\x -> nApp (Vbl (With1 baseToken m.{tokid=VARID, value="negate"})) x}
+    | '-' binex                         { \m\x -> nApp (Vbl (contextName m "negate")) x}
     | topex
     ;
 
@@ -1251,7 +1251,7 @@ term:
     | '(' operator ')'              { \_\o\_ -> (varcon o) (opSname o)}
     | '(' '-' ')'                   { \_\m\_ -> (Vbl (With1 baseToken m)) }
     | '(' operator expr ')'         { \z\o\x\_ ->  let -- (+1) --> flip (+) 1
-                                        flp = Vbl (With1 baseToken z.{tokid=VARID, value="flip"}) 
+                                        flp = Vbl (contextName z "flip") 
                                         op  = (varcon o) (opSname o)
                                         ex = nApp (nApp flp op) x
                                     in ex}
