@@ -52,7 +52,7 @@ Since the purity information is carried through the **type system**, the compile
 **2. No mutable state**
 
 Much can be achieved in Frege in one line of code and here is an example that you can paste into the
-[Online REPL](https://github.com/Frege/frege-repl). It calculates the fixpoint of the cosine function, i.e. the
+[Online REPL](http://try.frege-lang.org/). It calculates the fixpoint of the cosine function, i.e. the
 value where [`cos(x) == x`](http://www.wolframalpha.com/input/?i=cos+0.7390851332151607).
 
 Implementations in imperative languages usually involve introducing local mutable state. Not so in Frege:
