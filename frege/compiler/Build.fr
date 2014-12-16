@@ -70,12 +70,10 @@ compiler fs = do
         
         if isOn g.options.flags MAKE
         then do
-            todo <- parseAll empty files
-            g    <- getSTT
-            if g.errors > 0 then return false
-            else do
-                mvar <- liftIO C.MVar.newEmpty
-                make mvar todo
+            let todo = createTodo files
+            mvar ← liftIO C.MVar.newEmpty
+            todo ← parseAll mvar todo 
+            make mvar todo
         else do
             and <$> liftIO (mapM (compileFile g.options) files) 
             
@@ -311,8 +309,7 @@ processDirs fs = concat <$> mapM process fs
 packfile :: String -> IO Bool
 packfile f = do
     is <- File.new f
-    r  <- is.isFile
-    return r
+    is.isFile
 
 --- walk a directory and return all Frege source files found.
 walk :: MutableIO File -> IO [String]
@@ -353,7 +350,15 @@ resolveSP g path = do
  
 --- to do item
 data Todo = 
-      {-- 
+    {-- We have a source file but don't know the package yet. -}
+    ParseMe {
+        source      :: String       --- path name to parse
+    }
+    | --- source has been parsed without syntax errors
+    Parsed {
+        global      :: Global       --- state after parsing
+    }
+    | {-- 
         Source has been parsed and dependencies added to tree.
         Will be compiled after dependencies have been checked and one of the 
         following is true:
@@ -400,17 +405,19 @@ data Todo =
     
 instance Show Todo where
     show x = case x  of
-        CompileAfterDeps{global, reason} -> "compile after dependencies"
+        CompileAfterDeps{global, reason} → "compile after dependencies"
                                 ++ maybe "" (const " if needed") reason
                                 ++ ", required by "
                                 ++ maybe "user" (unmagicPack . Pack.raw) reason
-        CheckUpdate{pack, reason} -> "check if build is necessary, required by "
+        CheckUpdate{pack, reason} → "check if build is necessary, required by "
                                 ++ maybe "user" (unmagicPack . Pack.raw) reason
-        Running{because}   -> "running " ++ because
-        Aborted{because}   -> "aborted " ++ because
-        Failed{because}    -> "build failed because " ++ because
-        NoRebuild{because} -> "no rebuild needed because " ++ because
-        Waiting{for, todo} -> "waiting for `" ++ unmagicPack for.raw
+        Running{because}    → "running " ++ because
+        Aborted{because}    → "aborted " ++ because
+        Failed{because}     → "build failed because " ++ because
+        NoRebuild{because}  → "no rebuild needed because " ++ because
+        Waiting{for, todo}  → "waiting for `" ++ unmagicPack for.raw
+        ParseMe{source}     → "parse " ++ source 
+        Parsed{}            →  "parsed"
 
 
 --- build tree
@@ -428,29 +435,14 @@ switchState new = do
     return old
     
 {-- 
-    Parse the files found on the command line
+    Create the To Do list.
 -}
-parseAll :: TodoList -> [Either (Pack, String) String] -> StIO TodoList
-parseAll tree [] = return tree
+createTodo :: [Either (Pack, String) String] -> TodoList
+createTodo xs = fold todoItem empty xs
+    where 
+        todoItem tree (Left (p, _)) = Tree.insert tree p CheckUpdate{pack=p, reason=Nothing}
+        todoItem tree (Right s)     = Tree.insert tree (Pack.new s) ParseMe{source=s}
 
--- Take a note that we need to re-build the module, if necessary
-parseAll tree (Left (p,_):ps) = do
-        parseAll tnew ps 
-    where
-        tnew = tree.insert p CheckUpdate{pack=p, reason=Nothing}
-
--- Parse the file, find the module name and dependencies
-parseAll tree (Right p:ps) = do
-    g  <- getSTT
-    gc <- lexparse p
-    
-    if gc.errors > 0 
-    then parseAll tree ps 
-    else do
-        let 
-            tree' = tree.insert gc.thisPack CompileAfterDeps{global=gc, reason=Nothing}
-            tnew = addDepsOf gc tree'  
-        parseAll tnew ps 
 
 --- Predicate to tell if the argument represents a running state
 running Running{} = true
@@ -477,7 +469,22 @@ addDepsOf gc tree = fold checkUpdate tree deps
             Just _ -> t 
             _      -> t.insert p CheckUpdate{pack=p, reason=Just gc.thisPack}   
 
-
+--- parse all files in parallel first
+parseAll :: C.MVar (Pack, Todo) → TodoList → StIO TodoList
+parseAll mvar tree = do
+        parsing <- foldM (makeone mvar) empty (filter (toparse . snd) (each tree))
+        let other = Tree.fromList (filter (not . toparse . snd) (each tree))
+        foldM parseResult other (each parsing)
+    where
+        toparse ParseMe{} = true
+        toparse _         = false
+        parseResult tree _ = liftIO do
+            (p, todo) ← mvar.take
+            case todo of
+                Parsed{global} -> return (tree.insert global.thisPack todo)
+                _ -> do
+                    stderr.println (p.raw ++ ": " ++ show todo)
+                    return (tree.insert p todo)
  
 {--
     Make a bunch of source files and/or packages.
@@ -490,31 +497,37 @@ make mvar tree = do
     if any running (values tree)
     then do
         tree <- liftIO do
-            result <-  mvar.poll
-            (p, todo) <- case result of
-                Just x -> return x  -- no time for status
-                _      -> do 
-                    status tree
-                    mvar.take
-                  where
-                    status tree = do
-                        let list = each tree
-                            rstate = filter (running    . snd) list
-                            fstate = filter (failed     . snd) list
-                            gstate = filter (successful . snd) list
-                        stderr.printf "%d running, %d failed, %d successful, %d queued%s"
-                                (length rstate)
-                                (length fstate)
-                                (length gstate)
-                                (length list - length rstate - length fstate - length gstate)
-                                lineSeparator
-                        return () 
+            -- result <-  mvar.poll
+            (p, todo) <- mvar.take
+            --case result of
+            --    Just x -> return x  -- no time for status
+            --    _      -> do 
+            --        status tree
+            --        mvar.take
+            --      where
+            --        status tree = do
+            --            let list = each tree
+            --                rstate = filter (running    . snd) list
+            --                fstate = filter (failed     . snd) list
+            --                gstate = filter (successful . snd) list
+            --            stderr.printf "%d running, %d failed, %d successful, %d queued/waiting%s"
+            --                    (length rstate)
+            --                    (length fstate)
+            --                    (length gstate)
+            --                    (length list - length rstate - length fstate - length gstate)
+            --                    lineSeparator
+            --            return () 
             -- let oldstate = maybe "WHAT THE FUCK???" show (tree.lookup p)
-            -- stderr.println ("finished task " ++ unmagicPack p.raw ++ ": " ++ show todo)
+            when (failed todo || successful todo) do
+                stderr.println ("finished task " ++ unmagicPack p.raw ++ ": " ++ show todo)
             case todo of
                 CompileAfterDeps{global} -> do
                                 -- need to add the new dependencies to the todo list
-                                return ((addDepsOf global tree).update p todo)
+                                -- also, the package name may have changed
+                                return ((     Tree.insertkv global.thisPack todo
+                                            . Tree.deletek p 
+                                            . addDepsOf global) 
+                                        tree)
                 Waiting{for, todo=prev} -> do
                     -- module waited for may already have changed state,
                     -- in that case just resubmit
@@ -555,6 +568,10 @@ makeone mvar tree (p, todo) = do
                 async (compileAfterDeps tree global reason)
             CheckUpdate{pack, reason} -> do
                 async (checkUpdate pack reason)
+            ParseMe{source} -> do 
+                async (parseMe source)
+            Parsed{global} -> do
+                async (return CompileAfterDeps{global, reason=Nothing})
             Running{}   -> return tree
             Aborted{}   -> return tree
             Failed{}    -> return tree
@@ -634,7 +651,13 @@ checkUpdate pack reason = do
                 else return Failed{because="`" 
                                 ++ gc.options.source 
                                 ++ "` defines unexpected package `" ++ gc.unpack gc.thisPack
-                                ++ "`"} 
+                                ++ "`"}
+
+parseMe path = do
+    gc <- lexparse path
+    if gc.errors > 0 
+    then return Failed{because = "of syntax errors."}
+    else return Parsed{global = gc}
             {- do
                 -- We have a source file in 'path', let's see if it is newer than
                 -- the corresponding class file
