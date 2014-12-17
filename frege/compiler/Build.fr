@@ -13,12 +13,11 @@ import  frege.Version(version)
 import  Compiler.enums.Flags
 import  Compiler.types.Global
 import  Compiler.common.Desugar
-import  Compiler.common.CompilerOptions (standardGlobal, getOpts)
+import  Compiler.common.CompilerOptions (standardGlobal, getOpts, theClassLoader, pathSep, ourPath)
 import  Compiler.common.Errors as E()
 import  Compiler.types.Tokens
 import  Compiler.types.Packs
 import  Compiler.types.Positions
-import  Compiler.Utilities as U()
 
 import  Compiler.grammar.Lexer as L()
 import  Compiler.grammar.Frege as F()
@@ -44,7 +43,8 @@ main args = do
     scanned <- getOpts args
     case scanned  of
         Just (opts, fs) = do
-                    let g = stdg.{options = opts}
+                    loader ← theClassLoader opts
+                    let g = stdg.{options = opts, sub ← _.{loader}}
                     (result, g) <- StateT.run (compiler fs) g
                     return result
         Nothing -> CompilerOptions.usage >> return false
@@ -90,7 +90,7 @@ compileFile opts ef = do
     let g = newg.{options = opts.{source = f}}
     -- StateT.put newg.{options = g.options.{source = f}}
     -- changeSTT Global.{options <- _.{source = f}}
-    (_, g) <- StateT.run (forM_ passes runpass) g
+    (_, g) <- StateT.run (forsome passes runpass) g
     return (g.errors == 0)
 
 --- All the passes that must normally be run
@@ -163,7 +163,16 @@ lexparse p = do
     gc <- switchState g
     mergeErrors gc
     return gc
-    
+
+--- Run the passes on an already parsed global
+makeFile glob = do
+    g <- switchState glob
+    when (isOn g.options.flags VERBOSE) do
+        liftIO $ stderr.println ("compiling " ++ magicPack (glob.unpack glob.thisPack))
+    changeSTT _.{options ← _.{flags ← flagClr VERBOSE}}
+    forsome makepasses runpass
+    switchState g
+
 
 ---  make filename from package name  @x.y.z.Packet@ =>  @dest/x/y/z/Packet.java@
 targetPath :: Global -> String -> String
@@ -216,9 +225,9 @@ javac = do
     g <- getSTT
     let target = targetPath g ".java"
     let command = maybe ["javac"] ´\s+´.splitted  (System.getProperty "frege.javac")
-        arguments = ["-cp", joined U.pathSep (U.ourPath g.options),
+        arguments = ["-cp", joined pathSep (ourPath g.options),
                     "-d",  g.options.dir,
-                    "-sourcepath", joined U.pathSep g.options.sourcePath,
+                    "-sourcepath", joined pathSep g.options.sourcePath,
                     "-encoding", "UTF-8",
                     target]
     when (isOn g.options.flags RUNJAVAC) do
@@ -401,6 +410,16 @@ data Todo =
     NoRebuild {
         because     :: String       --- reason why we don't need it
         compiletime :: Long         --- when has this been compiled?
+    }
+    | --- ready for javac
+    Compiled { 
+        global      :: Global       --- state after compiling
+    }
+    | --- needs recompilation
+    CompileMe {
+        global      :: Global       --- state
+        reason      :: Maybe Pack   --- required by or commandline
+        because     :: String       --- specific cause
     } 
     
 instance Show Todo where
@@ -417,7 +436,11 @@ instance Show Todo where
         NoRebuild{because}  → "no rebuild needed because " ++ because
         Waiting{for, todo}  → "waiting for `" ++ unmagicPack for.raw
         ParseMe{source}     → "parse " ++ source 
-        Parsed{}            →  "parsed"
+        Parsed{}            → "parsed"
+        Compiled{global}    → "compiled"
+        CompileMe{global, reason, because} -> "compilation needed because " ++ because
+                                ++ ", required by "
+                                ++ maybe "user" (unmagicPack . Pack.raw) reason
 
 
 --- build tree
@@ -450,6 +473,7 @@ running _         = false
 
 --- Predicate to tell if the argument represents a successful state
 successful NoRebuild{because} = true
+successful Compiled{global}   = true
 successful _                  = false
 
 
@@ -496,9 +520,10 @@ make mvar tree = do
     -- if something was running before or just submitted, wait for an answer
     if any running (values tree)
     then do
-        tree <- liftIO do
+        g       ←   getSTT
+        tree    ←   liftIO do
             -- result <-  mvar.poll
-            (p, todo) <- mvar.take
+            (p, todo)   ←   mvar.take
             --case result of
             --    Just x -> return x  -- no time for status
             --    _      -> do 
@@ -518,8 +543,10 @@ make mvar tree = do
             --                    lineSeparator
             --            return () 
             -- let oldstate = maybe "WHAT THE FUCK???" show (tree.lookup p)
-            when (failed todo || successful todo) do
+
+            when (isOn g.options.flags VERBOSE && (failed todo || successful todo)) do
                 stderr.println ("finished task " ++ unmagicPack p.raw ++ ": " ++ show todo)
+
             case todo of
                 CompileAfterDeps{global} -> do
                                 -- need to add the new dependencies to the todo list
@@ -572,11 +599,14 @@ makeone mvar tree (p, todo) = do
                 async (parseMe source)
             Parsed{global} -> do
                 async (return CompileAfterDeps{global, reason=Nothing})
-            Running{}   -> return tree
-            Aborted{}   -> return tree
-            Failed{}    -> return tree
-            NoRebuild{} -> return tree
-            Waiting{}   -> return tree
+            CompileMe{global, reason, because} → do
+                async (compileMe tree global)
+            Running{}   → return tree
+            Aborted{}   → return tree
+            Failed{}    → return tree
+            NoRebuild{} → return tree
+            Waiting{}   → return tree
+            Compiled{}  → return tree
     where
         async :: StIO Todo -> StIO TodoList
         async method = do
@@ -613,8 +643,14 @@ compileAfterDeps tree global reason = do
                 []  -> do
                     -- the list of failed prereq's is empty and the list of
                     -- not successful prereq's is also empty, this means we
-                    -- can go on! 
-                    return Aborted{because = "compile sooner or later"}
+                    -- can go on!
+                    let lastMod s = liftIO $ (File.new s >>= _.lastModified)
+                    smod    ← lastMod global.options.source
+                    cmod    ← lastMod (targetPath global ".class")
+                    jmod    ← lastMod (targetPath global ".java")
+                    if max jmod cmod <= smod
+                    then return CompileMe{global, reason, because="source newer than class/java"}
+                    else return Aborted{because = "compile sooner or later"}
 
 --- The action that checks if a package must be rebuilded
 checkUpdate :: Pack -> Maybe Pack -> StIO Todo
@@ -633,13 +669,13 @@ checkUpdate pack reason = do
                     -- is no way a fresher one could be made.
                     res <- Imp.getFP (g.unpack pack)
                     case res  of
-                        Left _ -> return Failed{
+                        Left _ -> return Failed {
                                 because = "module is not on class path"
                             }
-                        Right Nothing -> return Failed{
+                        Right Nothing -> return Failed {
                                 because = "package is not a frege module."
                             }
-                        Right (Just fp) -> return NoRebuild{
+                        Right (Just fp) -> return NoRebuild {
                                 because = "module exists on class path and no source available.",
                                 compiletime = fp.time 
                             }
@@ -658,6 +694,17 @@ parseMe path = do
     if gc.errors > 0 
     then return Failed{because = "of syntax errors."}
     else return Parsed{global = gc}
+
+compileMe :: TodoList -> Global -> StIO Todo
+compileMe tree g = do
+    -- add the packages our dependencies have imported to the package list
+    let deps = Imp.dependsOn g
+        gs   = map _.global . filter _.{global?} . mapMaybe (tree.lookup) $ deps
+        ps   = fold TreeMap.union g.packages (map _.packages gs)
+    gc <- makeFile g.{packages = ps}
+    if gc.errors > 0
+    then return Failed{because = "of compilation errors."}
+    else return Compiled{global=gc}
             {- do
                 -- We have a source file in 'path', let's see if it is newer than
                 -- the corresponding class file
