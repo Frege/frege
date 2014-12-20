@@ -6,7 +6,7 @@ package frege.compiler.Build
 import  frege.Prelude hiding(<+>)
 import  Lib.PP(msgdoc, text, <+>)
 import  Control.monad.State
-import  Data.TreeMap(Tree, each, values)
+import  Data.TreeMap(Tree, each, values, keys)
 
 import  frege.Version(version)
 
@@ -15,6 +15,7 @@ import  Compiler.types.Global
 import  Compiler.common.Desugar
 import  Compiler.common.CompilerOptions (standardGlobal, getOpts, theClassLoader, pathSep, ourPath)
 import  Compiler.common.Errors as E()
+import  Compiler.common.SymbolTable(enter)
 import  Compiler.types.Tokens
 import  Compiler.types.Packs
 import  Compiler.types.Positions
@@ -85,11 +86,11 @@ printErrors = do
 
 --- Compile a single file with given options 
 compileFile opts ef = do
-    newg <- standardGlobal
+    newg    ← standardGlobal
+    loader  ← theClassLoader opts
     let f = either snd id ef
-    let g = newg.{options = opts.{source = f}}
-    -- StateT.put newg.{options = g.options.{source = f}}
-    -- changeSTT Global.{options <- _.{source = f}}
+    let g = newg.{options = opts.{source = f}, sub <- _.{loader}}
+
     (_, g) <- StateT.run (forsome passes runpass) g
     return (g.errors == 0)
 
@@ -165,14 +166,31 @@ lexparse p = do
     return gc
 
 --- Run the passes on an already parsed global
-makeFile glob = do
-    g <- switchState glob
-    when (isOn g.options.flags VERBOSE) do
-        liftIO $ stderr.println ("compiling " ++ magicPack (glob.unpack glob.thisPack))
-    changeSTT _.{options ← _.{flags ← flagClr VERBOSE}}
-    forsome makepasses runpass
-    switchState g
-
+makeFile :: Global → [Symtab] → StIO Global 
+makeFile glob sts = do
+        g <- switchState glob
+        liftStG $ foreach sts mergeSymtab
+        when (isOn g.options.flags VERBOSE) do
+            liftIO $ stderr.println (magicPack glob.thisPack.raw ++ ": compiling")
+        changeSTT _.{options ← _.{flags ← flagClr VERBOSE}}
+        glob <- getSTT
+        liftIO do
+            stderr.println ("thisPack: " ++ glob.unpack glob.thisPack)
+            stderr.println ("unique:   " ++ show glob.unique)
+            stderr.println ("locals:   " ++ show (_.keys glob.locals))
+            stderr.println ("tySubst:  " ++ show (_.keys glob.tySubst))
+        forsome makepasses runpass
+        switchState g
+    where
+        mergeSymtab st = do
+            foreach (values st) mergeSym
+        mergeSym sym = do
+            g ← getST
+            case g.find sym.name of
+                Just _  → return ()
+                none    → do
+                    enter sym.{sid=0}
+                    when sym.{env?} (mergeSymtab sym.env)
 
 ---  make filename from package name  @x.y.z.Packet@ =>  @dest/x/y/z/Packet.java@
 targetPath :: Global -> String -> String
@@ -544,8 +562,8 @@ make mvar tree = do
             --            return () 
             -- let oldstate = maybe "WHAT THE FUCK???" show (tree.lookup p)
 
-            when (isOn g.options.flags VERBOSE && (failed todo || successful todo)) do
-                stderr.println ("finished task " ++ unmagicPack p.raw ++ ": " ++ show todo)
+            when (isOn g.options.flags VERBOSE && successful todo || failed todo) do
+                stderr.println (unmagicPack p.raw ++ ": " ++ show todo)
 
             case todo of
                 CompileAfterDeps{global} -> do
@@ -621,7 +639,9 @@ makeone mvar tree (p, todo) = do
                 return  (tree.update p Running{because = msg})
 
         exceptions :: Throwable -> IO ()
-        exceptions ex = mvar.put (p, Aborted{because = ex.show}) 
+        exceptions ex = do
+            ex.printStackTrace
+            mvar.put (p, Aborted{because = ex.show}) 
 
         unknown = return Aborted{because = "don't know what to do"}
 
@@ -700,8 +720,10 @@ compileMe tree g = do
     -- add the packages our dependencies have imported to the package list
     let deps = Imp.dependsOn g
         gs   = map _.global . filter _.{global?} . mapMaybe (tree.lookup) $ deps
-        ps   = fold TreeMap.union g.packages (map _.packages gs)
-    gc <- makeFile g.{packages = ps}
+        pks  = concatMap (keys   . _.packages) gs   -- package names
+        sts  = concatMap (values . _.packages) gs   -- symbol tables
+        ps   = fold (\t\p -> t.insert p empty) g.packages pks
+    gc <- makeFile g.{packages = ps} sts
     if gc.errors > 0
     then return Failed{because = "of compilation errors."}
     else return Compiled{global=gc}
