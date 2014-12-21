@@ -247,23 +247,29 @@ closePrinter = do
 native runJavac frege.runtime.Javac.runJavac :: MutableIO (JArray String) -> IO Int
 
 
---- run the java compiler
+--- run the java compiler for the current file
 javac :: StIO (String, Int)
 javac = do
     g <- getSTT
     let target = targetPath g ".java"
-    let command = maybe ["javac"] ´\s+´.splitted  (System.getProperty "frege.javac")
+    javacs [target]
+
+--- run the java compiler for some files
+javacs :: [String] → StIO(String, Int)
+javacs files = do
+    g <- getSTT
+    let command   = maybe ["javac"] ´\s+´.splitted  (System.getProperty "frege.javac")
         arguments = ["-cp", joined pathSep (ourPath g.options),
                     "-d",  g.options.dir,
                     "-sourcepath", joined pathSep g.options.sourcePath,
                     "-encoding", "UTF-8",
-                    target]
+                    ] ++ files
     when (isOn g.options.flags RUNJAVAC) do
         rc <- liftIO (JArray.fromList (command ++ arguments) >>= runJavac)
         when (rc != 0) do
             liftStG $ E.error (packageEnd g) 
                         (msgdoc "java compiler errors are most likely caused by erronous native definitions")
-    return ("source file", 1)
+    return ("source file", length files)
 
 
 runpass :: (StIO (String, Int), String) -> StIO  ()
@@ -598,19 +604,35 @@ make mvar tree = do
                         unwait Waiting{for, todo} | for == p = todo
                         unwait x = x
         make mvar tree
-    else if all successful (values tree)
-    then return true
     else do
-        -- there should be no tasks that are not either successful or failed
-        -- whenever this outputs something, it is time to reconsider the code
-        let hanging = filter (not . successful . snd)
-                    . filter (not . failed     . snd)
-                    . each $ tree
-        liftIO $ mapM_ (\(p,todo) -> stderr.println ("hanging: `" 
-                        ++ unmagicPack p.raw ++ "`  "
-                        ++ show todo)) hanging
-        liftIO $ stderr.println "Build failed."
-        return false
+        liftIO C.shutdown 
+        if all successful (values tree)
+        then do
+            let javafs = [ targetPath global ".java" | Compiled{global} <- values tree ]
+            g       ← getSTT
+            unless (null javafs || isOff g.options.flags RUNJAVAC) do 
+                start   ← liftIO $ System.currentTimeMillis ()
+                javacs javafs
+                ende    ← liftIO $ System.currentTimeMillis ()
+                when (isOn g.options.flags VERBOSE) do 
+                    liftIO $ stderr.printf "java compilation of %d files took %5.3fs%s"
+                        (length javafs)
+                        ((ende.double - start.double) / 1000)
+                        (System.lineSeparator())
+                return ()
+            g <- getSTT 
+            return (g.errors == 0)
+        else do
+            -- there should be no tasks that are not either successful or failed
+            -- whenever this outputs something, it is time to reconsider the code
+            let hanging = filter (not . successful . snd)
+                        . filter (not . failed     . snd)
+                        . each $ tree
+            liftIO $ mapM_ (\(p,todo) -> stderr.println ("hanging: `" 
+                            ++ unmagicPack p.raw ++ "`  "
+                            ++ show todo)) hanging
+            liftIO $ stderr.println "Build failed."
+            return false
 
 {--
     See what can be done for a single 'Todo' item
@@ -677,8 +699,8 @@ compileAfterDeps tree global reason = do
                     let lastMod s = liftIO $ (File.new s >>= _.lastModified)
                     smod    ← lastMod global.options.source
                     cmod    ← lastMod (targetPath global ".class")
-                    jmod    ← lastMod (targetPath global ".java")
-                    if max jmod cmod <= smod
+                    -- jmod    ← lastMod (targetPath global ".java")
+                    if  cmod <= smod
                     then return CompileMe{global, reason, because="source newer than class/java"}
                     else return Aborted{because = "compile sooner or later"}
 
