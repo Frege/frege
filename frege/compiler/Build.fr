@@ -124,13 +124,10 @@ passes = [ (lexPass, "lexer"),
         ]
 
 {-- 
-    When we @-make@, we don't need the java compiler pass,
-    because java compiling is done at the end.
-    
-    And we don't need the lexer and parser pass, because parsing is done
+    We don't need the lexer and parser pass, because parsing is done
     separatly in 'lexparse' 
     -}
-makepasses = filter ((!~ ´run java´) . snd) (drop 2 passes)
+makepasses = drop 2 passes
 
 lexPass = do
     g <- getSTT
@@ -173,8 +170,6 @@ makeFile :: Global → [Symtab] → StIO Global
 makeFile glob sts = do
         g <- switchState glob
         liftStG $ foreach sts mergeSymtab
-        when (isOn g.options.flags VERBOSE) do
-            liftIO $ stderr.println (unmagicPack glob.thisPack.raw ++ ": compiling")
         changeSTT _.{options ← _.{flags ← flagClr VERBOSE}}
         glob <- getSTT
         --liftIO do
@@ -209,6 +204,13 @@ targetPath g suffix =
                     ++ (´\.´.matcher (g.unpack g.thisPack)).replaceAll("/")
                     ++ suffix
 
+--- give name of class file for a package
+--- Whether the class file actually exists must be determined separatly.
+classForPack :: Global → Pack → String
+classForPack g p =
+                g.options.dir ++ "/"
+                    ++ (´\.´.matcher (g.unpack p)).replaceAll("/")
+                    ++ ".class"
 
 
 openPrinter = do
@@ -608,18 +610,18 @@ make mvar tree = do
         liftIO C.shutdown
 
         -- javac the compiled stuff no matter if something failed
-        let javafs = [ targetPath global ".java" | Compiled{global} <- values tree ]
-        g       ← getSTT
-        unless (null javafs || isOff g.options.flags RUNJAVAC) do 
-            start   ← liftIO $ System.currentTimeMillis ()
-            javacs javafs
-            ende    ← liftIO $ System.currentTimeMillis ()
-            when (isOn g.options.flags VERBOSE) do 
-                liftIO $ stderr.printf "java compilation of %d files took %5.3fs%s"
-                    (length javafs)
-                    ((ende.double - start.double) / 1000)
-                    (System.lineSeparator())
-            return ()
+        --let javafs = [ targetPath global ".java" | Compiled{global} <- values tree ]
+        --g       ← getSTT
+        --unless (null javafs || isOff g.options.flags RUNJAVAC) do 
+        --    start   ← liftIO $ System.currentTimeMillis ()
+        --    javacs javafs
+        --    ende    ← liftIO $ System.currentTimeMillis ()
+        --    when (isOn g.options.flags VERBOSE) do 
+        --        liftIO $ stderr.printf "java compilation of %d files took %5.3fs%s"
+        --            (length javafs)
+        --            ((ende.double - start.double) / 1000)
+        --            (System.lineSeparator())
+        --    return ()
   
         if all successful (values tree)
         then do
@@ -653,7 +655,7 @@ makeone mvar tree (p, todo) = do
             Parsed{global} -> do
                 async (return CompileAfterDeps{global, reason=Nothing})
             CompileMe{global, reason, because} → do
-                async (compileMe tree global)
+                async (compileMe tree global because)
             Running{}   → return tree
             Aborted{}   → return tree
             Failed{}    → return tree
@@ -705,7 +707,22 @@ compileAfterDeps tree global reason = do
                     -- jmod    ← lastMod (targetPath global ".java")
                     if  cmod <= smod
                     then return CompileMe{global, reason, because="source newer than class/java"}
-                    else return Aborted{because = "compile sooner or later"}
+                    else do
+                        let compiled = [ p | (p, Compiled{}) <- dr ]
+                        if not (null compiled)
+                        then do
+                            return CompileMe{global, reason, 
+                                because = unmagicPack (global.unpack (head compiled))
+                                    ++ " was compiled."}
+                        else do
+                            let outdt = [ p | (p, NoRebuild{compiletime}) ← dr,
+                                            compiletime > cmod ]
+                            if not (null outdt)
+                            then return CompileMe{global, reason, 
+                                because = "outdated with respect to "
+                                    ++ unmagicPack (global.unpack (head outdt))}
+                            else
+                                return NoRebuild{because="class file is up to date", compiletime=cmod}
 
 --- The action that checks if a package must be rebuilded
 checkUpdate :: Pack -> Maybe Pack -> StIO Todo
@@ -750,8 +767,12 @@ parseMe path = do
     then return Failed{because = "of syntax errors."}
     else return Parsed{global = gc}
 
-compileMe :: TodoList -> Global -> StIO Todo
-compileMe tree g = do
+compileMe :: TodoList → Global → String → StIO Todo
+compileMe tree g reason = do
+    when (isOn g.options.flags VERBOSE) do
+        liftIO $ stderr.println (unmagicPack g.thisPack.raw 
+                ++ ": compiling because " ++ reason)
+
     -- add the packages our dependencies have imported to the package list
     let deps = Imp.dependsOn g
         gs   = map _.global . filter _.{global?} . mapMaybe (tree.lookup) $ deps
