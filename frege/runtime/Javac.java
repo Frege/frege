@@ -26,16 +26,21 @@ public class Javac {
 		
 		if (compiler != null && fileManager != null) {
 			// use the internal compiler
-			File[] files = new File[] { new File(cmd[cmd.length-1]) };
-			String[] options = new String[cmd.length-2];
-			for (int i=0; i<options.length; i++) options[i] = cmd[i+1];
-		    Iterable<? extends JavaFileObject> compilationUnits1 =
+			int lastopt = cmd.length - 1;
+			while (cmd[lastopt].endsWith(".java")) lastopt--;
+			File[] files = new File[cmd.length-1-lastopt];
+			for (int i=0; i<files.length; i++) 
+				files[i] = new File(cmd[lastopt+1+i]);
+			String[] options = new String[cmd.length-files.length-1];
+			for (int i=0; i<options.length; i++) 
+				options[i] = cmd[i+1];
+		    Iterable<? extends JavaFileObject> compilationUnits =
 		               fileManager.getJavaFileObjectsFromFiles(Arrays.asList(files));
 		    System.err.println("calling: " + sb.toString());
 		    CompilationTask task = compiler.getTask(null, 
 		    		fileManager, null, 
 		    		Arrays.asList(options), 
-		    		null, compilationUnits1);
+		    		null, compilationUnits);
 		    
 		    boolean success = task.call();
 		    try {
