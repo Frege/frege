@@ -1063,12 +1063,7 @@ funhead:
 literal:
     TRUE                            { \x ->  Lit (yyline x) LBool "true" }
     | FALSE                         { \x ->  Lit (yyline x) LBool "false"}
-    | CHRCONST                      { \x ->  do
-                                                let v = Token.value x
-                                                when (length v > 3 && strhead v 2 != "'\\")
-                                                    (yyerror (yyline x) ("bad char literal: " ++ v))
-                                                YYM.return $ Lit (yyline x) LChar v
-                                    }
+    | CHRCONST                      { \x ->  do litchar x }
     | STRCONST                      { \x ->  Lit (yyline x) LString (Token.value x) }
     | INTCONST                      { \x ->  Lit (yyline x) LInt    (Token.value x) }
     | BIGCONST                      { \x ->  Lit (yyline x) LBig    (bignum x)      }
