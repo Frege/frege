@@ -127,7 +127,7 @@ passes = [ (lexPass, "lexer"),
     We don't need the lexer and parser pass, because parsing is done
     separatly in 'lexparse' 
     -}
-makepasses = drop 2 passes
+makepasses = filter (("run java compiler" !=) . snd) . drop 2 $ passes
 
 lexPass = do
     g <- getSTT
@@ -395,7 +395,7 @@ resolveSP g path = do
  
 --- to do item
 data Todo = 
-    {-- We have a source file but don't know the package yet. -}
+    --- We have a source file but do not know the package yet.
     ParseMe {
         source      :: String       --- path name to parse
     }
@@ -428,11 +428,12 @@ data Todo =
         -}
     Waiting {
         for  :: Pack                --- package we are waiting for
+        status :: Todo -> Bool      --- predicate to fulfill ('failed' always included)
         todo :: Todo                --- what to do once package fails or succeeds
     }
     | --- submitted to do some work
     Running { 
-        because     :: String       --- description of what task has to do
+        todo        :: Todo         --- what is it doing
     }
     | --- aborted for some reason like exceptions, ...
     Aborted {
@@ -447,7 +448,7 @@ data Todo =
         because     :: String       --- reason why we don't need it
         compiletime :: Long         --- when has this been compiled?
     }
-    | --- ready for javac
+    | --- successfully java compiled
     Compiled { 
         global      :: Global       --- state after compiling
     }
@@ -456,8 +457,12 @@ data Todo =
         global      :: Global       --- state
         reason      :: Maybe Pack   --- required by or commandline
         because     :: String       --- specific cause
-    } 
-    
+    }
+    | --- needs java compilation
+    JavacMe {
+        global      :: Global       --- state
+    }
+
 instance Show Todo where
     show x = case x  of
         CompileAfterDeps{global, reason} → "compile after dependencies"
@@ -466,7 +471,7 @@ instance Show Todo where
                                 ++ maybe "user" (unmagicPack . Pack.raw) reason
         CheckUpdate{pack, reason} → "check if build is necessary, required by "
                                 ++ maybe "user" (unmagicPack . Pack.raw) reason
-        Running{because}    → "running " ++ because
+        Running{todo}       → "running " ++ show todo
         Aborted{because}    → "aborted " ++ because
         Failed{because}     → "build failed because " ++ because
         NoRebuild{because}  → "no rebuild needed because " ++ because
@@ -477,7 +482,7 @@ instance Show Todo where
         CompileMe{global, reason, because} -> "compilation needed because " ++ because
                                 ++ ", required by "
                                 ++ maybe "user" (unmagicPack . Pack.raw) reason
-
+        JavacMe{global}     → "ready for java compilation"
 
 --- build tree
 type TodoList = Tree Pack Todo 
@@ -510,8 +515,12 @@ running _         = false
 --- Predicate to tell if the argument represents a successful state
 successful NoRebuild{because} = true
 successful Compiled{global}   = true
+successful JavacMe{global}    = true
 successful _                  = false
 
+complete NoRebuild{} = true
+complete Compiled{}  = true
+complete x           = failed x
 
 --- Predicate to tell if a 'Todo' item failed
 failed Failed{}  = true
@@ -591,11 +600,11 @@ make mvar tree = do
                                             . Tree.deletek p 
                                             . addDepsOf global) 
                                         tree)
-                Waiting{for, todo=prev} -> do
+                Waiting{for, status, todo=prev} -> do
                     -- module waited for may already have changed state,
                     -- in that case just resubmit
                     case tree.lookup for of
-                        Just x | failed x || successful x
+                        Just x | failed x || status x
                               = return (tree.update p prev)
                         sonst = return (tree.update p todo)
                 _ | failed todo || successful todo
@@ -609,19 +618,20 @@ make mvar tree = do
     else do                 -- no running tasks found
         liftIO C.shutdown
 
-        -- javac the compiled stuff no matter if something failed
-        --let javafs = [ targetPath global ".java" | Compiled{global} <- values tree ]
-        --g       ← getSTT
-        --unless (null javafs || isOff g.options.flags RUNJAVAC) do 
-        --    start   ← liftIO $ System.currentTimeMillis ()
-        --    javacs javafs
-        --    ende    ← liftIO $ System.currentTimeMillis ()
-        --    when (isOn g.options.flags VERBOSE) do 
-        --        liftIO $ stderr.printf "java compilation of %d files took %5.3fs%s"
-        --            (length javafs)
-        --            ((ende.double - start.double) / 1000)
-        --            (System.lineSeparator())
-        --    return ()
+        -- javac the compiled stuff in case -j was given
+        let javafs = [ targetPath global ".java" | Compiled{global} <- values tree,
+                                                    isOff global.options.flags RUNJAVAC ]
+        g       ← getSTT
+        changeSTT _.{options <- _.{flags <- flagSet RUNJAVAC}}
+        unless (null javafs) do 
+            start   ← liftIO $ System.currentTimeMillis ()
+            javacs javafs
+            ende    ← liftIO $ System.currentTimeMillis ()
+            when (isOn g.options.flags VERBOSE) do 
+                liftIO $ stderr.printf "java compilation of %d files took %5.3fs%s"
+                    (length javafs)
+                    ((ende.double - start.double) / 1000)
+                    (System.lineSeparator())
   
         if all successful (values tree)
         then do
@@ -656,6 +666,8 @@ makeone mvar tree (p, todo) = do
                 async (return CompileAfterDeps{global, reason=Nothing})
             CompileMe{global, reason, because} → do
                 async (compileMe tree global because)
+            JavacMe{global} -> do
+                async (javacMe tree global)
             Running{}   → return tree
             Aborted{}   → return tree
             Failed{}    → return tree
@@ -673,14 +685,13 @@ makeone mvar tree (p, todo) = do
                             mvar.put (p, newstate)
                         `catch` exceptions
                     -- stderr.println("starting task " ++ unmagicPack p.raw ++ ": " ++ msg) 
-                return  (tree.update p Running{because = msg})
+                return  (tree.update p Running{todo})
 
         exceptions :: Throwable -> IO ()
         exceptions ex = do
             ex.printStackTrace
             mvar.put (p, Aborted{because = ex.show}) 
 
-        unknown = return Aborted{because = "don't know what to do"}
 
 --- The action that re-builds a source if needed 
 compileAfterDeps :: TodoList -> Global -> Maybe Pack -> StIO Todo
@@ -696,7 +707,7 @@ compileAfterDeps tree global reason = do
             [] -> case filter (not . successful . snd) dr of
                 -- not successful, but not failed, i.e. waiting or running
                 -- tell the scheduler that we wait until p's state changes
-                (p, _):_ ->  return Waiting{for=p, todo=CompileAfterDeps{global, reason}}
+                (p, _):_ ->  return Waiting{for=p, status=successful, todo=CompileAfterDeps{global, reason}}
                 []  -> do
                     -- the list of failed prereq's is empty and the list of
                     -- not successful prereq's is also empty, this means we
@@ -708,7 +719,7 @@ compileAfterDeps tree global reason = do
                     if  cmod <= smod
                     then return CompileMe{global, reason, because="source newer than class/java"}
                     else do
-                        let compiled = [ p | (p, Compiled{}) <- dr ]
+                        let compiled = [ p | (p, Compiled{}) <- dr ] ++ [ p | (p, JavacMe{}) <- dr ]
                         if not (null compiled)
                         then do
                             return CompileMe{global, reason, 
@@ -723,6 +734,34 @@ compileAfterDeps tree global reason = do
                                     ++ unmagicPack (global.unpack (head outdt))}
                             else
                                 return NoRebuild{because="class file is up to date", compiletime=cmod}
+
+javacMe :: TodoList → Global → StIO Todo
+--- If -j was given, this transitions immediatly to 'Compiled'
+javacMe tree global | isOff global.options.flags RUNJAVAC = return Compiled{global}
+--- Otherwise, we need to wait until dependencies have finished javac-ing
+javacMe tree global = do
+    let deps    = Imp.dependsOn global
+        results = mapMaybe tree.lookup deps
+        dr      = zip deps results
+    if length results != length deps
+    then error "packages missing"       -- must not happen
+    else do
+        case filter (failed . snd) dr of
+            (p,_):_ -> return Failed{because="module `" ++ unmagicPack p.raw ++ "` not built."}
+            [] -> case filter (not . complete . snd) dr of
+                -- not complete, but not failed, i.e. waiting or running or javac-ing
+                -- tell the scheduler that we wait until p's state changes
+                (p, _):_ ->  return Waiting{for=p, status=complete, todo=JavacMe{global}}
+                []  -> do
+                    -- the list of failed prereq's is empty and the list of
+                    -- not completed prereq's is also empty, this means we
+                    -- can go on!
+                    old <- switchState global
+                    javac
+                    global <- switchState old
+                    if global.errors > 0 then
+                         return Failed{because="javac errors"}
+                    else return Compiled{global}
 
 --- The action that checks if a package must be rebuilded
 checkUpdate :: Pack -> Maybe Pack -> StIO Todo
@@ -775,7 +814,9 @@ compileMe tree g reason = do
 
     -- add the packages our dependencies have imported to the package list
     let deps = Imp.dependsOn g
-        gs   = map _.global . filter _.{global?} . mapMaybe (tree.lookup) $ deps
+        unrun Running{todo} = todo
+        unrun x             = x
+        gs   = map _.global . filter _.{global?} . map unrun . mapMaybe (tree.lookup) $ deps
         pks  = concatMap (keys   . _.packages) gs         -- package names
         sts  = concatMap (values . _.packages) gs         -- symbol tables
         jts  = concatMap (each   . _.javaEnv)  gs         -- java envs
@@ -789,7 +830,7 @@ compileMe tree g reason = do
     gc <- makeFile g.{packages = ps, javaEnv = jt} sts
     if gc.errors > 0
     then return Failed{because = "of compilation errors."}
-    else return Compiled{global=gc}
+    else return JavacMe{global=gc}
             {- do
                 -- We have a source file in 'path', let's see if it is newer than
                 -- the corresponding class file
