@@ -843,12 +843,19 @@ kind:
     ;
 
 simplekind:
-    LOP3                    { const KType }
+    SOMEOP                  { \star -> do
+                                let w = Token.value star
+                                when  (w != "*") do
+                                    yyerror (yyline star) 
+                                            ("expected `*`, found `" ++ w ++ "`") 
+                                return KType
+                            }
     | VARID                 { \v -> do
                                 let w = Token.value v
                                 if w == "generic" then return KGen
                                 else do
-                                    yyerror (yyline v) ("expected `generic` instead of `" ++ w ++ "`")
+                                    yyerror (yyline v) 
+                                            ("expected `generic` instead of `" ++ w ++ "`")
                                     return KType
                             }
     | '(' kind ')'          { \_\b\_ -> b }
