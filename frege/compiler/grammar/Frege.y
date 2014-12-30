@@ -958,7 +958,9 @@ contypes:
     simpletypes                 { \taus -> do
                                     g <- getST
                                     let field  = Field Position.null Nothing Nothing Public false
-                                                    . ForAll [] . RhoTau []
+                                                    • toSig
+                                        toSig (TSig s) = s
+                                        toSig tau      = (ForAll [] . RhoTau []) tau
                                     return (map field taus)
                                 }
     ;
