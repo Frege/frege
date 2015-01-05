@@ -113,7 +113,7 @@ dist: fregec.jar
 	perl scripts/mkdist.pl
 
 fregec.jar: compiler $(DIR)/check1
-	$(FREGECC)  -make  frege/StandardLibrary.fr
+	$(FREGECC)  -make  -j frege/StandardLibrary.fr
 	jar  -cf    fregec.jar -C build frege
 	jar  -uvfe  fregec.jar frege.compiler.Main
 	cp fregec.jar fallback.jar
@@ -183,16 +183,17 @@ $(DIR)/check1: $(DIR)/PreludeProperties.class
 	$(JAVA) -Xss1m -cp build frege.PreludeProperties && echo Prelude Properties checked >$(DIR)/check1
 
 
-$(DIR)/PreludeProperties.class:  frege/PreludeProperties.fr
+$(DIR)/PreludeProperties.class:  frege/PreludeProperties.fr $(COMPF)/Main.class
 	$(FREGECC) -make  frege/PreludeProperties.fr
 
 # 	$(TOOLSF)/Doc.class $(TOOLSF)/YYgen.class $(TOOLSF)/LexConvt.class
 tools: $(COMPF)/Main.class
-	$(FREGECC) -make  frege/StandardTools.fr
+	$(FREGECC) -make -j frege/StandardTools.fr
+
 #
 # final compiler
 #
-compiler: compiler2  $(COMPF)/Main.class tools
+compiler: $(COMPF)/Main.class tools
 	cp frege/tools/yygenpar-fr frege/tools/YYgenparM-fr build/frege/tools
 	@echo Compiler ready
 
@@ -202,25 +203,19 @@ frege/compiler/grammar/Frege.fr: frege/compiler/grammar/Frege.y
 	@echo We should have 6 shift/reduce conflicts in the grammar.
 	$(YACC) -v frege/compiler/grammar/Frege.y
 	$(FREGE) -cp fregec.jar frege.tools.YYgen -m State  frege/compiler/grammar/Frege.fr
+
 frege/Version.fr: .git/index
 	perl scripts/mkversion.pl >frege/Version.fr
-$(COMPF)/Main.class: frege/compiler/grammar/Frege.fr frege/compiler/Main.fr frege/Version.fr
-	$(FREGEC2)  -make frege.compiler.Main
-$(DIR)/Prelude.class: $(COMPF2)/Main.class $(PRELUDE)
-	rm -rf $(DIR)
-	cd build && mkdir frege
-	$(JAVAC) -d build frege/runtime/*.java
-	$(FREGEC2)  $(PRELUDE)
-	$(FREGEC2)  -make  frege.Prelude
 
-compiler2: $(COMPF2)/Main.class
+$(COMPF)/Main.class: compiler2
+	( test -d $(DIR) -a $(COMPF2)/Main.class -nt $(COMPF)/Main.class && rm -rf $(COMPF) $(TOOLSF) $(DIR)/prelude ) || true
+	$(FREGEC2)  -make frege.compiler.Main
+
+compiler2: compiler1
+	( test -d $(DIR2) -a $(COMPF1)/Main.class -nt $(COMPF2)/Main.class && rm -rf $(DIR2) ) || true
+	$(FREGEC1) -v -make frege.compiler.Main
 	@echo stage 2 compiler ready
 
-
-$(COMPF2)/Main.class: $(COMPF1)/Main.class
-	rm -rf $(COMPF2)
-	rm -rf $(DIR2)
-	$(FREGEC1) -v -make frege.compiler.Main
 
 
 SOURCES  =      $(COMPS)/Scanner.fr   $(COMPS)/Classtools.fr \
@@ -256,16 +251,10 @@ CLASSES  =       $(COMPF1)/Scanner.class   $(COMPF1)/Classtools.class \
 		$(COMPF1)/gen/Bindings.class $(COMPF1)/gen/Match.class \
 		$(COMPF1)/GenMeta.class   $(COMPF1)/GenJava7.class
 
-PRE1 = $(DIR1)/Prelude.class $(DATA1)/TreeMap.class $(DATA1)/Bits.class
 
-compiler1: $(RUNTIME)   $(COMPF1)/Main.class
-	@echo stage 1 compiler ready
-
-$(COMPF1)/Main.class :  frege/compiler/grammar/Frege.fr frege/Version.fr
-	rm -rf $(COMPF1)
-	rm -rf $(DIR1)
+compiler1: frege/compiler/grammar/Frege.fr frege/Version.fr 
 	$(FREGEC0)  -make frege.compiler.Main
-
+	@echo stage 1 compiler ready
 
 runtime:
 	mkdir -p build
