@@ -134,7 +134,7 @@ Project State
 The compiler, an Eclipse plugin and a provisional version of the documentation can be [downloaded](https://github.com/Frege/frege/releases). 
 Note that Frege requires JDK 7 to compile and run programs.
 
-The compiler, the standard library, and the documentation tool are **themselves written in Frege**.
+The compiler, the standard library, the Eclipse plugin, and the documentation tool are **themselves written in Frege**.
 This should speak for itself regarding stability, functional completeness and performance of the language.
 
 The documentation is provisional and the library supports almost all of the Haskell 2010 standard library
