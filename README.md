@@ -134,7 +134,13 @@ Project State
 The compiler, an Eclipse plugin and a provisional version of the documentation can be [downloaded](https://github.com/Frege/frege/releases). 
 Note that Frege requires JDK 7 to compile and run programs.
 
-The compiler, the standard library, the Eclipse plugin, and the documentation tool are **themselves written in Frege**.
+A number of tools are **written in Frege**:
+* the Frege compiler itself,
+* the Frege [standard library]( http://www.frege-lang.org/doc/frege/Prelude.html),
+* the Frege [command-line REPL](https://github.com/Frege/frege-repl),
+* the Frege web-based, full-stack [interactive online REPL](http://try.frege-lang.org/),
+* the Frege [Eclipse plugin](https://github.com/Frege/eclipse-plugin), 
+* and the documentation tool.
 This should speak for itself regarding stability, functional completeness and performance of the language.
 
 The documentation is provisional and the library supports almost all of the Haskell 2010 standard library
@@ -146,9 +152,6 @@ getting started at the command-line or read the [Eclipse plugin](https://github.
 You can develop [Frege inside Intellij IDEA](https://github.com/Frege/frege/wiki/Using-Frege-in-Intellij-IDEA)
 and there is build automation support for
 Maven, Gradle, and Leinigen.
-
-There is also an [interpreter (REPL)](https://github.com/Frege/frege-repl). 
-An online version of the REPL is available [here](http://try.frege-lang.org/).
 
 The awesome QuickCheck library for advanced unit testing comes bundled with the language.
 
