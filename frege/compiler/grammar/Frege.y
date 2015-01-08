@@ -73,7 +73,8 @@ import  Compiler.common.Errors as E()
 import  Compiler.common.Resolve as R(enclosed)
 
 import Lib.PP (group, break, msgdoc)
-import frege.compiler.Utilities as U(tuple)
+import frege.compiler.common.Tuples as T(tuple)
+import frege.compiler.Utilities as U()
 import frege.compiler.common.Desugar
 
 import frege.compiler.grammar.Lexer (substQQ)
