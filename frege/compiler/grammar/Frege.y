@@ -1,7 +1,7 @@
 %{
 {- 
 
-    Copyright © 2011 - 2014, Ingo Wechsung
+    Copyright © 2011 - 2015, Ingo Wechsung
     All rights reserved.
 
     Redistribution and use in source and binary forms, with or
@@ -14,7 +14,9 @@
         Redistributions in binary form must reproduce the above
         copyright notice, this list of conditions and the following
         disclaimer in the documentation and/or other materials provided
-        with the distribution. Neither the name of the copyright holder
+        with the distribution. 
+        
+        Neither the name of the copyright holder
         nor the names of its contributors may be used to endorse or
         promote products derived from this software without specific
         prior written permission.
@@ -74,7 +76,6 @@ import  Compiler.common.Resolve as R(enclosed)
 
 import Lib.PP (group, break, msgdoc)
 import frege.compiler.common.Tuples as T(tuple)
-import frege.compiler.Utilities as U()
 import frege.compiler.common.Desugar
 
 import frege.compiler.grammar.Lexer (substQQ)
@@ -761,7 +762,7 @@ mbdot:
 
 rho:
     tapp EARROW rhofun               { \tau\t\rho -> do
-                                        context <- U.tauToCtx tau
+                                        context <- tauToCtx tau
                                         YYM.return (Rho.{context} rho)
                                      }
     | rhofun              
@@ -869,7 +870,7 @@ classdef:
     }
     | CLASS CONID tau EARROW varid wheredef {
         \_\i\tau\_\v\defs -> do
-            ctxs <- U.tauToCtx tau
+            ctxs <- tauToCtx tau
             sups <- classContext (Token.value i) ctxs (v.value)
             YYM.return (ClaDcl {pos = yyline i, vis = Public, name = Token.value i,
                              clvar = TVar (yyline v) KVar v.value,
