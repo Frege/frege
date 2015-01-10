@@ -1,15 +1,17 @@
-# Makefile for the frege compiler distribution
+# Makefile for the frege compiler distribution.
+# When you need to run this under Windows (poor guy!),
+# change the path separator characters.
 
 #
 # Make sure you have sensible values for JAVAC, YACC and JAVA
-# The standard distribution needs a Java 1.7 JDK.
+# The standard distribution needs a Java 1.7 (or higher) JDK.
 # Because people may need previous JDKs/JREs for different work,
 # there are 2 mechanisms to get the right java:
 #
 #   - put the JDK7 in your PATH after other JDKs, and make java7 a symbolic link to
 #     the JDK7 java binary. (On Windows, just copy java.exe to java7.exe)
 #   - For UNIX users: make the following alias:
-#         alias fmake='make JAVA="/path/to/jdk7/java" -f frege.mk '
+#         alias fmake='make JAVA="/path/to/jdk7/java" '
 #
 # YACC should be a BSD compatible yacc. This can be obtained from the net at various places.
 # Windows users look for pbyacc.exe, Ubuntu users use
@@ -21,8 +23,6 @@
 
 JAVAC = javac -source 1.7 -target 1.7 -encoding UTF-8
 YACC =`which byacc || which byaccj || which pbyacc || false`
-# JAVA = java7 -XX:+TieredCompilation "-Dfrege.javac=javac -J-Xmx512m"
-# JAVA = java7 -XX:+TieredCompilation -Dfrege.javac=internal
 JAVA = java "-Dfrege.javac=internal -nowarn -source 1.7 -target 1.7"
 
 
