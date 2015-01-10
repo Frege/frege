@@ -132,7 +132,7 @@ Project State
 -------------
 
 The compiler, an Eclipse plugin and a provisional version of the documentation can be [downloaded](https://github.com/Frege/frege/releases). 
-Note that Frege requires JDK 7 to compile and run programs.
+Note that Frege requires at least JDK 7 to compile and run programs.
 
 A number of tools are **written in Frege**:
 * the Frege compiler itself,
@@ -218,7 +218,7 @@ API Docs
 
 Copyright and License
 ---------
-Copyright (c) Ingo Wechsung, 2011-2014. All rights reserved.
+Copyright (c) Ingo Wechsung, 2011-2015. All rights reserved.
 The use and distribution terms for this software are covered by the
 [BSD 3-clause license](http://opensource.org/licenses/BSD-3-Clause)
 which can be found in the file LICENSE.txt at the root of this distribution.
