@@ -172,8 +172,7 @@ fregec6.jar: fallback.jar savejava
 #	One should have a fallback.jar, just in case ....
 #
 test-jar: fallback.jar
-	$(FREGEC2) -make frege.compiler.Main
-	$(FREGEC2) -make frege.ide.Utilities
+	$(FREGEC2) -make frege.compiler.Main frege.ide.Utilities
 	jar  -cf    fregec.jar -C build frege
 	jar  -uvfe  fregec.jar frege.compiler.Main
 	cp fregec.jar  ../eclipse-plugin/lib/fregec.jar
@@ -193,7 +192,7 @@ tools: $(COMPF)/Main.class
 #
 # final compiler
 #
-compiler: $(COMPF)/Main.class tools
+compiler: $(COMPF)/Main.class 
 	cp frege/tools/yygenpar-fr frege/tools/YYgenparM-fr build/frege/tools
 	@echo Compiler ready
 
@@ -209,7 +208,7 @@ frege/Version.fr: .git/index
 
 $(COMPF)/Main.class: compiler2
 	( test -d $(DIR) -a $(COMPF2)/Main.class -nt $(COMPF)/Main.class && rm -rf $(COMPF) $(TOOLSF) $(DIR)/prelude ) || true
-	$(FREGEC2)  -make frege.compiler.Main
+	$(FREGEC2)  -make frege.compiler.Main frege/StandardTools.fr
 
 compiler2: compiler1
 	( test -d $(DIR2) -a $(COMPF1)/Main.class -nt $(COMPF2)/Main.class && rm -rf $(DIR2) ) || true
