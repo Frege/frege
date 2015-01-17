@@ -1,5 +1,5 @@
 /*
-    Copyright © 2011 - 2014, Ingo Wechsung
+    Copyright © 2011 - 2015, Ingo Wechsung
     All rights reserved.
     
     Redistribution and use in source and binary forms, with or
