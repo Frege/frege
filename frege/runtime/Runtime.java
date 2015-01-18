@@ -235,6 +235,8 @@ public class Runtime {
 //			throw new Error(ex); // ex.printStackTrace();
 //		}
 		finally {
+			// The following is needed to terminate a program that did forkIO
+			Concurrent.shutDownIfExists();
 			stderr.get().flush();
 			stdout.get().flush();
 		}

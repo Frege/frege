@@ -5,7 +5,7 @@ package frege.runtime;
 
 
 /**
- * Support for cpncurrency and parallelism.
+ * Support for concurrency and parallelism.
  * 
  * @author ingo
  *
@@ -147,6 +147,15 @@ public class Concurrent {
     				java.util.concurrent.Executors.newFixedThreadPool(
     						2 * java.lang.Runtime.getRuntime().availableProcessors()))
     		: execService;
+    }
+    
+    /**
+     * <p>Shutdown the Frege Executor Service if it exists.</p>
+     */
+    final public static void shutDownIfExists() {
+    	if (execService != null && !execService.isShutdown()) {
+    		execService.shutdown();
+    	}
     }
     
     /**
