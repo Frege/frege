@@ -28,9 +28,11 @@
 #
 
 CHAPTERS = chaptertypes.tex chaptermodules.tex chapterdeclarations.tex \
-            chapterlex.tex chapterexpr.tex chapternative.tex
+            chapterlex.tex chapterexpr.tex chapternative.tex chapterio.tex
 
 IMAGES = utfcode.eps
+
+LATEX = latex
 
 all: Language.pdf Implementation.pdf
 
@@ -41,11 +43,11 @@ Language.pdf: Language.dvi
 	dvipdfm -q Language
 
 Language.dvi: Language.tex $(CHAPTERS) $(IMAGES)
-	latex -interaction batchmode -quiet Language.tex
-	latex -interaction batchmode -quiet Language.tex
-	latex -interaction batchmode -quiet Language.tex
+	$(LATEX) -interaction batchmode  Language.tex
+	$(LATEX) -interaction batchmode  Language.tex
+	$(LATEX) -interaction batchmode  Language.tex
 	makeindex Language
-	latex -interaction batchmode -quiet Language.tex
+	$(LATEX) -interaction batchmode  Language.tex
 
 Implementation.ps: Implementation.dvi
 	dvips Implementation
