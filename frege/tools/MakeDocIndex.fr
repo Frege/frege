@@ -1,0 +1,112 @@
+--- This is an undocumented module
+module Tools.MakeDocIndex where
+
+import Data.List
+import Java.Net (URLArray, URLClassLoader)
+
+--- regular expression to split path names on 'File.separator'
+!separatorRE = if File.separator == "/" then ´/+´ else ´\\+´
+
+--- regular expression to detect "\*.html" files
+!htmlAtEnd = ´(?i:\.htm(l))$´
+
+--- drop ".html" from the end of a name
+unHtml n = (htmlAtEnd.matcher n).replaceFirst "" 
+
+--- tell if this is the name of a meta file
+isMeta f =     f == "fregedoc.html"
+            || f == "prefix-frame.html"
+            || f == "index.html"
+            || f.startsWith "frame-"
+
+
+findHtml ∷ String → IO [(String, String)]
+findHtml dir = do
+        fdir ← File.new dir
+        walk [] fdir  
+    where
+        -- strip leading "dir" and path separators from path
+        normalize = rmleading . rmdir
+        rmdir s     = if s.startsWith dir then strtail s (length dir) else s
+        rmleading s = if s.startsWith File.separator 
+            then rmleading (strtail s 1)
+            else s 
+        walk ∷ [(String, String)] → MutableIO File → IO [(String, String)]
+        walk acc fd = do
+            isdir ← fd.isDirectory
+            if isdir then do
+                subfiles ← fd.list
+                case subfiles of
+                    Nothing     = return acc
+                    Just array  = readonly _.toList array
+                                    >>= mapM (File.new fd)
+                                    >>= foldM walk acc
+            else do
+                p ← fd.getParentFile >>= maybe (return "") _.getPath
+                n ← fd.getName
+                if  not (isMeta n) && n ~ htmlAtEnd
+                then return  ((normalize p;n)!:acc)
+                else return acc  
+
+{--
+    We will make the following files:
+    
+    @fregedoc.html@ defines 3 frames: left upper, left lower and right.
+    
+    @prefix-frame.html@ contains a list of the module prefixes,
+    which are shown in the left upper frame. Each entry causes the
+    left lower frame to display the modules with that prefix.
+    
+    For each module prefix a file that lists the actual modules. 
+    This one is displayed in the left lower frame, and clicking on
+    one of the names causes the module documentation to appear
+    in the right frame.
+    For example, @frame-frege.prelude.html@ would contain @PreludeBase@, 
+    @PreludeMonad@ and so on.
+    
+    There will be a pseudo module prefix "@All Modules@" and a 
+    corresponding @frame-All-Modules.html@ that contains links to all the
+    modules.
+-}
+
+main :: [String] -> IO Bool
+main [doc] = do
+    results ← findHtml doc
+    let allmods = ("All Modules", sortBy (comparing snd) results)
+        grouped = groupBy (using fst) (sortBy (comparing fst) results)
+        groups  = allmods :  
+                    map (\xs -> (fst (head xs), sortBy  (comparing snd) xs))
+                        grouped
+        noruntime = filter (not • _.startsWith "frege/runtime" • fst) groups
+    printFregeDoc doc 
+    return true
+
+main _ = mapM_ stderr.println [
+        "usage: frege.tools.Docindex directory",
+        "",
+        "looks up frege documentation in the given directory and",
+        "creates all the auxiliary files for a HTML page with frames.",
+    ] >> return false
+
+--- Print the top file with the frameset
+printFregeDoc ∷ String →  IO ()
+printFregeDoc doc  = do
+        urls    ← URLArray.fromList []
+        loader  ← ClassLoader.current >>= URLClassLoader.new urls
+        mburl   ← loader.getResource "frege/tools/fregedoc.html"
+        case mburl of
+            Nothing -> do
+                stderr.println "Can't find resource frege/tools/fregedoc.html"
+                System.exit 1
+                return ()
+            Just url -> do
+                stream ← url.openStream
+                lines  ← InputStreamReader.new stream "UTF-8"  
+                        >>= BufferedReader.new
+                        >>= _.getLines
+                d   ← File.new doc
+                f   ← File.new d "fregedoc.html"
+                f   ← f.getPath 
+                p   ← openWriter f
+                mapM_ p.println lines
+                p.close

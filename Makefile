@@ -131,7 +131,7 @@ fregec7.jar:  savejava
 	$(JAVA) -Xmx1g -Xss4m -Dfrege.javac="javac -source 1.7 -target 1.7" -jar fregec7.jar -d build7 -nocp -fp build7 -make \
 	    frege/StandardTools.fr frege/StandardLibrary.fr
 	@echo Still running? Now we have it almost .... 
-	cp frege/tools/yygenpar-fr frege/tools/YYgenparM-fr build7/frege/tools
+	cp frege/tools/yygenpar-fr frege/tools/YYgenparM-fr frege/tools/fregedoc.html build7/frege/tools
 	jar -cf   fregec7.jar -C build7 frege
 	jar -uvfe fregec7.jar frege.compiler.Main
 	cp fregec7.jar ../eclipse-plugin/lib/fregec.jar
@@ -154,7 +154,7 @@ fregec6.jar: fallback.jar savejava
 	$(JAVA) -Xmx1g -Xss4m -Dfrege.javac="javac -source 1.6 -target 1.6" -jar fregec6.jar -d build6 -nocp -fp build6 -make \
 	    frege/StandardTools.fr save/StandardLibrary.fr
 	@echo Still running? Now we have it almost .... 
-	cp frege/tools/yygenpar-fr frege/tools/YYgenparM-fr build6/frege/tools
+	cp frege/tools/yygenpar-fr frege/tools/YYgenparM-fr frege/tools/fregedoc.html build6/frege/tools
 	jar -cf   fregec6.jar -C build6 frege
 	jar -uvfe fregec6.jar frege.compiler.Main
 	@echo
@@ -193,7 +193,7 @@ tools: $(COMPF)/Main.class
 # final compiler
 #
 compiler: $(COMPF)/Main.class 
-	cp frege/tools/yygenpar-fr frege/tools/YYgenparM-fr build/frege/tools
+	cp frege/tools/yygenpar-fr frege/tools/YYgenparM-fr frege/tools/fregedoc.html build/frege/tools
 	@echo Compiler ready
 
 $(COMPF)/grammar/Frege.class: frege/compiler/grammar/Frege.fr $(COMPF)/common/Desugar.class
