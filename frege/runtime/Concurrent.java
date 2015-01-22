@@ -89,7 +89,7 @@ public class Concurrent {
      *  This is a helper function for the `par` operator.</p>
      *  
      *  <p>Applies some value to the argument (which must be a {@link Lambda} that ignores
-     *  that argument), to abtain a  {@link Delayed} value.</p>
+     *  that argument), to obtain a  {@link Delayed} value.</p>
      *  
      *  <p>It then checks if we run in a {@link java.util.concurrent.ForkJoinPool}.
      *  If this is so, it {@link java.util.concurrent.ForkJoinTask#fork()}s, causing the 
@@ -106,12 +106,12 @@ public class Concurrent {
      *  
      *  <p>A {@link Delayed} has the property that it prevents itself from being evaluated
      *  more than once. It also blocks threads that attempt parallel execution. 
-     *  Once evaluated, it remembers the result and subsequent invokactions of 
-     *  {@link Delayed#call()} get the evaluated value immediatedly.</p>
+     *  Once evaluated, it remembers the result and subsequent invocations of
+     *  {@link Delayed#call()} get the evaluated value immediately.</p>
      *  
      *  <p>The success of parallel evaluation therefore depends on the time between 
      *  construction of the delayed expression and the time 
-     *  when the value will actually be used. Ideally, it takes some CPU ressources to 
+     *  when the value will actually be used. Ideally, it takes some CPU resources to
      *  evaluate a parallel computation, and it so happens that the value is only needed
      *  after it has been evaluated, to avoid wait time in the main thread.</p>  
     
@@ -119,8 +119,8 @@ public class Concurrent {
      *  @return true
      * 
      */
-    final public static boolean fork(Lambda val) {
-    	Lazy a = val.apply(true).result();
+    final public static boolean fork(frege.runtime.Lambda val) {
+    	frege.runtime.Lazy a = val.apply(true).result();
         if (java.util.concurrent.ForkJoinTask.inForkJoinPool())
         	java.util.concurrent.ForkJoinTask.adapt(a).fork();
         else synchronized (Runtime.emptyString) {		// make sure 2 threads can't do that
@@ -162,7 +162,7 @@ public class Concurrent {
      * <p>Monitor wait on a given object.</p>
      * <p>Because {@link Object#wait} must be run in a synchronized block,
      * we cannot just introduce it as a native function in Frege.</p>
-     * <p>Basically, Frege does not know soemthing like object identity.
+     * <p>Basically, Frege does not know something like object identity.
      * It is, however, guaranteed that, in the presence of a top level definition like:</p>
      * <pre>
      * object = "object to wait on"

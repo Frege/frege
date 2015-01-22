@@ -102,7 +102,7 @@ public class Runtime {
 	
 	
 	/**
-	 * Provide UTF-8 decoded standard inupt Reader
+	 * Provide UTF-8 decoded standard input Reader
 	 */
 	public static ThreadLocal<BufferedReader> stdin = new ThreadLocal<BufferedReader>() {
 		@Override protected BufferedReader initialValue() {
@@ -222,8 +222,8 @@ public class Runtime {
 	public static java.lang.Integer runMain(final Object arg) {
 		java.lang.Integer xit = null;
 		try {
-			Object mainres = Delayed.delayed(arg).call();
-			mainres = Delayed.<Object>forced(mainres);
+			Object mainres = frege.runtime.Delayed.delayed(arg).call();
+			mainres = frege.runtime.Delayed.<Object>forced(mainres);
 			if (mainres instanceof java.lang.Integer) {
 				xit = (java.lang.Integer)mainres;
 			}
@@ -236,7 +236,7 @@ public class Runtime {
 //		}
 		finally {
 			// The following is needed to terminate a program that did forkIO
-			Concurrent.shutDownIfExists();
+			frege.runtime.Concurrent.shutDownIfExists();
 			stderr.get().flush();
 			stdout.get().flush();
 		}
