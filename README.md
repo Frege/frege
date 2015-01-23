@@ -200,7 +200,7 @@ Links
 ----
 * [Frege Wiki](https://github.com/Frege/frege/wiki/_pages)
 * [Language reference](http://www.frege-lang.org/doc/Language.pdf)
-* [Author's Blog](http://fregepl.blogspot.com/)
+* [Author's Blog](http://fregepl.blogspot.com/), [Dierk's Blog](http://www.canoo.com/blog/tag/frege/)
 * [edX Functional Programming course FP101x](https://www.edx.org/course/introduction-functional-programming-delftx-fp101x) with exercises in Frege
 * Introduction to Frege: [video](https://www.parleys.com/play/543fa326e4b06e1184ae41e6/chapter44/about), [slides](http://de.slideshare.net/Mittie/frege-purely-functional-programming-on-the-jvm)
 
