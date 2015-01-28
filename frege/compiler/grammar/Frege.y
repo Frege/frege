@@ -1184,7 +1184,7 @@ topex:
     | CASE  expr OF '{' calts   '}'    { \_\e\_\_\as\_ -> Case CNormal e as}
     | LET '{' letdefs '}' IN  expr     { \_\_\ds\_\_\e -> Let ds e}
     | lambda
-    | appex
+    | appex                            { underscore }
 
     ;
 
