@@ -212,8 +212,7 @@ Recommended reading
 
 API Docs
 --------
-* [Standard library (prelude)]( http://www.frege-lang.org/doc/frege/Prelude.html)
-* [Online Docs (Frege)](http://www.frege-lang.org/doc/index.html)
+* [Online Docs (Frege Standard Library)](http://www.frege-lang.org/doc/fregedoc.html)
 * [Online Docs (Runtime Javadoc)](http://www.frege-lang.org/doc/index.html)
 
 Copyright and License
