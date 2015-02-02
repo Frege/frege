@@ -660,6 +660,7 @@ fixity:
 opstring:
     operator                { Token.value }
     | VARID                 { Token.value }
+    | '-'                   { Token.value }
     ;
 
 operators:
