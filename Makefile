@@ -1,4 +1,4 @@
-# Makefile for the frege compiler distribution.
+# Makefile for the frege compiler distribution versions 3.22.xxx
 # When you need to run this under Windows (poor guy!),
 # change the path separator characters.
 
