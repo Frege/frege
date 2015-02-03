@@ -40,10 +40,10 @@ package frege.runtime.v78;
 /**
  * <p> Frege functions with arity 26. </p>
  *
- * <p> See {@link Func1} for a general discussion of untyped function values. </p>
+ * <p> See {@link Function} for a general discussion of untyped function values. </p>
  *
  */
-public interface Func26 {
+public interface Func26 extends Function {
     /**
      * <p> Run the function. </p>
      *
