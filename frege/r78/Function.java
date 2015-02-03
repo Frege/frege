@@ -35,19 +35,13 @@
     THE POSSIBILITY OF SUCH DAMAGE.
 
      */
+package frege.r78;
 
-package frege.runtime.v78;
 /**
- * <p> Frege functions with arity 13. </p>
- *
- * <p> See {@link Function} for a general discussion of untyped function values. </p>
+ * <p> This is a marker interface all function values will implement. </p>
+ * @author ingo
  *
  */
-public interface Func13 extends Function {
-    /**
-     * <p> Run the function. </p>
-     *
-     * @return possibly lazy result
-     */
-    public Object call(final Object arg1, final Object arg2, final Object arg3, final Object arg4, final Object arg5, final Object arg6, final Object arg7, final Object arg8, final Object arg9, final Object arg10, final Object arg11, final Object arg12, final Object arg13);
+public interface Function {
+
 }

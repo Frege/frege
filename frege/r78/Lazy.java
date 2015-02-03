@@ -1,4 +1,4 @@
-package frege.runtime.v78;
+package frege.r78;
 
 import java.util.concurrent.Callable;
 

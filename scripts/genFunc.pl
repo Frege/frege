@@ -7,7 +7,7 @@ my $n = 1;
 
 
 while ($n < 27) {
-    open J, ">frege/runtime/v78/Func$n.java" or die "can't open $!";
+    open J, ">frege/r78/Func$n.java" or die "can't open $!";
     my @nargs = map {"final Object arg$_" } (1..$n);
     my $cnargs = join (", ", @nargs);
     my @args  = map { "arg$_" } (1..$n);
@@ -54,7 +54,7 @@ while ($n < 27) {
 
 LIZENZ
 
-    print J "package frege.runtime.v78;\n";
+    print J "package frege.r78;\n";
     print J <<"TEXT";
 /**
  * <p> Frege functions with arity $n. </p>

@@ -36,7 +36,7 @@
  */
 
 
-package frege.runtime.v78;
+package frege.r78;
 
 import frege.runtime.BlackHole;
 

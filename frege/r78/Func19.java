@@ -36,18 +36,18 @@
 
      */
 
-package frege.runtime.v78;
+package frege.r78;
 /**
- * <p> Frege functions with arity 14. </p>
+ * <p> Frege functions with arity 19. </p>
  *
  * <p> See {@link Function} for a general discussion of untyped function values. </p>
  *
  */
-public interface Func14 extends Function {
+public interface Func19 extends Function {
     /**
      * <p> Run the function. </p>
      *
      * @return possibly lazy result
      */
-    public Object call(final Object arg1, final Object arg2, final Object arg3, final Object arg4, final Object arg5, final Object arg6, final Object arg7, final Object arg8, final Object arg9, final Object arg10, final Object arg11, final Object arg12, final Object arg13, final Object arg14);
+    public Object call(final Object arg1, final Object arg2, final Object arg3, final Object arg4, final Object arg5, final Object arg6, final Object arg7, final Object arg8, final Object arg9, final Object arg10, final Object arg11, final Object arg12, final Object arg13, final Object arg14, final Object arg15, final Object arg16, final Object arg17, final Object arg18, final Object arg19);
 }
