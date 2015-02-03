@@ -1,19 +1,3 @@
-#!perl -w
-
-use warnings;
-use strict;
-
-my $n = 1;
-
-
-while ($n < 27) {
-    open J, ">frege/runtime/v78/Func$n.java" or die "can't open $!";
-    my @nargs = map {"final Object arg$_" } (1..$n);
-    my $cnargs = join (", ", @nargs);
-    my @args  = map { "arg$_" } (1..$n);
-    my $crargs = join(",", reverse @args);
-    my $rt = "Object";
-    print J <<'LIZENZ';
 /* 
 
     Copyright © 2015, Ingo Wechsung
@@ -52,25 +36,18 @@ while ($n < 27) {
 
      */
 
-LIZENZ
-
-    print J "package frege.runtime.v78;\n";
-    print J <<"TEXT";
+package frege.runtime.v78;
 /**
- * <p> Frege functions with arity $n. </p>
+ * <p> Frege functions with arity 3. </p>
  *
- * <p> See {\@link Func1} for a general discussion of untyped function values. </p>
+ * <p> See {@link Func1} for a general discussion of untyped function values. </p>
  *
  */
-public interface Func$n {
+public interface Func3 {
     /**
      * <p> Run the function. </p>
      *
-     * \@return possibly lazy result
+     * @return possibly lazy result
      */
-    public Object call($cnargs);
-}
-TEXT
-    close J;
-    $n++;
+    public Object call(final Object arg1, final Object arg2, final Object arg3);
 }
