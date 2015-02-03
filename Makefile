@@ -21,9 +21,9 @@
 
 .SUFFIXES: .class .fr
 
-JAVAC = javac -source 1.7 -target 1.7 -encoding UTF-8
+JAVAC = javac -encoding UTF-8
 YACC =`which byacc || which byaccj || which pbyacc || false`
-JAVA = java "-Dfrege.javac=internal -nowarn -source 1.7 -target 1.7"
+JAVA = java "-Dfrege.javac=internal"
 
 
 DOC  = ../frege.github.com/doc
