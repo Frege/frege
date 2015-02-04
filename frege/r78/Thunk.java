@@ -165,7 +165,7 @@ import frege.runtime.BlackHole;
  *
  */
 public class Thunk implements Lazy {
-
+	/* INVARIANT: exactly one of item and eval is null at any time */
 	private volatile Object item = null;
 	private Lazy eval;
 	
@@ -206,14 +206,17 @@ public class Thunk implements Lazy {
 		// When the same thread evaluates this while we are not yet done,
 		// it will return the black hole, and this will, in turn,
 		// give a Class Cast Exception later.
+		// Different threads will have to wait anyway due to the "synchronized".
 		item = BlackHole.it;
 		Object o = eval.call();
 		Lazy  t = null;
 		// algebraic datatypes are Thunks, but their call() is the identity
-		// hence we know when to finish if either the result o is not Lazy or if it is equal
-		// to eval.
+		// hence we know when to finish if either 
+		// * the result o is not Lazy 
+		// * or if it is the same reference as eval.
 		while (o  instanceof Lazy && (t = (Lazy)o) != eval) {
 			eval = t;
+			o = eval.call();
 		}
 		item = o;
 		eval = null;	// make sure all the closed over things are not referenced anymore
@@ -260,7 +263,7 @@ public class Thunk implements Lazy {
 	 * this method constructs a {@link Thunk} value unless it is already a {@link Lazy} 
 	 * one.</p>
 	 * 
-	 * <p>Because all {@link Algebraic} and {@link Lambda} implement {@link Lazy}, 
+	 * <p>Because all {@link Algebraic} types implement {@link Lazy}, 
 	 * this will create a wrapper for native values only.</p>
 	 * 
 	 *   @param  val some value
