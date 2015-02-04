@@ -62,7 +62,7 @@ FREGECJ  = $(FREGE)  -jar fregec.jar  -d build -hints
 FREGEC0  = $(FREGECJ) -prefix a -sp shadow:.
 
 #	compile compiler2 with compiler1
-FREGEC1  = $(FREGE) afrege.compiler.Main -d build -hints -inline -prefix b
+FREGEC1  = $(FREGE) afrege.compiler.Main -d build -hints -target 1.7 -inline -prefix b
 
 #	compile final compiler with compiler2
 FREGEC2  = $(FREGE) bfrege.compiler.Main -d build -hints -O
@@ -257,7 +257,7 @@ compiler1: frege/compiler/grammar/Frege.fr frege/Version.fr
 
 runtime:
 	mkdir -p build
-	$(JAVAC) -d build frege/runtime/*.java
+	$(JAVAC) -d build -source 1.7 -target 1.7 frege/runtime/*.java frege/r78/*.java
 	@echo Runtime is complete.
 
 
