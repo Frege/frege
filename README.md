@@ -158,12 +158,12 @@ The awesome QuickCheck library for advanced unit testing comes bundled with the 
 Related Projects
 ----------------
 
-* [Maven Compiler Plugin for the Frege language](https://github.com/talios/frege-maven-plugin), by @talios�talios Mark Derricut 
-* [Frege compiler/library as an OSGi bundle](https://github.com/talios/frege-bundle), by @talios
-* [Apache Maven Tile for the Frege Programming Language](https://github.com/talios/frege-maven-tile), by @talios
-* [A Leiningen plugin to compile Frege code](https://github.com/seancorfield/lein-fregec), by @seancorfield
-* [Gradle Frege plugin](https://github.com/galderz/gradle-frege-plugin), by @galderz
-* [Real World Frege](https://github.com/Dierk/Real_World_Frege/), by @Dierk
+* [Maven Compiler Plugin for the Frege language](https://github.com/talios/frege-maven-plugin), by Mark Derricut 
+* [Frege compiler/library as an OSGi bundle](https://github.com/talios/frege-bundle), by Mark Derricut 
+* [Apache Maven Tile for the Frege Programming Language](https://github.com/talios/frege-maven-tile), by Mark Derricut 
+* [A Leiningen plugin to compile Frege code](https://github.com/seancorfield/lein-fregec), by Sean Corfield
+* [Gradle Frege plugin](https://github.com/galderz/gradle-frege-plugin), by Galder Zamarreño
+* [Real World Frege](https://github.com/Dierk/Real_World_Frege/), by Dierk König
 
 Contributions
 -------------
