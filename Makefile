@@ -257,7 +257,7 @@ compiler1: frege/compiler/grammar/Frege.fr frege/Version.fr
 
 runtime:
 	mkdir -p build
-	$(JAVAC) -d build -source 1.7 -target 1.7 frege/runtime/*.java frege/r78/*.java
+	$(JAVAC) -d build -source 1.7 -target 1.7 frege/runtime/*.java frege/run/*.java
 	@echo Runtime is complete.
 
 
