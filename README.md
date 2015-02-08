@@ -155,6 +155,16 @@ Maven, Gradle, and Leinigen.
 
 The awesome QuickCheck library for advanced unit testing comes bundled with the language.
 
+Related Projects
+----------------
+
+* [Maven Compiler Plugin for the Frege language](https://github.com/talios/frege-maven-plugin), by Mark Derricut 
+* [Frege compiler/library as an OSGi bundle](https://github.com/talios/frege-bundle), by Mark Derricut 
+* [Apache Maven Tile for the Frege Programming Language](https://github.com/talios/frege-maven-tile), by Mark Derricut 
+* [A Leiningen plugin to compile Frege code](https://github.com/seancorfield/lein-fregec), by Sean Corfield
+* [Gradle Frege plugin](https://github.com/galderz/gradle-frege-plugin), by Galder Zamarreño
+* [Real World Frege](https://github.com/Dierk/Real_World_Frege/), by Dierk König
+
 Contributions
 -------------
 
@@ -164,7 +174,7 @@ If you are interested in contributing, here are some hot topics:
 * Port Haskell libraries or tools.
 * Open issues in the issues tracker if you find bugs, errors in documentation, etc.
 * Help make Frege popular by writing code for projects like Rosetta Stone or Computer Language Shootout.
-* Contribute to [Real World Frege](https://github.com/Dierk/Real_World_Frege/).
+* Contribute to the related projects mentioned above, or make your own.
 
 Contact
 -------
