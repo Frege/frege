@@ -158,11 +158,12 @@ The awesome QuickCheck library for advanced unit testing comes bundled with the 
 Related Projects
 ----------------
 
-* [Maven Compiler Plugin for the Frege language](https://github.com/talios/frege-maven-plugin), by Mark Derricut 
+* The REPL projects, consisting of [core JSR 223 scripting support](https://github.com/Frege/frege-interpreter), [interface for the command-line](https://github.com/Frege/frege-repl) and [online REPL](https://github.com/Frege/try-frege), all written and maintained by Marimuthu Madasamy
+* [Maven Compiler Plugin for the Frege language](https://github.com/Frege/frege-maven-plugin), by Mark Derricut 
 * [Frege compiler/library as an OSGi bundle](https://github.com/talios/frege-bundle), by Mark Derricut 
 * [Apache Maven Tile for the Frege Programming Language](https://github.com/talios/frege-maven-tile), by Mark Derricut 
-* [A Leiningen plugin to compile Frege code](https://github.com/seancorfield/lein-fregec), by Sean Corfield
-* [Gradle Frege plugin](https://github.com/galderz/gradle-frege-plugin), by Galder Zamarreño
+* [A Leiningen plugin to compile Frege code](https://github.com/Frege/frege-lein-plugin), by Sean Corfield
+* [Gradle Frege plugin](https://github.com/Frege/frege-gradle-plugin), by Mark Perry and Dirk König
 * [Real World Frege](https://github.com/Dierk/Real_World_Frege/), by Dierk König
 
 Contributions
