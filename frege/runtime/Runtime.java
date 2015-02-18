@@ -54,6 +54,11 @@ import java.nio.charset.StandardCharsets;
  *
  */
 public class Runtime {
+	
+	/**
+	 * GLobal Random generator
+	 */
+	final public static java.util.Random stdRandom = new java.util.Random ();
 
 	/**
 	 * Implementation for 
