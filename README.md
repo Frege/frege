@@ -163,7 +163,7 @@ Related Projects
 * [Frege compiler/library as an OSGi bundle](https://github.com/talios/frege-bundle), by Mark Derricut 
 * [Apache Maven Tile for the Frege Programming Language](https://github.com/talios/frege-maven-tile), by Mark Derricut 
 * [A Leiningen plugin to compile Frege code](https://github.com/Frege/frege-lein-plugin), by Sean Corfield
-* [Gradle Frege plugin](https://github.com/Frege/frege-gradle-plugin), by Mark Perry and Dirk König
+* [Gradle Frege plugin](https://github.com/Frege/frege-gradle-plugin), by Mark Perry and Dierk König
 * [Real World Frege](https://github.com/Dierk/Real_World_Frege/), by Dierk König
 
 Contributions
@@ -179,6 +179,11 @@ If you are interested in contributing, here are some hot topics:
 
 Contact
 -------
+
+**Upcoming talks**
+
+Meet Frege friends at [JAX 2015](http://jax.de/2015/), Mainz, and join the [Frege Session](https://jax.de/2015/sessions/frege-ein-haskell-fuer-die-jvm)
+at April 21st, 9:45. 
 
 **For discussions**
 
