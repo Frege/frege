@@ -173,7 +173,7 @@ public class Thunk implements Lazy {
 	 * <p> Create a thunk from a {@link Lazy} value. </p>
 	 * <p> On evaluation via {@link Thunk#call}, this Thunk will be updated with
 	 * the result of evaluating the value. </p>
-	 * @param it a lazy value
+	 * @param it a lazy value. <b>This must never be null!</b>
 	 */
 	Thunk(Lazy it) { eval = it; }
 	/**
@@ -181,7 +181,7 @@ public class Thunk implements Lazy {
 	 * <p>It is checked wether the argument is, in fact, a {@link Lazy}, and if so, the
 	 * behaviour is just as with the other constructor. If, however, the argument is an
 	 * ordinary value, this Thunk will only wrap it and return it when called. </p> 
-	 * @param it a possibly lazy value
+	 * @param it a possibly lazy value. <b>This must never be null!</b>
 	 */
 	Thunk(Object it) {
 		if (it instanceof Lazy) {
@@ -210,7 +210,7 @@ public class Thunk implements Lazy {
 		item = BlackHole.it;
 		Object o = eval.call();
 		Lazy  t = null;
-		// algebraic datatypes are Thunks, but their call() is the identity
+		// algebraic datatypes are instances of Lazy, but their call() is the identity
 		// hence we know when to finish if either 
 		// * the result o is not Lazy 
 		// * or if it is the same reference as eval.
@@ -228,7 +228,13 @@ public class Thunk implements Lazy {
 	 * <p>Evaluate an object if it is a lazy value.</p>
 	 * <p>
 	 * This method is intended for use in generated code, as the compiler
-	 * hopefully never errs about the expected type.
+	 * hopefully never errs about the expected type.</p>
+	 * 
+	 * <p>It handles multiple levels of laziness, that is, if a {@link Lazy} returns another
+	 * <i>different</i> {@link Lazy}, this one will be evaluated in turn, and so forth.
+	 * This helps in cases when we need the result of a function that does tail calls.
+	 * The tail call is returned as unshared {@link Lazy}, and {@link Lazy#call()}-ing this might just
+	 * return the next tail call. 
 	 * </p>
 	 * @throws ClassCastException if the argument is not an instance of {@link Lazy} 
 	 *         and cannot be casted to <code>R</code>
@@ -242,7 +248,13 @@ public class Thunk implements Lazy {
 	 */
 	@SuppressWarnings("unchecked")
 	public final static<R> R forced(Object o) {
-		return (R) (o instanceof Lazy ? ((Lazy) o).call() : o);
+		Object r = null;
+		while (o instanceof Lazy) { 
+			r = ((Lazy)o).call();
+			if (r==o) break;
+			o = r;
+		}
+		return (R) o;
 	}
 	
 	/**
@@ -276,6 +288,19 @@ public class Thunk implements Lazy {
 		return new Thunk(val);
 	}
 	
+	/**
+	 * <p>Static form of the constructor</p>
+	 
+	 * <p>For statically known {@link Thunk}s, this is the identity.</p>
+	 * <p>{@link Lazy} instances are wrapped in a {@link Thunk}, this makes them shared.</p>
+	 * <p>Other things are passed to the constructor. In any case, the returned value is
+	 * a compile time {@link Thunk}.</p>
+	 * 
+	 * @return a {@link Thunk}, no matter what.
+	 */
+	public final static Thunk shared(Thunk v)  { return v; }
+	public final static Thunk shared(Lazy v)   { return new Thunk(v); }
+	public final static Thunk shared(Object v) { return new Thunk(v); }
 	
 	/***
 	 * <p>Utility function to get some value and clearing it at the same time.</p>
