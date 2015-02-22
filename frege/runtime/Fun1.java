@@ -45,7 +45,7 @@ package frege.runtime;
  * of the type variables, see below.</p>
  *
  */
-public abstract class Fun1<X> extends Lambda {
+public abstract class Fun1<X> extends frege.runtime.Lambda {
    /**
      * <p>Apply this function to an argument.</p>
      *
@@ -60,14 +60,14 @@ public abstract class Fun1<X> extends Lambda {
         return new Delayed () {
         	Object darg1 = arg1;
             final public Object eval() {
-                return Fun1.this.eval(Delayed.once(darg1, darg1=null));
+                return Fun1.this.eval(frege.runtime.Delayed.once(darg1, darg1 = null));
             }
         };
     }
     
     /**
      * <p>Force the Java typechecker to accept sensible substitutions.</p>
-     * <p>The Java typechecker won't accept a function that promisses 
+     * <p>The Java typechecker won't accept a function that promises
      * to return X in place of a function that promises to return {@link Object},
      * though this should be completely save, shouldn't it?</p>
      * <p>It also refuses to accept any frege type, when {@link Lazy} is demanded,

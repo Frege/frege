@@ -26,7 +26,7 @@ public class Undefined extends IllegalArgumentException {
 	 * Construct an undefined value from a string and another exception.
 	 * 
 	 * <p> This is used by Frege code to throw any exception catched from
-	 * invokation of native functions.<br>
+	 * invocation of native functions.<br>
 	 * This mechanism avoids <b>throws</b> clauses on frege functions.</p> 
 	 * @param err
 	 * @param cause

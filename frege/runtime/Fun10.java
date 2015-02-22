@@ -41,7 +41,7 @@ package frege.runtime;
  * <p> See {@link Fun1} for a general discussion of untyped function values. </p>
  *
  */
-public abstract class Fun10<X> extends Lambda {
+public abstract class Fun10<X> extends frege.runtime.Lambda {
    /**
      * <p>Apply this function to an argument.</p>
      *
@@ -52,8 +52,8 @@ public abstract class Fun10<X> extends Lambda {
      * @return an instance of type <tt>Fun9</tt> that waits for the
      * remaining arguments to be supplied and calls back with all arguments.
      */
-    final public Fun9<X> apply(final Object arg1) {
-        return new Fun9<X> () {
+    final public frege.runtime.Fun9<X> apply(final Object arg1) {
+        return new frege.runtime.Fun9<X>() {
             final public X eval(final Object arg10,final Object arg9,final Object arg8,final Object arg7,final Object arg6,final Object arg5,final Object arg4,final Object arg3,final Object arg2) {
                 return Fun10.this.eval(arg10,arg9,arg8,arg7,arg6,arg5,arg4,arg3,arg2,arg1);
             }
@@ -66,8 +66,8 @@ public abstract class Fun10<X> extends Lambda {
      * when evaluated, invokes the {@link Fun10#eval} method of this
      * function.</p>
      *
-     * Use of this method is preferrable compared
-     * to repeated invokation of the single argument form since intermediate
+     * Use of this method is preferable compared
+     * to repeated invocation of the single argument form since intermediate
      * closure creation is saved.
      *
      * @return an instance of type {@link Delayed} 
@@ -80,7 +80,7 @@ public abstract class Fun10<X> extends Lambda {
     
 	/**
      * <p>Force the Java typechecker to accept sensible substitutions.</p>
-     * <p>The Java typechecker won't accept a function that promisses 
+     * <p>The Java typechecker won't accept a function that promises
      * to return X in place of a function that promises to return {@link Object},
      * though this should be completely save, shouldn't it?</p>
      * <p>It also refuses to accept any frege type, when {@link Lazy} is demanded,
