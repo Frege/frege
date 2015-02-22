@@ -1,0 +1,282 @@
+--- JSON support
+{--
+    JSON support comprises 3 levels:
+    
+    1. On the lexical level, we analyze a 'String' and produce a list of JSON 'Tokens'.
+    2. On the grammar level, we parse a list of 'Tokens' and produce a JSON 'Object'.
+    3. On the value level, we convert JSON 'Value's to and from values of algebraic data types.
+    
+    Showing a JSON 'Object' produces valid JSON for exchange with the outside world.  
+--}
+module frege.data.JSON where
+
+import frege.Prelude hiding(Object, null)
+import Data.Bits (shiftL, .|.)
+import Data.TreeMap(Tree, each)
+import Data.NanoParsec as NP()
+import Lib.PP(bracket, text, sep, pretty, stack)
+
+--- lexical entities that can appear in a JSON String
+protected data Token = 
+      protected BRACEL                  --- left brace @{@
+    | protected BRACER                  --- right brace @}@
+    | protected BRACKL                  --- left bracket @[@
+    | protected BRACKR                  --- right bracket @]@
+    | protected COLON                   --- colon @:@
+    | protected COMMA                   --- comma @,@
+    | protected S {!sval ∷ String}      --- a JSON string, escapes already decoded
+    | protected N {!nval ∷ String}      --- a JSON number, 'atod' will work
+    | protected TRUE                    --- @true@
+    | protected FALSE                   --- @false@
+    | protected NULL                    --- @null@ (o noes!!!)
+    | protected ERROR  {!offset ∷ Int, 
+                        !text   ∷ String}   --- lexical error indicator
+
+derive Show Token
+derive Eq Token
+
+{--
+    Translate a 'String' into a lazy list of 'Token's.
+
+    There will be at most one 'Token.ERROR' token in the result, 
+    and it will be the last in the list. This is, the 'lexer' will stop
+    on the first lexical error.
+    
+    Absence of lexical errors does not mean valid JSON, for example
+    > "null, true,"
+    is lexed as
+    > [NULL, COMMA, TRUE, COMMA]
+    but is, of course invalid.
+-} 
+protected lexer :: String -> [Token]
+protected lexer s = lex s 0
+
+{--
+    Scan a 'String' and take care of offsets
+-}
+private lex :: String → Int → [Token]
+private lex !cs !start
+    | endOfSeq        = []
+    | ch.isWhitespace = lex cs (start+1)    -- handles tabs, carriage return and newlines as well
+    | ch.isDigit      = case positive 0 of
+                            !after | after > 0 
+                                      → Token.N{nval = seq (start+after)} !: lex cs (start+after)
+                            otherwise → Token.ERROR{offset=start, text=seq (start+1)} !: []
+    | otherwise = case ch of
+        '"' →   string 1 []
+        '-' →   case positive 1 of
+                    !after | after > 0 
+                              → Token.N{nval = seq (start+after)} !: lex cs (start+after)
+                    otherwise → Token.ERROR{offset=start, text=seq (start+1)} !: []
+        ',' →   Token.COMMA  : lex cs (start+1) 
+        ':' →   Token.COLON  : lex cs (start+1)
+        '{' →   Token.BRACEL : lex cs (start+1) 
+        '}' →   Token.BRACER : lex cs (start+1)
+        '[' →   Token.BRACKL : lex cs (start+1) 
+        ']' →   Token.BRACKR : lex cs (start+1)
+        -- the following lexes "truenull" as TRUE:NULL:...
+        -- and "true0" as TRUE:N "0":...
+        -- but this will yield syntax error later
+        't' | at 1 == 'r', at 2 == 'u', at 3 == 'e'
+            →   Token.TRUE : lex cs (start+4)
+        'f' | at 1 == 'a', at 2 == 'l', at 3 == 's', at 4 == 'e'
+            →   Token.FALSE : lex cs (start+5)
+        'n' | at 1 == 'u', at 2 == 'l', at 3 == 'l'
+            →   Token.NULL : lex cs (start+4)
+        _   →   Token.ERROR{offset=start, text=seq (start+1)} !: []        -- abort scanning
+    where
+        !endOfSeq   = start >= cs.length      -- assume that length is a cheap operation on Strings
+        !ch         = at 0
+        seq end     = (cs.substr start end)
+        at i        = if start+i >= cs.length then '\0' else cs.charAt (start+i)
+        positive off
+            | at off == '0'     → fractional (off+1)
+            | (at off).isDigit  → fractional (digits (off+1))
+            | otherwise         → -1 
+        digits off  -- skip 0 or more digits
+            | (at off).isDigit  → digits (off+1)
+            | otherwise         → off
+        fractional off
+            | at off == '.'     → if (at (off+1)).isDigit 
+                                    then expo (digits (off+2))
+                                    else -1
+            | otherwise         → expo off
+        expo off = case at off of
+                'e'     → expo1 (off+1)
+                'E'     → expo1 (off+1)
+                _       → off   -- no exponent
+        expo1 off = case at off of
+            '+' → expo2 (off+1)
+            '-' → expo2 (off+1)
+            _   → expo2 off
+        -- at least 1 digit 
+        expo2 off = if (at off).isDigit then digits (off+1) else -1     
+        string off !acc
+            | ch == '"'     → Token.S{sval=packed (reverse acc)} !: lex cs (start+off+1)
+            | ch == '\\'    → case at (off+1) of
+                                '"' → string (off+2) ('"'  : acc)
+                                '\\'→ string (off+2) ('\\' : acc)
+                                '/' → string (off+2) ('/'  : acc)
+                                'b' → string (off+2) ('\b' : acc)
+                                'f' → string (off+2) ('\f' : acc)
+                                'n' → string (off+2) ('\n' : acc)
+                                'r' → string (off+2) ('\r' : acc)
+                                't' → string (off+2) ('\t' : acc)
+                                'u' | Just h1 ← hexval (at (off+2)),
+                                      Just h2 ← hexval (at (off+3)),
+                                      Just h3 ← hexval (at (off+4)),
+                                      Just h4 ← hexval (at (off+5)),
+                                      !hex <- h1 `shiftL` 12 
+                                                .|. h2 `shiftL` 8
+                                                .|. h3 `shiftL` 4
+                                                .|. h4
+                                    → string (off+6) (chr hex !: acc)
+                                other ->  Token.ERROR{offset=start+off+1, text=seq (start+off+2)} !: []
+            | ch >= ' '     → string (off+1) (ch : acc)
+            | otherwise     → Token.ERROR{offset=start+off, text=seq (start+off+1)} !: []  
+            where
+                !ch = at off
+                j :: Int -> Maybe Int
+                j !x = Just x
+                hexval c
+                    | c >= '0' && c <= '9' = j (ord c - ord '0')
+                    | c >= 'a' && c <= 'f' = j (10 + (ord c - ord 'a'))
+                    | c >= 'A' && c <= 'F' = j (10 + (ord c - ord 'A'))
+                    | otherwise = Nothing
+
+--- JSON types
+data Value = 
+      protected String {sval ∷ String }                 --- a string
+    | protected Number {nval ∷ String }                 --- a number
+    | protected Bool   {bval ∷ Bool }                   --- @true@ or @false@   
+    | protected Null                                    --- just @null@
+    | protected Object {oval ∷ Object }                 --- array or map
+
+--- JSON arrays or maps
+--- This is what the top level parser produces. 
+protected data Object = 
+    protected Array [Value]
+    | protected Struct (Tree String Value)
+                              
+type Parser a = NP.Parser [] Token a
+
+--- run a 'Parser' and extract the result 
+protected parse :: Parser a -> [Token] -> (String | a)
+protected parse p = fst • NP.runid p  
+
+--- parse a 'String' into a JSON 'Object'
+parseJSON = parse object . lexer
+
+--- parse a 'String' into a JSON 'Value'
+parseValue = parse value . lexer
+
+--- Parses an 'Object.Array' or an 'Object.Map'
+--- This is what should be applied to JSON gotten from external sources
+protected object :: Parser Object
+protected object =
+    NP.cond  (lbrack <|> lbrace)
+        (parseArray <|> parseMap) 
+        (NP.failure "JSON object or JSON array expected")
+    <* NP.eos  
+
+--- parse a value
+protected value  ∷ Parser Value
+protected value = (
+        (Value.String <$> string)
+        <|> number
+        <|> null
+        <|> boolean
+        <|> Value.Object <$> parseArray
+        <|> Value.Object <$> parseMap)
+    NP.<?> "JSON value expected" 
+
+--- parse a left bracket
+protected lbrack  ∷ Parser Token
+protected lbrack = NP.expect Token.BRACKL NP.<?> "'[' expected"
+
+--- parse a left brace
+protected lbrace  ∷ Parser Token
+protected lbrace = NP.expect Token.BRACEL NP.<?> "'{' expected"
+
+--- parse a right bracket
+protected rbrack  ∷ Parser Token
+protected rbrack = NP.expect Token.BRACKR NP.<?> "']' missing"
+
+--- parse a right brace
+protected rbrace  ∷ Parser Token
+protected rbrace = NP.expect Token.BRACER NP.<?> "'}' missing"
+
+--- parse a comma
+protected comma  ∷ Parser Token
+protected comma = NP.expect Token.COMMA NP.<?> "',' expected"
+
+--- parse a colon
+protected colon ∷ Parser Token
+protected colon = NP.expect Token.COLON NP.<?> "':' expected"
+
+--- parse a string
+protected string :: Parser String
+protected string = _.sval <$> NP.satisfy _.{sval?}
+
+--- parse a number
+protected number :: Parser Value
+protected number = Value.Number . _.nval <$> NP.satisfy _.{nval?}
+
+--- parse a boolean
+protected boolean ∷ Parser Value
+protected boolean = 
+            const Value.Bool{bval=true}  <$> NP.expect Token.TRUE 
+        <|> const Value.Bool{bval=false} <$> NP.expect Token.FALSE  
+
+--- parse null
+protected null :: Parser Value
+protected null = const Value.Null <$> NP.expect Token.NULL
+
+--- parse a pair
+protected pair :: Parser (String, Value)
+protected pair = do
+    k <- string NP.<?> "string expected"
+    colon
+    v <- value
+    return (k,v)
+    
+--- parse a JSON array
+protected parseArray = do
+    lbrack
+    NP.cond rbrack (rbrack >> return (Object.Array [])) do 
+        vs <- value NP.`sepBy1` comma
+        rbrack
+        return (Object.Array vs)
+
+--- parse a JSON object
+--- If one and the same key appears multiple times, only last one will be taken into account.
+protected parseMap = do
+    lbrace
+    NP.cond rbrace (rbrace >> return (Object.Struct empty)) do
+        ps ← pair NP.`sepBy1` comma
+        rbrace
+        (return . Object.Struct . Tree.fromList) ps
+
+--- pretty print a 'Value'
+valDoc :: Value -> PP.DOCUMENT 
+valDoc v = case v  of
+    Value.String{sval} → text (show sval)
+    Value.Number{nval} → text nval
+    Value.Bool{bval}   → text (display bval)
+    Value.Null         → text "null"
+    Value.Object{oval} → objDoc oval
+
+--- pretty print an 'Object'
+objDoc :: Object -> PP.DOCUMENT
+objDoc o = case o  of
+    Object.Array a  -> bracket "[" (sep "," (map valDoc a)) "]" 
+    Object.Struct s -> bracket "{" (sep "," pairs) "}"
+                where 
+                    pairs = map pairDoc (each s)
+                    pairDoc (s,v) = PP.group $ text (show s) PP.<+> text ":" PP.<+> valDoc v
+
+instance Show Value where
+    show = pretty 72 . valDoc
+
+instance Show Object where
+    show = pretty 72 . objDoc
