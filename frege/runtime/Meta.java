@@ -137,7 +137,7 @@ public class Meta {
     
     /**
      * <p>The equivalent for a Kind.</p
-     * <p>References to other Kinds appear as indexes into the Tau table. </p>
+     * <p>References to other Kinds appear as indexes into the Kind table. </p>
      * @author ingo
      *
      */
@@ -343,6 +343,7 @@ public class Meta {
          * 6 - Lit
          * 7 - local Vbl
          * 8 - global Vbl
+         * 9 - Let
          */
         int        xkind()         default 7;     // local Vbl
         QName[]    name()          default {};    // set for global Vbl, Con
@@ -353,7 +354,12 @@ public class Meta {
         int[]      alts()          default {};    // case alternatives or lambda
                                                   // first halve are expression indexes for patterns
                                                   // second halve are expression indexes for expressions
-        int        subx1()         default 0;     // index of 1st subexpression, set for Ann, App, If, Case
+                                                  // For Let, the number of elements is a multiple of 3
+                                                  // and each value bound by the let is a triple (v, s, x)
+                                                  // where v is an index of an Expr that describes the local variable
+                                                  //       s is a sigma index or -1 if v was not aannotated
+                                                  //       x is the index of an Expr for the expression defining v
+        int        subx1()         default 0;     // index of 1st subexpression, set for Ann, App, If, Case and Let
         int        subx2()         default 0;     // index of 2nd subexpression, set for App, If
         int        subx3()         default 0;     // index of 3rd subexpression, set fot If
     }
