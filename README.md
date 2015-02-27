@@ -1,6 +1,8 @@
 What is Frege?
 ==============
 
+[![Build Status](https://travis-ci.org/Frege/frege.svg?branch=travis)](https://travis-ci.org/Frege/frege)
+
 <img align="right" src="resources/Frege_logo.png"/>
 Frege is a **pure** functional programming language for the JVM in the spirit of Haskell.
 It enjoys a strong static type system with powerful type inference and
