@@ -21,6 +21,9 @@
 
 .SUFFIXES: .class .fr
 
+.PHONY: all shadow-prelude clean sanitycheck test-jar compiler \
+  compiler1 compiler2 runtime docu diffs savejava
+
 JAVAC = javac -encoding UTF-8
 YACC =`which byacc || which byaccj || which pbyacc || false`
 JAVA = java "-Dfrege.javac=internal"
