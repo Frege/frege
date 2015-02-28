@@ -8,7 +8,7 @@ package frege.runtime;
  * 
  * <p>This is used in the runtime to detect so called black holes.
  * Black holes are expressions that demand evaluation of themselves
- * while they are avaluated.</p>
+ * while they are evaluated.</p>
  * 
  *  <p>Consider:</p>
  *  
@@ -24,7 +24,7 @@ package frege.runtime;
  * @author ingo
  *
  */
-public class BlackHole {
+final public class BlackHole {
 	private BlackHole() {}
 	/**
 	 * <p>A uniq object that is useless and cannot be casted

@@ -340,6 +340,10 @@ pPos newp (p@PConFS{}) = do
     let ret (nm, pat) = do p <- pPos newp pat; return (nm, p)
     fields <- mapSt ret p.fields
     return p.{fields}
+pPos newp (p@PAt{pos, var, pat}) = do
+    npat ← pPos newp pat
+    return p.{pat=npat, pos = newp.change VARID var}
+pPos newp (p@PVar{pos, var}) = return p.{pos = newp.change VARID var}
 pPos newp p
     | p.{pat?} = pPos newp p.pat >>= return .  p.{pat=}
     | p.{pos?} = return p.{pos=newp}
@@ -864,7 +868,8 @@ replUids t = mapEx true rep where
 copyExpr :: Maybe Position -> Tree Int Int -> Expr -> StG Expr    
 copyExpr mbp t x = mapEx false (copy t) x where
     ins t (k::Int,v) = Tree.insertI t k v
-    copy tree (Lam{pat,ex,typ}) = do
+
+    copyAlt tree CAlt{pat,ex} = do
         let qnames  = patNames pat
             olduids = map QName.uid qnames
         pat <- pReturn pat
@@ -873,22 +878,15 @@ copyExpr mbp t x = mapEx false (copy t) x where
             ntree   = fold ins tree (zip olduids newuids)
         ex <- copyExpr mbp ntree ex
         mapM_ (copySym mbp ntree) qnames
-        stio (Right Lam{pat,ex,typ})
+        stio CAlt{pat,ex}
+    
+    copy tree (Lam{pat,ex,typ}) = do
+        patex ← copyAlt tree CAlt{pat, ex}
+        stio (Right Lam{pat=patex.pat,ex=patex.ex,typ})
     copy tree (Case ckind x alts typ) = do
         x    <- copyExpr mbp tree x
-        alts <- mapSt copyAlt alts
+        alts <- mapSt (copyAlt tree) alts
         stio (Right (Case ckind x alts typ))
-      where
-        copyAlt CAlt{pat,ex} = do
-            let qnames  = patNames pat
-                olduids = map QName.uid qnames
-            pat <- pReturn pat
-            pat <- maybe (return pat) (flip pPos pat) mbp
-            let newuids = map QName.uid (patNames pat)
-                ntree   = fold ins tree (zip olduids newuids)
-            ex <- copyExpr mbp ntree ex
-            mapM_ (copySym mbp ntree) qnames
-            stio CAlt{pat,ex}
     copy tree (Let{env,ex,typ}) = do
         let olduids = map QName.uid env
         newuids <- sequence (map (const uniqid) olduids)
@@ -897,8 +895,10 @@ copyExpr mbp t x = mapEx false (copy t) x where
         ex   <- copyExpr mbp ntree ex
         stio (Right Let{env=nenv,ex,typ})
     copy tree (v@Vbl{name=Local{uid}}) = case tree.lookupI uid of
-        Just nid -> stio (Right v.{pos <- flip fromMaybe mbp, name <- QName.{uid=nid}})
-        Nothing  -> stio (Right v.{pos <- flip fromMaybe mbp})
+            Just nid -> stio (Right v.{pos = npos, name <- QName.{uid=nid}})
+            Nothing  -> stio (Right v.{pos = npos})
+        where
+            npos = (fromMaybe v.pos mbp).change VARID v.name.base
     copy _ (x@Ann{}) = stio (Left x)        -- keep annotations!
     copy _ x = stio (Left x)
 
@@ -911,8 +911,9 @@ copySym mbp tree qname = do
                 mex <- maybeST sym.expr id
                 mbx <- maybeST mex (copyExpr mbp tree)
                 let name = sym.name.{uid=nuid}
+                    npos = (fromMaybe sym.pos mbp).change VARID name.base
                     -- nsig = if sym.anno || isNothing sym.expr then sym.typ else pSigma
-                    nsym = sym.{pos <- flip fromMaybe mbp, name, expr = fmap return mbx, sid = nuid}
+                    nsym = sym.{pos = npos, name, expr = fmap return mbx, sid = nuid}
                 enter nsym
                 stio name
         Nothing -> Prelude.error ("Can't find sid " ++ show sym.sid ++ " for name " ++ show sym.name)
@@ -926,7 +927,9 @@ maybeST Nothing _ = stio Nothing
 
 {--
     @untypeExpr x@ removes all type information from @x@
-    all local symbols bound inside the expression are set back to 'pSigma' and state 'Unchecked'
+
+    All let bound symbols inside the expression are set back to state 'Unchecked'
+    and the type to 'pSigma', unless there was an annotation.
 -}
 untypeExpr x = mapEx true unty x
     where

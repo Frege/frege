@@ -1,4 +1,4 @@
-# Makefile for the frege compiler distribution versions 3.22.xxx
+# Makefile for the frege compiler distribution.
 # When you need to run this under Windows (poor guy!),
 # change the path separator characters.
 
@@ -21,9 +21,9 @@
 
 .SUFFIXES: .class .fr
 
-JAVAC = javac -source 1.7 -target 1.7 -encoding UTF-8
+JAVAC = javac -encoding UTF-8
 YACC =`which byacc || which byaccj || which pbyacc || false`
-JAVA = java "-Dfrege.javac=internal -nowarn -source 1.7 -target 1.7"
+JAVA = java "-Dfrege.javac=internal"
 
 
 DOC  = ../frege.github.com/doc
@@ -62,7 +62,7 @@ FREGECJ  = $(FREGE)  -jar fregec.jar  -d build -hints
 FREGEC0  = $(FREGECJ) -prefix a -sp shadow:.
 
 #	compile compiler2 with compiler1
-FREGEC1  = $(FREGE) afrege.compiler.Main -d build -hints -inline -prefix b
+FREGEC1  = $(FREGE) afrege.compiler.Main -d build -hints -target 1.7 -inline -prefix b
 
 #	compile final compiler with compiler2
 FREGEC2  = $(FREGE) bfrege.compiler.Main -d build -hints -O
@@ -257,7 +257,7 @@ compiler1: frege/compiler/grammar/Frege.fr frege/Version.fr
 
 runtime:
 	mkdir -p build
-	$(JAVAC) -d build frege/runtime/*.java
+	$(JAVAC) -d build -source 1.7 -target 1.7 frege/runtime/*.java frege/run/*.java
 	@echo Runtime is complete.
 
 
