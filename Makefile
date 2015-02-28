@@ -22,11 +22,18 @@
 .SUFFIXES: .class .fr
 
 .PHONY: all shadow-prelude clean sanitycheck test-jar compiler \
-  compiler1 compiler2 runtime docu diffs savejava
+  compiler1 compiler2 runtime docu diffs savejava downloadbootstrap
 
 JAVAC = javac -encoding UTF-8
 YACC =`which byacc || which byaccj || which pbyacc || false`
 JAVA = java "-Dfrege.javac=internal"
+PERL = perl
+CURL = curl
+MKDIR_P = mkdir -p
+
+# Compiler to compile the compiler
+BOOTSTRAP_COMPILER_URL = https://github.com/Frege/frege/releases/download/3.22.324/frege3.22.367-g2737683.jar
+BOOTSTRAP_COMPILER = fregec-bootstrap.jar
 
 
 DOC  = ../frege.github.com/doc
@@ -58,10 +65,10 @@ COMPS   = frege/compiler
 
 FREGE    = $(JAVA) -Xss4m -Xmx1800m -cp build
 
-#	compile using the fregec.jar in the working directory
-FREGECJ  = $(FREGE)  -jar fregec.jar  -d build -hints
+#	compile using the bootstrap fregec
+FREGECJ  = $(FREGE)  -jar $(BOOTSTRAP_COMPILER)  -d build -hints
 
-#	compile compiler1 with fregec.jar, uses prelude sources from shadow/
+#	compile compiler1 bootstrap fregec jar, uses prelude sources from shadow/
 FREGEC0  = $(FREGECJ) -prefix a -sp shadow:.
 
 #	compile compiler2 with compiler1
@@ -104,16 +111,14 @@ shadow-prelude:
 	rm shadow.jar
 
 clean:
-	rm -rf build/afrege build/bfrege build/frege
 	rm -rf build
-	mkdir build
-
+	rm -f fregec.jar fallback.jar
 
 sanitycheck:
 	$(JAVA) -version
 
 dist: fregec.jar
-	perl scripts/mkdist.pl
+	$(PERL) scripts/mkdist.pl
 
 fregec.jar: compiler $(DIR)/check1
 	$(FREGECC)  -make  frege/StandardLibrary.fr
@@ -124,7 +129,7 @@ fregec.jar: compiler $(DIR)/check1
 fregec7.jar:  savejava
 	@echo The following will probably only work if you just made a compiler
 	rm -rf build7
-	mkdir build7
+	$(MKDIR_P) build7
 	@echo You can ignore the compiler warning.
 	$(JAVAC) -J-Xmx1g -source 1.7 -target 1.7 -sourcepath save -d build7 \
 	    save/frege/compiler/Main.java
@@ -146,7 +151,7 @@ fregec6.jar: fallback.jar savejava
 	cp frege/runtime/Runtime.java6    save/frege/runtime/Runtime.java
 	cp frege/runtime/CompilerSupport.java6    save/frege/runtime/CompilerSupport.java
 	rm -rf build6
-	mkdir build6
+	$(MKDIR_P) build6
 	@echo You can ignore the compiler warning.
 	$(JAVAC) -J-Xmx1g -source 1.6 -target 1.6 -sourcepath save -d build6 \
 	    save/frege/compiler/Main.java
@@ -204,10 +209,10 @@ $(COMPF)/grammar/Frege.class: frege/compiler/grammar/Frege.fr $(COMPF)/common/De
 frege/compiler/grammar/Frege.fr: frege/compiler/grammar/Frege.y
 	@echo We should have 6 shift/reduce conflicts in the grammar.
 	$(YACC) -v frege/compiler/grammar/Frege.y
-	$(FREGE) -cp fregec.jar frege.tools.YYgen -m State  frege/compiler/grammar/Frege.fr
+	$(FREGE) -cp $(BOOTSTRAP_COMPILER) frege.tools.YYgen -m State  frege/compiler/grammar/Frege.fr
 
 frege/Version.fr: .git/index
-	perl scripts/mkversion.pl >frege/Version.fr
+	$(PERL) scripts/mkversion.pl >frege/Version.fr
 
 $(COMPF)/Main.class: compiler2
 	( test -d $(DIR) -a $(COMPF2)/Main.class -nt $(COMPF)/Main.class && rm -rf $(COMPF) $(TOOLSF) $(DIR)/prelude ) || true
@@ -253,13 +258,14 @@ CLASSES  =       $(COMPF1)/Scanner.class   $(COMPF1)/Classtools.class \
 		$(COMPF1)/gen/Bindings.class $(COMPF1)/gen/Match.class \
 		$(COMPF1)/GenMeta.class   $(COMPF1)/GenJava7.class
 
+build:
+	$(MKDIR_P) build
 
-compiler1: frege/compiler/grammar/Frege.fr frege/Version.fr 
+compiler1: frege/compiler/grammar/Frege.fr frege/Version.fr build
 	$(FREGEC0)  -make frege.compiler.Main
 	@echo stage 1 compiler ready
 
-runtime:
-	mkdir -p build
+runtime: build
 	$(JAVAC) -d build -source 1.7 -target 1.7 frege/runtime/*.java frege/run/*.java
 	@echo Runtime is complete.
 
@@ -288,4 +294,7 @@ diffs:
 	diff -b -r -x "*.class" -I "This code was generated with the frege compiler version" -I "^ +source=" save  build
 
 savejava:
-	perl scripts/savejava.pl
+	$(PERL) scripts/savejava.pl
+
+downloadbootstrap:
+	$(CURL) -L -o $(BOOTSTRAP_COMPILER) $(BOOTSTRAP_COMPILER_URL)
