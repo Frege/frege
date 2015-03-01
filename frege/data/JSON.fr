@@ -4,6 +4,7 @@
     
     1. On the lexical level, we analyze a 'String' and produce a list of JSON 'Tokens'.
     2. On the grammar level, we parse a list of 'Tokens' and produce a JSON 'Object'.
+       It is also possible to write parsers that produce certain data objects directly.
     3. On the value level, we convert JSON 'Value's to and from values of algebraic data types.
     
     Showing a JSON 'Object' produces valid JSON for exchange with the outside world.  
@@ -133,6 +134,8 @@ private lex !cs !start
                                     → string (off+6) (chr hex !: acc)
                                 other ->  Token.ERROR{offset=start+off+1, text=seq (start+off+2)} !: []
             | ch >= ' '     → string (off+1) (ch : acc)
+            | start+off >= cs.length
+                            → Token.ERROR{offset=start+off, text=seq (cs.length)}   !: []
             | otherwise     → Token.ERROR{offset=start+off, text=seq (start+off+1)} !: []  
             where
                 !ch = at off
@@ -155,8 +158,8 @@ data Value =
 --- JSON arrays or maps
 --- This is what the top level parser produces. 
 protected data Object = 
-    protected Array [Value]
-    | protected Struct (Tree String Value)
+      protected Array [Value]                       --- > [ value, ... ]
+    | protected Struct (Tree String Value)          --- > { "name":value, ... }
                               
 type Parser a = NP.Parser [] Token a
 
@@ -165,7 +168,7 @@ protected parse :: Parser a -> [Token] -> (String | a)
 protected parse p = fst • NP.runid p  
 
 --- parse a 'String' into a JSON 'Object'
-parseJSON = parse object . lexer
+-- parseJSON = parse object . lexer
 
 --- parse a 'String' into a JSON 'Value'
 parseValue = parse value . lexer
@@ -243,19 +246,23 @@ protected pair = do
 --- parse a JSON array
 protected parseArray = do
     lbrack
-    NP.cond rbrack (rbrack >> return (Object.Array [])) do 
-        vs <- value NP.`sepBy1` comma
-        rbrack
-        return (Object.Array vs)
+    NP.cond rbrack 
+        (rbrack >> return (Object.Array [])) 
+        do 
+            vs <- value NP.`sepBy1` comma
+            rbrack
+            return (Object.Array vs)
 
 --- parse a JSON object
 --- If one and the same key appears multiple times, only last one will be taken into account.
 protected parseMap = do
     lbrace
-    NP.cond rbrace (rbrace >> return (Object.Struct empty)) do
-        ps ← pair NP.`sepBy1` comma
-        rbrace
-        (return . Object.Struct . Tree.fromList) ps
+    NP.cond rbrace 
+        (rbrace >> return (Object.Struct empty)) 
+        do
+            ps ← pair NP.`sepBy1` comma
+            rbrace
+            (return . Object.Struct . Tree.fromList) ps
 
 --- pretty print a 'Value'
 valDoc :: Value -> PP.DOCUMENT 
@@ -280,3 +287,154 @@ instance Show Value where
 
 instance Show Object where
     show = pretty 72 . objDoc
+
+{--
+    Class of types whose values can be reconstructed from JSON.
+    
+    There are two ways to accomplish this:
+    
+    1. take a JSON 'Value' and try to reconstruct a value of the desired type,
+       that is, implement function 'fromJSON'
+    2. write a 'Parser' that produces the desired value directly and use
+       this to implement 'parseJSON'
+    
+    The usual way is to implement 'fromJSON' and keep the default for 'parseJSON', 
+    which parses a 'String' to a 'Object', 
+    wraps this in a 'Value' and passes that value to 'fromJSON'.
+    
+    Minimal complete definition: 'fromJSON'
+    
+    The instances of all standard types that are not encoded as objects will
+    have an implementation of 'parseJSON' that fails immediately. This behaviour 
+    is in line with the JSON standard which allows only objects
+    (that is, maps or arrays) to appear on the top level.
+     
+    There is currently no support for automatically derived instances yet,
+    but when it gets implemented it shall use the following encodings:
+    
+    - primitives, 'String', 'Regex': @true@, @false@, _number_, "_string_" 
+    - lists, arrays and the like: @[ value, ... ]@
+    - the trivial type @()@: @[]@
+    - tuples and other product types: @[ value1, value2, ... ]@
+    - enumerations: the constructor name as string
+    - new types: same as the wrapped type
+    - algebraic types: @{ "Just":v }@ or @{"Nothing":null}@,
+      when there is more than one value bound under the constructor, treat
+      the values as tuple: @{ "Data": [v1,v2,...]}. If we have a record under
+      the constructor: @{ "Person": {"name":"Smith", "age":42}}@
+    - inside @[]@ or @{}@ brackets, 'Maybe' values can be abbreviated 
+      in such a way that @null@ stands for 'Nothing' and @v@ for 'Just' v, but
+      observe that values of type @(Maybe (Maybe x))@ cannot be encoded like this, 
+      because there would be no encoding for the value 'Just' 'Nothing'.   
+-}
+class FromJSON a where
+    {-- 
+        Interpret a JSON value as a value of the instance type, or 'fail'.
+    
+        This function must be implemented by all instances.
+        
+        If one has a non-standard implementation of 'parseJSON' that does
+        not use 'fromJSON', a conforming, but inefficient implementation would be
+        
+        > fromJSON = parseJSON . show 
+    -}
+    fromJSON  ∷ MonadFail 𝖒 ⇒ Value → 𝖒 a
+    
+    parseJSON ∷ MonadFail 𝖒 ⇒ String → 𝖒 a
+    parseJSON = either fail fromJSON . fmap Value.Object . parse object . lexer  
+
+--
+-- instances
+--
+
+instance FromJSON () where
+    fromJSON Value.Object{oval=Object.Array  xs}
+        | xs.null   = return ()
+        | otherwise = fail ("cannot decode () from non empty array")
+    fromJSON other  = fail ("cannot decode () from " ++ show other)
+    
+instance FromJSON Bool where
+    fromJSON Value.Bool{bval} = return bval
+    fromJSON other            = fail ("cannot decode Bool from " ++ show other)
+    parseJSON _               = fail ("A top level JSON value cannot be Bool")
+    
+instance FromJSON Int where
+    fromJSON Value.Number{nval} = either (fail . Throwable.show) return . String.int $ nval
+    fromJSON other              = fail ("cannot decode Int from " ++ show other)
+    parseJSON _                 = fail ("A top level JSON value cannot be Int")
+
+instance FromJSON Long where
+    fromJSON Value.Number{nval} = either (fail . Throwable.show) return . String.long $ nval
+    fromJSON other              = fail ("cannot decode Long from " ++ show other)
+    parseJSON _                 = fail ("A top level JSON value cannot be Long")
+
+instance FromJSON Integer where
+    fromJSON Value.Number{nval} = either (fail . Throwable.show) return . String.integer $ nval
+    fromJSON other              = fail ("cannot decode Integer from " ++ show other)
+    parseJSON _                 = fail ("A top level JSON value cannot be Integer")
+
+instance FromJSON Float where
+    fromJSON Value.Number{nval} = either (fail . Throwable.show) return . String.float $ nval
+    fromJSON other              = fail ("cannot decode Float from " ++ show other)
+    parseJSON _                 = fail ("A top level JSON value cannot be Float")
+
+instance FromJSON Double where
+    fromJSON Value.Number{nval} = either (fail . Throwable.show) return . String.double $ nval
+    fromJSON other              = fail ("cannot decode Double from " ++ show other)
+    parseJSON _                 = fail ("A top level JSON value cannot be Double")
+
+
+instance FromJSON Char where
+    fromJSON Value.String{sval} | length sval == 1 
+                                = return (sval.charAt 0)
+    fromJSON other              = fail ("cannot decode Char from " ++ show other)
+    parseJSON _                 = fail ("A top level JSON value cannot be Char")
+
+instance FromJSON String where
+    fromJSON Value.String{sval} = return sval
+    fromJSON other              = fail ("cannot decode String from " ++ show other)
+    parseJSON _                 = fail ("A top level JSON value cannot be String")
+
+instance FromJSON (FromJSON 𝖊) ⇒ [𝖊] where
+    fromJSON Value.Object{oval=Object.Array xs} = mapM fromJSON xs
+    fromJSON other              = fail ("cannot decode [] from non array " ++ show other)
+
+instance FromJSON (FromJSON 𝖊) ⇒ Maybe 𝖊  where
+    {--
+        Encoding can be:
+        > {"Just": some-value}
+        > {"Nothing": _}
+        > null
+        > some-value 
+    -}
+    fromJSON Value.Object{oval=Object.Struct m}
+        | Just v <- m.lookup "Just"     = Just <$> fromJSON v
+        | Just _ <- m.lookup "Nothing"  = return Nothing
+    fromJSON Value.Null                 = return Nothing
+    fromJSON v                          = Just <$> fromJSON v
+
+instance FromJSON (FromJSON 𝖆, FromJSON 𝖇) ⇒  (𝖆, 𝖇) where
+    fromJSON Value.Object{oval=Object.Array [va, vb]} = do
+        a ← fromJSON va
+        b ← fromJSON vb
+        return (a,b)
+    fromJSON other      = fail ("cannot decode (a,b) from " ++ show other)
+    
+instance FromJSON (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈) ⇒  (𝖆, 𝖇, 𝖈) where
+    fromJSON Value.Object{oval=Object.Array [va, vb, vc]} = do
+        a ← fromJSON va
+        b ← fromJSON vb
+        c ← fromJSON vc
+        return (a,b,c)
+    fromJSON other      = fail ("cannot decode (a,b,c) from " ++ show other)
+
+instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
+                    FromJSON 𝖉) ⇒  (𝖆, 𝖇, 𝖈, 𝖉) where
+    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd]} = do
+        a ← fromJSON va
+        b ← fromJSON vb
+        c ← fromJSON vc
+        d ← fromJSON vd
+        return (a,b,c,d)
+    fromJSON other      = fail ("cannot decode (a,b,c,d) from " ++ show other)
+    
