@@ -148,7 +148,9 @@ public class Runtime {
 				sr.append(low);
 				i++;
 			}
-			else if (!Character.isDefined(c) || Character.isSurrogate(c)) {
+			else if (!Character.isDefined(c)
+					|| Character.getType(c) == Character.CONTROL
+					|| Character.isSurrogate(c)) {
 				sr.append(String.format("\\u%04x", (int) c));
 			}
 			else sr.append(c);
@@ -177,7 +179,9 @@ public class Runtime {
             sr.append('\\');
             sr.append(c);
         }
-		else if (!Character.isDefined(c) || Character.isSurrogate(c)) {
+		else if (!Character.isDefined(c)
+				|| Character.getType(c) == Character.CONTROL
+				|| Character.isSurrogate(c)) {
 			sr.append(String.format("\\u%04x", (int) c));
 		}
         else sr.append(c);
