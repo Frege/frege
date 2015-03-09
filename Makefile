@@ -115,6 +115,7 @@ dist: fregec.jar
 fregec.jar: test
 	jar  -cf    fregec.jar -C build frege
 	jar  -uvfe  fregec.jar frege.compiler.Main
+	java -jar fregec.jar -version
 	cp fregec.jar fallback.jar
 
 fregec7.jar:  savejava
