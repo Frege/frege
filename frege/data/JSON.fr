@@ -1,0 +1,1131 @@
+--- JSON support
+{--
+    JSON support comprises 3 levels:
+    
+    1. On the lexical level, we analyze a 'String' and produce a list of JSON 'Tokens'.
+    2. On the grammar level, we parse a list of 'Tokens' and produce a JSON 'Value'.
+       It is also possible to write parsers that produce certain data objects directly.
+    3. On the value level, we convert JSON 'Value's to and from values of algebraic data types.
+    
+    Showing a JSON 'Value' or JSON 'Object' produces valid JSON for exchange with the outside world.  
+--}
+module frege.data.JSON where
+
+import frege.Prelude hiding(Object, null)
+import Data.Bits (shiftL, .|.)
+import Data.TreeMap(Tree, each)
+import Data.NanoParsec as NP()
+import Lib.PP(bracket, text, sep, pretty, stack)
+import Data.List (sortBy)
+
+--- lexical entities that can appear in a JSON String
+protected data Token = 
+      protected BRACEL                  --- left brace @{@
+    | protected BRACER                  --- right brace @}@
+    | protected BRACKL                  --- left bracket @[@
+    | protected BRACKR                  --- right bracket @]@
+    | protected COLON                   --- colon @:@
+    | protected COMMA                   --- comma @,@
+    | protected S {!sval ∷ String}      --- a JSON string, escapes already decoded
+    | protected N {!nval ∷ String}      --- a JSON number, 'atod' will work
+    | protected TRUE                    --- @true@
+    | protected FALSE                   --- @false@
+    | protected NULL                    --- @null@ (o noes!!!)
+    | protected ERROR  {!offset ∷ Int, 
+                        !text   ∷ String}   --- lexical error indicator
+
+derive Show Token
+derive Eq Token
+
+{--
+    Translate a 'String' into a lazy list of 'Token's.
+
+    There will be at most one 'Token.ERROR' token in the result, 
+    and it will be the last in the list. This is, the 'lexer' will stop
+    on the first lexical error.
+    
+    Absence of lexical errors does not mean valid JSON, for example
+    > "null, true,"
+    is lexed as
+    > [NULL, COMMA, TRUE, COMMA]
+    but is, of course invalid.
+-} 
+lexer :: String -> [Token]
+lexer s = lex s 0
+
+{--
+    Scan a 'String' and take care of offsets
+-}
+private lex :: String → Int → [Token]
+private lex !cs !start
+    | endOfSeq        = []
+    | ch.isWhitespace = lex cs (start+1)    -- handles tabs, carriage return and newlines as well
+    | ch.isDigit      = case positive 0 of
+                            !after | after > 0 
+                                      → Token.N{nval = seq (start+after)} !: lex cs (start+after)
+                            otherwise → Token.ERROR{offset=start, text=seq (start+1)} !: []
+    | otherwise = case ch of
+        '"' →   string 1 []
+        '-' →   case positive 1 of
+                    !after | after > 0 
+                              → Token.N{nval = seq (start+after)} !: lex cs (start+after)
+                    otherwise → Token.ERROR{offset=start, text=seq (start+1)} !: []
+        ',' →   Token.COMMA  : lex cs (start+1) 
+        ':' →   Token.COLON  : lex cs (start+1)
+        '{' →   Token.BRACEL : lex cs (start+1) 
+        '}' →   Token.BRACER : lex cs (start+1)
+        '[' →   Token.BRACKL : lex cs (start+1) 
+        ']' →   Token.BRACKR : lex cs (start+1)
+        -- the following lexes "truenull" as TRUE:NULL:...
+        -- and "true0" as TRUE:N "0":...
+        -- but this will yield syntax error later
+        't' | at 1 == 'r', at 2 == 'u', at 3 == 'e'
+            →   Token.TRUE : lex cs (start+4)
+        'f' | at 1 == 'a', at 2 == 'l', at 3 == 's', at 4 == 'e'
+            →   Token.FALSE : lex cs (start+5)
+        'n' | at 1 == 'u', at 2 == 'l', at 3 == 'l'
+            →   Token.NULL : lex cs (start+4)
+        _   →   Token.ERROR{offset=start, text=seq (start+1)} !: []        -- abort scanning
+    where
+        !endOfSeq   = start >= cs.length      -- assume that length is a cheap operation on Strings
+        !ch         = at 0
+        seq end     = (cs.substr start end)
+        at i        = if start+i >= cs.length then '\0' else cs.charAt (start+i)
+        positive off
+            | at off == '0'     → fractional (off+1)
+            | (at off).isDigit  → fractional (digits (off+1))
+            | otherwise         → -1 
+        digits off  -- skip 0 or more digits
+            | (at off).isDigit  → digits (off+1)
+            | otherwise         → off
+        fractional off
+            | at off == '.'     → if (at (off+1)).isDigit 
+                                    then expo (digits (off+2))
+                                    else -1
+            | otherwise         → expo off
+        expo off = case at off of
+                'e'     → expo1 (off+1)
+                'E'     → expo1 (off+1)
+                _       → off   -- no exponent
+        expo1 off = case at off of
+            '+' → expo2 (off+1)
+            '-' → expo2 (off+1)
+            _   → expo2 off
+        -- at least 1 digit 
+        expo2 off = if (at off).isDigit then digits (off+1) else -1     
+        string off !acc
+            | ch == '"'     → Token.S{sval=packed (reverse acc)} !: lex cs (start+off+1)
+            | ch == '\\'    → case at (off+1) of
+                                '"' → string (off+2) ('"'  : acc)
+                                '\\'→ string (off+2) ('\\' : acc)
+                                '/' → string (off+2) ('/'  : acc)
+                                'b' → string (off+2) ('\b' : acc)
+                                'f' → string (off+2) ('\f' : acc)
+                                'n' → string (off+2) ('\n' : acc)
+                                'r' → string (off+2) ('\r' : acc)
+                                't' → string (off+2) ('\t' : acc)
+                                'u' | Just h1 ← hexval (at (off+2)),
+                                      Just h2 ← hexval (at (off+3)),
+                                      Just h3 ← hexval (at (off+4)),
+                                      Just h4 ← hexval (at (off+5)),
+                                      !hex <- h1 `shiftL` 12 
+                                                .|. h2 `shiftL` 8
+                                                .|. h3 `shiftL` 4
+                                                .|. h4
+                                    → string (off+6) (chr hex !: acc)
+                                other ->  Token.ERROR{offset=start+off+1, text=seq (start+off+2)} !: []
+            | ch >= ' '     → string (off+1) (ch : acc)
+            | start+off >= cs.length
+                            → Token.ERROR{offset=start+off, text=seq (cs.length)}   !: []
+            | otherwise     → Token.ERROR{offset=start+off, text=seq (start+off+1)} !: []  
+            where
+                !ch = at off
+                j :: Int -> Maybe Int
+                j !x = Just x
+                hexval c
+                    | c >= '0' && c <= '9' = j (ord c - ord '0')
+                    | c >= 'a' && c <= 'f' = j (10 + (ord c - ord 'a'))
+                    | c >= 'A' && c <= 'F' = j (10 + (ord c - ord 'A'))
+                    | otherwise = Nothing
+
+--- JSON types
+data Value = 
+      protected String {sval ∷ String }                 --- a string
+    | protected Number {nval ∷ String }                 --- a number
+    | protected Bool   {bval ∷ Bool }                   --- @true@ or @false@   
+    | protected Null                                    --- just @null@
+    | protected Object {oval ∷ Object }                 --- array or map
+
+--- JSON arrays or maps 
+protected data Object = 
+      protected Array [Value]                       --- > [ value, ... ]
+    | protected Struct (Tree String Value)          --- > { "name":value, ... }
+
+type Parser a = NP.Parser [] Token a
+
+--- run a 'Parser' and extract the result 
+runParser :: Parser a -> [Token] -> (String | a)
+runParser p = fst • NP.runid p  
+
+-- parse a 'String' into a JSON 'Object'
+-- parseJSON = parse object . lexer
+
+-- parse a 'String' into a JSON 'Value'
+-- parseValue = runParser value . lexer
+
+--- Parses an 'Object.Array' or an 'Object.Map'
+--- This is what should be applied to JSON gotten from external sources
+parseObject :: Parser Object
+parseObject =
+    NP.cond  (parseLbrack <|> parseLbrace)
+        (parseArray <|> parseMap) 
+        (NP.failure "JSON object or JSON array expected")
+    <* NP.eos  
+
+--- parse a value
+parseValue  ∷ Parser Value
+parseValue = (
+            Value.String <$> parseString
+        <|> parseNumber
+        <|> parseNull
+        <|> parseBoolean
+        <|> Value.Object <$> parseArray
+        <|> Value.Object <$> parseMap)
+    NP.<?> "JSON value expected" 
+
+--- parse a left bracket
+parseLbrack  ∷ Parser Token
+parseLbrack = NP.expect Token.BRACKL NP.<?> "'[' expected"
+
+--- parse a left brace
+parseLbrace  ∷ Parser Token
+parseLbrace = NP.expect Token.BRACEL NP.<?> "'{' expected"
+
+--- parse a right bracket
+parseRbrack  ∷ Parser Token
+parseRbrack = NP.expect Token.BRACKR NP.<?> "']' missing"
+
+--- parse a right brace
+parseRbrace  ∷ Parser Token
+parseRbrace = NP.expect Token.BRACER NP.<?> "'}' missing"
+
+--- parse a comma
+parseComma  ∷ Parser Token
+parseComma = NP.expect Token.COMMA NP.<?> "',' expected"
+
+--- parse a colon
+parseColon ∷ Parser Token
+parseColon = NP.expect Token.COLON NP.<?> "':' expected"
+
+--- parse a string
+parseString :: Parser String
+parseString = _.sval <$> NP.satisfy _.{sval?}
+
+--- parse a number
+parseNumber :: Parser Value
+parseNumber = Value.Number . _.nval <$> NP.satisfy _.{nval?}
+
+--- parse a raw 'Int'
+parseInt :: Parser Int
+parseInt = NP.satisfy _.{nval?} >>= either (const pzero) return . String.int . Token.nval 
+
+--- parse a raw 'Long'
+parseLong :: Parser Long
+parseLong = NP.satisfy _.{nval?} >>= either (const pzero) return . String.long . Token.nval 
+
+--- parse a raw 'Integer'
+parseInteger :: Parser Integer
+parseInteger = NP.satisfy _.{nval?} >>= either (const pzero) return . String.integer . Token.nval 
+
+--- parse a raw 'Double'
+parseDouble :: Parser Double
+parseDouble = NP.satisfy _.{nval?} >>= either (const pzero) return . String.double . Token.nval 
+
+--- parse a raw 'Float'
+parseFloat :: Parser Float
+parseFloat = NP.satisfy _.{nval?} >>= either (const pzero) return . String.float . Token.nval 
+
+
+--- parse a boolean
+parseBoolean ∷ Parser Value
+parseBoolean = 
+            const Value.Bool{bval=true}  <$> NP.expect Token.TRUE 
+        <|> const Value.Bool{bval=false} <$> NP.expect Token.FALSE  
+
+--- parse a raw boolean
+parseBool = const true  <$> NP.expect Token.TRUE
+        <|> const false <$> NP.expect Token.FALSE
+
+--- parse null
+parseNull :: Parser Value
+parseNull = const Value.Null <$> NP.expect Token.NULL
+
+--- parse a pair
+parsePair :: Parser (String, Value)
+parsePair = do
+    k <- parseString NP.<?> "string expected"
+    parseColon
+    v <- parseValue
+    return (k,v)
+    
+--- parse a JSON array
+parseArray ∷ Parser Object
+parseArray = do
+    parseLbrack
+    NP.cond parseRbrack 
+        (parseRbrack >> return (Object.Array [])) 
+        do 
+            vs <- parseValue NP.`sepBy1` parseComma
+            parseRbrack
+            return (Object.Array vs)
+
+--- parse a JSON object
+--- If one and the same key appears multiple times, only last one will be taken into account.
+parseMap ∷ Parser Object
+parseMap = do
+    parseLbrace
+    NP.cond parseRbrace 
+        (parseRbrace >> return (Object.Struct empty)) 
+        do
+            ps ← parsePair NP.`sepBy1` parseComma
+            parseRbrace
+            (return . Object.Struct . Tree.fromList) ps
+
+--- pretty print a 'Value'
+valDoc :: Value -> PP.DOCUMENT 
+valDoc v = case v  of
+    Value.String{sval} → text (show sval)
+    Value.Number{nval} → text nval
+    Value.Bool{bval}   → text (display bval)
+    Value.Null         → text "null"
+    Value.Object{oval} → objDoc oval
+
+--- pretty print an 'Object'
+objDoc :: Object -> PP.DOCUMENT
+objDoc o = case o  of
+    Object.Array a  -> bracket "[" (sep "," (map valDoc a)) "]" 
+    Object.Struct s -> bracket "{" (sep "," pairs) "}"
+                where 
+                    pairs = map pairDoc (each s)
+                    pairDoc (s,v) = PP.group $ text (show s) PP.<+> text ":" PP.<+> valDoc v
+
+instance Show Value where
+    show = pretty 72 . valDoc
+
+instance Show Object where
+    show = pretty 72 . objDoc
+
+derive Eq Value
+
+instance Eq Object where
+    hashCode _ = -1
+    Object.Array  a == Object.Array  b = a  == b 
+    Object.Struct m == Object.Struct p = em == ep
+        where
+            em = sortBy (comparing fst) (each m)
+            ep = sortBy (comparing fst) (each p)
+    _ == _ = false
+
+{--
+    Class of types whose values can be reconstructed from JSON.
+    
+    There are two ways to accomplish this:
+    
+    1. take a JSON 'Value' and try to reconstruct a value of the desired type,
+       that is, implement function 'fromJSON'
+    2. write a 'Parser' that produces the desired value directly and use
+       this to implement 'parseJSON'
+
+    The usual way is to implement 'fromJSON' and keep the default for 'parseJSON', 
+    which parses a 'String' to a 'Object', 
+    wraps this in a 'Value' and passes that value to 'fromJSON'.
+
+    Minimal complete definition: 'fromJSON'
+
+    The instances of all standard types that are not encoded as objects will
+    have an implementation of 'parseJSON' that fails immediately. This behaviour 
+    is in line with the JSON standard which allows only objects
+    (that is, maps or arrays) to appear on the top level.
+
+    There is currently no support for automatically derived instances yet,
+    but when it gets implemented it shall use the following encodings:
+
+    - primitives, 'String', 'Regex': @true@, @false@, _number_, "_string_" 
+    - lists, arrays and the like: @[ value, ... ]@
+    - the trivial type @()@: @[]@
+    - tuples and other product types: @[ value1, value2, ... ]@
+    - enumerations: the constructor name as string
+    - new types: same as the wrapped type
+    - algebraic types: @{ "Just":v }@ or @{"Nothing":null}@,
+      when there is more than one value bound under the constructor, treat
+      the values as tuple: @{ "Data": [v1,v2,...]}. If we have a record under
+      the constructor: @{ "Person": {"name":"Smith", "age":42}}@
+    - inside @[]@ or @{}@ brackets, 'Maybe' values can be abbreviated 
+      in such a way that @null@ stands for 'Nothing' and @v@ for 'Just' v, but
+      observe that values of type @(Maybe (Maybe x))@ cannot be encoded like this, 
+      because there would be no encoding for the value 'Just' 'Nothing'.   
+-}
+class FromJSON a where
+    {-- 
+        Interpret a JSON value as a value of the instance type, or 'fail'.
+
+        This function must be implemented by all instances.
+
+        If one has a non-standard implementation of 'parseJSON' that does
+        not use 'fromJSON', a conforming, but inefficient implementation would be
+
+        > fromJSON = parseJSON . show 
+    -}
+    fromJSON  ∷ MonadFail 𝖒 ⇒ Value → 𝖒 a
+
+    parseJSON ∷ MonadFail 𝖒 ⇒ String → 𝖒 a
+    parseJSON = either fail fromJSON . fmap Value.Object . runParser parseObject . lexer  
+
+{--
+    The class of types that support their serialization to JSON.
+
+    Note that the JSON value for primitive types and 'String's yields no
+    valid JSON document when printed.  
+-}
+class ToJSON a where
+    toJSON :: a -> Value
+
+instance ToJSON Value where
+    toJSON = id
+
+instance ToJSON Object where
+    toJSON = Value.Object 
+
+instance ToJSON () where
+    toJSON () = Value.Object (Object.Array [])
+
+instance ToJSON Bool where
+    toJSON b = Value.Bool b
+
+instance ToJSON Int where
+    toJSON i = Value.Number{nval=show i}
+
+instance ToJSON Long where
+    toJSON i = Value.Number{nval=show i}
+
+instance ToJSON Integer where
+    toJSON i = Value.Number{nval=show i}
+
+instance ToJSON Float where
+    toJSON i = Value.Number{nval=show i}
+
+instance ToJSON Double where
+    toJSON i = Value.Number{nval=show i}
+
+instance ToJSON Char where
+    toJSON c = Value.String{sval=ctos c}
+
+instance ToJSON String where
+    toJSON s = Value.String s
+
+instance ToJSON ToJSON 𝖊 ⇒ [𝖊] where
+    toJSON = Value.Object . Object.Array . map toJSON 
+
+instance ToJSON ToJSON 𝖊 ⇒ JArray 𝖊  where
+    toJSON = Value.Object . Object.Array . map toJSON . toList
+--
+-- instances
+--
+
+instance FromJSON Value where
+    fromJSON = return
+
+instance FromJSON Object where
+    fromJSON Value.Object{oval} = return oval
+    fromJSON other = fail ("cannot decode JSON.Object from " ++ show other)
+
+instance FromJSON () where
+    fromJSON Value.Object{oval=Object.Array  xs}
+        | xs.null   = return ()
+        | otherwise = fail ("cannot decode () from non empty array")
+    fromJSON other  = fail ("cannot decode () from " ++ show other)
+    
+instance FromJSON Bool where
+    fromJSON Value.Bool{bval} = return bval
+    fromJSON other            = fail ("cannot decode Bool from " ++ show other)
+    parseJSON _               = fail ("A top level JSON value cannot be Bool")
+    
+instance FromJSON Int where
+    fromJSON Value.Number{nval} = either (fail . Throwable.show) return . String.int $ nval
+    fromJSON other              = fail ("cannot decode Int from " ++ show other)
+    parseJSON _                 = fail ("A top level JSON value cannot be Int")
+
+instance FromJSON Long where
+    fromJSON Value.Number{nval} = either (fail . Throwable.show) return . String.long $ nval
+    fromJSON other              = fail ("cannot decode Long from " ++ show other)
+    parseJSON _                 = fail ("A top level JSON value cannot be Long")
+
+instance FromJSON Integer where
+    fromJSON Value.Number{nval} = either (fail . Throwable.show) return . String.integer $ nval
+    fromJSON other              = fail ("cannot decode Integer from " ++ show other)
+    parseJSON _                 = fail ("A top level JSON value cannot be Integer")
+
+instance FromJSON Float where
+    fromJSON Value.Number{nval} = either (fail . Throwable.show) return . String.float $ nval
+    fromJSON other              = fail ("cannot decode Float from " ++ show other)
+    parseJSON _                 = fail ("A top level JSON value cannot be Float")
+
+instance FromJSON Double where
+    fromJSON Value.Number{nval} = either (fail . Throwable.show) return . String.double $ nval
+    fromJSON other              = fail ("cannot decode Double from " ++ show other)
+    parseJSON _                 = fail ("A top level JSON value cannot be Double")
+
+
+instance FromJSON Char where
+    fromJSON Value.String{sval} | length sval == 1 
+                                = return (sval.charAt 0)
+    fromJSON other              = fail ("cannot decode Char from " ++ show other)
+    parseJSON _                 = fail ("A top level JSON value cannot be Char")
+
+instance FromJSON String where
+    fromJSON Value.String{sval} = return sval
+    fromJSON other              = fail ("cannot decode String from " ++ show other)
+    parseJSON _                 = fail ("A top level JSON value cannot be String")
+
+instance FromJSON (FromJSON 𝖊) ⇒ [𝖊] where
+    fromJSON Value.Object{oval=Object.Array xs} = mapM fromJSON xs
+    fromJSON other              = fail ("cannot decode [] from non array " ++ show other)
+
+instance FromJSON (FromJSON 𝖊, ArrayElem 𝖊) ⇒ JArray 𝖊 where
+    fromJSON list = arrayFromList <$> fromJSON list
+
+instance FromJSON (FromJSON 𝖊) ⇒ Maybe 𝖊  where
+    {--
+        Encoding can be:
+        > {"Just": some-value}
+        > {"Nothing": _}
+        > null
+        > some-value 
+    -}
+    fromJSON Value.Object{oval=Object.Struct m}
+        | Just v <- m.lookup "Just"     = Just <$> fromJSON v
+        | Just _ <- m.lookup "Nothing"  = return Nothing
+    fromJSON Value.Null                 = return Nothing
+    fromJSON v                          = Just <$> fromJSON v
+
+instance FromJSON (FromJSON 𝖆, FromJSON 𝖇) ⇒ (𝖆|𝖇)  where
+    fromJSON Value.Object{oval=Object.Struct m}
+        | Just v <- m.lookup "Left"     = Left  <$> fromJSON v
+        | Just v <- m.lookup "Right"    = Right <$> fromJSON v
+    fromJSON other                      = fail ("cannot decode Either from " ++ show other)
+
+instance FromJSON (FromJSON 𝖆, FromJSON 𝖇) ⇒  (𝖆, 𝖇) where
+    fromJSON Value.Object{oval=Object.Array [va, vb]} = do
+        a ← fromJSON va
+        b ← fromJSON vb
+        return (a,b)
+    fromJSON other      = fail ("cannot decode (a,b) from " ++ show other)
+    
+instance FromJSON (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈) ⇒  (𝖆, 𝖇, 𝖈) where
+    fromJSON Value.Object{oval=Object.Array [va, vb, vc]} = do
+        a ← fromJSON va
+        b ← fromJSON vb
+        c ← fromJSON vc
+        return (a,b,c)
+    fromJSON other      = fail ("cannot decode (a,b,c) from " ++ show other)
+
+instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
+                    FromJSON 𝖉) ⇒  (𝖆, 𝖇, 𝖈, 𝖉) where
+    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd]} = do
+        a ← fromJSON va
+        b ← fromJSON vb
+        c ← fromJSON vc
+        d ← fromJSON vd
+        return (a,b,c,d)
+    fromJSON other      = fail ("cannot decode (a,b,c,d) from " ++ show other)
+
+instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
+                    FromJSON 𝖉, FromJSON 𝖊) ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊) where
+    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve]} = do
+        a ← fromJSON va
+        b ← fromJSON vb
+        c ← fromJSON vc
+        d ← fromJSON vd
+        e ← fromJSON ve
+        return (a,b,c,d,e)
+    fromJSON other      = fail ("cannot decode (a,b,c,d,e) from " ++ show other)
+
+instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
+                    FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋) ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋) where
+    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf]} = do
+        a ← fromJSON va
+        b ← fromJSON vb
+        c ← fromJSON vc
+        d ← fromJSON vd
+        e ← fromJSON ve
+        f ← fromJSON vf
+        return (a,b,c,d,e,f)
+    fromJSON other      = fail ("cannot decode (a,b,c,d,e,f) from " ++ show other)
+
+instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
+                    FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
+                    FromJSON 𝖌) ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌) where
+    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf, vg]} = do
+        a ← fromJSON va
+        b ← fromJSON vb
+        c ← fromJSON vc
+        d ← fromJSON vd
+        e ← fromJSON ve
+        f ← fromJSON vf
+        g ← fromJSON vg
+        return (a,b,c,d,e,f,g)
+    fromJSON other      = fail ("cannot decode (a,b,c,d,e,f,g) from " ++ show other)
+
+instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
+                    FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
+                    FromJSON 𝖌, FromJSON 𝖍) ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍) where
+    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf, vg, vh]} = do
+        a ← fromJSON va
+        b ← fromJSON vb
+        c ← fromJSON vc
+        d ← fromJSON vd
+        e ← fromJSON ve
+        f ← fromJSON vf
+        g ← fromJSON vg
+        h ← fromJSON vh
+        return (a,b,c,d,e,f,g,h)
+    fromJSON other      = fail ("cannot decode (a,b,c,d,e,f,g,h) from " ++ show other)
+
+instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
+                    FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
+                    FromJSON 𝖌, FromJSON 𝖍, FromJSON 𝖎) ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎) where
+    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf, vg, vh, vi]} = do
+        a ← fromJSON va
+        b ← fromJSON vb
+        c ← fromJSON vc
+        d ← fromJSON vd
+        e ← fromJSON ve
+        f ← fromJSON vf
+        g ← fromJSON vg
+        h ← fromJSON vh
+        i ← fromJSON vi
+        return (a,b,c,d,e,f,g,h,i)
+    fromJSON other      = fail ("cannot decode (a,b,c,d,e,f,g,h,i) from " ++ show other)
+
+instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
+                    FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
+                    FromJSON 𝖌, FromJSON 𝖍, FromJSON 𝖎,
+                    FromJSON 𝖏) ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏) where
+    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
+                                             vj]} = do
+        a ← fromJSON va
+        b ← fromJSON vb
+        c ← fromJSON vc
+        d ← fromJSON vd
+        e ← fromJSON ve
+        f ← fromJSON vf
+        g ← fromJSON vg
+        h ← fromJSON vh
+        i ← fromJSON vi
+        j ← fromJSON vj
+        return (a,b,c,d,e,f,g,h,i,j)
+    fromJSON other      = fail ("cannot decode (a,b,c,d,e,f,g,h,i,j) from " ++ show other)
+
+instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
+                    FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
+                    FromJSON 𝖌, FromJSON 𝖍, FromJSON 𝖎,
+                    FromJSON 𝖏, FromJSON 𝖐) ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐) where
+    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
+                                             vj, vk]} = do
+        a ← fromJSON va
+        b ← fromJSON vb
+        c ← fromJSON vc
+        d ← fromJSON vd
+        e ← fromJSON ve
+        f ← fromJSON vf
+        g ← fromJSON vg
+        h ← fromJSON vh
+        i ← fromJSON vi
+        j ← fromJSON vj
+        k ← fromJSON vk
+        return (a,b,c,d,e,f,g,h,i,j,k)
+    fromJSON other      = fail ("cannot decode (a,b,c,d,e,f,g,h,i,j,k) from " ++ show other)
+
+instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
+                    FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
+                    FromJSON 𝖌, FromJSON 𝖍, FromJSON 𝖎,
+                    FromJSON 𝖏, FromJSON 𝖐, FromJSON 𝖑) 
+                    ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑) where
+    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
+                                             vj, vk, vl]} = do
+        a ← fromJSON va
+        b ← fromJSON vb
+        c ← fromJSON vc
+        d ← fromJSON vd
+        e ← fromJSON ve
+        f ← fromJSON vf
+        g ← fromJSON vg
+        h ← fromJSON vh
+        i ← fromJSON vi
+        j ← fromJSON vj
+        k ← fromJSON vk
+        l ← fromJSON vl
+        return (a,b,c,d,e,f,g,h,i,j,k,l)
+    fromJSON other      = fail ("cannot decode (a,b,c,d,e,f,g,h,i,j,k,l) from " ++ show other)
+
+instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
+                    FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
+                    FromJSON 𝖌, FromJSON 𝖍, FromJSON 𝖎,
+                    FromJSON 𝖏, FromJSON 𝖐, FromJSON 𝖑,
+                    FromJSON 𝖒) 
+                    ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒) where
+    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
+                                             vj, vk, vl, vm]} = do
+        a ← fromJSON va
+        b ← fromJSON vb
+        c ← fromJSON vc
+        d ← fromJSON vd
+        e ← fromJSON ve
+        f ← fromJSON vf
+        g ← fromJSON vg
+        h ← fromJSON vh
+        i ← fromJSON vi
+        j ← fromJSON vj
+        k ← fromJSON vk
+        l ← fromJSON vl
+        m ← fromJSON vm
+        return (a,b,c,d,e,f,g,h,i,j,k,l,m)
+    fromJSON other      = fail ("cannot decode (a,b,c,d,e,f,g,h,i,j,k,l,m) from " ++ show other)
+
+instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
+                    FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
+                    FromJSON 𝖌, FromJSON 𝖍, FromJSON 𝖎,
+                    FromJSON 𝖏, FromJSON 𝖐, FromJSON 𝖑,
+                    FromJSON 𝖒, FromJSON 𝖓) 
+                    ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓) where
+    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
+                                             vj, vk, vl, vm, vn]} = do
+        a ← fromJSON va
+        b ← fromJSON vb
+        c ← fromJSON vc
+        d ← fromJSON vd
+        e ← fromJSON ve
+        f ← fromJSON vf
+        g ← fromJSON vg
+        h ← fromJSON vh
+        i ← fromJSON vi
+        j ← fromJSON vj
+        k ← fromJSON vk
+        l ← fromJSON vl
+        m ← fromJSON vm
+        n ← fromJSON vn
+        return (a,b,c,d,e,f,g,h,i,j,k,l,m,n)
+    fromJSON other      = fail ("cannot decode (a,b,c,d,e,f,g,h,i,j,k,l,m,n) from " ++ show other)
+
+instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
+                    FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
+                    FromJSON 𝖌, FromJSON 𝖍, FromJSON 𝖎,
+                    FromJSON 𝖏, FromJSON 𝖐, FromJSON 𝖑,
+                    FromJSON 𝖒, FromJSON 𝖓, FromJSON 𝖔) 
+                    ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔) where
+    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
+                                             vj, vk, vl, vm, vn, vo]} = do
+        a ← fromJSON va
+        b ← fromJSON vb
+        c ← fromJSON vc
+        d ← fromJSON vd
+        e ← fromJSON ve
+        f ← fromJSON vf
+        g ← fromJSON vg
+        h ← fromJSON vh
+        i ← fromJSON vi
+        j ← fromJSON vj
+        k ← fromJSON vk
+        l ← fromJSON vl
+        m ← fromJSON vm
+        n ← fromJSON vn
+        o ← fromJSON vo
+        return (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o)
+    fromJSON other      = fail ("cannot decode (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o) from " ++ show other)
+
+instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
+                    FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
+                    FromJSON 𝖌, FromJSON 𝖍, FromJSON 𝖎,
+                    FromJSON 𝖏, FromJSON 𝖐, FromJSON 𝖑,
+                    FromJSON 𝖒, FromJSON 𝖓, FromJSON 𝖔,
+                    FromJSON 𝖕) 
+                    ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕) where
+    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
+                                             vj, vk, vl, vm, vn, vo, vp]} = do
+        a ← fromJSON va
+        b ← fromJSON vb
+        c ← fromJSON vc
+        d ← fromJSON vd
+        e ← fromJSON ve
+        f ← fromJSON vf
+        g ← fromJSON vg
+        h ← fromJSON vh
+        i ← fromJSON vi
+        j ← fromJSON vj
+        k ← fromJSON vk
+        l ← fromJSON vl
+        m ← fromJSON vm
+        n ← fromJSON vn
+        o ← fromJSON vo
+        p ← fromJSON vp
+        return (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p)
+    fromJSON other      = fail ("cannot decode (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p) from " ++ show other)
+
+instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
+                    FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
+                    FromJSON 𝖌, FromJSON 𝖍, FromJSON 𝖎,
+                    FromJSON 𝖏, FromJSON 𝖐, FromJSON 𝖑,
+                    FromJSON 𝖒, FromJSON 𝖓, FromJSON 𝖔,
+                    FromJSON 𝖕, FromJSON 𝖖) 
+                    ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕, 𝖖) where
+    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
+                                             vj, vk, vl, vm, vn, vo, vp, vq]} = do
+        a ← fromJSON va
+        b ← fromJSON vb
+        c ← fromJSON vc
+        d ← fromJSON vd
+        e ← fromJSON ve
+        f ← fromJSON vf
+        g ← fromJSON vg
+        h ← fromJSON vh
+        i ← fromJSON vi
+        j ← fromJSON vj
+        k ← fromJSON vk
+        l ← fromJSON vl
+        m ← fromJSON vm
+        n ← fromJSON vn
+        o ← fromJSON vo
+        p ← fromJSON vp
+        q ← fromJSON vq
+        return (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q)
+    fromJSON other      = fail ("cannot decode (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q) from " ++ show other)
+
+instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
+                    FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
+                    FromJSON 𝖌, FromJSON 𝖍, FromJSON 𝖎,
+                    FromJSON 𝖏, FromJSON 𝖐, FromJSON 𝖑,
+                    FromJSON 𝖒, FromJSON 𝖓, FromJSON 𝖔,
+                    FromJSON 𝖕, FromJSON 𝖖, FromJSON 𝖗) 
+                    ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕, 𝖖, 𝖗) where
+    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
+                                             vj, vk, vl, vm, vn, vo, vp, vq, vr]} = do
+        a ← fromJSON va
+        b ← fromJSON vb
+        c ← fromJSON vc
+        d ← fromJSON vd
+        e ← fromJSON ve
+        f ← fromJSON vf
+        g ← fromJSON vg
+        h ← fromJSON vh
+        i ← fromJSON vi
+        j ← fromJSON vj
+        k ← fromJSON vk
+        l ← fromJSON vl
+        m ← fromJSON vm
+        n ← fromJSON vn
+        o ← fromJSON vo
+        p ← fromJSON vp
+        q ← fromJSON vq
+        r ← fromJSON vr
+        return (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r)
+    fromJSON other      = fail ("cannot decode (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r) from " ++ show other)
+
+instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
+                    FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
+                    FromJSON 𝖌, FromJSON 𝖍, FromJSON 𝖎,
+                    FromJSON 𝖏, FromJSON 𝖐, FromJSON 𝖑,
+                    FromJSON 𝖒, FromJSON 𝖓, FromJSON 𝖔,
+                    FromJSON 𝖕, FromJSON 𝖖, FromJSON 𝖗,
+                    FromJSON 𝖘) 
+                    ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕, 𝖖, 𝖗, 𝖘) where
+    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
+                                             vj, vk, vl, vm, vn, vo, vp, vq, vr, 
+                                             vs]} = do
+        a ← fromJSON va
+        b ← fromJSON vb
+        c ← fromJSON vc
+        d ← fromJSON vd
+        e ← fromJSON ve
+        f ← fromJSON vf
+        g ← fromJSON vg
+        h ← fromJSON vh
+        i ← fromJSON vi
+        j ← fromJSON vj
+        k ← fromJSON vk
+        l ← fromJSON vl
+        m ← fromJSON vm
+        n ← fromJSON vn
+        o ← fromJSON vo
+        p ← fromJSON vp
+        q ← fromJSON vq
+        r ← fromJSON vr
+        s ← fromJSON vs
+        return (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s)
+    fromJSON other      = fail ("cannot decode (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s) from " ++ show other)
+
+instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
+                    FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
+                    FromJSON 𝖌, FromJSON 𝖍, FromJSON 𝖎,
+                    FromJSON 𝖏, FromJSON 𝖐, FromJSON 𝖑,
+                    FromJSON 𝖒, FromJSON 𝖓, FromJSON 𝖔,
+                    FromJSON 𝖕, FromJSON 𝖖, FromJSON 𝖗,
+                    FromJSON 𝖘, FromJSON 𝖙) 
+                ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕, 𝖖, 𝖗, 𝖘, 𝖙) where
+    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
+                                             vj, vk, vl, vm, vn, vo, vp, vq, vr, 
+                                             vs, vt]} = do
+        a ← fromJSON va
+        b ← fromJSON vb
+        c ← fromJSON vc
+        d ← fromJSON vd
+        e ← fromJSON ve
+        f ← fromJSON vf
+        g ← fromJSON vg
+        h ← fromJSON vh
+        i ← fromJSON vi
+        j ← fromJSON vj
+        k ← fromJSON vk
+        l ← fromJSON vl
+        m ← fromJSON vm
+        n ← fromJSON vn
+        o ← fromJSON vo
+        p ← fromJSON vp
+        q ← fromJSON vq
+        r ← fromJSON vr
+        s ← fromJSON vs
+        t ← fromJSON vt
+        return (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t)
+    fromJSON other      = fail ("cannot decode (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t) from " ++ show other)
+
+
+instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
+                    FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
+                    FromJSON 𝖌, FromJSON 𝖍, FromJSON 𝖎,
+                    FromJSON 𝖏, FromJSON 𝖐, FromJSON 𝖑,
+                    FromJSON 𝖒, FromJSON 𝖓, FromJSON 𝖔,
+                    FromJSON 𝖕, FromJSON 𝖖, FromJSON 𝖗,
+                    FromJSON 𝖘, FromJSON 𝖙, FromJSON 𝖚) 
+                ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕, 𝖖, 𝖗, 𝖘, 𝖙, 𝖚) where
+    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
+                                             vj, vk, vl, vm, vn, vo, vp, vq, vr, 
+                                             vs, vt, vu]} = do
+        a ← fromJSON va
+        b ← fromJSON vb
+        c ← fromJSON vc
+        d ← fromJSON vd
+        e ← fromJSON ve
+        f ← fromJSON vf
+        g ← fromJSON vg
+        h ← fromJSON vh
+        i ← fromJSON vi
+        j ← fromJSON vj
+        k ← fromJSON vk
+        l ← fromJSON vl
+        m ← fromJSON vm
+        n ← fromJSON vn
+        o ← fromJSON vo
+        p ← fromJSON vp
+        q ← fromJSON vq
+        r ← fromJSON vr
+        s ← fromJSON vs
+        t ← fromJSON vt
+        u ← fromJSON vu
+        return (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u)
+    fromJSON other      = fail ("cannot decode (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u) from " ++ show other)
+
+instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
+                    FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
+                    FromJSON 𝖌, FromJSON 𝖍, FromJSON 𝖎,
+                    FromJSON 𝖏, FromJSON 𝖐, FromJSON 𝖑,
+                    FromJSON 𝖒, FromJSON 𝖓, FromJSON 𝖔,
+                    FromJSON 𝖕, FromJSON 𝖖, FromJSON 𝖗,
+                    FromJSON 𝖘, FromJSON 𝖙, FromJSON 𝖚,
+                    FromJSON 𝖛) 
+            ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕, 𝖖, 𝖗, 𝖘, 𝖙, 𝖚, 𝖛) where
+    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
+                                             vj, vk, vl, vm, vn, vo, vp, vq, vr, 
+                                             vs, vt, vu, vv]} = do
+        a ← fromJSON va
+        b ← fromJSON vb
+        c ← fromJSON vc
+        d ← fromJSON vd
+        e ← fromJSON ve
+        f ← fromJSON vf
+        g ← fromJSON vg
+        h ← fromJSON vh
+        i ← fromJSON vi
+        j ← fromJSON vj
+        k ← fromJSON vk
+        l ← fromJSON vl
+        m ← fromJSON vm
+        n ← fromJSON vn
+        o ← fromJSON vo
+        p ← fromJSON vp
+        q ← fromJSON vq
+        r ← fromJSON vr
+        s ← fromJSON vs
+        t ← fromJSON vt
+        u ← fromJSON vu
+        v ← fromJSON vv
+        return (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v)
+    fromJSON other      = fail ("cannot decode (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v) from " ++ show other)
+
+instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
+                    FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
+                    FromJSON 𝖌, FromJSON 𝖍, FromJSON 𝖎,
+                    FromJSON 𝖏, FromJSON 𝖐, FromJSON 𝖑,
+                    FromJSON 𝖒, FromJSON 𝖓, FromJSON 𝖔,
+                    FromJSON 𝖕, FromJSON 𝖖, FromJSON 𝖗,
+                    FromJSON 𝖘, FromJSON 𝖙, FromJSON 𝖚,
+                    FromJSON 𝖛, FromJSON 𝖜) 
+            ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕, 𝖖, 𝖗, 𝖘, 𝖙, 𝖚, 𝖛, 𝖜) where
+    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
+                                             vj, vk, vl, vm, vn, vo, vp, vq, vr, 
+                                             vs, vt, vu, vv, vw]} = do
+        a ← fromJSON va
+        b ← fromJSON vb
+        c ← fromJSON vc
+        d ← fromJSON vd
+        e ← fromJSON ve
+        f ← fromJSON vf
+        g ← fromJSON vg
+        h ← fromJSON vh
+        i ← fromJSON vi
+        j ← fromJSON vj
+        k ← fromJSON vk
+        l ← fromJSON vl
+        m ← fromJSON vm
+        n ← fromJSON vn
+        o ← fromJSON vo
+        p ← fromJSON vp
+        q ← fromJSON vq
+        r ← fromJSON vr
+        s ← fromJSON vs
+        t ← fromJSON vt
+        u ← fromJSON vu
+        v ← fromJSON vv
+        w ← fromJSON vw
+        return (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w)
+    fromJSON other      = fail ("cannot decode (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w) from " ++ show other)
+
+instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
+                    FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
+                    FromJSON 𝖌, FromJSON 𝖍, FromJSON 𝖎,
+                    FromJSON 𝖏, FromJSON 𝖐, FromJSON 𝖑,
+                    FromJSON 𝖒, FromJSON 𝖓, FromJSON 𝖔,
+                    FromJSON 𝖕, FromJSON 𝖖, FromJSON 𝖗,
+                    FromJSON 𝖘, FromJSON 𝖙, FromJSON 𝖚,
+                    FromJSON 𝖛, FromJSON 𝖜, FromJSON 𝖝) 
+            ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕, 𝖖, 𝖗, 𝖘, 𝖙, 𝖚, 𝖛, 𝖜, 𝖝) where
+    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
+                                             vj, vk, vl, vm, vn, vo, vp, vq, vr, 
+                                             vs, vt, vu, vv, vw, vx]} = do
+        a ← fromJSON va
+        b ← fromJSON vb
+        c ← fromJSON vc
+        d ← fromJSON vd
+        e ← fromJSON ve
+        f ← fromJSON vf
+        g ← fromJSON vg
+        h ← fromJSON vh
+        i ← fromJSON vi
+        j ← fromJSON vj
+        k ← fromJSON vk
+        l ← fromJSON vl
+        m ← fromJSON vm
+        n ← fromJSON vn
+        o ← fromJSON vo
+        p ← fromJSON vp
+        q ← fromJSON vq
+        r ← fromJSON vr
+        s ← fromJSON vs
+        t ← fromJSON vt
+        u ← fromJSON vu
+        v ← fromJSON vv
+        w ← fromJSON vw
+        x ← fromJSON vx
+        return (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x)
+    fromJSON other      = fail ("cannot decode (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x) from " ++ show other)
+
+instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
+                    FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
+                    FromJSON 𝖌, FromJSON 𝖍, FromJSON 𝖎,
+                    FromJSON 𝖏, FromJSON 𝖐, FromJSON 𝖑,
+                    FromJSON 𝖒, FromJSON 𝖓, FromJSON 𝖔,
+                    FromJSON 𝖕, FromJSON 𝖖, FromJSON 𝖗,
+                    FromJSON 𝖘, FromJSON 𝖙, FromJSON 𝖚,
+                    FromJSON 𝖛, FromJSON 𝖜, FromJSON 𝖝,
+                    FromJSON 𝖞) 
+            ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕, 𝖖, 𝖗, 𝖘, 𝖙, 𝖚, 𝖛, 𝖜, 𝖝, 𝖞) where
+    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
+                                             vj, vk, vl, vm, vn, vo, vp, vq, vr, 
+                                             vs, vt, vu, vv, vw, vx, vy]} = do
+        a ← fromJSON va
+        b ← fromJSON vb
+        c ← fromJSON vc
+        d ← fromJSON vd
+        e ← fromJSON ve
+        f ← fromJSON vf
+        g ← fromJSON vg
+        h ← fromJSON vh
+        i ← fromJSON vi
+        j ← fromJSON vj
+        k ← fromJSON vk
+        l ← fromJSON vl
+        m ← fromJSON vm
+        n ← fromJSON vn
+        o ← fromJSON vo
+        p ← fromJSON vp
+        q ← fromJSON vq
+        r ← fromJSON vr
+        s ← fromJSON vs
+        t ← fromJSON vt
+        u ← fromJSON vu
+        v ← fromJSON vv
+        w ← fromJSON vw
+        x ← fromJSON vx
+        y ← fromJSON vy
+        return (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x,y)
+    fromJSON other      = fail ("cannot decode (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x,y) from " ++ show other)
+
+instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
+                    FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
+                    FromJSON 𝖌, FromJSON 𝖍, FromJSON 𝖎,
+                    FromJSON 𝖏, FromJSON 𝖐, FromJSON 𝖑,
+                    FromJSON 𝖒, FromJSON 𝖓, FromJSON 𝖔,
+                    FromJSON 𝖕, FromJSON 𝖖, FromJSON 𝖗,
+                    FromJSON 𝖘, FromJSON 𝖙, FromJSON 𝖚,
+                    FromJSON 𝖛, FromJSON 𝖜, FromJSON 𝖝,
+                    FromJSON 𝖞, FromJSON 𝖟) 
+            ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕, 𝖖, 𝖗, 𝖘, 𝖙, 𝖚, 𝖛, 𝖜, 𝖝, 𝖞, 𝖟) where
+    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
+                                             vj, vk, vl, vm, vn, vo, vp, vq, vr, 
+                                             vs, vt, vu, vv, vw, vx, vy, vz]} = do
+        a ← fromJSON va
+        b ← fromJSON vb
+        c ← fromJSON vc
+        d ← fromJSON vd
+        e ← fromJSON ve
+        f ← fromJSON vf
+        g ← fromJSON vg
+        h ← fromJSON vh
+        i ← fromJSON vi
+        j ← fromJSON vj
+        k ← fromJSON vk
+        l ← fromJSON vl
+        m ← fromJSON vm
+        n ← fromJSON vn
+        o ← fromJSON vo
+        p ← fromJSON vp
+        q ← fromJSON vq
+        r ← fromJSON vr
+        s ← fromJSON vs
+        t ← fromJSON vt
+        u ← fromJSON vu
+        v ← fromJSON vv
+        w ← fromJSON vw
+        x ← fromJSON vx
+        y ← fromJSON vy
+        z ← fromJSON vz
+        return (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x,y,z)
+    fromJSON other      = fail ("cannot decode (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x,y,z) from " ++ show other)
