@@ -174,7 +174,7 @@ protected data Object =
       protected Array [Value]                       --- > [ value, ... ]
     | protected Struct (Tree String Value)          --- > { "name":value, ... }
 
-type Parser a = MP.Parser [] Token a
+type Parser = MP.Parser [] Token
 
 --- run a 'Parser' and extract the result 
 runParser :: Parser a -> [Token] -> (String | a)
@@ -282,6 +282,33 @@ parsePair = do
     parseColon
     v <- parseValue
     return (k,v)
+
+--- parse a list
+--- For example, 
+--- > parseList parseFloat
+--- produces a [Float] directly
+parseList :: Parser a -> Parser [a]
+parseList pElem = do
+    parseLbrack
+    cond parseRbrack 
+        (parseRbrack >> return []) 
+        do 
+            vs <- pElem `sepBy1` parseComma
+            parseRbrack
+            return  vs
+
+--- parse a raw tuple
+--- Use like
+--- > parseTuple (parseFloat, parseString)
+--- This would produce @(Float, String)@
+parseTuple ∷ (Parser 𝖆,Parser 𝖇) → Parser (𝖆,𝖇)
+parseTuple (pA, pB) = do
+    parseLbrack
+    a <- pA
+    parseComma
+    b <- pB
+    parseRbrack
+    return (a,b)
     
 --- parse a JSON array
 parseArray ∷ Parser Object
@@ -408,44 +435,150 @@ class ToJSON a where
 instance ToJSON Value where
     toJSON = id
 
+instance FromJSON Value where
+    fromJSON = return
+
+
 instance ToJSON Object where
-    toJSON = Value.Object 
+    toJSON = Value.Object
+
+instance FromJSON Object where
+    fromJSON Value.Object{oval} = return oval
+    fromJSON other = fail ("cannot decode JSON.Object from " ++ show other)
+ 
 
 instance ToJSON () where
     toJSON () = Value.Object (Object.Array [])
 
+instance FromJSON () where
+    fromJSON Value.Object{oval=Object.Array  xs}
+        | xs.null   = return ()
+        | otherwise = fail ("cannot decode () from non empty array")
+    fromJSON other  = fail ("cannot decode () from " ++ show other)
+
+
 instance ToJSON Bool where
     toJSON b = Value.Bool b
+
+instance FromJSON Bool where
+    fromJSON Value.Bool{bval} = return bval
+    fromJSON other            = fail ("cannot decode Bool from " ++ show other)
+    parseJSON _               = fail ("A top level JSON value cannot be Bool")
+
 
 instance ToJSON Byte where
     toJSON i = Value.Number{nval=show i.unsigned}
 
+instance FromJSON Byte where
+    fromJSON Value.Number{nval} = either (fail . Throwable.show) checkbyte . String.int $ nval
+        where
+            checkbyte n 
+                | n > Byte.maxBound.unsigned = fail ("%d too big for byte".format n)
+                | n < Byte.minBound.unsigned = fail ("%d too small for byte".format n)
+                | otherwise = return (byte n)
+    fromJSON other              = fail ("cannot decode Byte from " ++ show other)
+    parseJSON _                 = fail ("A top level JSON value cannot be Byte")
+
+
+instance ToJSON Short where
+    toJSON i = Value.Number{nval=show i.unsigned}
+
+instance FromJSON Short where
+    fromJSON Value.Number{nval} = either (fail . Throwable.show) checkshort . String.int $ nval
+        where
+            checkshort n 
+                | n > Short.maxBound.unsigned = fail ("%d too big for short".format n)
+                | n < Short.minBound.unsigned = fail ("%d too small for short".format n)
+                | otherwise = return (short n)
+    fromJSON other              = fail ("cannot decode Short from " ++ show other)
+    parseJSON _                 = fail ("A top level JSON value cannot be Short")
+
+
 instance ToJSON Int where
     toJSON i = Value.Number{nval=show i}
+
+instance FromJSON Int where
+    fromJSON Value.Number{nval} = either (fail . Throwable.show) return . String.int $ nval
+    fromJSON other              = fail ("cannot decode Int from " ++ show other)
+    parseJSON _                 = fail ("A top level JSON value cannot be Int")
+
 
 instance ToJSON Long where
     toJSON i = Value.Number{nval=show i}
 
+instance FromJSON Long where
+    fromJSON Value.Number{nval} = either (fail . Throwable.show) return . String.long $ nval
+    fromJSON other              = fail ("cannot decode Long from " ++ show other)
+    parseJSON _                 = fail ("A top level JSON value cannot be Long")
+
+
 instance ToJSON Integer where
     toJSON i = Value.Number{nval=show i}
+
+instance FromJSON Integer where
+    fromJSON Value.Number{nval} = either (fail . Throwable.show) return . String.integer $ nval
+    fromJSON other              = fail ("cannot decode Integer from " ++ show other)
+    parseJSON _                 = fail ("A top level JSON value cannot be Integer")
+
 
 instance ToJSON Float where
     toJSON i = Value.Number{nval=show i}
 
+instance FromJSON Float where
+    fromJSON Value.Number{nval} = either (fail . Throwable.show) return . String.float $ nval
+    fromJSON other              = fail ("cannot decode Float from " ++ show other)
+    parseJSON _                 = fail ("A top level JSON value cannot be Float")
+
+
 instance ToJSON Double where
     toJSON i = Value.Number{nval=show i}
+
+instance FromJSON Double where
+    fromJSON Value.Number{nval} = either (fail . Throwable.show) return . String.double $ nval
+    fromJSON other              = fail ("cannot decode Double from " ++ show other)
+    parseJSON _                 = fail ("A top level JSON value cannot be Double")
+
 
 instance ToJSON Char where
     toJSON c = Value.String{sval=ctos c}
 
+instance FromJSON Char where
+    fromJSON Value.String{sval} | length sval == 1 
+                                = return (sval.charAt 0)
+    fromJSON other              = fail ("cannot decode Char from " ++ show other)
+    parseJSON _                 = fail ("A top level JSON value cannot be Char")
+
+
 instance ToJSON String where
     toJSON s = Value.String s
+
+instance FromJSON String where
+    fromJSON Value.String{sval} = return sval
+    fromJSON other              = fail ("cannot decode String from " ++ show other)
+    parseJSON _                 = fail ("A top level JSON value cannot be String")
+
 
 instance ToJSON ToJSON 𝖊 ⇒ [𝖊] where
     toJSON = Value.Object . Object.Array . map toJSON 
 
+instance FromJSON (FromJSON 𝖊) ⇒ [𝖊] where
+    fromJSON Value.Object{oval=Object.Array xs}
+                                    -- goes 3 times through the list
+                                    -- but avoids implicit construction
+                                    -- of intermediate lists through mapM 
+                                = if all (either (const false) (const true)) js
+                                    then return     [ e | Right e ← js ]
+                                    else fail (head [ e | Left e  ← js ])
+                       where js = map fromJSON xs
+    fromJSON other              = fail ("cannot decode [] from non array " ++ show other)
+
+
 instance ToJSON ToJSON 𝖊 ⇒ JArray 𝖊  where
     toJSON = Value.Object . Object.Array . map maybeToJSON . toMaybeList
+
+instance FromJSON (FromJSON 𝖊, ArrayElem 𝖊) ⇒ JArray 𝖊 where
+    fromJSON list = arrayFromMaybeList <$> fromJSON list
+
 
 --- 'Maybe.toJSON' produces one of
 --- > {"Nothing" : null }
@@ -461,83 +594,6 @@ protected !nothingJSON = insert empty "Nothing" Value.Null
 --- produce either @null@ or just the jsonized value for a 'Maybe'
 maybeToJSON ∷ ToJSON 𝖆 ⇒ Maybe 𝖆 → Value
 maybeToJSON = maybe Value.Null toJSON
---
--- instances
---
-
-instance FromJSON Value where
-    fromJSON = return
-
-instance FromJSON Object where
-    fromJSON Value.Object{oval} = return oval
-    fromJSON other = fail ("cannot decode JSON.Object from " ++ show other)
-
-instance FromJSON () where
-    fromJSON Value.Object{oval=Object.Array  xs}
-        | xs.null   = return ()
-        | otherwise = fail ("cannot decode () from non empty array")
-    fromJSON other  = fail ("cannot decode () from " ++ show other)
-    
-instance FromJSON Bool where
-    fromJSON Value.Bool{bval} = return bval
-    fromJSON other            = fail ("cannot decode Bool from " ++ show other)
-    parseJSON _               = fail ("A top level JSON value cannot be Bool")
-
-instance FromJSON Byte where
-    fromJSON Value.Number{nval} = either (fail . Throwable.show) (return . byte) . String.int $ nval
-    fromJSON other              = fail ("cannot decode Byte from " ++ show other)
-    parseJSON _                 = fail ("A top level JSON value cannot be Byte")
-
-instance FromJSON Int where
-    fromJSON Value.Number{nval} = either (fail . Throwable.show) return . String.int $ nval
-    fromJSON other              = fail ("cannot decode Int from " ++ show other)
-    parseJSON _                 = fail ("A top level JSON value cannot be Int")
-
-instance FromJSON Long where
-    fromJSON Value.Number{nval} = either (fail . Throwable.show) return . String.long $ nval
-    fromJSON other              = fail ("cannot decode Long from " ++ show other)
-    parseJSON _                 = fail ("A top level JSON value cannot be Long")
-
-instance FromJSON Integer where
-    fromJSON Value.Number{nval} = either (fail . Throwable.show) return . String.integer $ nval
-    fromJSON other              = fail ("cannot decode Integer from " ++ show other)
-    parseJSON _                 = fail ("A top level JSON value cannot be Integer")
-
-instance FromJSON Float where
-    fromJSON Value.Number{nval} = either (fail . Throwable.show) return . String.float $ nval
-    fromJSON other              = fail ("cannot decode Float from " ++ show other)
-    parseJSON _                 = fail ("A top level JSON value cannot be Float")
-
-instance FromJSON Double where
-    fromJSON Value.Number{nval} = either (fail . Throwable.show) return . String.double $ nval
-    fromJSON other              = fail ("cannot decode Double from " ++ show other)
-    parseJSON _                 = fail ("A top level JSON value cannot be Double")
-
-
-instance FromJSON Char where
-    fromJSON Value.String{sval} | length sval == 1 
-                                = return (sval.charAt 0)
-    fromJSON other              = fail ("cannot decode Char from " ++ show other)
-    parseJSON _                 = fail ("A top level JSON value cannot be Char")
-
-instance FromJSON String where
-    fromJSON Value.String{sval} = return sval
-    fromJSON other              = fail ("cannot decode String from " ++ show other)
-    parseJSON _                 = fail ("A top level JSON value cannot be String")
-
-instance FromJSON (FromJSON 𝖊) ⇒ [𝖊] where
-    fromJSON Value.Object{oval=Object.Array xs}
-                                    -- goes 3 times through the list
-                                    -- but avoids implicit construction
-                                    -- of intermediate lists through mapM 
-                                = if all (either (const false) (const true)) js
-                                    then return [ e | Right e ← js ]
-                                    else fail (head [ e | Left e ← js ])
-                            where js = map fromJSON xs
-    fromJSON other              = fail ("cannot decode [] from non array " ++ show other)
-
-instance FromJSON (FromJSON 𝖊, ArrayElem 𝖊) ⇒ JArray 𝖊 where
-    fromJSON list = arrayFromMaybeList <$> fromJSON list
 
 instance FromJSON (FromJSON 𝖊) ⇒ Maybe 𝖊  where
     {--
@@ -553,11 +609,23 @@ instance FromJSON (FromJSON 𝖊) ⇒ Maybe 𝖊  where
     fromJSON Value.Null                 = return Nothing
     fromJSON v                          = Just <$> fromJSON v
 
+
+instance ToJSON (ToJSON 𝖆, ToJSON 𝖇) ⇒ (𝖆|𝖇)  where
+    toJSON = Value.Object 
+                . Object.Struct 
+                . either (insert empty "Left"  . toJSON) 
+                         (insert empty "Right" . toJSON)
+
+
 instance FromJSON (FromJSON 𝖆, FromJSON 𝖇) ⇒ (𝖆|𝖇)  where
     fromJSON Value.Object{oval=Object.Struct m}
         | Just v <- m.lookup "Left"     = Left  <$> fromJSON v
         | Just v <- m.lookup "Right"    = Right <$> fromJSON v
     fromJSON other                      = fail ("cannot decode Either from " ++ show other)
+
+
+instance ToJSON (ToJSON 𝖆, ToJSON 𝖇) ⇒ (𝖆, 𝖇)  where
+    toJSON (a,b) = Value.Object (Object.Array [toJSON a, toJSON b])
 
 instance FromJSON (FromJSON 𝖆, FromJSON 𝖇) ⇒  (𝖆, 𝖇) where
     fromJSON Value.Object{oval=Object.Array [va, vb]} = do
@@ -565,7 +633,10 @@ instance FromJSON (FromJSON 𝖆, FromJSON 𝖇) ⇒  (𝖆, 𝖇) where
         b ← fromJSON vb
         return (a,b)
     fromJSON other      = fail ("cannot decode (a,b) from " ++ show other)
-    
+
+instance ToJSON (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈) ⇒  (𝖆, 𝖇, 𝖈) where
+    toJSON (a,b,c) = Value.Object (Object.Array [toJSON a, toJSON b, toJSON c])
+
 instance FromJSON (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈) ⇒  (𝖆, 𝖇, 𝖈) where
     fromJSON Value.Object{oval=Object.Array [va, vb, vc]} = do
         a ← fromJSON va
@@ -573,6 +644,12 @@ instance FromJSON (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈) ⇒  (𝖆, 𝖇
         c ← fromJSON vc
         return (a,b,c)
     fromJSON other      = fail ("cannot decode (a,b,c) from " ++ show other)
+
+
+instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈, 
+                    ToJSON 𝖉) ⇒  (𝖆, 𝖇, 𝖈, 𝖉) where
+    toJSON (a,b,c,d) = Value.Object (Object.Array [
+                            toJSON a, toJSON b, toJSON c, toJSON d])
 
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉) ⇒  (𝖆, 𝖇, 𝖈, 𝖉) where
@@ -583,6 +660,13 @@ instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈,
         d ← fromJSON vd
         return (a,b,c,d)
     fromJSON other      = fail ("cannot decode (a,b,c,d) from " ++ show other)
+
+
+instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈, 
+                    ToJSON 𝖉, ToJSON 𝖊) ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊) where
+    toJSON (a,b,c,d,e) = Value.Object (Object.Array [
+                            toJSON a, toJSON b, toJSON c, toJSON d,
+                            toJSON e])
 
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊) ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊) where
@@ -595,6 +679,13 @@ instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈,
         return (a,b,c,d,e)
     fromJSON other      = fail ("cannot decode (a,b,c,d,e) from " ++ show other)
 
+
+instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈, 
+                    ToJSON 𝖉, ToJSON 𝖊, ToJSON 𝖋) ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋) where
+    toJSON (a,b,c,d,e,f) = Value.Object (Object.Array [
+                            toJSON a, toJSON b, toJSON c, toJSON d,
+                            toJSON e, toJSON f])
+
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋) ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋) where
     fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf]} = do
@@ -606,6 +697,14 @@ instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈,
         f ← fromJSON vf
         return (a,b,c,d,e,f)
     fromJSON other      = fail ("cannot decode (a,b,c,d,e,f) from " ++ show other)
+
+
+instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈, 
+                    ToJSON 𝖉, ToJSON 𝖊, ToJSON 𝖋,
+                    ToJSON 𝖌) ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌) where
+    toJSON (a,b,c,d,e,f,g) = Value.Object (Object.Array [
+                            toJSON a, toJSON b, toJSON c, toJSON d,
+                            toJSON e, toJSON f, toJSON g])
 
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
@@ -620,6 +719,14 @@ instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈,
         g ← fromJSON vg
         return (a,b,c,d,e,f,g)
     fromJSON other      = fail ("cannot decode (a,b,c,d,e,f,g) from " ++ show other)
+
+
+instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈, 
+                    ToJSON 𝖉, ToJSON 𝖊, ToJSON 𝖋,
+                    ToJSON 𝖌, ToJSON 𝖍) ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍) where
+    toJSON (a,b,c,d,e,f,g,h) = Value.Object (Object.Array [
+                            toJSON a, toJSON b, toJSON c, toJSON d,
+                            toJSON e, toJSON f, toJSON g, toJSON h])
 
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
@@ -636,6 +743,15 @@ instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈,
         return (a,b,c,d,e,f,g,h)
     fromJSON other      = fail ("cannot decode (a,b,c,d,e,f,g,h) from " ++ show other)
 
+
+instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈, 
+                    ToJSON 𝖉, ToJSON 𝖊, ToJSON 𝖋,
+                    ToJSON 𝖌, ToJSON 𝖍, ToJSON 𝖎) ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎) where
+    toJSON (a,b,c,d,e,f,g,h,i) = Value.Object (Object.Array [
+                            toJSON a, toJSON b, toJSON c, toJSON d,
+                            toJSON e, toJSON f, toJSON g, toJSON h,
+                            toJSON i])
+
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
                     FromJSON 𝖌, FromJSON 𝖍, FromJSON 𝖎) ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎) where
@@ -651,6 +767,16 @@ instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈,
         i ← fromJSON vi
         return (a,b,c,d,e,f,g,h,i)
     fromJSON other      = fail ("cannot decode (a,b,c,d,e,f,g,h,i) from " ++ show other)
+
+
+instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈, 
+                    ToJSON 𝖉, ToJSON 𝖊, ToJSON 𝖋,
+                    ToJSON 𝖌, ToJSON 𝖍, ToJSON 𝖎,
+                    ToJSON 𝖏) ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏) where
+    toJSON (a,b,c,d,e,f,g,h,i,j) = Value.Object (Object.Array [
+                            toJSON a, toJSON b, toJSON c, toJSON d,
+                            toJSON e, toJSON f, toJSON g, toJSON h,
+                            toJSON i, toJSON j])
 
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
@@ -671,6 +797,16 @@ instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈,
         return (a,b,c,d,e,f,g,h,i,j)
     fromJSON other      = fail ("cannot decode (a,b,c,d,e,f,g,h,i,j) from " ++ show other)
 
+
+instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈, 
+                    ToJSON 𝖉, ToJSON 𝖊, ToJSON 𝖋,
+                    ToJSON 𝖌, ToJSON 𝖍, ToJSON 𝖎,
+                    ToJSON 𝖏, ToJSON 𝖐) ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐) where
+    toJSON (a,b,c,d,e,f,g,h,i,j,k) = Value.Object (Object.Array [
+                            toJSON a, toJSON b, toJSON c, toJSON d,
+                            toJSON e, toJSON f, toJSON g, toJSON h,
+                            toJSON i, toJSON j, toJSON k])
+
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
                     FromJSON 𝖌, FromJSON 𝖍, FromJSON 𝖎,
@@ -690,6 +826,17 @@ instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈,
         k ← fromJSON vk
         return (a,b,c,d,e,f,g,h,i,j,k)
     fromJSON other      = fail ("cannot decode (a,b,c,d,e,f,g,h,i,j,k) from " ++ show other)
+
+
+instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈, 
+                    ToJSON 𝖉, ToJSON 𝖊, ToJSON 𝖋,
+                    ToJSON 𝖌, ToJSON 𝖍, ToJSON 𝖎,
+                    ToJSON 𝖏, ToJSON 𝖐, ToJSON 𝖑) 
+                    ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑) where
+    toJSON (a,b,c,d,e,f,g,h,i,j,k,l) = Value.Object (Object.Array [
+                            toJSON a, toJSON b, toJSON c, toJSON d,
+                            toJSON e, toJSON f, toJSON g, toJSON h,
+                            toJSON i, toJSON j, toJSON k, toJSON l])
 
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
@@ -712,6 +859,19 @@ instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈,
         l ← fromJSON vl
         return (a,b,c,d,e,f,g,h,i,j,k,l)
     fromJSON other      = fail ("cannot decode (a,b,c,d,e,f,g,h,i,j,k,l) from " ++ show other)
+
+
+instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈, 
+                    ToJSON 𝖉, ToJSON 𝖊, ToJSON 𝖋,
+                    ToJSON 𝖌, ToJSON 𝖍, ToJSON 𝖎,
+                    ToJSON 𝖏, ToJSON 𝖐, ToJSON 𝖑,
+                    ToJSON 𝖒) 
+                    ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒) where
+    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m) = Value.Object (Object.Array [
+                            toJSON a, toJSON b, toJSON c, toJSON d,
+                            toJSON e, toJSON f, toJSON g, toJSON h,
+                            toJSON i, toJSON j, toJSON k, toJSON l,
+                            toJSON m])
 
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
@@ -736,6 +896,19 @@ instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈,
         m ← fromJSON vm
         return (a,b,c,d,e,f,g,h,i,j,k,l,m)
     fromJSON other      = fail ("cannot decode (a,b,c,d,e,f,g,h,i,j,k,l,m) from " ++ show other)
+
+
+instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈, 
+                    ToJSON 𝖉, ToJSON 𝖊, ToJSON 𝖋,
+                    ToJSON 𝖌, ToJSON 𝖍, ToJSON 𝖎,
+                    ToJSON 𝖏, ToJSON 𝖐, ToJSON 𝖑,
+                    ToJSON 𝖒, ToJSON 𝖓) 
+                    ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓) where
+    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m,n) = Value.Object (Object.Array [
+                            toJSON a, toJSON b, toJSON c, toJSON d,
+                            toJSON e, toJSON f, toJSON g, toJSON h,
+                            toJSON i, toJSON j, toJSON k, toJSON l,
+                            toJSON m, toJSON n])
 
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
@@ -762,6 +935,19 @@ instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈,
         return (a,b,c,d,e,f,g,h,i,j,k,l,m,n)
     fromJSON other      = fail ("cannot decode (a,b,c,d,e,f,g,h,i,j,k,l,m,n) from " ++ show other)
 
+
+instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈, 
+                    ToJSON 𝖉, ToJSON 𝖊, ToJSON 𝖋,
+                    ToJSON 𝖌, ToJSON 𝖍, ToJSON 𝖎,
+                    ToJSON 𝖏, ToJSON 𝖐, ToJSON 𝖑,
+                    ToJSON 𝖒, ToJSON 𝖓, ToJSON 𝖔) 
+                    ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔) where
+    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o) = Value.Object (Object.Array [
+                            toJSON a, toJSON b, toJSON c, toJSON d,
+                            toJSON e, toJSON f, toJSON g, toJSON h,
+                            toJSON i, toJSON j, toJSON k, toJSON l,
+                            toJSON m, toJSON n, toJSON o])
+
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
                     FromJSON 𝖌, FromJSON 𝖍, FromJSON 𝖎,
@@ -787,6 +973,20 @@ instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈,
         o ← fromJSON vo
         return (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o)
     fromJSON other      = fail ("cannot decode (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o) from " ++ show other)
+
+
+instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈, 
+                    ToJSON 𝖉, ToJSON 𝖊, ToJSON 𝖋,
+                    ToJSON 𝖌, ToJSON 𝖍, ToJSON 𝖎,
+                    ToJSON 𝖏, ToJSON 𝖐, ToJSON 𝖑,
+                    ToJSON 𝖒, ToJSON 𝖓, ToJSON 𝖔,
+                    ToJSON 𝖕) 
+                    ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕) where
+    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p) = Value.Object (Object.Array [
+                            toJSON a, toJSON b, toJSON c, toJSON d,
+                            toJSON e, toJSON f, toJSON g, toJSON h,
+                            toJSON i, toJSON j, toJSON k, toJSON l,
+                            toJSON m, toJSON n, toJSON o, toJSON p])
 
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
@@ -815,6 +1015,21 @@ instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈,
         p ← fromJSON vp
         return (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p)
     fromJSON other      = fail ("cannot decode (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p) from " ++ show other)
+
+
+instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈, 
+                    ToJSON 𝖉, ToJSON 𝖊, ToJSON 𝖋,
+                    ToJSON 𝖌, ToJSON 𝖍, ToJSON 𝖎,
+                    ToJSON 𝖏, ToJSON 𝖐, ToJSON 𝖑,
+                    ToJSON 𝖒, ToJSON 𝖓, ToJSON 𝖔,
+                    ToJSON 𝖕, ToJSON 𝖖) 
+                    ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕, 𝖖) where
+    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q) = Value.Object (Object.Array [
+                            toJSON a, toJSON b, toJSON c, toJSON d,
+                            toJSON e, toJSON f, toJSON g, toJSON h,
+                            toJSON i, toJSON j, toJSON k, toJSON l,
+                            toJSON m, toJSON n, toJSON o, toJSON p,
+                            toJSON q])
 
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
@@ -845,6 +1060,21 @@ instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈,
         return (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q)
     fromJSON other      = fail ("cannot decode (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q) from " ++ show other)
 
+
+instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈, 
+                    ToJSON 𝖉, ToJSON 𝖊, ToJSON 𝖋,
+                    ToJSON 𝖌, ToJSON 𝖍, ToJSON 𝖎,
+                    ToJSON 𝖏, ToJSON 𝖐, ToJSON 𝖑,
+                    ToJSON 𝖒, ToJSON 𝖓, ToJSON 𝖔,
+                    ToJSON 𝖕, ToJSON 𝖖, ToJSON 𝖗) 
+                    ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕, 𝖖, 𝖗) where
+    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r) = Value.Object (Object.Array [
+                            toJSON a, toJSON b, toJSON c, toJSON d,
+                            toJSON e, toJSON f, toJSON g, toJSON h,
+                            toJSON i, toJSON j, toJSON k, toJSON l,
+                            toJSON m, toJSON n, toJSON o, toJSON p,
+                            toJSON q, toJSON r])
+
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
                     FromJSON 𝖌, FromJSON 𝖍, FromJSON 𝖎,
@@ -874,6 +1104,22 @@ instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈,
         r ← fromJSON vr
         return (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r)
     fromJSON other      = fail ("cannot decode (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r) from " ++ show other)
+
+
+instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈, 
+                    ToJSON 𝖉, ToJSON 𝖊, ToJSON 𝖋,
+                    ToJSON 𝖌, ToJSON 𝖍, ToJSON 𝖎,
+                    ToJSON 𝖏, ToJSON 𝖐, ToJSON 𝖑,
+                    ToJSON 𝖒, ToJSON 𝖓, ToJSON 𝖔,
+                    ToJSON 𝖕, ToJSON 𝖖, ToJSON 𝖗,
+                    ToJSON 𝖘) 
+                    ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕, 𝖖, 𝖗, 𝖘) where
+    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s) = Value.Object (Object.Array [
+                            toJSON a, toJSON b, toJSON c, toJSON d,
+                            toJSON e, toJSON f, toJSON g, toJSON h,
+                            toJSON i, toJSON j, toJSON k, toJSON l,
+                            toJSON m, toJSON n, toJSON o, toJSON p,
+                            toJSON q, toJSON r, toJSON s])
 
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
@@ -907,6 +1153,22 @@ instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈,
         s ← fromJSON vs
         return (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s)
     fromJSON other      = fail ("cannot decode (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s) from " ++ show other)
+
+
+instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈, 
+                    ToJSON 𝖉, ToJSON 𝖊, ToJSON 𝖋,
+                    ToJSON 𝖌, ToJSON 𝖍, ToJSON 𝖎,
+                    ToJSON 𝖏, ToJSON 𝖐, ToJSON 𝖑,
+                    ToJSON 𝖒, ToJSON 𝖓, ToJSON 𝖔,
+                    ToJSON 𝖕, ToJSON 𝖖, ToJSON 𝖗,
+                    ToJSON 𝖘, ToJSON 𝖙) 
+                ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕, 𝖖, 𝖗, 𝖘, 𝖙) where
+    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t) = Value.Object (Object.Array [
+                            toJSON a, toJSON b, toJSON c, toJSON d,
+                            toJSON e, toJSON f, toJSON g, toJSON h,
+                            toJSON i, toJSON j, toJSON k, toJSON l,
+                            toJSON m, toJSON n, toJSON o, toJSON p,
+                            toJSON q, toJSON r, toJSON s, toJSON t])
 
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
@@ -943,6 +1205,22 @@ instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈,
     fromJSON other      = fail ("cannot decode (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t) from " ++ show other)
 
 
+instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈, 
+                    ToJSON 𝖉, ToJSON 𝖊, ToJSON 𝖋,
+                    ToJSON 𝖌, ToJSON 𝖍, ToJSON 𝖎,
+                    ToJSON 𝖏, ToJSON 𝖐, ToJSON 𝖑,
+                    ToJSON 𝖒, ToJSON 𝖓, ToJSON 𝖔,
+                    ToJSON 𝖕, ToJSON 𝖖, ToJSON 𝖗,
+                    ToJSON 𝖘, ToJSON 𝖙, ToJSON 𝖚) 
+                ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕, 𝖖, 𝖗, 𝖘, 𝖙, 𝖚) where
+    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u) = Value.Object (Object.Array [
+                            toJSON a, toJSON b, toJSON c, toJSON d,
+                            toJSON e, toJSON f, toJSON g, toJSON h,
+                            toJSON i, toJSON j, toJSON k, toJSON l,
+                            toJSON m, toJSON n, toJSON o, toJSON p,
+                            toJSON q, toJSON r, toJSON s, toJSON t,
+                            toJSON u])
+
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
                     FromJSON 𝖌, FromJSON 𝖍, FromJSON 𝖎,
@@ -977,6 +1255,24 @@ instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈,
         u ← fromJSON vu
         return (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u)
     fromJSON other      = fail ("cannot decode (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u) from " ++ show other)
+
+
+instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈, 
+                    ToJSON 𝖉, ToJSON 𝖊, ToJSON 𝖋,
+                    ToJSON 𝖌, ToJSON 𝖍, ToJSON 𝖎,
+                    ToJSON 𝖏, ToJSON 𝖐, ToJSON 𝖑,
+                    ToJSON 𝖒, ToJSON 𝖓, ToJSON 𝖔,
+                    ToJSON 𝖕, ToJSON 𝖖, ToJSON 𝖗,
+                    ToJSON 𝖘, ToJSON 𝖙, ToJSON 𝖚,
+                    ToJSON 𝖛) 
+            ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕, 𝖖, 𝖗, 𝖘, 𝖙, 𝖚, 𝖛) where
+    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v) = Value.Object (Object.Array [
+                            toJSON a, toJSON b, toJSON c, toJSON d,
+                            toJSON e, toJSON f, toJSON g, toJSON h,
+                            toJSON i, toJSON j, toJSON k, toJSON l,
+                            toJSON m, toJSON n, toJSON o, toJSON p,
+                            toJSON q, toJSON r, toJSON s, toJSON t,
+                            toJSON u, toJSON v])
 
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
@@ -1014,6 +1310,24 @@ instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈,
         v ← fromJSON vv
         return (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v)
     fromJSON other      = fail ("cannot decode (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v) from " ++ show other)
+
+
+instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈, 
+                    ToJSON 𝖉, ToJSON 𝖊, ToJSON 𝖋,
+                    ToJSON 𝖌, ToJSON 𝖍, ToJSON 𝖎,
+                    ToJSON 𝖏, ToJSON 𝖐, ToJSON 𝖑,
+                    ToJSON 𝖒, ToJSON 𝖓, ToJSON 𝖔,
+                    ToJSON 𝖕, ToJSON 𝖖, ToJSON 𝖗,
+                    ToJSON 𝖘, ToJSON 𝖙, ToJSON 𝖚,
+                    ToJSON 𝖛, ToJSON 𝖜) 
+            ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕, 𝖖, 𝖗, 𝖘, 𝖙, 𝖚, 𝖛, 𝖜) where
+    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w) = Value.Object (Object.Array [
+                            toJSON a, toJSON b, toJSON c, toJSON d,
+                            toJSON e, toJSON f, toJSON g, toJSON h,
+                            toJSON i, toJSON j, toJSON k, toJSON l,
+                            toJSON m, toJSON n, toJSON o, toJSON p,
+                            toJSON q, toJSON r, toJSON s, toJSON t,
+                            toJSON u, toJSON v, toJSON w])
 
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
@@ -1053,6 +1367,24 @@ instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈,
         return (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w)
     fromJSON other      = fail ("cannot decode (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w) from " ++ show other)
 
+
+instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈, 
+                    ToJSON 𝖉, ToJSON 𝖊, ToJSON 𝖋,
+                    ToJSON 𝖌, ToJSON 𝖍, ToJSON 𝖎,
+                    ToJSON 𝖏, ToJSON 𝖐, ToJSON 𝖑,
+                    ToJSON 𝖒, ToJSON 𝖓, ToJSON 𝖔,
+                    ToJSON 𝖕, ToJSON 𝖖, ToJSON 𝖗,
+                    ToJSON 𝖘, ToJSON 𝖙, ToJSON 𝖚,
+                    ToJSON 𝖛, ToJSON 𝖜, ToJSON 𝖝) 
+            ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕, 𝖖, 𝖗, 𝖘, 𝖙, 𝖚, 𝖛, 𝖜, 𝖝) where
+    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x) = Value.Object (Object.Array [
+                            toJSON a, toJSON b, toJSON c, toJSON d,
+                            toJSON e, toJSON f, toJSON g, toJSON h,
+                            toJSON i, toJSON j, toJSON k, toJSON l,
+                            toJSON m, toJSON n, toJSON o, toJSON p,
+                            toJSON q, toJSON r, toJSON s, toJSON t,
+                            toJSON u, toJSON v, toJSON w, toJSON x])
+
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
                     FromJSON 𝖌, FromJSON 𝖍, FromJSON 𝖎,
@@ -1091,6 +1423,26 @@ instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈,
         x ← fromJSON vx
         return (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x)
     fromJSON other      = fail ("cannot decode (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x) from " ++ show other)
+
+
+instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈, 
+                    ToJSON 𝖉, ToJSON 𝖊, ToJSON 𝖋,
+                    ToJSON 𝖌, ToJSON 𝖍, ToJSON 𝖎,
+                    ToJSON 𝖏, ToJSON 𝖐, ToJSON 𝖑,
+                    ToJSON 𝖒, ToJSON 𝖓, ToJSON 𝖔,
+                    ToJSON 𝖕, ToJSON 𝖖, ToJSON 𝖗,
+                    ToJSON 𝖘, ToJSON 𝖙, ToJSON 𝖚,
+                    ToJSON 𝖛, ToJSON 𝖜, ToJSON 𝖝,
+                    ToJSON 𝖞) 
+            ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕, 𝖖, 𝖗, 𝖘, 𝖙, 𝖚, 𝖛, 𝖜, 𝖝, 𝖞) where
+    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x,y) = Value.Object (Object.Array [
+                            toJSON a, toJSON b, toJSON c, toJSON d,
+                            toJSON e, toJSON f, toJSON g, toJSON h,
+                            toJSON i, toJSON j, toJSON k, toJSON l,
+                            toJSON m, toJSON n, toJSON o, toJSON p,
+                            toJSON q, toJSON r, toJSON s, toJSON t,
+                            toJSON u, toJSON v, toJSON w, toJSON x,
+                            toJSON y])
 
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
@@ -1132,6 +1484,26 @@ instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈,
         y ← fromJSON vy
         return (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x,y)
     fromJSON other      = fail ("cannot decode (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x,y) from " ++ show other)
+
+
+instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈, 
+                    ToJSON 𝖉, ToJSON 𝖊, ToJSON 𝖋,
+                    ToJSON 𝖌, ToJSON 𝖍, ToJSON 𝖎,
+                    ToJSON 𝖏, ToJSON 𝖐, ToJSON 𝖑,
+                    ToJSON 𝖒, ToJSON 𝖓, ToJSON 𝖔,
+                    ToJSON 𝖕, ToJSON 𝖖, ToJSON 𝖗,
+                    ToJSON 𝖘, ToJSON 𝖙, ToJSON 𝖚,
+                    ToJSON 𝖛, ToJSON 𝖜, ToJSON 𝖝,
+                    ToJSON 𝖞, ToJSON 𝖟) 
+            ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕, 𝖖, 𝖗, 𝖘, 𝖙, 𝖚, 𝖛, 𝖜, 𝖝, 𝖞, 𝖟) where
+    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x,y,z) = Value.Object (Object.Array [
+                            toJSON a, toJSON b, toJSON c, toJSON d,
+                            toJSON e, toJSON f, toJSON g, toJSON h,
+                            toJSON i, toJSON j, toJSON k, toJSON l,
+                            toJSON m, toJSON n, toJSON o, toJSON p,
+                            toJSON q, toJSON r, toJSON s, toJSON t,
+                            toJSON u, toJSON v, toJSON w, toJSON x,
+                            toJSON y, toJSON z])
 
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
