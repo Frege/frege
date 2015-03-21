@@ -20,14 +20,14 @@ public final class JHashMap {
 		catch (IOException e) {}
 	}
 	
-	static int wörter = 0;
+	
 	
 	public static void uniq() throws IOException {
 		HashMap<String, Integer> map = new HashMap<>();
 		
 		String line = null;
 		Pattern words = Pattern.compile("\\w+", 448);	// same mode as in Frege, for fairness
-		int result = 0;
+		// int result = 0;
 		BufferedReader in = Runtime.stdin.get();
 		
 		while ((line = in.readLine()) != null) {
@@ -39,7 +39,8 @@ public final class JHashMap {
 				else map.put(key, n+1);
 			}
 		}
-		map.values().stream().forEach(arg -> wörter+=arg);
+		int wörter = 0;
+		for (int n : map.values()) wörter += n;
 		System.err.println(wörter);
 		System.out.println(map.size());
 
