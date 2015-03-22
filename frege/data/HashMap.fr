@@ -1,0 +1,252 @@
+{--
+    A HashMap implementation based on a 
+    'https://en.wikipedia.org/wiki/Hash_array_mapped_trie Hash Array Mapped Trie'
+
+    The hash array mapped trie achieves almost hash table-like speed 
+    while using memory much more economically. 
+    Also, a hash table may have to be periodically resized, 
+    an expensive operation, whereas HAMTs grow and shrink dynamically.
+
+
+-}
+module frege.data.HashMap where
+
+import Data.Bits
+import Data.JSON
+import Data.TreeMap(Tree)
+import Data.List()
+
+{--
+    'HasMap' based on a Hash Mapped Array Trie
+    
+    A node of the 'HashMap' is either
+
+        - a key/value pair
+        - a list of different key/value pairs where the hash code for all keys
+        is identical (collisions). In the (hopefully) unlikely case of collisions,
+        the performance of the affected keys degrades to list operations. However,
+        collision lists should be short, if occuring at all.
+        - a bitmapped node with a bitmap of size 64 to indicate
+        absence or presence of sub-nodes, followed by an array of up to 64
+        nodes.
+    
+    This implementation of a
+    'https://en.wikipedia.org/wiki/Persistent_data_structure persistent' 
+    hash array mapped trie uses 32 bit hash values as provided by Java and the
+    Frege 'Eq' type class. 
+    
+    To find a value, the search starts with the root node.
+    If the node is a key/value pair, the node's key is compared to the search key. 
+
+    If the node is a bitmapped node, the hash code of the lookup key is computed 
+    and the presence of the index provided by the last six bits is checked in the bitmap.
+    If it is there, the search continues with the corresponding node 
+    from the node array, otherwise the key is not in the map.
+    
+    It remains the case that the node is a collision list. The searched key's
+    hashcode either is the same as the one of the keys in the collision list, 
+    in which case the search degrades to a sequential search in that list, or it
+    is different, and in the latter case we know that the key is not in the
+    map without even touching the list.
+    
+    Hence, the worst case in searching must do the following: 
+    
+      - 1 time: compute the hash code of the key
+      - 6 times: find the next node through the array. This is in 
+        essence computation of an index with bit operations, followed by a
+        memory read. The reason this is done at max 6 times is that it consumes
+        6 bits of the hash code every time. With 32 bit hash code, we have 5 6-bit
+        quantities that can range from 0 to 63, while the last 6-bit quantity has
+        only 2 significand bits, the other 4 are always zero. The hashmapped nodes
+        at the 6th level of the map will consequently have only 4 sub-nodes.
+        (Note that this is an intrinsic limit that is 
+        determined by the hash code bit size, *not* by the algorithm.
+        Should later Java versions choose to provide 'Long' bitcodes, for example,
+        this code will still work, just that there would be 11 levels of bitmapped 
+        nodes instead of 6.)
+      - _n_ times: comparision with the keys in the collision list, where _n_
+        is the number of elements of the collision list, or comparision with the
+        key of a key/value node (this is equivalent to a collision list of length 1).
+    
+    It turns out that - absent hash collisions - lookup will be done in 
+    *constant time* with a tiny constant factor. 
+    And so will be inserts and deletes, altough with a slightly larger constant 
+    factor due to the house-keeping necessary for a persistent data structure. 
+    However, even this are in the worst case 6 array copies, where 5 of them may
+    be of size 64. Even if the pointers are 8 bytes long, this amounts to
+    less than 4k of memory that must be copied. 
+    
+    The map can have at most 2^32 non-bitmapped nodes maintained in 
+    1+64+4096+262144+16777216+1073741824 bitmapped nodes. Because collision lists
+    can be arbitrary long, the total number of elements hashed is unlimited. 
+    
+-}
+
+abstract data HashMap k v =
+      {-- 
+        Singleton node holding a key with a value.
+        Also caches the 'hashCode' of the key to avoid
+        possibly expensive recomputation.
+      -}
+      KV {!hash :: Int, !key::k, value :: v }
+    | {--
+        Collision node, holding a list of key/value tuples
+        as well as the 'hashCode' all keys have in common.
+        This helps us avoid touching the list when the 
+        sought key has a different hash code. 
+        
+        [Invariant 1] length of 'list' is at least 2.
+        [Invariant 2] all keys in 'list' are different.
+      -}
+      CO {!hash :: Int, !list :: [(k,v)]}
+    | {--
+        Bitmapped node. It has a bitmap of 64 bits that indicate presence
+        or absence of a sub node for a given index which is in the range [0..63],
+        and an array of sub nodes. The size of the array is equal to the number
+        of 1-bits in the bitmap. An index is mapped to an actual array index
+        like so: If the corresponding 'bit' is set in the bitmap, the number
+        of less significand 1-bits in the bitmap is counted with 'bitCount' and
+        this is then the index in the array. Otherwise there is no 
+        sub node for that index.
+
+        [Invariant 1] The length of 'subnodes' equals the number of set bits in 'bitmap'.
+        [Invariant 2] There is no null pointer in 'subnodes'.
+
+      -}
+      BM {!subnodes :: JArray (HashMap k v), !bitmap :: Long } where
+
+    --- this checks the invariants for a node
+    invariants ∷ Eq 𝖐 ⇒ HashMap 𝖐 𝖛 → Bool
+    invariants KV{} = true
+    invariants CO{list} = coinv list
+        where
+            coinv [a,b] = fst a != fst b
+            coinv (a:xs) = all (!= fst a) (map fst xs) && coinv xs
+            coinv _ = false -- less than 2 elements
+    invariants BM{bitmap, subnodes} = bitCount bitmap == arrayLength subnodes
+                                        && all isJust (toMaybeList subnodes)
+                                        && all invariants (toList subnodes)
+
+    --- transform an index into an actual array index
+    --- > indexMap bmap nodes inx
+    --- _bmap_ is the bitmap
+    --- _nodes_ is the subnodes array
+    --- _inx_ is a hash code or part of a hash code, whose least significant 6 bits are the index
+    --- returns a number in the range 0..nodes.length, where nodes.length means "no corresponding node"
+    indexMap !bmap !nodes !inx = if bmap .&. b == 0 then arrayLength nodes
+                                else bitCount (bmap .&. (b-1)) 
+        where !b = Long.bit (inx .&. 0x3f)
+    
+    empty :: HashMap a b
+    !empty = BM{subnodes = arrayFromList [], bitmap = 0}
+    
+    null BM{bitmap} = bitmap == 0
+    null _ = false
+    
+    singleton k v = KV{hash=hashCode k, key=k, value=v}
+    
+    insert hm k v = insertWork k v hm (hashCode k) 0
+    
+    --- > insertWork "foo" v node h s
+    --- _h_ is the *unshifted* original hash code!
+    --- _s_ is the number of bits to shift _h_ to the right for getting an index at this level
+    private insertWork ∷ Eq 𝖐 ⇒ 𝖐 → 𝖛 → HashMap 𝖐 𝖛 → Int → Int → HashMap 𝖐 𝖛
+    private insertWork !k v !node !h !s = case node  of
+        KV{hash, key, value}
+            | hash == h, key == k = node.{value=v}              -- update
+            | hash == h = CO{hash,list=(k,v)!:(key,value)!:[]}  -- collision
+            | otherwise = ST.run (newBM2 s KV{hash=h, key=k, value=v} node)  
+        CO{hash, list}
+            | hash == h = case List.find (\(a,_) -> a == k) list of
+                Just (k', v') -> node.{list = (k,v) !: filter (\(a,_) -> a != k) list}
+                nothing       -> node.{list = (k,v) !: list}        -- very bad, collision list grows
+            | otherwise = ST.run (newBM2 s KV{hash=h, key=k, value=v} node) 
+        BM{subnodes, bitmap}
+            | bitmap == 0 = KV{hash=h, key=k, value=v}
+            | sz <- arrayLength subnodes = case indexMap bitmap subnodes (h `ushiftR` s) of
+                i | i < sz = ST.run do
+                        let newn = insertWork k v (elemAt subnodes i) h (s+6)
+                        nodes <- Mutable.thaw subnodes
+                        setElemAt nodes i newn
+                        frozen <- nodes.freeze
+                        return node.{subnodes=frozen}
+                  | otherwise = ST.run do
+                        nodes <- copyOf (mutable subnodes) (1+sz)
+                        -- compute the new index
+                        let !vi     = (h `ushiftR` s) .&. 0x3F
+                            !nbit   = Long.bit vi
+                            !nbm    = bitmap .|. nbit
+                            !j      = bitCount (nbm .&. (nbit-1))
+                            !newn   = KV{hash=h, key=k, value=v}
+                        if j == sz 
+                        then do -- append at end
+                            setElemAt nodes sz newn
+                        else do
+                            -- old i0, i1, i2, sz == 3
+                            -- new i0, n, i1, i2
+                            -- shift elements from j on one to the right
+                            arraycopy nodes j nodes (j+1) (sz-j)
+                            setElemAt nodes j newn
+                        frozen <- nodes.freeze
+                        return BM{bitmap=nbm, subnodes=frozen}
+    --- join two non bitmapped nodes with *different* hash codes into a BM node
+    --- works for KV/KV, KV/CO, CO/KV and CO/CO
+    private newBM2 !s !n1 !n2 = do
+        let !h1 = (n1.hash `ushiftR` s) .&. 0x3F
+            !h2 = (n2.hash `ushiftR` s) .&. 0x3F
+            !bitmap = Long.bit h1 .|. Long.bit h2
+        if (h1 == h2)   -- we have different hashes, but they would map to same index at this level!
+        then do
+            n <- newBM2 (s+6) n1 n2  -- try next level, there must be a difference
+            nodes <- newArray 1
+            setElemAt nodes 0 n
+            subnodes <- readonly id nodes
+            return BM{bitmap, subnodes}
+        else do
+            nodes <- newArray 2
+            setElemAt nodes 0 (if h1 < h2 then n1 else n2)
+            setElemAt nodes 1 (if h1 > h2 then n1 else n2)
+            subnodes <- readonly id nodes
+            return BM{bitmap, subnodes}
+ 
+
+
+instance ToJSON (ToJSON k, ToJSON v) ⇒ (HashMap k v) where
+    toJSON node = case node  of
+        HashMap.KV{hash, key, value} -> Value.Object (JSON.Object.Struct t)
+            where t = Tree.empty.insert "KV" (toJSON (hash, key, value))
+        HashMap.CO{hash, list} -> Value.Object (JSON.Object.Struct t)
+            where t = Tree.empty.insert "CO" (toJSON (hash, list))
+        HashMap.BM{subnodes, bitmap} -> Value.Object (JSON.Object.Struct t)
+            where t = Tree.empty.insert "BM" (toJSON (subnodes, bitmap))
+
+-- Instances
+
+derive ArrayElement HashMap a b
+private instance Cloneable (JArray (HashMap k v)) 
+private instance Freezable (JArray (HashMap k v)) where
+    freeze = id
+    thaw   = clone  
+
+instance Show (ToJSON k, ToJSON v) ⇒ HashMap k v where
+    show hm = show (toJSON hm)
+
+--- use the native array.length to get the length
+private pure native arrayLength ".length" ∷ JArray (HashMap k v) → Int 
+
+
+--- Copies the specified array, truncating or padding with nulls (if necessary) so the copy has the specified length.
+private native copyOf java.util.Arrays.copyOf 
+        :: ArrayOf s (HashMap k v) -> Int -> ST s (ArrayOf s (HashMap k v)) 
+
+{--
+    > arraycopy(Object src, int srcPos, Object dest, int destPos, int length)
+
+    Copies an array from the specified source array, 
+    beginning at the specified position, to the specified position of the destination array.
+    
+    Can be used to do overlapping copies.
+-}
+private native arraycopy java.lang.System.arraycopy 
+    ∷ ArrayOf s (HashMap k v) -> Int -> ArrayOf s (HashMap k v) -> Int -> Int -> ST s ()
+ 
