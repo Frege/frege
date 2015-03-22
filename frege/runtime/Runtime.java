@@ -225,6 +225,19 @@ public class Runtime {
         }
     }
 
+    
+    /**
+     * Identity function for reference types
+     * (Can be used to pseudo thaw/freeze a value) 
+     */
+    public final static <T> T identity(T x) { return x; }
+    
+    /**
+     * Thaw a readonly array by cloning it
+     */
+    public final static <T> T[] arrayThaw(T[] a) { return a.clone(); }
+    
+     
     /**
      * <p> Cheat with phantom types. </p>
      * <p> This method is announced with type String a -&gt; Int -&gt; a
