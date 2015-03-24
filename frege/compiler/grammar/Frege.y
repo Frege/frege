@@ -165,6 +165,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type letdefs         [Def]
 //%type wherelet        [Def]
 //%type visibledefinition [Def]
+//%type moduledefinition Def
 //%type wheredef        [Def]
 //%type tyvar           TauS
 //%type tvapp           TauS
@@ -219,6 +220,12 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type qualifiers      (Token -> SName)
 //%type kind            Kind
 //%type simplekind      Kind
+//%type jtoken          Token
+//%type jtokens         [Token]
+//%type typeclause      (Maybe TauS)
+//%type interfaces      [TauS]
+//%explain typeclause   the type this module derives from
+//%explain interfaces   the interfaces this module implements
 //%explain mbdot        '.' or '•'
 //%explain thenx        then branch
 //%explain elsex        else branch
@@ -256,6 +263,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%explain importitem   an import item
 //%explain alias        a simple name for a member or import item
 //%explain commata      a sequence of one or more ','
+//%explain moduledefinition specification for module class 
 //%explain topdefinition a top level declaration
 //%explain publicdefinition a declaration
 //%explain localdef     a local declaration
@@ -345,6 +353,8 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%explain strictfldid  a field specification
 //%explain plainfldid   a field specification
 //%explain fldids       field specifications
+//%explain jtoken       java token
+//%explain jtokens      java tokens
 %}
 
 %token VARID CONID QVARID QCONID QUALIFIER DOCUMENTATION
@@ -478,7 +488,43 @@ visibledefinition:
 topdefinition:
     import                              { single }
     | infix                             { single }
+    | moduledefinition                  { single }
     | publicdefinition
+    ;
+
+moduledefinition:
+    NATIVE PACKAGE typeclause interfaces WHERE '{' jtokens '}'
+                                        { \_\m\t\i\_\_\js\_ -> ModDcl {pos = yyline m, extends=t, implements=i, code=js }}
+    ;
+
+typeclause:
+                                      { Nothing }
+    | TYPE tau                        { \a\b -> Just b }
+    ;
+
+interfaces:
+                                      { [] }
+    | CLASS tauSC                     { \_\taus -> taus }
+    ;
+
+jtoken:
+      VARID     | CONID     | QVARID    | QCONID    | QUALIFIER | DOCUMENTATION
+    | PACKAGE   | IMPORT    | INFIX     | INFIXR    | INFIXL    | NATIVE 
+    | DATA      | WHERE     | CLASS     | INSTANCE  | ABSTRACT  | TYPE 
+    | TRUE      | FALSE     | IF        | THEN      | ELSE      | CASE 
+    | OF        | DERIVE    | LET       | IN        | DO        | FORALL 
+    | PRIVATE   | PROTECTED | PUBLIC    | PURE      | THROWS    | MUTABLE
+    | INTCONST  | STRCONST  | LONGCONST | FLTCONST  | DBLCONST  | CHRCONST
+    | ARROW     | DCOLON    | GETS      | EARROW    | DOTDOT    | SOMEOP
+    | INTERPRET
+    | ',' | '|' | '[' | ']' | '(' | ')' | '.' | '?' | '-' | ';' | '!' | '=' | '\\'
+    ;
+
+jtokens:
+    jtoken                              { single }
+    | jtoken jtokens                    { (:) }
+    | '{' jtokens '}'                   { \a\b\c -> a:(b++[c]) }
+    | '{' jtokens '}' jtokens           { \a\b\c\d -> (a:b)++(c:d) }
     ;
 
 documentation:
