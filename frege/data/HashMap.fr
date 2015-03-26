@@ -19,12 +19,15 @@ import Data.TreeMap(Tree)
 import Data.List()
 
 --- General interface of a Hash Map
-class HashMapInterface  m where
+class HashingMap  m where
     --- O(1) Create a singleton map
-    singleton ∷ k v → m k v
+    singleton ∷ k → v → m k v
 
-    --- O(n) Compute the size of the Map
+    --- O(n) Compute the size of the map
     size ∷ m k v → Int
+    
+    --- O(n) Retrieve a list of the values in the map
+    values :: m k v -> [v]
 
 {--
     'HasMap' based on a Hash Mapped Array Trie
@@ -159,69 +162,96 @@ abstract data HashMap k v =
     size CO{list} = length list
     size BM{subnodes} = sum (map size (toList subnodes))
     
-    insert hm k v = insertWork k v hm (hashCode k) 0
+    values = go []
+        where
+            go vs KV{value} = value:vs
+            go vs CO{list}  = map snd list ++ vs
+            go vs BM{subnodes} = fold go vs subnodes.toList 
     
-    --- > insertWork "foo" v node h s
+    collisions = go (0,0, [])
+        where
+            go t KV{} = t
+            go t BM{subnodes} = fold go t subnodes.toList
+            go (a,b, kss) CO{list} = (a+1; b+length list; map fst list:kss)  
+    
+    insert k v hm = insertWork const k v hm (hashCode k) 0
+    
+    insertWith f k v hm = insertWork f k v hm (hashCode k) 0
+    
+--     insertSWith ∷ (𝖆→𝖆→𝖆) →String → 𝖆 → HashMap String 𝖆 → HashMap String 𝖆
+--     insertSWith f k v hm = insertSWork f k v hm (hashCode k) 0
+-- 
+--     private insertSWork ∷ (𝖛→𝖛→𝖛) → String → 𝖛 → HashMap String 𝖛 → Int → Int → HashMap String 𝖛
+--     private insertSWork !f !k v !node !h !s = case node  of
+--         KV{hash, key, value}
+--             | hash == h, key == k = case f v value of !v -> node.{value = v} -- update
+--             | hash == h = CO{hash,list=(k,v)!:(key,value)!:[]}  -- collision
+--             | otherwise = joinNodes s KV{hash=h, key=k, value=v} node  
+--         BM{subnodes, bitmap}
+--             | bitmap == 0 = KV{hash=h, key=k, value=v}      -- replace empty
+--             | otherwise   = case indexMap bitmap subnodes vi of
+--                 i | i < arrayLength subnodes = node.{subnodes = cloneSetElemAt i sub subnodes} 
+--                   | otherwise = BM{bitmap = nbm, subnodes = insertAt j nkv subnodes}
+--                   where
+--                     sub   = insertSWork f k v (elemAt subnodes i) h (s+6)  -- recurse
+--                     !nbit = Long.bit vi
+--                     !nbm  = bitmap .|. nbit
+--                     !j    = bitCount (nbm .&. (nbit-1))
+--                     nkv   = KV{hash=h, key=k, value=v}
+--             where
+--                 !vi   = (h `ushiftR` s) .&. 0x3F  -- virtual index
+--         CO{hash, list}
+--             | hash == h = case List.find (\(a,_) -> a == k) list of
+--                 Just (k', v') -> node.{list = (k; f v v') !: filter (\(a,_) -> a != k) list}
+--                 nothing       -> node.{list = (k,v) !: list}        -- very bad, collision list grows
+--             | otherwise = joinNodes s KV{hash=h, key=k, value=v} node 
+
+        
+                
+    --- > insertWork f "foo" v node h s
+    --- _f_ is the function called as @f newval oldval@ if the key is already in the map
     --- _h_ is the *unshifted* original hash code!
     --- _s_ is the number of bits to shift _h_ to the right for getting an index at this level
-    private insertWork ∷ Eq 𝖐 ⇒ 𝖐 → 𝖛 → HashMap 𝖐 𝖛 → Int → Int → HashMap 𝖐 𝖛
-    private insertWork !k v !node !h !s = case node  of
+    private insertWork ∷ Eq 𝖐 ⇒ (𝖛→𝖛→𝖛) → 𝖐 → 𝖛 → HashMap 𝖐 𝖛 → Int → Int → HashMap 𝖐 𝖛
+    private insertWork !f !k v !node !h !s = case node  of
         KV{hash, key, value}
-            | hash == h, key == k = node.{value=v}              -- update
+            | hash == h, key == k = case f v value of !v -> node.{value = v} -- update
             | hash == h = CO{hash,list=(k,v)!:(key,value)!:[]}  -- collision
-            | otherwise = ST.run (newBM2 s KV{hash=h, key=k, value=v} node)  
+            | otherwise = joinNodes s KV{hash=h, key=k, value=v} node  
+        BM{subnodes, bitmap}
+            | bitmap == 0 = KV{hash=h, key=k, value=v}      -- replace empty
+            | otherwise   = case indexMap bitmap subnodes vi of
+                i | i < arrayLength subnodes = node.{subnodes = cloneSetElemAt i sub subnodes} 
+                  | otherwise = BM{bitmap = nbm, subnodes = insertAt j nkv subnodes}
+                  where
+                    sub   = insertWork f k v (elemAt subnodes i) h (s+6)  -- recurse
+                    !nbit = Long.bit vi
+                    !nbm  = bitmap .|. nbit
+                    !j    = bitCount (nbm .&. (nbit-1))
+                    nkv   = KV{hash=h, key=k, value=v}
+            where
+                !vi   = (h `ushiftR` s) .&. 0x3F  -- virtual index
         CO{hash, list}
             | hash == h = case List.find (\(a,_) -> a == k) list of
-                Just (k', v') -> node.{list = (k,v) !: filter (\(a,_) -> a != k) list}
+                Just (k', v') -> case  filter (\(a,_) -> a != k) list of
+                                    !rest | length rest >= 0 = node.{list = (k; f v v') !: rest}
+                                          | otherwise = node        -- not reached    
                 nothing       -> node.{list = (k,v) !: list}        -- very bad, collision list grows
-            | otherwise = ST.run (newBM2 s KV{hash=h, key=k, value=v} node) 
-        BM{subnodes, bitmap}
-            | bitmap == 0 = KV{hash=h, key=k, value=v}
-            | sz <- arrayLength subnodes = case indexMap bitmap subnodes (h `ushiftR` s) of
-                i | i < sz = ST.run do
-                        let newn = insertWork k v (elemAt subnodes i) h (s+6)
-                        nodes <- thaw (mutable subnodes)
-                        setElemAt nodes i newn
-                        frozen <- freeze nodes
-                        return node.{subnodes=frozen}
-                  | otherwise = ST.run do
-                        nodes <- copyOf (mutable subnodes) (1+sz)
-                        -- compute the new index
-                        let !vi     = (h `ushiftR` s) .&. 0x3F
-                            !nbit   = Long.bit vi
-                            !nbm    = bitmap .|. nbit
-                            !j      = bitCount (nbm .&. (nbit-1))
-                            !newn   = KV{hash=h, key=k, value=v}
-                        if j == sz 
-                        then do -- append at end
-                            setElemAt nodes sz newn
-                        else do
-                            -- old i0, i1, i2, sz == 3
-                            -- new i0, n, i1, i2
-                            -- shift elements from j on one to the right
-                            arraycopy nodes j nodes (j+1) (sz-j)
-                            setElemAt nodes j newn
-                        frozen <- freeze nodes
-                        return BM{bitmap=nbm, subnodes=frozen}
+            | otherwise = joinNodes s KV{hash=h, key=k, value=v} node 
+
+
     --- join two non bitmapped nodes with *different* hash codes into a BM node
     --- works for KV/KV, KV/CO, CO/KV and CO/CO
-    private newBM2 !s !n1 !n2 = do
-        let !h1 = (n1.hash `ushiftR` s) .&. 0x3F
+    private joinNodes !s !n1 !n2
+        -- different hashes that map to same index at this level
+        -- try next level, there must be a difference
+        | h1 == h2  = BM{bitmap, subnodes = mkSingleton (joinNodes (s+6) n1 n2)}
+        | h1 <  h2  = BM{bitmap, subnodes = mkPair n1 n2}
+        | otherwise = BM{bitmap, subnodes = mkPair n2 n1}  
+        where
+            !h1 = (n1.hash `ushiftR` s) .&. 0x3F
             !h2 = (n2.hash `ushiftR` s) .&. 0x3F
             !bitmap = Long.bit h1 .|. Long.bit h2
-        if (h1 == h2)   -- we have different hashes, but they would map to same index at this level!
-        then do
-            n <- newBM2 (s+6) n1 n2  -- try next level, there must be a difference
-            nodes <- newArray 1
-            setElemAt nodes 0 n
-            subnodes <- readonly id nodes
-            return BM{bitmap, subnodes}
-        else do
-            nodes <- newArray 2
-            setElemAt nodes 0 (if h1 < h2 then n1 else n2)
-            setElemAt nodes 1 (if h1 > h2 then n1 else n2)
-            subnodes <- readonly id nodes
-            return BM{bitmap, subnodes}
  
 
 
@@ -240,6 +270,88 @@ derive ArrayElement HashMap a b
 
 instance Show (ToJSON k, ToJSON v) ⇒ HashMap k v where
     show hm = show (toJSON hm)
+
+-- Array primitives
+
+native module where {
+    // clone and set element
+    private static final THashMap[] cSEA(int inx, THashMap node, THashMap[] array) {
+        THashMap[] neu = array.clone();
+        neu[inx] = node;
+        return neu;
+    }
+    
+    // insert element in a copy that is one element greater
+    private static final THashMap[] iA(int inx, THashMap node, THashMap[] array) {
+        final int sz   = array.length;
+        THashMap[] neu = java.util.Arrays.copyOf(array, 1+sz);
+        if (inx < sz)
+            java.lang.System.arraycopy(array, inx, neu, inx+1, sz-inx);
+        neu[inx] = node;
+        return neu;
+    }
+
+    // make a singleton array
+    private static final THashMap[] mkS(THashMap node) {
+        return new THashMap[] { node };
+    }
+    
+    // make an  array with 2 elements
+    private static final THashMap[] mkP(THashMap node1, THashMap node2) {
+        return new THashMap[] { node1, node2 };
+    }
+}
+
+{--
+    Clone (duplicate) an array, and set a single element to a new value
+--}
+pure native cloneSetElemAt HashMap.cSEA ∷ Int → HashMap k v → JArray (HashMap k v) → JArray (HashMap k v)
+-- cloneSetElemAt ∷ Int → HashMap k v → JArray (HashMap k v) → JArray (HashMap k v)
+-- cloneSetElemAt !inx !node !array = ST.run do
+--     new ← thaw (mutable array)
+--     setElemAt new inx node
+--     freeze new
+
+{--
+    Insert an element in a copy of an arry that is one element greater.
+-}
+pure native insertAt HashMap.iA ∷ Int → HashMap k v → JArray (HashMap k v) → JArray (HashMap k v)
+-- insertAt ∷ Int → HashMap k v → JArray (HashMap k v) → JArray (HashMap k v)
+-- insertAt !inx !node !array = ST.run do
+--         new ← copyOf (mutable array) (1+sz)
+--         if inx == sz 
+--             then do -- append at end
+--                 setElemAt new sz node
+--             else do
+--                 -- old i0, i1, i2, sz == 3
+--                 -- new i0, n, i1, i2
+--                 -- shift elements from j on one to the right
+--                 arraycopy (mutable array) inx new (inx+1) (sz-inx)
+--                 setElemAt new inx node
+--         freeze new
+--     where
+--         !sz = arrayLength array
+
+{--
+    Make a 1 element array
+-}
+pure native mkSingleton HashMap.mkS ∷ HashMap k v → JArray (HashMap k v)
+-- mkSingleton ∷ HashMap k v → JArray (HashMap k v)
+-- mkSingleton !node = ST.run do
+--     new ← newArray 1
+--     setElemAt new 0 node
+--     freeze new
+
+{--
+    Make a 2 element array
+-}
+pure native mkPair HashMap.mkP ∷ HashMap k v → HashMap k v → JArray (HashMap k v)
+-- mkPair ∷ HashMap k v → HashMap k v → JArray (HashMap k v)
+-- mkPair !node1 !node2 = ST.run do
+--     new ← newArray 2
+--     setElemAt new 0 node1
+--     setElemAt new 1 node2
+--     freeze new
 
 --- clone an array
 private native thaw clone ∷ ArrayOf s (HashMap k v) -> ST s (ArrayOf s (HashMap k v))
