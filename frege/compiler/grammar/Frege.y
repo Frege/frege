@@ -222,6 +222,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type simplekind      Kind
 //%type jtoken          Token
 //%type jtokens         [Token]
+//%type wheretokens     [Token]
 //%type typeclause      (Maybe TauS)
 //%type interfaces      [TauS]
 //%explain typeclause   the type this module derives from
@@ -355,6 +356,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%explain fldids       field specifications
 //%explain jtoken       java token
 //%explain jtokens      java tokens
+//%explain wheretokens  java code
 %}
 
 %token VARID CONID QVARID QCONID QUALIFIER DOCUMENTATION
@@ -493,8 +495,8 @@ topdefinition:
     ;
 
 moduledefinition:
-    NATIVE PACKAGE typeclause interfaces WHERE '{' jtokens '}'
-                                        { \_\m\t\i\_\_\js\_ -> ModDcl {pos = yyline m, extends=t, implements=i, code=js }}
+    NATIVE PACKAGE typeclause interfaces wheretokens 
+                                        { \_\m\t\i\js -> ModDcl {pos = yyline m, extends=t, implements=i, code=js }}
     ;
 
 typeclause:
@@ -505,6 +507,11 @@ typeclause:
 interfaces:
                                       { [] }
     | CLASS tauSC                     { \_\taus -> taus }
+    ;
+
+wheretokens: 
+      WHERE '{' jtokens '}'             { \_\_\c\_ -> c  }
+    | WHERE '{'         '}'             { \_\_\_   -> [] }
     ;
 
 jtoken:
@@ -525,6 +532,8 @@ jtokens:
     | jtoken jtokens                    { (:) }
     | '{' jtokens '}'                   { \a\b\c -> a:(b++[c]) }
     | '{' jtokens '}' jtokens           { \a\b\c\d -> (a:b)++(c:d) }
+    | '{' '}'                           { \a\b -> [a,b] }
+    | '{' '}' jtokens                   { \a\b\cs -> a:b:cs }
     ;
 
 documentation:
