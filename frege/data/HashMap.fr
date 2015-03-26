@@ -18,16 +18,62 @@ import Data.JSON
 import Data.TreeMap(Tree)
 import Data.List()
 
---- General interface of a Hash Map
-class HashingMap  m where
-    --- O(1) Create a singleton map
-    singleton ∷ k → v → m k v
+-- General interface of a Hash Map
 
-    --- O(n) Compute the size of the map
-    size ∷ m k v → Int
-    
-    --- O(n) Retrieve a list of the values in the map
-    values :: m k v -> [v]
+--- O(1) Create a singleton map
+singleton ∷ Eq k ⇒ k → v → HashMap k v
+singleton k v = HashMap.KV{hash=hashCode k, key=k, value=v}
+
+--- O(n) Compute the size of the map
+size ∷ HashMap k v → Int
+size HashMap.KV{}         = 1
+size HashMap.CO{list}     = length list
+size HashMap.BM{subnodes} = sum (map size (toList subnodes))
+
+--- O(n) Retrieve a list of the values in the map
+values :: HashMap k v -> [v]
+values = go []
+    where
+        go vs HashMap.KV{value}    = value:vs
+        go vs HashMap.CO{list}     = map snd list ++ vs
+        go vs HashMap.BM{subnodes} = fold go vs subnodes.toList 
+
+{-- O(log n)
+    > insert k v m
+    is a 'HashMap' _h_ such that 
+    > lookup k h = Just v
+    and lookup for any other key _o_
+    > lookup o h = lookup o m  
+
+    Less formally said, _k_ is associated with _v_ in the resulting map, updating
+    a previously existing association of _k_ if it exists, while all other associations
+    are left untouched.
+
+    In the case of an update, the new value will get forced, see 'insertWith' for details. 
+-}
+insert k v hm = HashMap.insertWork const k v hm (hashCode k) 0
+
+{-- O(log n)
+    > insertWith f k v m
+    If _m_ does not contain _k_, this works like 'insert'.
+    Otherwise, the existing association of _k_ with some value _v'_ is replaced by
+    an association of _k_ with the result of evaluating 
+    > f v v'
+    in the resulting map. 
+
+    Strict evaluation is necessary to prevent building up of large thunks 
+    of the form
+    > f3 v3 (f2 v2 (f1 v1 v0))
+
+    Note that
+    > insert = insertWith const
+    and that this will evaluate the new value in case of an update. If you
+    want to prevent this, use
+
+    > replace k v = insert k v . delete k
+-} 
+insertWith f k v hm = HashMap.insertWork f k v hm (hashCode k) 0
+
 
 {--
     'HasMap' based on a Hash Mapped Array Trie
@@ -47,15 +93,16 @@ class HashingMap  m where
     'https://en.wikipedia.org/wiki/Persistent_data_structure persistent' 
     hash array mapped trie uses 32 bit hash values as provided by Java and the
     Frege 'Eq' type class. 
-    
+
     To find a value, the search starts with the root node.
-    If the node is a key/value pair, the node's key is compared to the search key. 
+    If the node is a key/value pair, the node's key is compared to the search key.
+    When the keys are equal, the value is returned, otherwise the key is not in the map. 
 
     If the node is a bitmapped node, the hash code of the lookup key is computed 
     and the presence of the index provided by the last six bits is checked in the bitmap.
     If it is there, the search continues with the corresponding node 
     from the node array, otherwise the key is not in the map.
-    
+
     It remains the case that the node is a collision list. The searched key's
     hashcode either is the same as the one of the keys in the collision list, 
     in which case the search degrades to a sequential search in that list, or it
@@ -80,19 +127,19 @@ class HashingMap  m where
       - _n_ times: comparision with the keys in the collision list, where _n_
         is the number of elements of the collision list, or comparision with the
         key of a key/value node (this is equivalent to a collision list of length 1).
-    
+
     It turns out that - absent hash collisions - lookup will be done in 
     *constant time* with a tiny constant factor. 
     And so will be inserts and deletes, altough with a slightly larger constant 
     factor due to the house-keeping necessary for a persistent data structure. 
     However, even this are in the worst case 6 array copies, where 5 of them may
-    be of size 64. Even if the pointers are 8 bytes long, this amounts to
-    less than 4k of memory that must be copied. 
-    
+    be of size 64 and one of size 4. Assuming that the pointers are 4 bytes long, 
+    this amounts to copying at most 324*4 bytes of memory. 
+
     The map can have at most 2^32 non-bitmapped nodes maintained in 
     1+64+4096+262144+16777216+1073741824 bitmapped nodes. Because collision lists
-    can be arbitrary long, the total number of elements hashed is unlimited. 
-    
+    can be arbitrary long, the total number of key/value pairs is *not limited*. 
+
 -}
 
 abstract data HashMap k v =
@@ -143,71 +190,33 @@ abstract data HashMap k v =
     --- transform an index into an actual array index
     --- > indexMap bmap nodes inx
     --- _bmap_ is the bitmap
-    --- _nodes_ is the subnodes array
+    --- _nodes_ is the number of actual subnodes
     --- _inx_ is a hash code or part of a hash code, whose least significant 6 bits are the index
-    --- returns a number in the range 0..nodes.length, where nodes.length means "no corresponding node"
-    indexMap !bmap !nodes !inx = if bmap .&. b == 0 then arrayLength nodes
+    --- returns a number in the range 0..nodes, where _nodes_ means "no corresponding node"
+    indexMap !bmap !nodes !inx = if bmap .&. b == 0 then nodes
                                 else bitCount (bmap .&. (b-1)) 
         where !b = Long.bit (inx .&. 0x3f)
-    
+
+
     empty :: HashMap a b
     !empty = BM{subnodes = arrayFromList [], bitmap = 0}
-    
+
     null BM{bitmap} = bitmap == 0
     null _ = false
-    
-    singleton k v = KV{hash=hashCode k, key=k, value=v}
-    
-    size KV{} = 1
-    size CO{list} = length list
-    size BM{subnodes} = sum (map size (toList subnodes))
-    
-    values = go []
-        where
-            go vs KV{value} = value:vs
-            go vs CO{list}  = map snd list ++ vs
-            go vs BM{subnodes} = fold go vs subnodes.toList 
-    
+
+
+
+    --- _O(n)_ Compute a 3-tuple of
+    --- - the number of collision nodes
+    --- - the total number of keys that have a collision
+    --- - a list of lists of colliding keys
     collisions = go (0,0, [])
         where
             go t KV{} = t
             go t BM{subnodes} = fold go t subnodes.toList
             go (a,b, kss) CO{list} = (a+1; b+length list; map fst list:kss)  
-    
-    insert k v hm = insertWork const k v hm (hashCode k) 0
-    
-    insertWith f k v hm = insertWork f k v hm (hashCode k) 0
-    
---     insertSWith ∷ (𝖆→𝖆→𝖆) →String → 𝖆 → HashMap String 𝖆 → HashMap String 𝖆
---     insertSWith f k v hm = insertSWork f k v hm (hashCode k) 0
--- 
---     private insertSWork ∷ (𝖛→𝖛→𝖛) → String → 𝖛 → HashMap String 𝖛 → Int → Int → HashMap String 𝖛
---     private insertSWork !f !k v !node !h !s = case node  of
---         KV{hash, key, value}
---             | hash == h, key == k = case f v value of !v -> node.{value = v} -- update
---             | hash == h = CO{hash,list=(k,v)!:(key,value)!:[]}  -- collision
---             | otherwise = joinNodes s KV{hash=h, key=k, value=v} node  
---         BM{subnodes, bitmap}
---             | bitmap == 0 = KV{hash=h, key=k, value=v}      -- replace empty
---             | otherwise   = case indexMap bitmap subnodes vi of
---                 i | i < arrayLength subnodes = node.{subnodes = cloneSetElemAt i sub subnodes} 
---                   | otherwise = BM{bitmap = nbm, subnodes = insertAt j nkv subnodes}
---                   where
---                     sub   = insertSWork f k v (elemAt subnodes i) h (s+6)  -- recurse
---                     !nbit = Long.bit vi
---                     !nbm  = bitmap .|. nbit
---                     !j    = bitCount (nbm .&. (nbit-1))
---                     nkv   = KV{hash=h, key=k, value=v}
---             where
---                 !vi   = (h `ushiftR` s) .&. 0x3F  -- virtual index
---         CO{hash, list}
---             | hash == h = case List.find (\(a,_) -> a == k) list of
---                 Just (k', v') -> node.{list = (k; f v v') !: filter (\(a,_) -> a != k) list}
---                 nothing       -> node.{list = (k,v) !: list}        -- very bad, collision list grows
---             | otherwise = joinNodes s KV{hash=h, key=k, value=v} node 
 
-        
-                
+
     --- > insertWork f "foo" v node h s
     --- _f_ is the function called as @f newval oldval@ if the key is already in the map
     --- _h_ is the *unshifted* original hash code!
@@ -220,7 +229,7 @@ abstract data HashMap k v =
             | otherwise = joinNodes s KV{hash=h, key=k, value=v} node  
         BM{subnodes, bitmap}
             | bitmap == 0 = KV{hash=h, key=k, value=v}      -- replace empty
-            | otherwise   = case indexMap bitmap subnodes vi of
+            | otherwise   = case indexMap bitmap (arrayLength subnodes) vi of
                 i | i < arrayLength subnodes = node.{subnodes = cloneSetElemAt i sub subnodes} 
                   | otherwise = BM{bitmap = nbm, subnodes = insertAt j nkv subnodes}
                   where
@@ -233,9 +242,8 @@ abstract data HashMap k v =
                 !vi   = (h `ushiftR` s) .&. 0x3F  -- virtual index
         CO{hash, list}
             | hash == h = case List.find (\(a,_) -> a == k) list of
-                Just (k', v') -> case  filter (\(a,_) -> a != k) list of
-                                    !rest | length rest >= 0 = node.{list = (k; f v v') !: rest}
-                                          | otherwise = node        -- not reached    
+                Just (k', v') -> case rFilterNEQ k [] list of
+                                    !rev -> node.{list = (k; f v v') !: rev}
                 nothing       -> node.{list = (k,v) !: list}        -- very bad, collision list grows
             | otherwise = joinNodes s KV{hash=h, key=k, value=v} node 
 
@@ -252,7 +260,26 @@ abstract data HashMap k v =
             !h1 = (n1.hash `ushiftR` s) .&. 0x3F
             !h2 = (n2.hash `ushiftR` s) .&. 0x3F
             !bitmap = Long.bit h1 .|. Long.bit h2
- 
+
+    {--
+        Reverse list while filtering out some key.
+
+        Consider a collision list [("foo", n), ("...", m)] in a word counting application.
+        Assume that "foo" occurs many times, while "..." ocurs just once.
+        So if we would re-compute the collision list with
+        > ("foo", n+1) : filter (!="foo")
+        we would get
+        > ("foo", n+1) : ("...", m) : filter (!="foo") []
+        because 'filter' is lazy in the tail. The next time "foo" occurs, we would get
+        > ("foo", n+1+1) : ("...", m) : filter (!="foo") (filter (!="foo") [])
+        thus building up thunks. In the end, this breaks down on operations like
+        'size', 'keys', 'values', 'each' ... etc. because the wrapped up filters will have
+        to get evaluated, and a stack overflow may happen.
+    -}
+    rFilterNEQ !k !acc (t:ts)
+        | k == fst t = rFilterNEQ k acc ts
+        | otherwise  = rFilterNEQ k (t:acc) ts
+    rFilterNEQ _ acc [] = acc
 
 
 instance ToJSON (ToJSON k, ToJSON v) ⇒ (HashMap k v) where
@@ -264,6 +291,7 @@ instance ToJSON (ToJSON k, ToJSON v) ⇒ (HashMap k v) where
         HashMap.BM{subnodes, bitmap} -> Value.Object (JSON.Object.Struct t)
             where t = Tree.empty.insert "BM" (toJSON (subnodes, bitmap))
 
+ 
 -- Instances
 
 derive ArrayElement HashMap a b
