@@ -31,13 +31,13 @@ public final class JHashMap {
 		BufferedReader in = Runtime.stdin.get();
 		
 		while ((line = in.readLine()) != null) {
-			Matcher m = words.matcher(line);
-			while (m.find()) {
-				String key = m.group();
-				Integer n = map.get(key);
-				if (n == null) map.put(key, 1);
-				else map.put(key, n+1);
-			}
+			// Matcher m = words.matcher(line);
+			// while (m.find()) {
+			//	String key = m.group();
+				Integer n = map.get(line);
+				if (n == null) map.put(line, 1);
+				else map.put(line, n+1);
+			// }
 		}
 		int wörter = 0;
 		for (int n : map.values()) wörter += n;
