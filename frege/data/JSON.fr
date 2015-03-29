@@ -1,14 +1,114 @@
---- JSON support
+--- This module provides 'http://www.ecma-international.org/publications/files/ECMA-ST/ECMA-404.pdf JSON support' for Frege.
 {--
     JSON support comprises 3 levels:
-    
-    1. On the lexical level, we analyze a 'String' and produce a list of JSON 'Tokens'.
-    2. On the grammar level, we parse a list of 'Tokens' and produce a JSON 'Value'.
+
+    1. On the lexical level, we analyze a 'String' and produce a list of JSON 'Token's.
+    2. On the grammar level, we parse a list of 'Token's and produce a JSON 'Value'.
        It is also possible to write parsers that produce certain data objects directly.
     3. On the value level, we convert JSON 'Value's to and from values of algebraic data types.
+       This is accomplished by type classes 'ToJSON' and 'FromJSON'. Instances for basic types,
+       in particular for all tuple types, are provided.
+
+    ## Converting Strings to JSON 'Values's
+    Function 'lexer' translates a 'String' to a list of JSON 'Token's, which is
+    given to some 'Parser'. The standard parser 'parseObject' should be used 
+    to parse top level 'String' with JSON data, which must reresent either
+    an array or a record according to the JSON standard.
+
+    ## Converting JSON 'Values' to values
+    Once we have a 'Value' we can use 'fromJSON' to convert (or decode) it 
+    to a value of any type that is an instance of type class 'FromJSON'.
+
+    All the basic types, lists, arrays and tuples are instances of 'FromJSON'
+    already. Thus, writing a custom instance for your own type is easy. We
+    will use the following types for a running example:
     
+    >  data Motor = Electric Double --- just performance in kW
+    >               | Combustion { fuel :: [Fuel], displacement :: Double, cyls :: Int }
+    >  data Fuel = DIESEL | GASOLINE | NATURALGAS | LPG
+    >  data Vehicle = Vehicle { wheels :: Int, engine :: Maybe Motor }
+    >  bicycle = Vehicle { wheels = 2, engine = Nothing }
+    >  ebike   = Vehicle { wheels = 2, engine = Just (Electric 0.9) }
+    >  car     = Vehicle { wheels = 4, engine = Just (Combustion {
+    >                                   fuel = [LPG, GASOLINE], 
+    >                                   displacement = 2.0,
+    >                                   cyls = 4 })}
+    > vehicles = [car, bicycle, ebike]
+    
+    ### Write a 'FromJSON' instance
+    
+    The key for doing this is to have some conventions as to how the type is 
+    represented in JSON. We shall use the following encodings for our types.
+    [Motor] for example @{"Electric" : 0.9}@ or @{"Combustion" : [["DIESEL"], 2.5, 4]}@.  
+    [Fuel] just the name, i.e. "NATURALGAS"
+    [Vehicle] a JSON struct like @{"wheels" : 2, "engine" = {"Electric" : 0.9}}@.
+    Note that the 'Maybe' will be encoded implicitly by the presence 
+    or absence of the "engine" component.
+
+    We can now write the following instances:
+    
+    > instance FromJSON Fuel where
+    >     fromJSON (String "DIESEL") = return DIESEL
+    >     fromJSON (String "GASOLINE") = return GASOLINE
+    >     fromJSON (String "NATURALGAS") = return NATURALGAS
+    >     fromJSON (String "LPG") = return LPG
+    >     fromJSON s = fail ("cannot decode fuel from " ++ show s)
+    
+    Note the use of 'fail' and 'return' which is needed because we produce
+    our value in a failure monad like 'Maybe' or 'Either String'.
+    
+    > instance FromJSON Motor where
+    >    fromJSON (Struct m)
+    >       | Just n <- m.lookup "Electric" = fromJSON n >>= return . Electric
+    >       | Just fdc <- m.lookup "Combustion" = do
+    >               (fuel, displacement, cyls) <- fromJSON fdc
+    >               return Combustion{fuel, displacement,cyls}
+    >    fromJSON x = fail ("invalid engine: " ++ show x)
+    
+    We need to look up the keys to find out which variant we have. We then
+    just decode the associated values and recreate our value. Note that failures
+    for sub-components are propagated upwards automatically, thanks to the 
+    monadic approach. For example, when we decode a Motor from
+    
+    > { "Combustion" : [ ["Water"], 2.7, 3]}
+    
+    we will get the error 
+    
+    > cannot decode fuel from "Water"
+    
+    Because the fuel cannot get decoded, the decoding of the 3-tuple fails, and
+    our combustion engine will not be constructed.  
+    
+    Note how the existence of generic 'FromJSON' instances for tuples and lists
+    makes the decoding easy.
+    
+    Finally we can decode vehicles:
+     
+    > instance FromJSON Vehicle where
+    >     fromJSON (Struct m) = 
+    >         | Just jw <- m.lookup "wheels" = case m.lookup "engine" of
+    >             Just je -> do
+    >                  w <- fromJSON jw
+    >                  e <- fromJSON je
+    >                  return Vehicle{wheels=w, engine=Just e}
+    >             Nothing -> do
+    >                 w <- fromJSON jw
+    >                 return Vehicle{wheels=w, engine=Nothing}
+    >    fromJSON garbage = fail "not a vehicle"
+    
+    The 3 instances provide for all we need. To read a vehicle from a 'String',
+    we just need to run the automatically supplied 'parseJSON' function:
+    
+    >  case parseJSON "{\"wheels\" : 3 }"  of
+    >       Just Vehicle{wheels=w} -> -- we have w wheels ...
+    
+    The 'parseJSON' function needs to know the type of the item to decode as
+    well as the failure monad to work with. Most often, this can be inferred
+    by the compiler, like in the example above where it is clear that we want
+    a @Maybe Vehicle@.
+      
     Showing a JSON 'Value' or JSON 'Object' produces valid JSON for exchange with the outside world.  
---}
+-}
 module frege.data.JSON where
 
 import frege.Prelude hiding(Object, null)
@@ -163,16 +263,12 @@ private lex !cs !start
 
 --- JSON types
 data Value = 
-      protected String {sval ∷ String }                 --- a string
-    | protected Number {nval ∷ String }                 --- a number
-    | protected Bool   {bval ∷ Bool }                   --- @true@ or @false@   
-    | protected Null                                    --- just @null@
-    | protected Object {oval ∷ Object }                 --- array or map
-
---- JSON arrays or maps 
-protected data Object = 
-      protected Array [Value]                       --- > [ value, ... ]
-    | protected Struct (Tree String Value)          --- > { "name":value, ... }
+      String {sval ∷ String }                 --- a string
+    | Number {nval ∷ String }                 --- a number
+    | Bool   {bval ∷ Bool }                   --- @true@ or @false@   
+    | Null                                    --- just @null@
+    | Array [Value]                           --- > [ value, ... ]
+    | Struct (Tree String Value)              --- > { "name":value, ... }
 
 type Parser = MP.Parser [] Token
 
@@ -189,8 +285,8 @@ runParser p ts = case MP.runid p ts of
 -- parseValue = runParser value . lexer
 
 --- Parses an 'Object.Array' or an 'Object.Map'
---- This is what should be applied to JSON gotten from external sources
-parseObject :: Parser Object
+--- This is the parser that will be used in type class 'FromJSON' by default.
+parseObject :: Parser Value
 parseObject =
     cond  (parseLbrack <|> parseLbrace)
         (parseArray <|> parseMap) 
@@ -204,8 +300,8 @@ parseValue = (
         <|> parseNumber
         <|> parseNull
         <|> parseBoolean
-        <|> Value.Object <$> parseArray
-        <|> Value.Object <$> parseMap)
+        <|> parseArray
+        <|> parseMap)
     <?> "JSON value expected" 
 
 --- parse a left bracket
@@ -311,42 +407,37 @@ parseTuple (pA, pB) = do
     return (a,b)
     
 --- parse a JSON array
-parseArray ∷ Parser Object
+parseArray ∷ Parser Value
 parseArray = do
     parseLbrack
     cond parseRbrack 
-        (parseRbrack >> return (Object.Array [])) 
+        (parseRbrack >> return (Array [])) 
         do 
             vs <- parseValue `sepBy1` parseComma
             parseRbrack
-            return (Object.Array vs)
+            return (Array vs)
 
---- parse a JSON object
---- If one and the same key appears multiple times, only last one will be taken into account.
-parseMap ∷ Parser Object
+--- Parse a JSON record
+--- If one and the same key appears multiple times, only the last one will be taken into account.
+parseMap ∷ Parser Value
 parseMap = do
     parseLbrace
     cond parseRbrace 
-        (parseRbrace >> return (Object.Struct empty)) 
+        (parseRbrace >> return (Struct empty)) 
         do
             ps ← parsePair `sepBy1` parseComma
             parseRbrace
-            (return . Object.Struct . Tree.fromList) ps
+            (return . Struct . Tree.fromList) ps
 
 --- pretty print a 'Value'
 valDoc :: Value -> PP.DOCUMENT 
 valDoc v = case v  of
-    Value.String{sval} → text (show sval)
-    Value.Number{nval} → text nval
-    Value.Bool{bval}   → text (display bval)
-    Value.Null         → text "null"
-    Value.Object{oval} → objDoc oval
-
---- pretty print an 'Object'
-objDoc :: Object -> PP.DOCUMENT
-objDoc o = case o  of
-    Object.Array a  -> bracket "[" (sep "," (map valDoc a)) "]" 
-    Object.Struct s -> bracket "{" (sep "," pairs) "}"
+    String{sval} → text (show sval)
+    Number{nval} → text nval
+    Bool{bval}   → text (display bval)
+    Null         → text "null"
+    Array a      → bracket "[" (sep "," (map valDoc a)) "]" 
+    Struct s     → bracket "{" (sep "," pairs) "}"
                 where 
                     pairs = map pairDoc (each s)
                     pairDoc (s,v) = PP.group $ text (show s) PP.<+> text ":" PP.<+> valDoc v
@@ -354,15 +445,10 @@ objDoc o = case o  of
 instance Show Value where
     show = pretty 72 . valDoc
 
-instance Show Object where
-    show = pretty 72 . objDoc
-
-derive Eq Value
-
-instance Eq Object where
+instance Eq Value where
     hashCode _ = -1
-    Object.Array  a == Object.Array  b = a  == b 
-    Object.Struct m == Object.Struct p = em == ep
+    Array  a == Array  b = a  == b 
+    Struct m == Struct p = em == ep
         where
             em = sortBy (comparing fst) (each m)
             ep = sortBy (comparing fst) (each p)
@@ -400,8 +486,8 @@ instance Eq Object where
     - new types: same as the wrapped type
     - algebraic types: @{ "Just":v }@ or @{"Nothing":null}@,
       when there is more than one value bound under the constructor, treat
-      the values as tuple: @{ "Data": [v1,v2,...]}. If we have a record under
-      the constructor: @{ "Person": {"name":"Smith", "age":42}}@
+      the values as tuple: @{ "Data": [v1,v2,...]}@. If we have a record under
+      the constructor: @{ "case":"Person", "name":"Smith", "age":42}}@
     - inside @[]@ or @{}@ brackets, 'Maybe' values can be abbreviated 
       in such a way that @null@ stands for 'Nothing' and @v@ for 'Just' v, but
       observe that values of type @(Maybe (Maybe x))@ cannot be encoded like this, 
@@ -421,13 +507,13 @@ class FromJSON a where
     fromJSON  ∷ MonadFail 𝖒 ⇒ Value → 𝖒 a
 
     parseJSON ∷ MonadFail 𝖒 ⇒ String → 𝖒 a
-    parseJSON = either fail fromJSON . fmap Value.Object . runParser parseObject . lexer  
+    parseJSON = either fail fromJSON . runParser parseObject . lexer  
 
 {--
     The class of types that support their serialization to JSON.
 
     Note that the JSON value for primitive types and 'String's yields no
-    valid JSON document when printed.  
+    valid JSON document when printed.
 -}
 class ToJSON a where
     toJSON :: a -> Value
@@ -439,19 +525,12 @@ instance FromJSON Value where
     fromJSON = return
 
 
-instance ToJSON Object where
-    toJSON = Value.Object
-
-instance FromJSON Object where
-    fromJSON Value.Object{oval} = return oval
-    fromJSON other = fail ("cannot decode JSON.Object from " ++ show other)
- 
 
 instance ToJSON () where
-    toJSON () = Value.Object (Object.Array [])
+    toJSON () = Array []
 
 instance FromJSON () where
-    fromJSON Value.Object{oval=Object.Array  xs}
+    fromJSON (Array  xs)
         | xs.null   = return ()
         | otherwise = fail ("cannot decode () from non empty array")
     fromJSON other  = fail ("cannot decode () from " ++ show other)
@@ -559,10 +638,10 @@ instance FromJSON String where
 
 
 instance ToJSON ToJSON 𝖊 ⇒ [𝖊] where
-    toJSON = Value.Object . Object.Array . map toJSON 
+    toJSON = Array . map toJSON 
 
 instance FromJSON (FromJSON 𝖊) ⇒ [𝖊] where
-    fromJSON Value.Object{oval=Object.Array xs}
+    fromJSON (Array xs)
                                     -- goes 3 times through the list
                                     -- but avoids implicit construction
                                     -- of intermediate lists through mapM 
@@ -574,7 +653,7 @@ instance FromJSON (FromJSON 𝖊) ⇒ [𝖊] where
 
 
 instance ToJSON ToJSON 𝖊 ⇒ JArray 𝖊  where
-    toJSON = Value.Object . Object.Array . map maybeToJSON . toMaybeList
+    toJSON = Array . map maybeToJSON . toMaybeList
 
 instance FromJSON (FromJSON 𝖊, ArrayElem 𝖊) ⇒ JArray 𝖊 where
     fromJSON list = arrayFromMaybeList <$> fromJSON list
@@ -585,11 +664,12 @@ instance FromJSON (FromJSON 𝖊, ArrayElem 𝖊) ⇒ JArray 𝖊 where
 --- > {"Just"    : v }
 --- For a more concise representation see 'maybeToJSON'
 instance ToJSON ToJSON 𝖊 ⇒ Maybe 𝖊 where
-    toJSON = Value.Object . Object.Struct 
+    toJSON = Struct 
                 . maybe nothingJSON (insert empty "Just" . toJSON)
 
 --- constant @{"Nothing" : null}@, used in encoding 'Maybe' values
-protected !nothingJSON = insert empty "Nothing" Value.Null
+private nothingJSON :: Tree String Value
+private !nothingJSON = insert empty "Nothing" Value.Null
 
 --- produce either @null@ or just the jsonized value for a 'Maybe'
 maybeToJSON ∷ ToJSON 𝖆 ⇒ Maybe 𝖆 → Value
@@ -603,7 +683,7 @@ instance FromJSON (FromJSON 𝖊) ⇒ Maybe 𝖊  where
         > null
         > some-value 
     -}
-    fromJSON Value.Object{oval=Object.Struct m}
+    fromJSON (Struct m)
         | Just v <- m.lookup "Just"     = Just <$> fromJSON v
         | Just _ <- m.lookup "Nothing"  = return Nothing
     fromJSON Value.Null                 = return Nothing
@@ -611,34 +691,33 @@ instance FromJSON (FromJSON 𝖊) ⇒ Maybe 𝖊  where
 
 
 instance ToJSON (ToJSON 𝖆, ToJSON 𝖇) ⇒ (𝖆|𝖇)  where
-    toJSON = Value.Object 
-                . Object.Struct 
+    toJSON = Struct 
                 . either (insert empty "Left"  . toJSON) 
                          (insert empty "Right" . toJSON)
 
 
 instance FromJSON (FromJSON 𝖆, FromJSON 𝖇) ⇒ (𝖆|𝖇)  where
-    fromJSON Value.Object{oval=Object.Struct m}
+    fromJSON (Struct m)
         | Just v <- m.lookup "Left"     = Left  <$> fromJSON v
         | Just v <- m.lookup "Right"    = Right <$> fromJSON v
     fromJSON other                      = fail ("cannot decode Either from " ++ show other)
 
 
 instance ToJSON (ToJSON 𝖆, ToJSON 𝖇) ⇒ (𝖆, 𝖇)  where
-    toJSON (a,b) = Value.Object (Object.Array [toJSON a, toJSON b])
+    toJSON (a,b) = Array [toJSON a, toJSON b]
 
 instance FromJSON (FromJSON 𝖆, FromJSON 𝖇) ⇒  (𝖆, 𝖇) where
-    fromJSON Value.Object{oval=Object.Array [va, vb]} = do
+    fromJSON (Array [va, vb]) = do
         a ← fromJSON va
         b ← fromJSON vb
         return (a,b)
     fromJSON other      = fail ("cannot decode (a,b) from " ++ show other)
 
 instance ToJSON (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈) ⇒  (𝖆, 𝖇, 𝖈) where
-    toJSON (a,b,c) = Value.Object (Object.Array [toJSON a, toJSON b, toJSON c])
+    toJSON (a,b,c) = Array [toJSON a, toJSON b, toJSON c]
 
 instance FromJSON (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈) ⇒  (𝖆, 𝖇, 𝖈) where
-    fromJSON Value.Object{oval=Object.Array [va, vb, vc]} = do
+    fromJSON (Array [va, vb, vc]) = do
         a ← fromJSON va
         b ← fromJSON vb
         c ← fromJSON vc
@@ -648,12 +727,12 @@ instance FromJSON (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈) ⇒  (𝖆, 𝖇
 
 instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈, 
                     ToJSON 𝖉) ⇒  (𝖆, 𝖇, 𝖈, 𝖉) where
-    toJSON (a,b,c,d) = Value.Object (Object.Array [
-                            toJSON a, toJSON b, toJSON c, toJSON d])
+    toJSON (a,b,c,d) = Array [
+                            toJSON a, toJSON b, toJSON c, toJSON d]
 
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉) ⇒  (𝖆, 𝖇, 𝖈, 𝖉) where
-    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd]} = do
+    fromJSON (Array [va, vb, vc, vd]) = do
         a ← fromJSON va
         b ← fromJSON vb
         c ← fromJSON vc
@@ -664,13 +743,13 @@ instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈,
 
 instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈, 
                     ToJSON 𝖉, ToJSON 𝖊) ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊) where
-    toJSON (a,b,c,d,e) = Value.Object (Object.Array [
+    toJSON (a,b,c,d,e) = Array [
                             toJSON a, toJSON b, toJSON c, toJSON d,
-                            toJSON e])
+                            toJSON e]
 
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊) ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊) where
-    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve]} = do
+    fromJSON (Array [va, vb, vc, vd, ve]) = do
         a ← fromJSON va
         b ← fromJSON vb
         c ← fromJSON vc
@@ -682,13 +761,13 @@ instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈,
 
 instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈, 
                     ToJSON 𝖉, ToJSON 𝖊, ToJSON 𝖋) ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋) where
-    toJSON (a,b,c,d,e,f) = Value.Object (Object.Array [
+    toJSON (a,b,c,d,e,f) = Array [
                             toJSON a, toJSON b, toJSON c, toJSON d,
-                            toJSON e, toJSON f])
+                            toJSON e, toJSON f]
 
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋) ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋) where
-    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf]} = do
+    fromJSON (Array [va, vb, vc, vd, ve, vf]) = do
         a ← fromJSON va
         b ← fromJSON vb
         c ← fromJSON vc
@@ -702,14 +781,14 @@ instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈,
 instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈, 
                     ToJSON 𝖉, ToJSON 𝖊, ToJSON 𝖋,
                     ToJSON 𝖌) ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌) where
-    toJSON (a,b,c,d,e,f,g) = Value.Object (Object.Array [
+    toJSON (a,b,c,d,e,f,g) = Array [
                             toJSON a, toJSON b, toJSON c, toJSON d,
-                            toJSON e, toJSON f, toJSON g])
+                            toJSON e, toJSON f, toJSON g]
 
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
                     FromJSON 𝖌) ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌) where
-    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf, vg]} = do
+    fromJSON (Array [va, vb, vc, vd, ve, vf, vg]) = do
         a ← fromJSON va
         b ← fromJSON vb
         c ← fromJSON vc
@@ -724,14 +803,14 @@ instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈,
 instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈, 
                     ToJSON 𝖉, ToJSON 𝖊, ToJSON 𝖋,
                     ToJSON 𝖌, ToJSON 𝖍) ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍) where
-    toJSON (a,b,c,d,e,f,g,h) = Value.Object (Object.Array [
+    toJSON (a,b,c,d,e,f,g,h) = Array [
                             toJSON a, toJSON b, toJSON c, toJSON d,
-                            toJSON e, toJSON f, toJSON g, toJSON h])
+                            toJSON e, toJSON f, toJSON g, toJSON h]
 
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
                     FromJSON 𝖌, FromJSON 𝖍) ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍) where
-    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf, vg, vh]} = do
+    fromJSON (Array [va, vb, vc, vd, ve, vf, vg, vh]) = do
         a ← fromJSON va
         b ← fromJSON vb
         c ← fromJSON vc
@@ -747,15 +826,15 @@ instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈,
 instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈, 
                     ToJSON 𝖉, ToJSON 𝖊, ToJSON 𝖋,
                     ToJSON 𝖌, ToJSON 𝖍, ToJSON 𝖎) ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎) where
-    toJSON (a,b,c,d,e,f,g,h,i) = Value.Object (Object.Array [
+    toJSON (a,b,c,d,e,f,g,h,i) = Array [
                             toJSON a, toJSON b, toJSON c, toJSON d,
                             toJSON e, toJSON f, toJSON g, toJSON h,
-                            toJSON i])
+                            toJSON i]
 
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
                     FromJSON 𝖌, FromJSON 𝖍, FromJSON 𝖎) ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎) where
-    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf, vg, vh, vi]} = do
+    fromJSON (Array [va, vb, vc, vd, ve, vf, vg, vh, vi]) = do
         a ← fromJSON va
         b ← fromJSON vb
         c ← fromJSON vc
@@ -773,17 +852,17 @@ instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈,
                     ToJSON 𝖉, ToJSON 𝖊, ToJSON 𝖋,
                     ToJSON 𝖌, ToJSON 𝖍, ToJSON 𝖎,
                     ToJSON 𝖏) ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏) where
-    toJSON (a,b,c,d,e,f,g,h,i,j) = Value.Object (Object.Array [
+    toJSON (a,b,c,d,e,f,g,h,i,j) = Array [
                             toJSON a, toJSON b, toJSON c, toJSON d,
                             toJSON e, toJSON f, toJSON g, toJSON h,
-                            toJSON i, toJSON j])
+                            toJSON i, toJSON j]
 
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
                     FromJSON 𝖌, FromJSON 𝖍, FromJSON 𝖎,
                     FromJSON 𝖏) ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏) where
-    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
-                                             vj]} = do
+    fromJSON (Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
+                                             vj]) = do
         a ← fromJSON va
         b ← fromJSON vb
         c ← fromJSON vc
@@ -802,17 +881,17 @@ instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈,
                     ToJSON 𝖉, ToJSON 𝖊, ToJSON 𝖋,
                     ToJSON 𝖌, ToJSON 𝖍, ToJSON 𝖎,
                     ToJSON 𝖏, ToJSON 𝖐) ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐) where
-    toJSON (a,b,c,d,e,f,g,h,i,j,k) = Value.Object (Object.Array [
+    toJSON (a,b,c,d,e,f,g,h,i,j,k) = Array [
                             toJSON a, toJSON b, toJSON c, toJSON d,
                             toJSON e, toJSON f, toJSON g, toJSON h,
-                            toJSON i, toJSON j, toJSON k])
+                            toJSON i, toJSON j, toJSON k]
 
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
                     FromJSON 𝖌, FromJSON 𝖍, FromJSON 𝖎,
                     FromJSON 𝖏, FromJSON 𝖐) ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐) where
-    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
-                                             vj, vk]} = do
+    fromJSON (Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
+                                             vj, vk]) = do
         a ← fromJSON va
         b ← fromJSON vb
         c ← fromJSON vc
@@ -833,18 +912,18 @@ instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈,
                     ToJSON 𝖌, ToJSON 𝖍, ToJSON 𝖎,
                     ToJSON 𝖏, ToJSON 𝖐, ToJSON 𝖑) 
                     ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑) where
-    toJSON (a,b,c,d,e,f,g,h,i,j,k,l) = Value.Object (Object.Array [
+    toJSON (a,b,c,d,e,f,g,h,i,j,k,l) = Array [
                             toJSON a, toJSON b, toJSON c, toJSON d,
                             toJSON e, toJSON f, toJSON g, toJSON h,
-                            toJSON i, toJSON j, toJSON k, toJSON l])
+                            toJSON i, toJSON j, toJSON k, toJSON l]
 
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
                     FromJSON 𝖌, FromJSON 𝖍, FromJSON 𝖎,
                     FromJSON 𝖏, FromJSON 𝖐, FromJSON 𝖑) 
                     ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑) where
-    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
-                                             vj, vk, vl]} = do
+    fromJSON (Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
+                                             vj, vk, vl]) = do
         a ← fromJSON va
         b ← fromJSON vb
         c ← fromJSON vc
@@ -867,11 +946,11 @@ instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈,
                     ToJSON 𝖏, ToJSON 𝖐, ToJSON 𝖑,
                     ToJSON 𝖒) 
                     ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒) where
-    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m) = Value.Object (Object.Array [
+    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m) = Array [
                             toJSON a, toJSON b, toJSON c, toJSON d,
                             toJSON e, toJSON f, toJSON g, toJSON h,
                             toJSON i, toJSON j, toJSON k, toJSON l,
-                            toJSON m])
+                            toJSON m]
 
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
@@ -879,8 +958,8 @@ instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈,
                     FromJSON 𝖏, FromJSON 𝖐, FromJSON 𝖑,
                     FromJSON 𝖒) 
                     ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒) where
-    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
-                                             vj, vk, vl, vm]} = do
+    fromJSON (Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
+                                             vj, vk, vl, vm]) = do
         a ← fromJSON va
         b ← fromJSON vb
         c ← fromJSON vc
@@ -904,11 +983,11 @@ instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈,
                     ToJSON 𝖏, ToJSON 𝖐, ToJSON 𝖑,
                     ToJSON 𝖒, ToJSON 𝖓) 
                     ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓) where
-    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m,n) = Value.Object (Object.Array [
+    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m,n) = Array [
                             toJSON a, toJSON b, toJSON c, toJSON d,
                             toJSON e, toJSON f, toJSON g, toJSON h,
                             toJSON i, toJSON j, toJSON k, toJSON l,
-                            toJSON m, toJSON n])
+                            toJSON m, toJSON n]
 
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
@@ -916,8 +995,8 @@ instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈,
                     FromJSON 𝖏, FromJSON 𝖐, FromJSON 𝖑,
                     FromJSON 𝖒, FromJSON 𝖓) 
                     ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓) where
-    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
-                                             vj, vk, vl, vm, vn]} = do
+    fromJSON (Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
+                                             vj, vk, vl, vm, vn]) = do
         a ← fromJSON va
         b ← fromJSON vb
         c ← fromJSON vc
@@ -942,11 +1021,11 @@ instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈,
                     ToJSON 𝖏, ToJSON 𝖐, ToJSON 𝖑,
                     ToJSON 𝖒, ToJSON 𝖓, ToJSON 𝖔) 
                     ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔) where
-    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o) = Value.Object (Object.Array [
+    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o) = Array [
                             toJSON a, toJSON b, toJSON c, toJSON d,
                             toJSON e, toJSON f, toJSON g, toJSON h,
                             toJSON i, toJSON j, toJSON k, toJSON l,
-                            toJSON m, toJSON n, toJSON o])
+                            toJSON m, toJSON n, toJSON o]
 
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
@@ -954,8 +1033,8 @@ instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈,
                     FromJSON 𝖏, FromJSON 𝖐, FromJSON 𝖑,
                     FromJSON 𝖒, FromJSON 𝖓, FromJSON 𝖔) 
                     ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔) where
-    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
-                                             vj, vk, vl, vm, vn, vo]} = do
+    fromJSON (Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
+                                             vj, vk, vl, vm, vn, vo]) = do
         a ← fromJSON va
         b ← fromJSON vb
         c ← fromJSON vc
@@ -982,11 +1061,11 @@ instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈,
                     ToJSON 𝖒, ToJSON 𝖓, ToJSON 𝖔,
                     ToJSON 𝖕) 
                     ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕) where
-    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p) = Value.Object (Object.Array [
+    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p) = Array [
                             toJSON a, toJSON b, toJSON c, toJSON d,
                             toJSON e, toJSON f, toJSON g, toJSON h,
                             toJSON i, toJSON j, toJSON k, toJSON l,
-                            toJSON m, toJSON n, toJSON o, toJSON p])
+                            toJSON m, toJSON n, toJSON o, toJSON p]
 
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
@@ -995,8 +1074,8 @@ instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈,
                     FromJSON 𝖒, FromJSON 𝖓, FromJSON 𝖔,
                     FromJSON 𝖕) 
                     ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕) where
-    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
-                                             vj, vk, vl, vm, vn, vo, vp]} = do
+    fromJSON (Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
+                                             vj, vk, vl, vm, vn, vo, vp]) = do
         a ← fromJSON va
         b ← fromJSON vb
         c ← fromJSON vc
@@ -1024,12 +1103,12 @@ instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈,
                     ToJSON 𝖒, ToJSON 𝖓, ToJSON 𝖔,
                     ToJSON 𝖕, ToJSON 𝖖) 
                     ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕, 𝖖) where
-    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q) = Value.Object (Object.Array [
+    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q) = Array [
                             toJSON a, toJSON b, toJSON c, toJSON d,
                             toJSON e, toJSON f, toJSON g, toJSON h,
                             toJSON i, toJSON j, toJSON k, toJSON l,
                             toJSON m, toJSON n, toJSON o, toJSON p,
-                            toJSON q])
+                            toJSON q]
 
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
@@ -1038,8 +1117,8 @@ instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈,
                     FromJSON 𝖒, FromJSON 𝖓, FromJSON 𝖔,
                     FromJSON 𝖕, FromJSON 𝖖) 
                     ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕, 𝖖) where
-    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
-                                             vj, vk, vl, vm, vn, vo, vp, vq]} = do
+    fromJSON (Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
+                                             vj, vk, vl, vm, vn, vo, vp, vq]) = do
         a ← fromJSON va
         b ← fromJSON vb
         c ← fromJSON vc
@@ -1068,12 +1147,12 @@ instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈,
                     ToJSON 𝖒, ToJSON 𝖓, ToJSON 𝖔,
                     ToJSON 𝖕, ToJSON 𝖖, ToJSON 𝖗) 
                     ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕, 𝖖, 𝖗) where
-    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r) = Value.Object (Object.Array [
+    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r) = Array [
                             toJSON a, toJSON b, toJSON c, toJSON d,
                             toJSON e, toJSON f, toJSON g, toJSON h,
                             toJSON i, toJSON j, toJSON k, toJSON l,
                             toJSON m, toJSON n, toJSON o, toJSON p,
-                            toJSON q, toJSON r])
+                            toJSON q, toJSON r]
 
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
@@ -1082,8 +1161,8 @@ instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈,
                     FromJSON 𝖒, FromJSON 𝖓, FromJSON 𝖔,
                     FromJSON 𝖕, FromJSON 𝖖, FromJSON 𝖗) 
                     ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕, 𝖖, 𝖗) where
-    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
-                                             vj, vk, vl, vm, vn, vo, vp, vq, vr]} = do
+    fromJSON (Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
+                                             vj, vk, vl, vm, vn, vo, vp, vq, vr]) = do
         a ← fromJSON va
         b ← fromJSON vb
         c ← fromJSON vc
@@ -1114,12 +1193,12 @@ instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈,
                     ToJSON 𝖕, ToJSON 𝖖, ToJSON 𝖗,
                     ToJSON 𝖘) 
                     ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕, 𝖖, 𝖗, 𝖘) where
-    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s) = Value.Object (Object.Array [
+    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s) = Array [
                             toJSON a, toJSON b, toJSON c, toJSON d,
                             toJSON e, toJSON f, toJSON g, toJSON h,
                             toJSON i, toJSON j, toJSON k, toJSON l,
                             toJSON m, toJSON n, toJSON o, toJSON p,
-                            toJSON q, toJSON r, toJSON s])
+                            toJSON q, toJSON r, toJSON s]
 
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
@@ -1129,9 +1208,9 @@ instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈,
                     FromJSON 𝖕, FromJSON 𝖖, FromJSON 𝖗,
                     FromJSON 𝖘) 
                     ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕, 𝖖, 𝖗, 𝖘) where
-    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
+    fromJSON (Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
                                              vj, vk, vl, vm, vn, vo, vp, vq, vr, 
-                                             vs]} = do
+                                             vs]) = do
         a ← fromJSON va
         b ← fromJSON vb
         c ← fromJSON vc
@@ -1163,12 +1242,12 @@ instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈,
                     ToJSON 𝖕, ToJSON 𝖖, ToJSON 𝖗,
                     ToJSON 𝖘, ToJSON 𝖙) 
                 ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕, 𝖖, 𝖗, 𝖘, 𝖙) where
-    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t) = Value.Object (Object.Array [
+    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t) = Array [
                             toJSON a, toJSON b, toJSON c, toJSON d,
                             toJSON e, toJSON f, toJSON g, toJSON h,
                             toJSON i, toJSON j, toJSON k, toJSON l,
                             toJSON m, toJSON n, toJSON o, toJSON p,
-                            toJSON q, toJSON r, toJSON s, toJSON t])
+                            toJSON q, toJSON r, toJSON s, toJSON t]
 
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
@@ -1178,9 +1257,9 @@ instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈,
                     FromJSON 𝖕, FromJSON 𝖖, FromJSON 𝖗,
                     FromJSON 𝖘, FromJSON 𝖙) 
                 ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕, 𝖖, 𝖗, 𝖘, 𝖙) where
-    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
+    fromJSON (Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
                                              vj, vk, vl, vm, vn, vo, vp, vq, vr, 
-                                             vs, vt]} = do
+                                             vs, vt]) = do
         a ← fromJSON va
         b ← fromJSON vb
         c ← fromJSON vc
@@ -1213,13 +1292,13 @@ instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈,
                     ToJSON 𝖕, ToJSON 𝖖, ToJSON 𝖗,
                     ToJSON 𝖘, ToJSON 𝖙, ToJSON 𝖚) 
                 ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕, 𝖖, 𝖗, 𝖘, 𝖙, 𝖚) where
-    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u) = Value.Object (Object.Array [
+    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u) = Array [
                             toJSON a, toJSON b, toJSON c, toJSON d,
                             toJSON e, toJSON f, toJSON g, toJSON h,
                             toJSON i, toJSON j, toJSON k, toJSON l,
                             toJSON m, toJSON n, toJSON o, toJSON p,
                             toJSON q, toJSON r, toJSON s, toJSON t,
-                            toJSON u])
+                            toJSON u]
 
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
@@ -1229,9 +1308,9 @@ instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈,
                     FromJSON 𝖕, FromJSON 𝖖, FromJSON 𝖗,
                     FromJSON 𝖘, FromJSON 𝖙, FromJSON 𝖚) 
                 ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕, 𝖖, 𝖗, 𝖘, 𝖙, 𝖚) where
-    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
+    fromJSON (Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
                                              vj, vk, vl, vm, vn, vo, vp, vq, vr, 
-                                             vs, vt, vu]} = do
+                                             vs, vt, vu]) = do
         a ← fromJSON va
         b ← fromJSON vb
         c ← fromJSON vc
@@ -1266,13 +1345,13 @@ instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈,
                     ToJSON 𝖘, ToJSON 𝖙, ToJSON 𝖚,
                     ToJSON 𝖛) 
             ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕, 𝖖, 𝖗, 𝖘, 𝖙, 𝖚, 𝖛) where
-    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v) = Value.Object (Object.Array [
+    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v) = Array [
                             toJSON a, toJSON b, toJSON c, toJSON d,
                             toJSON e, toJSON f, toJSON g, toJSON h,
                             toJSON i, toJSON j, toJSON k, toJSON l,
                             toJSON m, toJSON n, toJSON o, toJSON p,
                             toJSON q, toJSON r, toJSON s, toJSON t,
-                            toJSON u, toJSON v])
+                            toJSON u, toJSON v]
 
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
@@ -1283,9 +1362,9 @@ instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈,
                     FromJSON 𝖘, FromJSON 𝖙, FromJSON 𝖚,
                     FromJSON 𝖛) 
             ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕, 𝖖, 𝖗, 𝖘, 𝖙, 𝖚, 𝖛) where
-    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
+    fromJSON (Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
                                              vj, vk, vl, vm, vn, vo, vp, vq, vr, 
-                                             vs, vt, vu, vv]} = do
+                                             vs, vt, vu, vv]) = do
         a ← fromJSON va
         b ← fromJSON vb
         c ← fromJSON vc
@@ -1321,13 +1400,13 @@ instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈,
                     ToJSON 𝖘, ToJSON 𝖙, ToJSON 𝖚,
                     ToJSON 𝖛, ToJSON 𝖜) 
             ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕, 𝖖, 𝖗, 𝖘, 𝖙, 𝖚, 𝖛, 𝖜) where
-    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w) = Value.Object (Object.Array [
+    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w) = Array [
                             toJSON a, toJSON b, toJSON c, toJSON d,
                             toJSON e, toJSON f, toJSON g, toJSON h,
                             toJSON i, toJSON j, toJSON k, toJSON l,
                             toJSON m, toJSON n, toJSON o, toJSON p,
                             toJSON q, toJSON r, toJSON s, toJSON t,
-                            toJSON u, toJSON v, toJSON w])
+                            toJSON u, toJSON v, toJSON w]
 
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
@@ -1338,9 +1417,9 @@ instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈,
                     FromJSON 𝖘, FromJSON 𝖙, FromJSON 𝖚,
                     FromJSON 𝖛, FromJSON 𝖜) 
             ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕, 𝖖, 𝖗, 𝖘, 𝖙, 𝖚, 𝖛, 𝖜) where
-    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
+    fromJSON (Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
                                              vj, vk, vl, vm, vn, vo, vp, vq, vr, 
-                                             vs, vt, vu, vv, vw]} = do
+                                             vs, vt, vu, vv, vw]) = do
         a ← fromJSON va
         b ← fromJSON vb
         c ← fromJSON vc
@@ -1377,13 +1456,13 @@ instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈,
                     ToJSON 𝖘, ToJSON 𝖙, ToJSON 𝖚,
                     ToJSON 𝖛, ToJSON 𝖜, ToJSON 𝖝) 
             ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕, 𝖖, 𝖗, 𝖘, 𝖙, 𝖚, 𝖛, 𝖜, 𝖝) where
-    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x) = Value.Object (Object.Array [
+    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x) = Array [
                             toJSON a, toJSON b, toJSON c, toJSON d,
                             toJSON e, toJSON f, toJSON g, toJSON h,
                             toJSON i, toJSON j, toJSON k, toJSON l,
                             toJSON m, toJSON n, toJSON o, toJSON p,
                             toJSON q, toJSON r, toJSON s, toJSON t,
-                            toJSON u, toJSON v, toJSON w, toJSON x])
+                            toJSON u, toJSON v, toJSON w, toJSON x]
 
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
@@ -1394,9 +1473,9 @@ instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈,
                     FromJSON 𝖘, FromJSON 𝖙, FromJSON 𝖚,
                     FromJSON 𝖛, FromJSON 𝖜, FromJSON 𝖝) 
             ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕, 𝖖, 𝖗, 𝖘, 𝖙, 𝖚, 𝖛, 𝖜, 𝖝) where
-    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
+    fromJSON (Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
                                              vj, vk, vl, vm, vn, vo, vp, vq, vr, 
-                                             vs, vt, vu, vv, vw, vx]} = do
+                                             vs, vt, vu, vv, vw, vx]) = do
         a ← fromJSON va
         b ← fromJSON vb
         c ← fromJSON vc
@@ -1435,14 +1514,14 @@ instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈,
                     ToJSON 𝖛, ToJSON 𝖜, ToJSON 𝖝,
                     ToJSON 𝖞) 
             ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕, 𝖖, 𝖗, 𝖘, 𝖙, 𝖚, 𝖛, 𝖜, 𝖝, 𝖞) where
-    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x,y) = Value.Object (Object.Array [
+    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x,y) = Array [
                             toJSON a, toJSON b, toJSON c, toJSON d,
                             toJSON e, toJSON f, toJSON g, toJSON h,
                             toJSON i, toJSON j, toJSON k, toJSON l,
                             toJSON m, toJSON n, toJSON o, toJSON p,
                             toJSON q, toJSON r, toJSON s, toJSON t,
                             toJSON u, toJSON v, toJSON w, toJSON x,
-                            toJSON y])
+                            toJSON y]
 
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
@@ -1454,9 +1533,9 @@ instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈,
                     FromJSON 𝖛, FromJSON 𝖜, FromJSON 𝖝,
                     FromJSON 𝖞) 
             ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕, 𝖖, 𝖗, 𝖘, 𝖙, 𝖚, 𝖛, 𝖜, 𝖝, 𝖞) where
-    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
+    fromJSON (Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
                                              vj, vk, vl, vm, vn, vo, vp, vq, vr, 
-                                             vs, vt, vu, vv, vw, vx, vy]} = do
+                                             vs, vt, vu, vv, vw, vx, vy]) = do
         a ← fromJSON va
         b ← fromJSON vb
         c ← fromJSON vc
@@ -1496,14 +1575,14 @@ instance ToJSON  (ToJSON 𝖆, ToJSON 𝖇, ToJSON 𝖈,
                     ToJSON 𝖛, ToJSON 𝖜, ToJSON 𝖝,
                     ToJSON 𝖞, ToJSON 𝖟) 
             ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕, 𝖖, 𝖗, 𝖘, 𝖙, 𝖚, 𝖛, 𝖜, 𝖝, 𝖞, 𝖟) where
-    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x,y,z) = Value.Object (Object.Array [
+    toJSON (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x,y,z) = Array [
                             toJSON a, toJSON b, toJSON c, toJSON d,
                             toJSON e, toJSON f, toJSON g, toJSON h,
                             toJSON i, toJSON j, toJSON k, toJSON l,
                             toJSON m, toJSON n, toJSON o, toJSON p,
                             toJSON q, toJSON r, toJSON s, toJSON t,
                             toJSON u, toJSON v, toJSON w, toJSON x,
-                            toJSON y, toJSON z])
+                            toJSON y, toJSON z]
 
 instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈, 
                     FromJSON 𝖉, FromJSON 𝖊, FromJSON 𝖋,
@@ -1515,9 +1594,9 @@ instance FromJSON  (FromJSON 𝖆, FromJSON 𝖇, FromJSON 𝖈,
                     FromJSON 𝖛, FromJSON 𝖜, FromJSON 𝖝,
                     FromJSON 𝖞, FromJSON 𝖟) 
             ⇒  (𝖆, 𝖇, 𝖈, 𝖉, 𝖊, 𝖋, 𝖌, 𝖍, 𝖎, 𝖏, 𝖐, 𝖑, 𝖒, 𝖓, 𝖔, 𝖕, 𝖖, 𝖗, 𝖘, 𝖙, 𝖚, 𝖛, 𝖜, 𝖝, 𝖞, 𝖟) where
-    fromJSON Value.Object{oval=Object.Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
+    fromJSON (Array [va, vb, vc, vd, ve, vf, vg, vh, vi, 
                                              vj, vk, vl, vm, vn, vo, vp, vq, vr, 
-                                             vs, vt, vu, vv, vw, vx, vy, vz]} = do
+                                             vs, vt, vu, vv, vw, vx, vy, vz]) = do
         a ← fromJSON va
         b ← fromJSON vb
         c ← fromJSON vc
