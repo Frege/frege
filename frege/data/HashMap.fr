@@ -68,13 +68,38 @@ insert k v hm = HashMap.insertWork const k v hm (hashCode k) 0
 
     Note that
     > insert = insertWith const
-    and that this will evaluate the new value in case of an update. If you
+    and that this will evaluate the *new* value in case of an update. If you
     want to prevent this, use
 
     > replace k v = insert k v . delete k
+    
+    The replaced value will be evaluated only if the given function is strict
+    in the second argument. Since 'const' is lazy in the second argument, the
+    following will be fine:
+    
+    > insert "foo" 7 (insert "foo" undefined (delete "foo" m))
+    
+    That is, the value that is inserted for a given key first is not evaluated on
+    insertion, and only evaluated on update if the update function demands it, which
+    is not the case for a plain 'insert'.
 -} 
 insertWith f k v hm = HashMap.insertWork f k v hm (hashCode k) 0
 
+{-- 
+    _O(log n)
+    > delete k m
+    is a 'HashMap' h such that
+    > lookup k h = Nothing
+    and for any other key _o_
+    > lookup o h = lookup o m
+
+    Less formally, the association of _k_ with some value, if any, 
+    is removed in the result, while all other associations are retained.
+
+    If _m_ didn't contain _k_ in the first place,
+    > delete k m = m    
+-}
+delete k hm = HashMap.deleteWork k hm (hashCode k) 0
 
 {--
     A map from hashable keys to values based on a Hash Mapped Array Trie.
@@ -177,6 +202,7 @@ abstract data HashMap k v =
 
         [Invariant 1] The length of 'subnodes' equals the number of set bits in 'bitmap'.
         [Invariant 2] There is no null pointer in 'subnodes'.
+        [Invariant 3] No subnode is the empty node.
 
       -}
       BM {!subnodes :: JArray (HashMap k v), !bitmap :: Int } where
@@ -191,7 +217,8 @@ abstract data HashMap k v =
             coinv _ = false -- less than 2 elements
     invariants BM{bitmap, subnodes} = bitCount bitmap == arrayLength subnodes
                                         && all isJust (toMaybeList subnodes)
-                                        && all invariants (toList subnodes)
+                                        && all (\n -> not (null n) && invariants n) 
+                                                        (toList subnodes)
 
     --- transform an index into an actual array index
     --- > indexMap bmap nodes inx
@@ -256,6 +283,32 @@ abstract data HashMap k v =
                 nothing       -> node.{list = (k,v) !: list}        -- very bad, collision list grows
             | otherwise = joinNodes s KV{hash=h, key=k, value=v} node 
 
+    --- > deleteWork "foo" node h s
+    --- _h_ is the *unshifted* original hash code!
+    --- _s_ is the number of bits to shift _h_ to the right for getting an index at this level
+    private deleteWork ∷ Eq 𝖐 ⇒ 𝖐  → HashMap 𝖐 𝖛 → Int → Int → HashMap 𝖐 𝖛
+    private deleteWork !k !node !h !s = case node  of
+        KV{hash, key, value}
+            | hash == h, key == k   = empty
+            | otherwise             = node      -- not found
+        BM{subnodes, bitmap}
+            | bitmap == 0           = node      -- not found
+            | otherwise   = case indexMap bitmap (arrayLength subnodes) vi of
+                i | i < arrayLength subnodes = case deleteWork k (elemAt subnodes i) h (s+5) of
+                        !sub | null sub  = node.{bitmap = nbm, subnodes = removeAt i subnodes}
+                             | otherwise = node.{subnodes = cloneSetElemAt i sub subnodes} 
+                  | otherwise = node            -- not found 
+                  where
+                    !nbit = Int.bit vi
+                    !nbm  = bitmap .&. complement nbit
+            where
+                !vi   = (h `ushiftR` s) .&. 0x1F  -- virtual index
+        CO{hash, list}
+            | hash == h = case rFilterNEQ k [] list of
+                            [(key, value)] → KV{hash,key,value}
+                            kvs            → node.{list = kvs}
+            | otherwise = node                  -- not found
+        
 
     --- join two non bitmapped nodes with *different* hash codes into a BM node
     --- works for KV/KV, KV/CO, CO/KV and CO/CO
@@ -369,6 +422,20 @@ private pure native insertAt HashMap.iA
 --         freeze new
 --     where
 --         !sz = arrayLength array
+
+{--
+    > removeAt inx arr
+    Returns an array that has 1 element less than @arr@ and the element at index
+    @inx@ is removed.
+-}
+private removeAt :: Int -> JArray (HashMap k v) → JArray (HashMap k v)
+private removeAt inx arr = ST.run do
+        new ← copyOf (mutable arr) (sz-1)
+        unless (inx == sz-1) do
+            arraycopy (mutable arr) (inx+1) new inx (sz-1-inx)
+        freeze new
+    where
+        !sz = arrayLength arr
 
 {--
     Make a 1 element array
