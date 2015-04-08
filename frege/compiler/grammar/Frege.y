@@ -165,6 +165,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type letdefs         [Def]
 //%type wherelet        [Def]
 //%type visibledefinition [Def]
+//%type moduledefinition Def
 //%type wheredef        [Def]
 //%type tyvar           TauS
 //%type tvapp           TauS
@@ -219,6 +220,13 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type qualifiers      (Token -> SName)
 //%type kind            Kind
 //%type simplekind      Kind
+//%type jtoken          Token
+//%type jtokens         [Token]
+//%type wheretokens     [Token]
+//%type typeclause      (Maybe TauS)
+//%type interfaces      [TauS]
+//%explain typeclause   the type this module derives from
+//%explain interfaces   the interfaces this module implements
 //%explain mbdot        '.' or '•'
 //%explain thenx        then branch
 //%explain elsex        else branch
@@ -256,6 +264,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%explain importitem   an import item
 //%explain alias        a simple name for a member or import item
 //%explain commata      a sequence of one or more ','
+//%explain moduledefinition specification for module class 
 //%explain topdefinition a top level declaration
 //%explain publicdefinition a declaration
 //%explain localdef     a local declaration
@@ -345,14 +354,17 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%explain strictfldid  a field specification
 //%explain plainfldid   a field specification
 //%explain fldids       field specifications
+//%explain jtoken       java token
+//%explain jtokens      java tokens
+//%explain wheretokens  java code
 %}
 
 %token VARID CONID QVARID QCONID QUALIFIER DOCUMENTATION
 %token PACKAGE IMPORT INFIX INFIXR INFIXL NATIVE DATA WHERE CLASS
 %token INSTANCE ABSTRACT TYPE TRUE FALSE IF THEN ELSE CASE OF DERIVE
-%token LET IN WHILE DO FORALL PRIVATE PROTECTED PUBLIC PURE THROWS MUTABLE
+%token LET IN DO FORALL PRIVATE PROTECTED PUBLIC PURE THROWS MUTABLE
 %token INTCONST STRCONST LONGCONST FLTCONST DBLCONST CHRCONST REGEXP BIGCONST
-%token ARROW DCOLON GETS EARROW TARROW DOTDOT
+%token ARROW DCOLON GETS EARROW DOTDOT
 %token LOP1 LOP2 LOP3 LOP4 LOP5 LOP6 LOP7 LOP8 LOP9 LOP10 LOP11 LOP12 LOP13 LOP14 LOP15 LOP16
 %token ROP1 ROP2 ROP3 ROP4 ROP5 ROP6 ROP7 ROP8 ROP9 ROP10 ROP11 ROP12 ROP13 ROP14 ROP15 ROP16
 %token NOP1 NOP2 NOP3 NOP4 NOP5 NOP6 NOP7 NOP8 NOP9 NOP10 NOP11 NOP12 NOP13 NOP14 NOP15 NOP16
@@ -478,7 +490,50 @@ visibledefinition:
 topdefinition:
     import                              { single }
     | infix                             { single }
+    | moduledefinition                  { single }
     | publicdefinition
+    ;
+
+moduledefinition:
+    NATIVE PACKAGE typeclause interfaces wheretokens 
+                                        { \_\m\t\i\js -> ModDcl {pos = yyline m, extends=t, implements=i, code=js }}
+    ;
+
+typeclause:
+                                      { Nothing }
+    | TYPE tau                        { \a\b -> Just b }
+    ;
+
+interfaces:
+                                      { [] }
+    | CLASS tauSC                     { \_\taus -> taus }
+    ;
+
+wheretokens: 
+      WHERE '{' jtokens '}'             { \_\_\c\_ -> c  }
+    | WHERE '{'         '}'             { \_\_\_   -> [] }
+    ;
+
+jtoken:
+      VARID     | CONID     | QVARID    | QCONID    | QUALIFIER | DOCUMENTATION
+    | PACKAGE   | IMPORT    | INFIX     | INFIXR    | INFIXL    | NATIVE 
+    | DATA      | WHERE     | CLASS     | INSTANCE  | ABSTRACT  | TYPE 
+    | TRUE      | FALSE     | IF        | THEN      | ELSE      | CASE 
+    | OF        | DERIVE    | LET       | IN        | DO        | FORALL 
+    | PRIVATE   | PROTECTED | PUBLIC    | PURE      | THROWS    | MUTABLE
+    | INTCONST  | STRCONST  | LONGCONST | FLTCONST  | DBLCONST  | CHRCONST
+    | ARROW     | DCOLON    | GETS      | EARROW    | DOTDOT    | SOMEOP
+    | INTERPRET
+    | ',' | '|' | '[' | ']' | '(' | ')' | '.' | '?' | '-' | ';' | '!' | '=' | '\\'
+    ;
+
+jtokens:
+    jtoken                              { single }
+    | jtoken jtokens                    { (:) }
+    | '{' jtokens '}'                   { \a\b\c -> a:(b++[c]) }
+    | '{' jtokens '}' jtokens           { \a\b\c\d -> (a:b)++(c:d) }
+    | '{' '}'                           { \a\b -> [a,b] }
+    | '{' '}' jtokens                   { \a\b\cs -> a:b:cs }
     ;
 
 documentation:

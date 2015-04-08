@@ -1,4 +1,4 @@
-{- «•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»
+{- 
 
     Copyright © 2011 - 2015, Ingo Wechsung
     All rights reserved.
@@ -92,6 +92,8 @@ h1 = Par "h1"
 h2 = Par "h2"
 --- convenience function to create a heading of level 3
 h3 = Par "h3"
+--- convenience function to create a heading of level 4
+h4 = Par "h4"
 --- convenience function to create an ordinary paragraph
 par = Par "p"
 --- convenience function to create a pseudo paragraph
@@ -108,9 +110,10 @@ data Text =
       P String                 --- plain text
     | E String                 --- symbols like &forall; &rarr; ...
     | T Attr Text              --- text with character attributes
-    | Label String Text        --- <a name="#label">text<\/a>
+    | Label QName Text         --- <a name="#label">text<\/a>
     | Ref QName Text           --- <a href="...">N.n<\/a>
     | XRef String Text         --- generic ref
+    | XLbl String Text         --- generic label
     | PRef Pack (Maybe String) Text           
                                --- reference to a package with optional item
     | Seq Text Text            --- concatenation of 2 texts
@@ -142,6 +145,18 @@ a :- b = Seq a b
 eForall = E "&forall;"
 eArrow  = E "&rarr;"
 spc     = E "&nbsp;"
+
+--- remove 'Label' from 'Text'
+unlabel (Label q t) = Ref q (unlabel t)
+unlabel (T a t)     = T a (unlabel t)
+unlabel (Seq (E "<br>") _) = spc
+unlabel (Seq a b)   = unlabel a `Seq` unlabel b
+unlabel (Ref q t)   = Ref q (unlabel t)
+unlabel (XRef s t)  = XRef s (unlabel t)
+unlabel (XLbl s t)  = XLbl s (unlabel t)
+unlabel (PRef p m t)    = PRef p m (unlabel t)
+unlabel t           = t
+
 -- spaces 4 = E "<br>"
 spaces n = (seq • take n • repeat) spc
 break    = E "<br>"
@@ -183,7 +198,7 @@ joins n f xs = seq (intersperse (spaces n :- text " ") (map f xs))
 
 docSym g (syma@SymA {name, vars, typ=ForAll _ rho, doc}) = (code title, docit g doc) where
     title = (bold • text $ "type ")
-        :- Label (mangled (QName.base name)) (text name.base)
+        :- Label name (text name.base)
         :- text " "
         :- joint " " (dTau g) vars
         :- text " = "
@@ -191,7 +206,7 @@ docSym g (syma@SymA {name, vars, typ=ForAll _ rho, doc}) = (code title, docit g 
 
 docSym g (SymC {name,tau,doc,supers,insts,env}) = (code title, content) where
     title = (bold • text $ "class ")
-        :- Label (mangled (QName.base name)) (text name.base)
+        :- Label name (text name.base)
         :- text " "
         :- dCtx g (map (\c -> Ctx {pos=Position.null, cname=c, tau}) supers)
         :- text " " :- dTau g tau
@@ -207,7 +222,7 @@ docSym g (SymC {name,tau,doc,supers,insts,env}) = (code title, content) where
 
 docSym g (SymI {name, doc, clas, typ=ForAll _ rho, env}) = (code title, content) where
     title = (bold • text $ "instance ")
-        :- Label (mangled (QName.base name)) (text " ")
+        :- Label name (text " ")
         :- text " "
         :- tref clas g :- text " "
         :- dRho g rho []
@@ -220,7 +235,7 @@ docSym g (SymI {name, doc, clas, typ=ForAll _ rho, env}) = (code title, content)
 
 docSym g (SymT {name, doc, typ=ForAll _ rho, env, nativ, pur, mutable}) = (code title, content) where
     title = (bold • text $ "data ")
-        :- Label (mangled (QName.base name)) (text " ")
+        :- Label name (text " ")
         :- text " "
         -- :- tref clas g :- text " "
         :- dRho g rho []
@@ -289,8 +304,8 @@ docSym g (sym@SymV {name, typ, doc, nativ, pur, strsig, op, throwing}) = (code t
 
 docSym g (SymL {name,alias}) = case g.findit alias of
     Nothing -> (badref (name.nice g ++ "links to " ++ alias.nice g ++ " but not found"), [])
-    Just (vsym@SymV{})  = docSym g vsym.{name, 
-                                doc = Just ("Alias for '" ++ name.base ++ "'")}
+    Just (vsym@SymV{}) | g.our alias = docSym g vsym.{name, 
+                             doc = Just ("Alias for '" ++ nicer alias g ++ "'")}
     Just sym -> docSym g sym
 
 docop tok
@@ -318,8 +333,8 @@ overSig g sym = [(Symbol.typ o, Symbol.throwing o) | q <- Symbol.over sym, o <- 
                               
 
 --- create a label  for a variable or a constructor
-label (MName (TName _ b1) b2) = Label (mangled b1 ++ "." ++ mangled b2) (text b2)
-label name                    = Label (mangled (QName.base name)) (text name.base)
+-- label (MName (TName _ b1) b2) = Label (mangled b1 ++ "." ++ mangled b2) (text b2)
+label name                    = Label name (text name.base)
 
 
 altcode xs = [ (c t, d) | (c,(t,d)) <- zip (cycle [code1,code2]) xs ]
@@ -338,12 +353,13 @@ docit g (Just s) = dpars where
 {--
  * we have the following parapgraph kinds:
  * - plain
+ * - headers
  * - unordered list item
  * - ordered list item
  * - definition list item
  * - preformatted
  -}
-data PKind = Plain | UItem | OItem | DItem | Pre
+data PKind = Plain | Header | UItem | OItem | DItem | Pre
 derive Eq PKind
 
 --- tag paragraph with kind, each paragraph must have at least one line
@@ -352,6 +368,7 @@ tagP (p@s:_)
     | ditem s = (DItem, p)
     | uitem s = (UItem, p)
     | oitem s = (OItem, p)
+    | header s = (Header, p)
     | otherwise = (Plain, p)
 tagP [] = error "tagP: empty paragraph list"
 
@@ -370,6 +387,17 @@ docpars sts (pss@(UItem,  _):_) = mkUL uis : docpars sts rest where
             xss = s' ++ " " ++ join " " ss
             s'  = strtail s 1           -- remove '-' at front
         mkLi _ = error "mkLi: no par"
+docpars sts (pss@(Header, _):_) = mkHD his : docpars sts rest where
+    his  = head . snd . head $ pss
+    rest = tail pss
+    mkHD (m~'^(#+)\s*') = case maybe 0 length (m.group 1) of
+            1 -> h1 (markup sts h)
+            2 -> h2 (markup sts h)
+            3 -> h3 (markup sts h)
+            _ -> h4 (markup sts h)
+        where
+            h = m.replaceFirst ""
+    mkHD _ = error "mkHD: no header"
 docpars sts (pss@(OItem,  _):_) = mkOL uis : docpars sts rest where
     uis  = takeWhile ((OItem ==) • fst) pss
     rest = dropWhile ((OItem ==) • fst) pss
@@ -470,6 +498,7 @@ isEnd = (null • dropEmpty)
 lsToPs xs
     | null ys   = []      -- no more
     | pres y    = takeWhile pres ys : lsToPs (dropWhile pres ys)
+    | header y  = [y] : lsToPs (tail ys)
     | litem y   = (y:takeWhile item (tail ys)) : lsToPs (dropWhile item (tail ys))
     | otherwise = takeWhile item ys : lsToPs (dropWhile item ys)
     where
@@ -484,13 +513,14 @@ oitem s = s ~ orex
 orex = ´^(\d+\.|\(\d+\))´
 ditem s = s ~ drex
 drex = ´^\[([^\]]+)\]´
+header s = s ~ '^#+'
 
 --- check if this is the start of a list item
 litem s = uitem s || oitem s || ditem s
 
 --- check if this is a normal paragraph line
 item "" = false
-item s  = !(litem s) && !(pres s)
+item s  = !(litem s) && !(pres s) && !(header s)
 
 {--
  * Checks the property that, after applying 'unws',
@@ -755,8 +785,12 @@ htmlText (T a t) = do
         attr Italic = "i"
         attr _ = "em"
 
-htmlText (Label s t) = do
-        print $ "<a name=" ++ show s ++ ">"
+htmlText (Label (MName tname base) t) = do
+        print $ "<a name=" ++ mangled tname.base ++ "." ++ mangled base ++ ">"
+        htmlText t
+        print "</a>"
+htmlText (Label q t) = do
+        print $ "<a name=" ++ mangled q.base ++ ">"
         htmlText t
         print "</a>"
 
@@ -814,6 +848,12 @@ htmlText (XRef link txt) = do
         print $ "<a HREF=" ++ show link ++ ">"
         htmlText txt
         print "</a>"
+
+htmlText (XLbl link txt) = do
+        print $ "<a NAME=" ++ show link ++ ">"
+        htmlText txt
+        print "</a>"
+
 
 htmlText _ = error "htmlText: illegal Ref"
 
