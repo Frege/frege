@@ -71,6 +71,7 @@ import  Compiler.enums.RFlag
 import  Compiler.enums.Visibility
 import  Compiler.enums.Literals
 import  Compiler.enums.CaseKind
+import  Compiler.enums.TokenID(QUALIFIER)
 
 import  Compiler.types.Kinds
 import  Compiler.types.Positions
@@ -80,6 +81,7 @@ import  Compiler.types.JTypes
 import  Compiler.types.Packs
 import  Compiler.types.QNames
 import  Compiler.types.Types
+import  Compiler.types.Tokens
 import  Compiler.types.Patterns
 import  Compiler.types.Expression
 import  Compiler.types.ConstructorField
@@ -102,7 +104,7 @@ import frege.compiler.Transform     as T(patternStrictness, patternRefutable)
 import frege.compiler.tc.Util        as TC(sameTau, impliesG)
 import frege.compiler.Typecheck     as TY(mainSigma, tc, tauString)
 import frege.compiler.tc.Methods (NIKind, niKind)
--- import frege.compiler.Javatypes     as JT(subTypeOf)
+
 
 import frege.compiler.gen.Match     as GM
 import frege.compiler.gen.Util      as GU 
@@ -348,17 +350,39 @@ genAnonLams = do
             jnames = map (extFname g) syms
         
         sequence (zipWith lazyDecl syms jnames)
-         
- 
+
+reconstruct ∷ [Token] → StIO ()
+reconstruct [] = return ()
+reconstruct (x:xs)
+    | not (null x.qual) = reconstruct (x.qual ++ (x.{qual=[]} : xs))
+reconstruct [x] = U.println (tval x) >> U.println ""
+reconstruct (a:b:xs) = do
+    U.print (tval a)
+    unless (a.vor b) do
+        if (a.line != b.line) then U.println "" else U.print " "
+    reconstruct (b:xs)
+
+tval ∷ Token → String
+tval Token{tokid, value}  = case tokid  of
+    TokenID.QUALIFIER → value ++ "."
+    _ → value
+
  
 pass :: StIO (String, Int)
 pass = do
     liftStG setupLambdas
     -- changeST Global.{unique <- (*100000) . succ . (`quot` 100000)}
     g <- getSTT
-    U.print "final public class "
-    U.print (mainClass g).base
-    U.println " {"
+    let modul = JClass{attr=attrs [JFinal, JPublic], 
+                    jtype = Ref{jname = JName{qual="", base=(mainClass g).base}, typeargs=[]}, 
+                    extend = fmap (sigmaJT g) g.options.extends, 
+                    implement = map (sigmaJT g) g.options.implements, 
+                    defs=[]}
+        headline = (´}´.matcher (PP.pretty 200 (anno modul))).replaceAll("")
+    -- U.print "final public class "
+    -- U.print (mainClass g).base
+    U.println headline
+    reconstruct (g.options.code)
 
     let vals = values g.thisTab
         cClass = JMember {
@@ -848,17 +872,19 @@ symCode' binds (sym@SymC {sid}) = do           -- type class
      g <- getST
      let vals = sortBy (comparing Symbol.name) (values sym.env)
      abstrFuns <- mapSt (abstractFun sym) vals
-     let ivals = filter (isJust • Symbol.expr) (filter Symbol.{expr?} vals) -- default implementations
-     implFuns <- mapSt (symCode binds) ivals
+     -- let ivals = filter (isJust • Symbol.expr) (filter Symbol.{expr?} vals) -- default implementations
+     -- implFuns <- mapSt (symCode binds) ivals
      -- taujt    <- tauJT sym.tau
      let jtype = Ref (U.javaName g sym.name) []
          superclasses = [ Ref (U.javaName g nm) [] | nm <- sym.supers ]
-         implDef
-             | null implFuns = []
-             | otherwise = [JClass {attr = attrs [JPublic, JStatic],
-                             jtype = Ref (JName "" "I") [],
-                             extend = Nothing, implement = [], defs = concat implFuns}]
-         result = JInterface (attrs [JPublic]) jtype superclasses (concat abstrFuns ++ implDef)
+         -- implDef
+         --     | null implFuns = []
+         --     | otherwise = [JClass {attr = attrs [JPublic, JStatic],
+         --                     jtype = Ref (JName "" "I") [],
+         --                     extend = Nothing, implement = [], defs = concat implFuns}]
+         result = JInterface (attrs [JPublic]) jtype superclasses
+                            (concat abstrFuns) 
+                            -- (concat abstrFuns ++ implDef)
      stio [JComment (nice sym g), result]
  
 {--
@@ -883,6 +909,7 @@ symCode' binds (sym@SymI {sid}) = do             -- instance definition
          methods2 = case instTSym (Symbol.typ sym) g of
               Just (tsym@SymT {pos}) -> [ alias |
                                 SymL {name, alias} <- values tsym.env, alias.{tynm?},    -- links
+                                alias `notElem` methods1,                 -- avoid duplicates
                                 alias.base `elem` superMethods,           -- mentioning one of our methods
                                 name.base `notElem` map QName.base methods1,
                                 SymI {clas} <- g.findit alias.tynm, -- pointing to an instance
@@ -1571,7 +1598,11 @@ topFun (sym@SymV {expr = Just dx}) binds = do
         argAttr     = if RTailRec `member` sym.rkind then BitSet.empty else attrFinal 
         -- (rty, _) = U.returnTypeN sym.depth sym.typ.rho
         -- staticWorker = null sym.typ.rho.context
-        constrargs  = zipWith (makeConstraintArg g)  sym.typ.rho.context  ctxNames
+        constrargs  = map unFinal (zipWith (makeConstraintArg g)  sym.typ.rho.context  ctxNames)
+        -- when this is a tail recursive function, we write "Ctx fctx$1"
+        unFinal (farg@(attr,  sig, t, nm))
+            | RTailRec `member` sym.rkind   = (empty, sig, t, nm++"f")
+            | otherwise                     = farg
         -- rjt         = rhoJT g rty
         wrjt        = si.returnJT
         workerArgs  = argDefs argAttr si argNames
@@ -1855,9 +1886,15 @@ genFunction (sym@SymV {expr = Just dex}) rmode args binds = do
         if not (RTailRec `member` sym.rkind) -- if (sym.rkind `.&.` T.rkTail) == 0
             then genLambda rmode ex args binds
             else do
+                g <- getST
                 let
+                    ctxs  = zipWith (makeConstraintArg g)  sym.typ.rho.context  ctxNames
                     fargs = [ (attrFinal, sig, jt, nm ++ "f") | (_,sig,jt,nm) <- args ]
-                    decls = [ JMember { attr = attrFinal,
+                    decls = [ JMember { attr = attrFinal, jtype = jt,
+                                        name = nm,
+                                        init = Just (JAtom (nm++"f"))}
+                                            | (_,_,jt,nm) <- ctxs ]
+                            ++ [ JMember { attr = attrFinal,
                                          jtype = jt,
                                          name = nm ++ "f",
                                          init = Just (JAtom nm)} | (_,sig,jt,nm) <- args ]
@@ -2187,14 +2224,33 @@ genStmts jret rm ex binds
                    Just (sym@SymV {sid}) <- g.findit name,
                    sid == (head (g.genEnv)).sid,
                    length args == sym.depth = do
-                        si <- symInfo sym
-                        abinds   <- sequence (zipWith genEx si.argJTs args)
-                        let assigns = zipWith JAssign (map JAtom argNames) (map Binding.jex abinds)
-                            argNames = drop (fold (+) 0 (map Symbol.depth (tail g.genEnv))) GenJava7.argNames
-                            comment = sComment ("tailcall  " ++ nicer ex g)
-                        stio (comment:assigns ++ [JEx (JAtom "continue tailrecursion")])
+                        -- tail call
+                        let argNames = map (++"f") (take (length sym.typ.rho.context) ctxNames) ++
+                                    drop (sum (map Symbol.depth (tail g.genEnv))) GenJava7.argNames 
+                        call <- genExpr true rm ex binds
+                        case call.jex of
+                            JInvoke{args} -> do
+                            -- si <- symInfo sym
+                            -- abinds   <- sequence (zipWith genEx si.argJTs args)
+                                let assigns = zipWith JAssign (map JAtom argNames) args --(map Binding.jex abinds)
+                                stio (comment:assigns ++ [JEx (JAtom "continue tailrecursion")])
+                            JNewClass{
+                                args=[], 
+                                decls=[JMethod{
+                                    name="eval", 
+                                    args=[], 
+                                    body=JBlock [JReturn JInvoke{args}]}]} -> do
+                                let assigns = zipWith JAssign (map JAtom argNames) args --(map Binding.jex abinds)
+                                stio (comment:assigns ++ [JEx (JAtom "continue tailrecursion")])
+                            _ -> do
+                                E.error (getpos ex) (text "can't make tail recursion for"
+                                    </> PP.nest 4 (text (nicer ex g))
+                                    </> text "from"
+                                    </> PP.nest 4 (PP.group (anno call.jex)))
+                                return [JEx (JAtom "continue tailrecursion")]
                  where
-                     genEx tt aex = genExpr false tt aex binds
+                    comment = sComment ("tailcall  " ++ nicer ex g)
+                    -- genEx tt aex = genExpr false tt aex binds
              _ = do
                  -- small hack to find out if this is actually a return ...
                  let realReturn

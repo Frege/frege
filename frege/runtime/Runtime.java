@@ -54,6 +54,11 @@ import java.nio.charset.StandardCharsets;
  *
  */
 public class Runtime {
+	
+	/**
+	 * GLobal Random generator
+	 */
+	final public static java.util.Random stdRandom = new java.util.Random ();
 
 	/**
 	 * Implementation for 
@@ -118,16 +123,35 @@ public class Runtime {
 		java.lang.StringBuilder sr = new java.lang.StringBuilder(2+((5*a.length()) >> 2));
 		sr.append('"');
 		int i = 0;
-		char c;
+		char c; char low;
 		while (i<a.length()) {
 			c = a.charAt(i++);
 			if (c<' ' || c == '\177') {
-				sr.append('\\');
-				sr.append(java.lang.String.format("%03o", (int) c));
+				if (c == '\n') sr.append("\\n");
+				else if (c == '\t') sr.append("\\t");
+				else if (c == '\f') sr.append("\\f");
+				else if (c == '\r') sr.append("\\r");
+				else if (c == '\b') sr.append("\\b");
+				else {
+					sr.append(java.lang.String.format("\\u%04x", (int) c));
+				}
 			}
 			else if (c == '\\' || c == '"') {
 				sr.append('\\');
 				sr.append(c);
+			}
+			// don't break surrogate pairs that denote valid characters
+			else if (i < a.length() 
+					&& Character.isSurrogatePair(c, (low = a.charAt(i)))
+					&& Character.isDefined(Character.toCodePoint(c, low))) {
+				sr.append(c);
+				sr.append(low);
+				i++;
+			}
+			else if (!Character.isDefined(c)
+					|| Character.getType(c) == Character.CONTROL
+					|| Character.isSurrogate(c)) {
+				sr.append(String.format("\\u%04x", (int) c));
 			}
 			else sr.append(c);
 		}
@@ -142,13 +166,24 @@ public class Runtime {
         java.lang.StringBuilder sr = new java.lang.StringBuilder(8);
         sr.append("'");
         if (c<' ' || c == '\177') {
-            sr.append('\\');
-            sr.append(java.lang.String.format("%o", (int) c));
+        	if (c == '\n') sr.append("\\n");
+			else if (c == '\t') sr.append("\\t");
+			else if (c == '\f') sr.append("\\f");
+			else if (c == '\r') sr.append("\\r");
+			else if (c == '\b') sr.append("\\b");
+			else {
+				sr.append(java.lang.String.format("\\u%04x", (int) c));
+			}
         }
         else if (c == '\\' || c == '\'') {
             sr.append('\\');
             sr.append(c);
         }
+		else if (!Character.isDefined(c)
+				|| Character.getType(c) == Character.CONTROL
+				|| Character.isSurrogate(c)) {
+			sr.append(String.format("\\u%04x", (int) c));
+		}
         else sr.append(c);
         sr.append("'");
         return sr.toString();
@@ -190,6 +225,19 @@ public class Runtime {
         }
     }
 
+    
+    /**
+     * Identity function for reference types
+     * (Can be used to pseudo thaw/freeze a value) 
+     */
+    public final static <T> T identity(T x) { return x; }
+    
+    /**
+     * Thaw a readonly array by cloning it
+     */
+    public final static <T> T[] arrayThaw(T[] a) { return a.clone(); }
+    
+     
     /**
      * <p> Cheat with phantom types. </p>
      * <p> This method is announced with type String a -&gt; Int -&gt; a

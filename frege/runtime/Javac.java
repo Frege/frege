@@ -14,13 +14,14 @@ import javax.tools.ToolProvider;
 public class Javac {
 	
 	final static String fregeJavac = System.getProperty("frege.javac");
-	final static JavaCompiler compiler =
-			fregeJavac == null || fregeJavac.startsWith("internal") ?
-				ToolProvider.getSystemJavaCompiler() : null;
-  final static StandardJavaFileManager fileManager = 
-    		compiler == null ? null : compiler.getStandardFileManager(null, null, null);
 
 	public static int runJavac(final String[] cmd) {
+		final JavaCompiler compiler =
+				fregeJavac == null || fregeJavac.startsWith("internal") ?
+					ToolProvider.getSystemJavaCompiler() : null;
+	    final StandardJavaFileManager fileManager = 
+	    		compiler == null ? null : compiler.getStandardFileManager(null, null, null);
+
 		StringBuilder sb = new StringBuilder();
 		for (String s : cmd) { sb.append(s); sb.append(" "); }
 		

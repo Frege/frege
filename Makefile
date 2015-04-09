@@ -65,10 +65,10 @@ FREGEC0  = $(FREGECJ) -prefix a -sp shadow:.
 FREGEC1  = $(FREGE) afrege.compiler.Main -d build -hints -target 1.7 -inline -prefix b
 
 #	compile final compiler with compiler2
-FREGEC2  = $(FREGE) bfrege.compiler.Main -d build -hints -O
+FREGEC2  = $(FREGE) bfrege.compiler.Main -d build -hints -target 1.7 -O
 
 #	final compiler
-FREGECC  = $(FREGE) frege.compiler.Main  -d build -hints -O
+FREGECC  = $(FREGE) frege.compiler.Main  -d build -hints -target 1.7 -O
 
 #	shadow Prelude files in the order they must be compiled
 SPRELUDE  =  shadow/frege/prelude/PreludeBase.fr \
@@ -80,7 +80,7 @@ SPRELUDE  =  shadow/frege/prelude/PreludeBase.fr \
 		shadow/frege/java/Lang.fr \
 		shadow/frege/java/util/Regex.fr \
 		shadow/frege/prelude/PreludeText.fr \
-		shadow/frege/prelude/Math.fr shadow/frege/prelude/Floating.fr
+		shadow/frege/prelude/Math.fr shadow/frege/java/lang/Math.fr
 #	Prelude files in the order they must be compiled
 PRELUDE  =  frege/prelude/PreludeBase.fr \
 		frege/control/Semigroupoid.fr frege/control/Category.fr \
@@ -91,7 +91,7 @@ PRELUDE  =  frege/prelude/PreludeBase.fr \
 		frege/java/Lang.fr \
 		frege/java/util/Regex.fr \
 		frege/prelude/PreludeText.fr \
-		frege/prelude/Math.fr frege/prelude/Floating.fr
+		frege/prelude/Math.fr frege/java/lang/Math.fr
 
 all:  runtime compiler fregec.jar
 
@@ -112,10 +112,10 @@ sanitycheck:
 dist: fregec.jar
 	perl scripts/mkdist.pl
 
-fregec.jar: compiler $(DIR)/check1
-	$(FREGECC)  -make  frege/StandardLibrary.fr
+fregec.jar: test
 	jar  -cf    fregec.jar -C build frege
 	jar  -uvfe  fregec.jar frege.compiler.Main
+	java -jar fregec.jar -version
 	cp fregec.jar fallback.jar
 
 fregec7.jar:  savejava
@@ -178,8 +178,13 @@ test-jar: fallback.jar
 	cp fregec.jar  ../eclipse-plugin/lib/fregec.jar
 
 
-$(DIR)/check1: $(DIR)/PreludeProperties.class
-	$(JAVA) -Xss1m -cp build frege.PreludeProperties && echo Prelude Properties checked >$(DIR)/check1
+test: compiler
+	$(FREGECC)  -make  frege/StandardLibrary.fr
+	rm -rf buildt
+	mkdir -p buildt
+	$(FREGECC)  -d buildt  tests/qc
+	$(JAVA) -Xss4m -cp build frege.tools.Quick -v buildt
+	rm -rf buildt
 
 
 $(DIR)/PreludeProperties.class:  frege/PreludeProperties.fr $(COMPF)/Main.class

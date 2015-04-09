@@ -94,16 +94,18 @@ main args = do
 
 instance Cloneable (JArray String)
 
-{-- 
+{--
+    warning: this is not a pure function! Don't use it in Frege code.
+
     Provide an entry point whose name is *not* 'main' and that takes
     a 'String' array, for convenience of tools written in languages that know
     nothing of laziness, monads, etc.
-    
+
     It indicates success or failure through the returned 'Bool'.
-    
+
     The Java signature should be like
     > static boolean runCompiler(String[]  args)
-    
+
     Despite its type, this is not a pure function, we are cheating here with
     'IO.performUnsafe'. 
     -}
@@ -126,9 +128,11 @@ compiler fs = do
             mvar ← liftIO C.MVar.newEmpty
             todo ← parseAll mvar todo 
             make mvar todo
-        else do
-            and <$> liftIO (mapM (compileFile g.options) files) 
-            
+        else liftIO $
+            mapM (compileFile g.options) files
+            >>= mapM C.MVar.take
+            >>= return . and 
+
 
 --- output error messages without clearing them
 printErrors = do
@@ -142,8 +146,16 @@ compileFile opts ef = do
     let f = either snd id ef
     let g = newg.{options = opts.{source = f}, sub <- _.{loader}}
 
-    (_, g) <- StateT.run (forsome passes runpass) g
-    return (g.errors == 0)
+    mvar <- C.MVar.newEmpty
+    let exceptions :: Throwable -> IO ()
+        exceptions ex = do
+            ex.printStackTrace
+            mvar.put false
+    C.forkIO do
+            (_, g) <- StateT.run (forsome passes runpass) g
+            mvar.put (g.errors == 0)
+        `catch` exceptions
+    return mvar
 
 --- All the passes that must normally be run
 passes = [ (lexPass, "lexer"),
@@ -179,7 +191,7 @@ genpass = do
     We don't need the lexer and parser pass, because parsing is done
     separatly in 'lexparse' 
     -}
-makepasses = filter (("run java compiler" !=) . snd) . drop 2 $ passes
+makepasses = {- filter (("run java compiler" !=) . snd) . -} drop 2 $ passes
 
 lexPass = do
     g <- getSTT
@@ -514,7 +526,7 @@ data Todo =
         because     :: String       --- reason why we don't need it
         compiletime :: Long         --- when has this been compiled?
     }
-    | --- successfully java compiled
+    | --- successfully compiled
     Compiled { 
         global      :: Global       --- state after compiling
     }
@@ -524,10 +536,10 @@ data Todo =
         reason      :: Maybe Pack   --- required by or commandline
         because     :: String       --- specific cause
     }
-    | --- needs java compilation
-    JavacMe {
-        global      :: Global       --- state
-    }
+    -- | --- needs java compilation
+    -- JavacMe {
+    --     global      :: Global       --- state
+    -- }
 
 instance Show Todo where
     show x = case x  of
@@ -548,7 +560,7 @@ instance Show Todo where
         CompileMe{global, reason, because} -> "compilation needed because " ++ because
                                 ++ ", required by "
                                 ++ maybe "user" (unmagicPack . Pack.raw) reason
-        JavacMe{global}     → "ready for java compilation"
+        -- JavacMe{global}     → "ready for java compilation"
 
 --- build tree
 type TodoList = Tree Pack Todo 
@@ -581,7 +593,7 @@ running _         = false
 --- Predicate to tell if the argument represents a successful state
 successful NoRebuild{because} = true
 successful Compiled{global}   = true
-successful JavacMe{global}    = true
+-- successful JavacMe{global}    = true
 successful _                  = false
 
 complete NoRebuild{} = true
@@ -732,8 +744,8 @@ makeone mvar tree (p, todo) = do
                 async (return CompileAfterDeps{global, reason=Nothing})
             CompileMe{global, reason, because} → do
                 async (compileMe tree global because)
-            JavacMe{global} -> do
-                async (javacMe tree global)
+            -- JavacMe{global} -> do
+            --    async (javacMe tree global)
             Running{}   → return tree
             Aborted{}   → return tree
             Failed{}    → return tree
@@ -787,7 +799,7 @@ compileAfterDeps tree global reason = do
                             because=if cmod > 0 then "class file outdated with respect to source file" 
                                                 else "class file doesn't exist"}
                     else do
-                        let compiled = [ p | (p, Compiled{}) <- dr ] ++ [ p | (p, JavacMe{}) <- dr ]
+                        let compiled = [ p | (p, Compiled{}) <- dr ] -- ++ [ p | (p, JavacMe{}) <- dr ]
                         if not (null compiled)
                         then do
                             return CompileMe{global, reason, 
@@ -806,7 +818,7 @@ compileAfterDeps tree global reason = do
 
 
 
-   
+{-
 javacMe :: TodoList → Global → StIO Todo
 --- If -j was given, this transitions immediatly to 'Compiled'
 javacMe tree global | isOff global.options.flags RUNJAVAC = return Compiled{global}
@@ -834,6 +846,7 @@ javacMe tree global = do
                     if global.errors > 0 then
                          return Failed{because="javac errors"}
                     else return Compiled{global}
+-}
 
 --- The action that checks if a package must be rebuilded
 checkUpdate :: Pack -> Maybe Pack -> StIO Todo
@@ -902,7 +915,7 @@ compileMe tree g reason = do
     gc <- makeFile g.{packages = ps, javaEnv = jt} sts
     if gc.errors > 0
     then return Failed{because = "of compilation errors."}
-    else return JavacMe{global=gc}
+    else return Compiled{global=gc}
             {- do
                 -- We have a source file in 'path', let's see if it is newer than
                 -- the corresponding class file

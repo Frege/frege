@@ -1,0 +1,352 @@
+--- Small parser, inspired by Parsec, but much less versatile.
+--- A bit faster and uses less memory than the transformer in Data.NanoParsec.
+module frege.data.MicroParsec where
+
+import Prelude.PreludeBase (StringJ)
+
+{--
+    Parser Monad
+    
+    > Parser s t m r
+    
+    is the type of parsers that reads tokens of type _t_
+    from a stream _s t_ and returns either an error message string
+    or a result _r_ paired with the yet unprocessed input.
+    
+    
+    Works in principle like a combination of 
+    'State' and 'Either', 
+    where the state is the current input to get parsed, and the bind operations 
+    will stop on the first 'Left' result, which signals a syntax error.
+    
+    'Parser' is also an instance of 'MonadAlt'. The operations '<+>' and '<|>'
+    can be used to implement choice, i.e. they allow to continue on failure. 
+    
+    The input for a 'Parser' must be something that is an instance of 'ListView'.
+    Ordinary lists, 'String's, 'frege.data.Iterators#StringIterator'
+    and 'frege.data.Iterators#ArrayIterator' are such types. The parser
+    combinators use only the 'uncons' and 'null' operations.
+-}
+abstract data Parser s t r = P { run :: (s t) -> ((String | r), s t) }
+
+--- Remember the current state of the input stream.
+--- 'getPos' always succeeds.
+getPos      = Parser.P getPos
+    where
+        getPos str = (Right str, str)
+
+--- Resume parsing with the given input stream.
+--- 'putPos' always succeeds. 
+putPos pos   = Parser.P putPos
+    where
+        putPos _ = (Right (), pos)
+
+modifyPos f  = Parser.P modPos
+    where
+        modPos pos = (Right (), f pos)
+
+
+--- fail with given error message
+failure s = Parser.P (\pos -> (Left s, pos))
+
+--- run a  parser
+runid p = Parser.run p
+--- run a Parser, return just the result/error
+parse p  = fmap fst . Parser.run p 
+
+instance MonadAlt  Parser s t where
+    --- generic failure
+    pzero    = Parser.P (\pos -> (Left "parse failed", pos)) 
+    --- generic success
+    return a = Parser.P (\pos -> (Right a, pos))
+    {--
+        > p >>= (r -> q)
+        > p >> q
+        If @p@ succeeds, the overall result is that of @q@
+        Otherwise, the overall result is failure.
+        
+        Could be read as _p followed by q_.
+    -}
+    Parser.P p >>= f = Parser.P bind
+        where
+            bind pos = case p pos of
+                    (Right r, pos') = case f r of
+                        Parser.P q = q pos'
+                    (Left err, pos') = (Left err, pos')
+    {-- 
+        > p <|> q
+        
+        The result is that of the first parser, if it succeeds,
+        otherwise that of the second one. Note that @q@ is
+        run on the same input as @p@, even if @p@ already consumed something.
+        
+        > expect 'c' <|> expect 'd'
+        
+        would succeed if the input starts with \'c\' or \'d\'. 
+    -}                
+    Parser.P p <|> q = Parser.P alternate
+        where
+            alternate pos = case p pos of
+                    (Left err, pos') = Parser.run q pos
+                    right            = right
+            
+    
+    {--
+        > p <+> q
+        
+        The result is that of the first parser, if it succeeds,
+        otherwise that of the second one, which is applied to the
+        input left over by _p_
+    -}
+    Parser.P p <+> q = Parser.P altplus
+        where
+            altplus pos = case p pos of
+                    (Left err, pos') = Parser.run q pos'
+                    right            = right
+
+    p <* q = do
+        r <- p
+        q
+        return r
+        
+    p *> q = p >> q
+        
+    
+--- run a 'Parser' on some input and report
+parseTest :: (Show r, Show t, ListView s) => Parser s t r -> (s t) -> IO ()
+parseTest p s = case runid p s of
+    (Left msg, str) -> do
+        print "Parse failed: "
+        println (reporterror str msg)
+    (Right r, str) ->  do
+        println "Parse succeeded!"
+        println r
+        unless (null str) do
+            println (reporterror str "Warning! Tokens left")
+
+-- ---------------------- error reporting -------------------------
+
+reporterror ts msg = msg ++ ", found: " 
+                        ++ fold (++) "" (map display (take 8 $ toList ts))
+
+{-- 
+    Causes the error message to be _msg_ when _p_ fails.
+    
+    The error will be reported at the position where _p_ was attempted,
+    not necessarily at the position where _p_ failed: 
+  
+    > Parser.run (letter >> digit) "a?"  
+    > unexpected token, found ?
+    > Parser.run (label "id expected" $ letter >> digit) "a?"
+    > id expected, found a?
+-}
+label msg p = p <|> failure msg
+
+infix 14 `<?>`
+
+{--
+    > p <?> msg
+    
+    Causes the error message to be _msg_ when _p_ fails.
+    
+    The error will be reported at the position where _p_ failed.
+-}
+p <?> msg = p <+> failure msg
+
+-- ---------------------- simple parsers --------------------------
+{--
+    > expect t
+    This parser succeeds if the input is not empty and the head
+    of the input equals _t_. 
+-}            
+expect c = Parser.P expect
+    where
+        expect pos = case uncons pos of
+            Just (h, t) 
+                | h == c    = (Right h, t)
+            nothing         = (Left (show c ++ " expected"), pos)
+
+--- The 'eos' parser succeeds if the input is empty.
+eos = Parser.P eos
+    where
+        eos pos = case uncons pos of
+            Just _ = (Left "end of input expected", pos)
+            sonst  = (Right (), pos)
+
+--- > satisfy property
+--- Succeeds if there is a next token _t_ and  _property_ _t_ is true.
+satisfy :: ListView s => (t -> Bool) -> Parser s t t
+satisfy p = Parser.P satisfy
+    where 
+        satisfy pos = case uncons pos of
+            Just (h, t) | p h   = (Right h, t)
+            nothing             = (Left "unexpected token", pos)
+
+--- > exceptWhen prop
+--- Fails if and only if there is a next token _t_ and _prop t_ is true.
+--- Succeeds on end of stream or when the token does not satisfy the property.
+--- In other words, @exceptWhen p@ succeeds if and only if @satisfy p@ fails.
+exceptWhen pred = Parser.P except
+    where
+        except pos = case uncons pos of
+            Just  (h, t) | pred h    = (Left "expected token", pos)
+                         | otherwise = (Right (), t)
+            _ = (Right (), pos)
+ 
+
+--- > pany
+--- Fails if and only if 'eos' succeeds, otherwise returns the next token.
+pany = satisfy (const true)
+
+--- > symbol p
+--- Is the same parser as _p_, but skips spaces afterwards
+symbol p = p <* spaces
+-- ------------------------------------------- character classification 
+space       = satisfy (Char.isWhitespace :: Char -> Bool)
+digit       = satisfy (Char.isDigit      :: Char -> Bool)
+letter      = satisfy (Char.isLetter     :: Char -> Bool)
+uppercase   = satisfy (Char.isUpperCase  :: Char -> Bool)
+spaces      = skip space
+
+-- ---------------------------------------- special parsers for strings
+string :: String -> Parser StringJ Char String
+string s = Parser.P string
+    where
+        string xs = if xs.startsWith s 
+            then (Right s, strtail xs (length s))
+            else (Left ("expected '" ++ display s ++ "'"), xs)
+
+--- This parser succeeds if the pattern matches the beginning of the string.
+--- For efficiency reasons, the pattern should start with @^@
+match r = Parser.P match
+    where        
+        match xs = case m.find of
+                Just y | xs.startsWith y.match 
+                        -> (Right y, strtail xs (y.match.length))
+                nothing -> (Left ("expected to match ´" ++ display r ++ "´"), xs)
+            where 
+                m = Regex.matcher r xs
+                
+                    
+-- -------------------------------------------------- parser repetition 
+
+--- The optional parser always succeeds and returns its result wrapped in 'Maybe'
+
+optional :: Parser s t r -> Parser s t (Maybe r)
+optional p = (Just <$> p) <|> return Nothing
+
+--- > many p
+--- Collects as many _p_ as possible and returns the results in a list.
+--- Succeeds also when _p_ fails the first time, in that case the result is an empty list.
+--- Must not be applied to a parser that always succeeds!
+many !p = reverse <$> many' []
+    where
+        many' acc = do
+            a   <- optional p
+            case a  of
+                Nothing -> return acc
+                Just a  -> many' (a:acc) 
+
+--- > some p
+--- Like 'many', except there must be at least one _p_
+--- Must not be applied to a parser that always succeeds!
+some p = p >>= (\x -> fmap (x:) (many p))
+many1 = some
+
+--- > skip p
+--- equivalent to 
+--- > many p >> return ()
+--- but faster, because it does not build up lists.
+--- Must not be applied to a parser that always succeeds!
+skip :: Parser β δ γ -> Parser β δ  ()
+skip p = ux  <+> return ()
+    where ux = (p <|> pzero) >> ux
+
+--- > manyWhile p
+--- Collect tokens as long as they satisfy _p_
+manyWhile p = many (satisfy p)
+
+{-- 
+    > skipWhile p
+    
+    Skip tokens as long as they 'satisfy' predicate _p_.
+    
+    Beware of negative predicates like 
+    > skipWhile (!= 'a')
+    
+    This will loop forever if there is no @\'a\'@ in the input stream.
+    Instead use
+    
+    > skipUntil (== 'a')
+-}
+skipWhile p = skip (satisfy p)
+
+--- > skipUntil p
+--- Skip tokens as long as they do not satisfy p
+--- When this succeeds, the next token will satisfy p or the stream is exhausted.
+skipUntil p = skip (exceptWhen p)
+
+-- ------------------------------------------------ parser combinators
+
+--- > cond pcond pthen pelse
+--- if _pcond_ succeeds, then _pthen_ is run, else _pelse_
+--- To both _pthen_ and _pelse_ it will appear as if _pcond_ didn't consume any tokens.
+
+cond pcond pthen pelse = Parser.P look
+    where
+        look pos = case fst (Parser.run pcond pos) of
+                Right _ ->  Parser.run pthen pos
+                Left  _ ->  Parser.run pelse pos 
+
+--- > select [(if1, t1), (if2, t2), ..., (ifn, tn)] e
+--- unfolds as
+--- > cond if1 t1 (cond if2 t2 (... (cond ifn tn e))) 
+select ∷ [(Parser 𝖆 𝖉 𝖇,Parser 𝖆 𝖉 𝖈)] → Parser 𝖆 𝖉 𝖈 → Parser 𝖆 𝖉 𝖈
+select xs y = foldr (\(p1,p2)\end -> cond p1 p2 end) y xs
+   
+--- > choice ps
+--- Tries the parsers in the list from left to right, until success. 
+choice = fold (<|>) pzero
+
+--- > count n p
+--- Applies _p_ _n_ times and returns a list of the results
+count n p = replicateM n p
+
+--- > between left right p 
+--- Parses _left_, then _p_ and finally _right_ and returns the result of _p_
+between left right p = do
+    left
+    r <- p
+    right
+    return r
+
+--- > option v p 
+--- Applies _p_, and returns _v_ when it fails.
+--- Always succeeds.
+option v p = p <|> Parser.return v
+
+--- > p `sepBy1` q
+--- Parses p and many q followed by p
+sepBy1 p q = p >>= (\r -> fmap (r:) (many (q >> p)))
+
+--- > p `sepBy` q
+--- Like 'sepBy1', but allows zero _p_ elements
+sepBy p q = (p `sepBy1` q) <|> Parser.return []
+
+--- > p `endBy` q
+--- Parses zero or more occurrences of _p_ separated and ended by _q_
+endBy p q = many (p <* q)
+
+--- > p `endBy1` q
+--- Parses one or more occurrences of _p_ separated and ended by _q_
+endBy1 p q = some (p <* q)
+
+--- > p `sepEndBy` q
+--- Parses zero or more occurrences of _p_, separated and optionally ended by _q_
+sepEndBy p q = (p `sepBy` q) <* optional q
+
+--- > p `sepEndBy1` q
+--- Parses one or more occurrences of _p_, separated and optionally ended by _q_
+sepEndBy1 p q = (p `sepBy1` q) <* optional q
+
+
