@@ -50,7 +50,7 @@ import frege.Prelude hiding(<+>, break)
 
 import frege.control.monad.State(State)
 
-import Data.TreeMap(insertkv)
+import Data.TreeMap(insert)
 import Data.List as DL(elemBy)
 
 import  Compiler.enums.Flags 
@@ -408,7 +408,7 @@ nativename:
 packagename1:
     CONID                       { \t     -> do {
                                                 changeST Global.{sub <- SubSt.{
-                                                    idKind <- insertkv (KeyTk t) (Left())}};
+                                                    idKind <- insert (KeyTk t) (Left())}};
                                                 YYM.return (Token.value t, yyline t) }}
     | varidkw '.' packagename1  { \a\_\(c,p) -> (repljavakws (Token.value a) ++ "." ++ c,
                                                  (yyline a).merge p) }
@@ -594,11 +594,11 @@ import:
     | IMPORT packagename VARID CONID importliste { \i\p\a\c\l -> do
             when (Token.value a != "as") do
                 yyerror (yyline a) (show "as" ++ " expected instead of " ++ show (Token.value a))
-            changeST Global.{sub <- SubSt.{idKind <- insertkv (KeyTk c) (Left()) }}
+            changeST Global.{sub <- SubSt.{idKind <- insert (KeyTk c) (Left()) }}
             YYM.return ImpDcl {pos = snd p, pack = fst p, imports = l, as = Just (Token.value c)}
         }
     | IMPORT packagename CONID importliste { \i\p\c\l -> do
-            changeST Global.{sub <- SubSt.{idKind <- insertkv (KeyTk c) (Left()) }}
+            changeST Global.{sub <- SubSt.{idKind <- insert (KeyTk c) (Left()) }}
             YYM.return ImpDcl {pos = snd p, pack = fst p, imports = l, as = Just (Token.value c)}
         }
     ;

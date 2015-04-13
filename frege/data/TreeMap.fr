@@ -1,4 +1,4 @@
-{- «•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»
+{- 
 
     Copyright © 2011 - 2015, Ingo Wechsung
     All rights reserved.
@@ -32,23 +32,101 @@
     IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
     THE POSSIBILITY OF SUCH DAMAGE.
 
-    «•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•» -}
+-}
 
 
 {--
-    An AVL tree and a general interface for Maps and Sets based on AVL trees.
+    An efficient implementation of
+    'https://en.wikipedia.org/wiki/Persistent_data_structure persistent' 
+    ordered maps from keys to values
+    based on 'http://en.wikipedia.org/wiki/AVL_tree AVL trees'.
+
+    ## Properties of ordered maps
+    
+    An AVL tree is a self-balancing binary search tree. 
+    In an AVL tree, the heights of the two child subtrees of any node 
+    differ by at most one; if at any time they differ by more than one, 
+    rebalancing is done to restore this property. 
+    
+    Lookup, insertion, and deletion all take O(log n) time in both the average 
+    and worst cases, where n is the number of nodes in the tree prior to the 
+    operation. Insertions and deletions may require the tree to be rebalanced 
+    by one or more tree rotations.
+
+    AVL trees are height-balanced, but not weight-balanced nor μ-balanced,
+    that is, sibling nodes can have hugely differing numbers of descendants.
+    
+    ## Properties of this implementation
+    
+    Keys will always be strict, whereas values can remain un-evaluated until
+    two values will have to be combined. 
+    
+    Combination of two values takes place when a mapping for 
+    an already existing key is inserted in a map. In order to prevent
+    building up of thunks that could lead to stack overflows later, the
+    function combining the values will be evaluated right away, and this may 
+    trigger evaluation of one or both values in turn. 
+    
+    The default function used by operations like 'insert' or 'union' is 'const'; 
+    and this will cause evaluation of the *new* value. Take a look at
+    the following example:
+    
+    > insert 7 undefined (insert 7 25 empty)            -- will fail
+    > insert 7 42 (insert 7 undefined empty)            -- will succeed
+    > insertWith (+) 7 42 (insert 7 undefined empty)    -- will fail
+
+    The last expression will fail because ('+') needs to evaluate both 
+    arguments. OTOH, expressions like
+
+    > fold (\t\v -> insertWith (+) 42 v t) empty [1..1_000_000]
+ 
+    will not cause stack overflow when later the value associated with 42 is
+    actually used, nor will it need heap memory for one million thunks.
+
+    ## Operations
+
+    ### Creating Maps
+
+    Get an empty map with 'TreeMap.mempty' or 'TreeMap.empty', make a singleton one
+    with 'singleton' or turn an association list into a 'TreeMap' with 'fromList'.
+    The more general function 'fromListWith' allows custom handling of 
+    associations with duplicate keys.
+
 -}
 package frege.data.TreeMap where
 
-import frege.data.List (elemBy, partitioned, sortBy, groupBy)
+-- import frege.data.List (elemBy, partitioned, sortBy, groupBy)
 import frege.data.Monoid as M(Monoid)
+
+--- _O(1)_ Create a singleton map
+singleton ∷ Ord 𝖐 ⇒ 𝖐 → 𝖛 → TreeMap 𝖐 𝖛
+singleton k v = TreeMap.Node{höhe=1, left=TreeMap.Nil, right=TreeMap.Nil, key=k, value=v}
+
+--- _O(n)_ Compute the size of the map
+size ∷ TreeMap 𝖐 𝖛 → Int
+size TreeMap.Node{left, right} = 1 + size left + size right
+size TreeMap.Nil = 0
+
+{--
+    _O(log n)_
+    
+    > insert k v map
+    
+    returns a 'TreeMap' where _k_ is associated with _v_ such that
+    
+    > lookup k (insert k v map) = Just v
+    
+    If _k_ was already associated with some value in _map_, then _v_ will get 
+    evaluated to WHNF, otherwise it is left alone. 
+-}
+insert k v m = TreeMap.insertWork const m k v
 
 --- Interface for Maps based on AVL trees
 class AVLMap map where
     --- look up an element by key
     lookup    :: Ord key => map key value -> key -> Maybe value
-    --- insert an element
-    insert    :: Ord key => map key value -> key -> value -> map key value
+    -- insert an element
+    -- insert    :: Ord key => map key value -> key -> value -> map key value
     --- insert a (key, value) list
     insertList :: Ord key => map key value -> [(key, value)] -> map key value
     --- update an element
@@ -63,18 +141,18 @@ class AVLMap map where
     keys      :: map key value -> [key]
     --- the unordered list of values in the tree map
     values    :: map key value -> [value]
-    --- same as `insert` and `delete` operations suitable for use in a 'foldr'
-    insertkv, updatekv :: Ord key => key -> value -> map key value -> map key value
-    --- same s `delete` but tree argument is last for use in `foldr`
+    -- same as `insert` and `delete` operations suitable for use in a 'foldr'
+    -- insertkv, updatekv :: Ord key => key -> value -> map key value -> map key value
+    --- same as `delete` but tree argument is last for use in `foldr`
     deletek   :: Ord key => key -> map key value -> map key value
-    insertkv k v m = insert m k v
-    updatekv k v m = update m k v
+    -- insertkv k v m = insert k v
+    -- updatekv k v m = update m k v
     deletek  k m   = delete m k 
     fromList  = insertList mempty
 
-data Tree k v = 
+data TreeMap k v = 
           protected Nil    --- the empty tree 
-        | protected Node { !höhe :: Int, !left, !right :: (Tree k v), !key :: k, value ::  v}
+        | protected Node { !höhe :: Int, !left, !right :: (TreeMap k v), !key :: k, value ::  v}
         where
     
     depth (Node _ l r _ _) = max (depth l) (depth r)
@@ -126,7 +204,26 @@ data Tree k v =
     
     leftmost (this@Node _ Nil _ _ _) =  this
     leftmost (Node _ l _ _ _) = leftmost l
-    leftmost Nil              = error "AVLTree.leftmost Tree.Nil"
+    leftmost Nil              = error "AVLTree.leftmost TreeMap.Nil"
+
+    --- do the dirty work for insert operations
+    insertWork f (TreeMap.Node s l r  k1 v1) !k v =
+        case k <=> k1 of 
+            Lt -> case insertWork f l k v of 
+                    !nl -> case 1 + max (TreeMap.height nl) (TreeMap.height r) of 
+                        !ns -> TreeMap.rebalance (TreeMap.Node ns nl r k1 v1)
+            Eq -> case f v v1 of
+                    !nv → TreeMap.Node s l r k nv
+            Gt -> case insertWork f r k v of 
+                    !nr -> case 1 + max (TreeMap.height l) (TreeMap.height nr) of
+                        !ns -> TreeMap.rebalance (TreeMap.Node ns l nr k1 v1)
+    insertWork f nil k v = TreeMap.Node 1 TreeMap.Nil TreeMap.Nil k v
+
+    --- _O(log n)_
+    --- > tm.insert k v 
+    --- Variant of 'insert' that is better suited for left folds and supports dot-notation.
+    insert ∷ Ord 𝖆 ⇒ TreeMap 𝖆 𝖇 → 𝖆 → 𝖇 → TreeMap 𝖆 𝖇
+    insert = insertWork const
 
     keyvalues t order = kv t []
         where
@@ -140,11 +237,11 @@ data Tree k v =
     fmap f (Node i l r k v) = Node i (fmap f l) (fmap f r) k  (f v)
 
     insertList t kvs = fold ins t kvs where
-        ins t (k,v) = Tree.insert t k v
+        ins t (k,v) = t.insert k v
     fromList  = insertList empty
         
     --- version of lookup that is optimised for 'String' keys
-    lookupS    :: Tree String value -> String -> Maybe value
+    lookupS    :: TreeMap String value -> String -> Maybe value
     lookupS (Node _ l r k1 v) !k =
                     case String.compareTo k k1 of
                         cmp | cmp < 0 = lookupS l k
@@ -153,104 +250,93 @@ data Tree k v =
     lookupS nil _ = Nothing
 
     --- version of lookup that is optimised for 'Int' keys
-    lookupI    :: Tree Int value -> Int -> Maybe value
+    lookupI    :: TreeMap Int value -> Int -> Maybe value
     lookupI (Node _ l r k1 v) !k =
                     if k < k1 then lookupI l k
                     else if k > k1 then lookupI r k
                     else Just v
     lookupI nil _ = Nothing
     --- version of insert that is optimized for 'Int' keys
-    insertI :: Tree Int value -> Int -> value -> Tree Int value
-    insertI (Tree.Node s l r  k1 v1) !k v =
+    insertI :: TreeMap Int value -> Int -> value -> TreeMap Int value
+    insertI (Node s l r  k1 v1) !k v =
         case k <=> k1 of 
             Lt -> case insertI l k v of 
-                    !nl -> case 1 + max (Tree.height nl) (Tree.height r) of 
-                        !ns -> Tree.rebalance (Tree.Node ns nl r k1 v1)
-            Eq -> Tree.Node s l r k v
+                    !nl -> case 1 + max (TreeMap.height nl) (TreeMap.height r) of 
+                        !ns -> TreeMap.rebalance (TreeMap.Node ns nl r k1 v1)
+            Eq -> Node s l r k v
             Gt -> case insertI r k v of 
-                    !nr -> case 1 + max (Tree.height l) (Tree.height nr) of
-                        !ns -> Tree.rebalance (Tree.Node ns l nr k1 v1)
-    insertI nil k v = Tree.Node 1 Tree.Nil Tree.Nil k v
+                    !nr -> case 1 + max (TreeMap.height l) (TreeMap.height nr) of
+                        !ns -> TreeMap.rebalance (TreeMap.Node ns l nr k1 v1)
+    insertI nil k v = Node 1 Nil Nil k v
 
     insertkvI k v t = insertI t k v
     updatekvI k v t = insertI t k v
 
 
-    insertS :: Tree String value -> String -> value -> Tree String value
-    insertS (Tree.Node s l r  k1 v1) !k v =
+    insertS :: TreeMap String value -> String -> value -> TreeMap String value
+    insertS (TreeMap.Node s l r  k1 v1) !k v =
         case k <=> k1 of 
             Lt -> case insertS l k v of 
-                    !nl -> case 1 + max (Tree.height nl) (Tree.height r) of 
-                        !ns -> Tree.rebalance (Tree.Node ns nl r k1 v1)
-            Eq -> Tree.Node s l r k v
+                    !nl -> case 1 + max (TreeMap.height nl) (TreeMap.height r) of 
+                        !ns -> TreeMap.rebalance (TreeMap.Node ns nl r k1 v1)
+            Eq -> TreeMap.Node s l r k v
             Gt -> case insertS r k v of 
-                    !nr -> case 1 + max (Tree.height l) (Tree.height nr) of
-                        !ns -> Tree.rebalance (Tree.Node ns l nr k1 v1)
-    insertS nil k v = Tree.Node 1 Tree.Nil Tree.Nil k v
+                    !nr -> case 1 + max (TreeMap.height l) (TreeMap.height nr) of
+                        !ns -> TreeMap.rebalance (TreeMap.Node ns l nr k1 v1)
+    insertS nil k v = TreeMap.Node 1 TreeMap.Nil TreeMap.Nil k v
 
     insertkvS k v t = insertS t k v
     updatekvS k v t = insertS t k v
 
---- 'Tree' can be used as array element
-derive ArrayElement (Tree a b)
+--- 'TreeMap' can be used as array element
+derive ArrayElement (TreeMap a b)
 
+derive Show  TreeMap k v
 
-derive Show  Tree k v
-
-instance ListEmpty (Tree a) where
-    null Tree.Nil = true
+instance ListEmpty (TreeMap a) where
+    null TreeMap.Nil = true
     null _ = false
-    empty = Tree.Nil
+    empty = TreeMap.Nil
 
-instance Monoid Ord a => Tree a b where
-    mempty = Tree.Nil
+instance Monoid Ord a => TreeMap a b where
+    mempty = TreeMap.Nil
     mappend = union
 
-instance Functor Tree a 
+instance Functor TreeMap a 
 
-instance AVLMap Tree where
-    insert (Tree.Node s l r  k1 v1) !k v =
-        case k <=> k1 of 
-            Lt -> case insert l k v of 
-                    !nl -> case 1 + max (Tree.height nl) (Tree.height r) of 
-                        !ns -> Tree.rebalance (Tree.Node ns nl r k1 v1)
-            Eq -> Tree.Node s l r k v
-            Gt -> case insert r k v of 
-                    !nr -> case 1 + max (Tree.height l) (Tree.height nr) of
-                        !ns -> Tree.rebalance (Tree.Node ns l nr k1 v1)
-    insert nil k v = Tree.Node 1 Tree.Nil Tree.Nil k v
-    update t k v = insert t k v
-    delete (x@Tree.Node _ Tree.Nil Tree.Nil k1  _) k = if k == k1 then Tree.Nil else x
-    delete   (Tree.Node _ l   Tree.Nil k1 v1) k = if k == k1 then l else
+instance AVLMap TreeMap where
+    update t k v = t.insert k v
+    delete (x@TreeMap.Node _ TreeMap.Nil TreeMap.Nil k1  _) k = if k == k1 then TreeMap.Nil else x
+    delete   (TreeMap.Node _ l   TreeMap.Nil k1 v1) k = if k == k1 then l else
         let
             nl = delete l k
-            s' = 1 + Tree.height nl
-        in Tree.rebalance (Tree.Node s' nl Tree.Nil k1 v1)
-    delete (Tree.Node _ Tree.Nil r   k1 v1) k = if k == k1 then r else
+            s' = 1 + TreeMap.height nl
+        in TreeMap.rebalance (TreeMap.Node s' nl TreeMap.Nil k1 v1)
+    delete (TreeMap.Node _ TreeMap.Nil r   k1 v1) k = if k == k1 then r else
         let
             nr = delete r k
-            s' = 1 + Tree.height nr
-        in Tree.rebalance (Tree.Node s' Tree.Nil nr k1 v1)
-    delete (Tree.Node s l r k1 v1) k =
+            s' = 1 + TreeMap.height nr
+        in TreeMap.rebalance (TreeMap.Node s' TreeMap.Nil nr k1 v1)
+    delete (TreeMap.Node s l r k1 v1) k =
         case k <=> k1 of
             Lt -> let
                     nl = delete l k
-                    ns = 1 + max (Tree.height nl) (Tree.height r)
-                in Tree.rebalance (Tree.Node ns nl r k1 v1)
+                    ns = 1 + max (TreeMap.height nl) (TreeMap.height r)
+                in TreeMap.rebalance (TreeMap.Node ns nl r k1 v1)
             Gt -> let
                     nr = delete r k
-                    ns = 1 + max (Tree.height l) (Tree.height nr)
-                in Tree.rebalance (Tree.Node ns l nr k1 v1)
-            Eq -> case Tree.leftmost r of
-                Tree.Node ls _ _ lk lv -> let    -- r may not be Nil here, see above
+                    ns = 1 + max (TreeMap.height l) (TreeMap.height nr)
+                in TreeMap.rebalance (TreeMap.Node ns l nr k1 v1)
+            Eq -> case TreeMap.leftmost r of
+                TreeMap.Node ls _ _ lk lv -> let    -- r may not be Nil here, see above
                         nr = delete r lk
-                        ns = 1 + max (Tree.height l) (Tree.height nr)
-                    in Tree.rebalance (Tree.Node ns l nr lk lv)
-                Tree.Nil -> error "cannot happen"
+                        ns = 1 + max (TreeMap.height l) (TreeMap.height nr)
+                    in TreeMap.rebalance (TreeMap.Node ns l nr lk lv)
+                TreeMap.Nil -> error "cannot happen"
     delete nil k = nil
     
-    -- lookup    :: forall value key . Ord key => Tree key value -> key -> Maybe value;
-    lookup (Tree.Node _ l r !k1 v) !k =
+    -- lookup    :: forall value key . Ord key => TreeMap key value -> key -> Maybe value;
+    lookup (TreeMap.Node _ l r !k1 v) !k =
                     case k <=> k1 of {
                         Lt -> lookup l k;
                         Gt -> lookup r k;
@@ -260,29 +346,29 @@ instance AVLMap Tree where
          
     
     each t = kv t [] where
-        kv (Tree.Node _ l r key v) acc = (key,v) : kv l (kv r acc)
+        kv (TreeMap.Node _ l r key v) acc = (key,v) : kv l (kv r acc)
         kv nil acc = acc
     
     keys t = kv t [] where
-        kv (Tree.Node _ l r key v) acc = key : kv l (kv r acc)
+        kv (TreeMap.Node _ l r key v) acc = key : kv l (kv r acc)
         kv nil acc = acc
 
     values t = kv t [] where
-        kv (Tree.Node _ l r key v) acc = v : kv l (kv r acc)
+        kv (TreeMap.Node _ l r key v) acc = v : kv l (kv r acc)
         kv nil acc = acc
 
-type TreeSet a  = Tree a ()
+type TreeSet a  = TreeMap a ()
 
-including s o = Tree.insert s o ()
+including s o = insert o () s
 contains  s o
-    | Nothing <- Tree.lookup s o = false
+    | Nothing <- TreeMap.lookup s o = false
     | otherwise = true;
 
 fromKeys = fold ins empty 
     where
         ins :: Ord a => TreeSet a -> a -> TreeSet a 
-        ins t k = insert t k ()
-union s1 = Tree.insertList s1 . Tree.each
-intersection s1 s2 = (Tree.insertList empty . filter ((s2 `contains`) . fst) . Tree.each) s1 
-diff s1 s2 = (Tree.insertList empty . filter (not . (s2 `contains`) . fst) . Tree.each) s1
+        ins t k = t.insert k ()
+union s1 = TreeMap.insertList s1 . TreeMap.each
+intersection s1 s2 = (TreeMap.insertList empty . filter ((s2 `contains`) . fst) . TreeMap.each) s1 
+diff s1 s2 = (TreeMap.insertList empty . filter (not . (s2 `contains`) . fst) . TreeMap.each) s1
             
