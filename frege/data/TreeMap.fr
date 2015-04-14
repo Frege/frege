@@ -121,6 +121,55 @@ size TreeMap.Nil = 0
 -}
 insert k v m = TreeMap.insertWork const m k v
 
+{-- 
+    _O(log n)_
+    > insertWith f k v m
+    If _m_ does not contain _k_, this works like 'insert'.
+    Otherwise, the existing association of _k_ with some value _v'_ is replaced by
+    an association of _k_ with the result of evaluating 
+    > f v v'
+    in the resulting map. 
+
+    Strict evaluation is necessary to prevent building up of large thunks 
+    of the form
+    > f v3 (f v2 (f v1 v0))
+
+    Note that
+    > insert = insertWith const
+    and that this will evaluate the *new* value in case of an update. If you
+    want to prevent this, use
+
+    > replace k v = insert k v . delete k
+    
+    The replaced value will be evaluated only if the given function is strict
+    in the second argument. Since 'const' is lazy in the second argument, the
+    following will be fine:
+    
+    > insert "foo" 7 (insert "foo" undefined (delete "foo" m))
+    
+    That is, the value that is inserted for a given key first is not evaluated on
+    insertion, and only evaluated on update if the update function demands it, which
+    is not the case for a plain 'insert'.
+-} 
+insertWith f k v m = TreeMap.insertWork f m k v
+
+{-- 
+    _O(log n)_
+    > delete k tm
+    is a 'HashMap' m such that
+    > lookup k m = Nothing
+    and for any other key _o_
+    > lookup o m = lookup o tm
+
+    Less formally, the association of _k_ with some value, if any, 
+    is removed in the result, while all other associations are retained.
+
+    If _tm_ didn't contain _k_ in the first place,
+    > delete k tm = tm    
+-}
+delete ∷ Ord 𝖐 ⇒ 𝖐 → TreeMap 𝖐 𝖛 → TreeMap 𝖐 𝖛
+delete k tm = tm.delete k
+
 --- Interface for Maps based on AVL trees
 class AVLMap map where
     --- look up an element by key
@@ -131,8 +180,6 @@ class AVLMap map where
     insertList :: Ord key => map key value -> [(key, value)] -> map key value
     --- update an element
     update    :: Ord key => map key value -> key -> value -> map key value
-    --- remove an element
-    delete    :: Ord key => map key value -> key -> map key value
     --- construct a tree map from a list with (key, value) tuples
     fromList  :: (Monoid (map key value), Ord key) => [(key, value)]  -> map key value
     --- the tree data as unordered (key, value) list 
@@ -141,13 +188,6 @@ class AVLMap map where
     keys      :: map key value -> [key]
     --- the unordered list of values in the tree map
     values    :: map key value -> [value]
-    -- same as `insert` and `delete` operations suitable for use in a 'foldr'
-    -- insertkv, updatekv :: Ord key => key -> value -> map key value -> map key value
-    --- same as `delete` but tree argument is last for use in `foldr`
-    deletek   :: Ord key => key -> map key value -> map key value
-    -- insertkv k v m = insert k v
-    -- updatekv k v m = update m k v
-    deletek  k m   = delete m k 
     fromList  = insertList mempty
 
 data TreeMap k v = 
@@ -224,6 +264,39 @@ data TreeMap k v =
     --- Variant of 'insert' that is better suited for left folds and supports dot-notation.
     insert ∷ Ord 𝖆 ⇒ TreeMap 𝖆 𝖇 → 𝖆 → 𝖇 → TreeMap 𝖆 𝖇
     insert = insertWork const
+
+    --- _O(log n)_
+    --- > tm.delete k
+    --- Variant of 'delete' that is better suited for left folds and supports dot-notation 
+    delete (x@TreeMap.Node _ TreeMap.Nil TreeMap.Nil k1  _) k = if k == k1 then TreeMap.Nil else x
+    delete   (TreeMap.Node _ l   TreeMap.Nil k1 v1) k = if k == k1 then l else
+        let
+            nl = delete l k
+            s' = 1 + TreeMap.height nl
+        in TreeMap.rebalance (TreeMap.Node s' nl TreeMap.Nil k1 v1)
+    delete (TreeMap.Node _ TreeMap.Nil r   k1 v1) k = if k == k1 then r else
+        let
+            nr = delete r k
+            s' = 1 + TreeMap.height nr
+        in TreeMap.rebalance (TreeMap.Node s' TreeMap.Nil nr k1 v1)
+    delete (TreeMap.Node s l r k1 v1) k =
+        case k <=> k1 of
+            Lt -> let
+                    nl = delete l k
+                    ns = 1 + max (TreeMap.height nl) (TreeMap.height r)
+                in TreeMap.rebalance (TreeMap.Node ns nl r k1 v1)
+            Gt -> let
+                    nr = delete r k
+                    ns = 1 + max (TreeMap.height l) (TreeMap.height nr)
+                in TreeMap.rebalance (TreeMap.Node ns l nr k1 v1)
+            Eq -> case TreeMap.leftmost r of
+                TreeMap.Node ls _ _ lk lv -> let    -- r may not be Nil here, see above
+                        nr = delete r lk
+                        ns = 1 + max (TreeMap.height l) (TreeMap.height nr)
+                    in TreeMap.rebalance (TreeMap.Node ns l nr lk lv)
+                TreeMap.Nil -> error "cannot happen"
+    delete nil k = nil
+
 
     keyvalues t order = kv t []
         where
@@ -306,34 +379,6 @@ instance Functor TreeMap a
 
 instance AVLMap TreeMap where
     update t k v = t.insert k v
-    delete (x@TreeMap.Node _ TreeMap.Nil TreeMap.Nil k1  _) k = if k == k1 then TreeMap.Nil else x
-    delete   (TreeMap.Node _ l   TreeMap.Nil k1 v1) k = if k == k1 then l else
-        let
-            nl = delete l k
-            s' = 1 + TreeMap.height nl
-        in TreeMap.rebalance (TreeMap.Node s' nl TreeMap.Nil k1 v1)
-    delete (TreeMap.Node _ TreeMap.Nil r   k1 v1) k = if k == k1 then r else
-        let
-            nr = delete r k
-            s' = 1 + TreeMap.height nr
-        in TreeMap.rebalance (TreeMap.Node s' TreeMap.Nil nr k1 v1)
-    delete (TreeMap.Node s l r k1 v1) k =
-        case k <=> k1 of
-            Lt -> let
-                    nl = delete l k
-                    ns = 1 + max (TreeMap.height nl) (TreeMap.height r)
-                in TreeMap.rebalance (TreeMap.Node ns nl r k1 v1)
-            Gt -> let
-                    nr = delete r k
-                    ns = 1 + max (TreeMap.height l) (TreeMap.height nr)
-                in TreeMap.rebalance (TreeMap.Node ns l nr k1 v1)
-            Eq -> case TreeMap.leftmost r of
-                TreeMap.Node ls _ _ lk lv -> let    -- r may not be Nil here, see above
-                        nr = delete r lk
-                        ns = 1 + max (TreeMap.height l) (TreeMap.height nr)
-                    in TreeMap.rebalance (TreeMap.Node ns l nr lk lv)
-                TreeMap.Nil -> error "cannot happen"
-    delete nil k = nil
     
     -- lookup    :: forall value key . Ord key => TreeMap key value -> key -> Maybe value;
     lookup (TreeMap.Node _ l r !k1 v) !k =
