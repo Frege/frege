@@ -185,9 +185,6 @@ Contact
 Meet Frege friends at [JAX 2015](http://jax.de/2015/), Mainz, and join the [Frege Session](https://jax.de/2015/sessions/frege-ein-haskell-fuer-die-jvm)
 at April 21st, 9:45. 
 
-The [breathing code conference](http://breathing-code.de) will take place May 4th/5th in Frankfurt, Germany. It solely consists of 
-live coding events and a one-hour session will be devoted to the Frege language.
-
 **For discussions**
 
 You can contact the project members through the
