@@ -106,11 +106,12 @@ import Data.Traversable(traverse, Traversable)
 
 --- _O(1)_ Create a singleton map
 singleton ∷ Ord 𝖐 ⇒ 𝖐 → 𝖛 → TreeMap 𝖐 𝖛
-singleton k v = TreeMap.Node{höhe=1, left=TreeMap.Nil, right=TreeMap.Nil, key=k, value=v}
+singleton k v = TreeMap.Leaf{key=k, value=v}
 
 --- _O(n)_ Compute the size of the map
 size ∷ TreeMap 𝖐 𝖛 → Int
 size TreeMap.Node{left, right} = 1 + size left + size right
+size TreeMap.Leaf{} = 1
 size TreeMap.Nil = 0
 
 {--
@@ -376,29 +377,42 @@ keys = foldrWithKey (\k\v\kvs → k !: kvs) []
 data TreeMap k v = 
           protected Nil    --- the empty tree 
         | protected Node { !höhe :: Int, !left, !right :: (TreeMap k v), !key :: k, value ::  v}
+        | protected Leaf { !key :: k, value :: v }  --- short for Node 1 Nil Nil k v
         where
     
-    depth (Node _ l r _ _) = max (depth l) (depth r)
-    depth _ = 0
+    -- depth (Node _ l r _ _) = max (depth l) (depth r)
+    -- depth Leaf{} = 1
+    -- depth _ = 0
 
     balance (Node _ l r _ _) = height l - height r
     balance _ = 0
     
     height Node{höhe} = höhe
+    height Leaf{} = 1
     height _ = 0
 
     rotright (Node _ (Node _ ll lr lk lv) r k v) = Node sa ll x lk lv
         where
             sx = 1 + max (height lr) (height r)
-            x = Node sx lr r k v
+            x = if null lr && null r then Leaf k v else Node sx lr r k v
             sa = 1 + max (height ll) (height x)
+    rotright (Node _ (Leaf lk lv) r k v) = Node sa Nil x lk lv
+        where
+            sx = 1 + height r
+            x  = if null r then Leaf k v else Node sx Nil r k v
+            sa = 1 + height x
     rotright t = t
     
     rotleft (Node _ l (Node _ rl rr rk rv) k v) = Node sb x rr rk rv
         where
             sx = 1 + max (height l) (height rl)
-            x = Node sx l rl k v
+            x = if null l && null rl then Leaf k v else Node sx l rl k v
             sb = 1 + max (height x) (height rr)
+    rotleft (Node _ l (Leaf rk rv) k v) = Node sb x Nil rk rv
+        where
+            sx = 1 + height l
+            x = if null l then Leaf k v else Node sx l Nil k v
+            sb = 1 + height x
     rotleft t = t
     
     drotlr (Node s l r k v) = rotright (Node s (rotleft l) r k v)
@@ -428,19 +442,26 @@ data TreeMap k v =
     leftmost (this@Node _ Nil _ _ _) =  this
     leftmost (Node _ l _ _ _) = leftmost l
     leftmost Nil              = error "AVLTree.leftmost TreeMap.Nil"
+    leftmost leaf             = leaf
 
     --- do the dirty work for insert operations
-    insertWork f (TreeMap.Node s l r  k1 v1) !k v =
+    insertWork f (Node s l r  k1 v1) !k v =
         case k <=> k1 of 
             Lt -> case insertWork f l k v of 
-                    !nl -> case 1 + max (TreeMap.height nl) (TreeMap.height r) of 
-                        !ns -> TreeMap.rebalance (TreeMap.Node ns nl r k1 v1)
+                    !nl -> case 1 + max (height nl) (height r) of 
+                        !ns -> rebalance (Node ns nl r k1 v1)
             Eq -> case f v v1 of
-                    !nv → TreeMap.Node s l r k nv
+                    !nv → Node s l r k nv
             Gt -> case insertWork f r k v of 
-                    !nr -> case 1 + max (TreeMap.height l) (TreeMap.height nr) of
-                        !ns -> TreeMap.rebalance (TreeMap.Node ns l nr k1 v1)
-    insertWork f nil k v = TreeMap.Node 1 TreeMap.Nil TreeMap.Nil k v
+                    !nr -> case 1 + max (height l) (height nr) of
+                        !ns -> rebalance (Node ns l nr k1 v1)
+    insertWork f (Leaf k1 v1) !k v =
+        case k <=> k1 of 
+            Lt -> Node 2 (Leaf k v) Nil k1 v1 
+            Eq -> case f v v1 of
+                    !nv → Leaf k nv
+            Gt -> Node 2 Nil (Leaf k v) k1 v1
+    insertWork f nil k v = Leaf k v
 
     --- _O(log n)_
     --- > tm.insert k v 
@@ -451,68 +472,72 @@ data TreeMap k v =
     --- _O(log n)_
     --- > tm.delete k
     --- Variant of 'delete' that is better suited for left folds and supports dot-notation 
-    delete (x@TreeMap.Node _ TreeMap.Nil TreeMap.Nil k1  _) k = if k == k1 then TreeMap.Nil else x
-    delete   (TreeMap.Node _ l   TreeMap.Nil k1 v1) k = if k == k1 then l else
-        let
-            nl = delete l k
-            s' = 1 + TreeMap.height nl
-        in TreeMap.rebalance (TreeMap.Node s' nl TreeMap.Nil k1 v1)
-    delete (TreeMap.Node _ TreeMap.Nil r   k1 v1) k = if k == k1 then r else
-        let
-            nr = delete r k
-            s' = 1 + TreeMap.height nr
-        in TreeMap.rebalance (TreeMap.Node s' TreeMap.Nil nr k1 v1)
-    delete (TreeMap.Node s l r k1 v1) k =
+    delete (x@Leaf k1  _) k = if k == k1 then Nil else x
+
+    delete   (Node _ l   Nil k1 v1) k = if k == k1 then l else
+        case delete l k of
+            Nil → Leaf k1 v1
+            nl  → rebalance (Node (1 + height nl) nl Nil k1 v1)
+
+    delete   (Node _ Nil r   k1 v1) k = if k == k1 then r else
+        case delete r k of
+            Nil → Leaf k1 v1
+            nr  → rebalance (Node (1 + height nr) Nil nr k1 v1)
+
+    delete (Node s l r k1 v1) k =
         case k <=> k1 of
             Lt -> let
                     nl = delete l k
-                    ns = 1 + max (TreeMap.height nl) (TreeMap.height r)
-                in TreeMap.rebalance (TreeMap.Node ns nl r k1 v1)
+                    ns = 1 + max (height nl) (height r)
+                in rebalance (Node ns nl r k1 v1)
             Gt -> let
                     nr = delete r k
-                    ns = 1 + max (TreeMap.height l) (TreeMap.height nr)
-                in TreeMap.rebalance (TreeMap.Node ns l nr k1 v1)
-            Eq -> case TreeMap.leftmost r of
-                TreeMap.Node ls _ _ lk lv -> let    -- r may not be Nil here, see above
-                        nr = delete r lk
-                        ns = 1 + max (TreeMap.height l) (TreeMap.height nr)
-                    in TreeMap.rebalance (TreeMap.Node ns l nr lk lv)
-                TreeMap.Nil -> error "cannot happen"
+                    ns = 1 + max (height l) (height nr)
+                in rebalance (Node ns l nr k1 v1)
+            Eq -> case leftmost r of
+                lmost -> let    -- r may not be Nil here, see above
+                        nr = delete r lmost.key
+                        ns = 1 + max (height l) (height nr)
+                    in rebalance (TreeMap.Node ns l nr lmost.key lmost.value)
+                -- TreeMap.Nil -> error "cannot happen"
     delete nil k = nil
 
     filterKV :: Ord k ⇒ (k→v→Bool) → TreeMap k v → TreeMap k v
     filterKV !p Nil = Nil
     filterKV !p !m
         | p m.key m.value = case (fl,fr) of
-            (Nil, Nil) →  Nil
-            (fl,  Nil) →  fl
-            (Nil, fr)  →  fr
+            -- (Nil, Nil) →  Nil
+            (_,  Nil)  →  fl
+            (Nil, _)   →  fr
             _          →  case leftmost fr of
                 -- because fr is not Nil, this can't be Nil either
-                minr →  rebalance Node{höhe=hr, left=fl, right=dr, key=minr.key, value=minr.value}
+                minr →  rebalance (Node hr fl dr minr.key minr.value)
                             where
                                 hr   = 1 + max (height fl) (height dr)
-                                dr   = delete fr minr.key  
-        | otherwise = rebalance m.{höhe=nh, left=fl, right=fr}
+                                dr   = delete fr minr.key
+        | null fl, null fr = Leaf m.key m.value     -- stripped  
+        | otherwise = -- at least one of fl, fr is not Nil, therefore m must be Node
+                      rebalance m.{höhe=nh, left=fl, right=fr}
         where
-            fl = filterKV p m.left                  -- filtered left tree
-            fr = filterKV p m.right                 -- filtered right tree
+            fl = if m.{left?}  then filterKV p m.left  else Nil  -- filtered left tree
+            fr = if m.{right?} then filterKV p m.right else Nil  -- filtered right tree
             nh = 1 + max (height fl) (height fr)    -- new height
 
     lookup (TreeMap.Node _ l r !k1 v) !k =
-                    case k <=> k1 of {
-                        Lt -> lookup l k;
-                        Gt -> lookup r k;
-                        Eq -> Just v;
-                    };
-    lookup nil _ = Nothing;
+                    case k <=> k1 of 
+                        Lt -> lookup l k
+                        Gt -> lookup r k
+                        Eq -> Just v
+    lookup (Leaf k1 v) !k = if k == k1 then Just v else Nothing
+    lookup nil _ = Nothing
     
-    index TreeMap.Node{left, right, key, value} !k =
+    index Node{left, right, key, value} !k =
         case k <=> key of
             Lt → index left k
             Gt → index right k
             Eq → value
-    index TreeMap.Nil k = error "key not found in TreeMap"
+    index Leaf{key,value} k | k == key = value  
+    index nil k = error "key not found in TreeMap"
 
     {--
         > foldL o f a map
@@ -539,6 +564,7 @@ data TreeMap k v =
             descending order. 
     -}
     foldL ∷ Ordering → (c → a → b → c) → c → TreeMap a b → c
+    foldL o !f !a Leaf{key,value} = f a key value 
     foldL o !f !a t
         | t.null = a
         | otherwise = case o of
@@ -551,6 +577,7 @@ data TreeMap k v =
     --- The following yields the key of _map_ in ascending order:
     --- > foldR Gt (\k\v\a → k:a) [] map
     foldR ∷ Ordering → (a → b → c → c) → c → TreeMap a b → c
+    foldR o !f !a Leaf{key,value} = f key value a
     foldR o !f !a t
         | t.null = a
         | otherwise = case o of
@@ -560,12 +587,15 @@ data TreeMap k v =
  
 
     mapV f Nil = Nil
-    mapV f (Node i l r k v) = Node i (fmap f l) (fmap f r) k  (f v)
+    mapV f Leaf{key,value}  = Leaf key (f value)
+    mapV f (Node i l r k v) = Node i (mapV f l) (mapV f r) k  (f v)
 
     mapKV f Nil = Nil
+    mapKV f Leaf{key,value}  = Leaf key (f key value)
     mapKV f (Node i l r k v) = Node i (mapWithKey f l) (mapWithKey f r) k  (f k v)
 
     traverseKV f Nil = pure Nil
+    traverseKV f Leaf{key,value} =  Leaf key <$> f key value
     traverseKV f (Node i l r k v) = (Node i) <$> tl <*> tr <*> (pure k) <*> (f k v)
         where
             tl = traverseKV f l
@@ -584,6 +614,7 @@ data TreeMap k v =
                         cmp | cmp < 0 = lookupS l k
                             | cmp > 0 = lookupS r k
                             | otherwise = Just v
+    lookupS Leaf{key, value} k = if key == k then Just value else Nothing 
     lookupS nil _ = Nothing
 
     --- version of lookup that is optimised for 'Int' keys
@@ -592,35 +623,46 @@ data TreeMap k v =
                     if k < k1 then lookupI l k
                     else if k > k1 then lookupI r k
                     else Just v
+    lookupI Leaf{key, value} k = if key == k then Just value else Nothing
     lookupI nil _ = Nothing
     --- version of insert that is optimized for 'Int' keys
     insertI :: TreeMap Int value -> Int -> value -> TreeMap Int value
     insertI (Node s l r  k1 v1) !k v =
         case k <=> k1 of 
             Lt -> case insertI l k v of 
-                    !nl -> case 1 + max (TreeMap.height nl) (TreeMap.height r) of 
-                        !ns -> TreeMap.rebalance (TreeMap.Node ns nl r k1 v1)
+                    !nl -> case 1 + max (height nl) (height r) of 
+                        !ns -> rebalance (Node ns nl r k1 v1)
             Eq -> Node s l r k v
             Gt -> case insertI r k v of 
-                    !nr -> case 1 + max (TreeMap.height l) (TreeMap.height nr) of
-                        !ns -> TreeMap.rebalance (TreeMap.Node ns l nr k1 v1)
-    insertI nil k v = Node 1 Nil Nil k v
+                    !nr -> case 1 + max (height l) (height nr) of
+                        !ns -> rebalance (Node ns l nr k1 v1)
+    insertI (Leaf k1 v1) !k v =
+        case k <=> k1 of 
+            Lt -> Node 2 (Leaf k v) Nil k1 v1 
+            Eq -> Leaf k v
+            Gt -> Node 2 Nil (Leaf k v) k1 v1
+    insertI nil k v = Leaf k v
 
     insertkvI k v t = insertI t k v
     updatekvI k v t = insertI t k v
 
 
     insertS :: TreeMap String value -> String -> value -> TreeMap String value
-    insertS (TreeMap.Node s l r  k1 v1) !k v =
+    insertS (Node s l r  k1 v1) !k v =
         case k <=> k1 of 
             Lt -> case insertS l k v of 
-                    !nl -> case 1 + max (TreeMap.height nl) (TreeMap.height r) of 
-                        !ns -> TreeMap.rebalance (TreeMap.Node ns nl r k1 v1)
-            Eq -> TreeMap.Node s l r k v
+                    !nl -> case 1 + max (height nl) (height r) of 
+                        !ns -> rebalance (Node ns nl r k1 v1)
+            Eq -> Node s l r k v
             Gt -> case insertS r k v of 
-                    !nr -> case 1 + max (TreeMap.height l) (TreeMap.height nr) of
-                        !ns -> TreeMap.rebalance (TreeMap.Node ns l nr k1 v1)
-    insertS nil k v = TreeMap.Node 1 TreeMap.Nil TreeMap.Nil k v
+                    !nr -> case 1 + max (height l) (height nr) of
+                        !ns -> rebalance (Node ns l nr k1 v1)
+    insertS (Leaf k1 v1) !k v =
+        case k <=> k1 of 
+            Lt -> Node 2 (Leaf k v) Nil k1 v1 
+            Eq -> Leaf k v
+            Gt -> Node 2 Nil (Leaf k v) k1 v1
+    insertS nil k v = Leaf k v
 
     insertkvS k v t = insertS t k v
     updatekvS k v t = insertS t k v
