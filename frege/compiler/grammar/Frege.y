@@ -40,7 +40,7 @@
 {--
     This is the grammar for the Frege language.
 -}
-package frege.compiler.grammar.Frege where
+module frege.compiler.grammar.Frege where
 
     {-
        !!! DO NOT CHANGE FILE Frege.fr, IT HAS BEEN CREATED AUTOMATICALLY !!!
@@ -231,16 +231,16 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%explain thenx        then branch
 //%explain elsex        else branch
 //%explain qualifiers   qualified type name
-//%explain package      a package
-//%explain packageclause a package clause
-//%explain packagename  a package name
-//%explain packagename1 a package name
+//%explain package      a module
+//%explain packageclause a module clause
+//%explain packagename  a module name
+//%explain packagename1 a module name
 //%explain script      a frege script
 //%explain semicoli     the next definition
 //%explain varop        a variable or an operator
 //%explain operator     an operator
 //%explain operators    some operators
-//%explain import       a package import
+//%explain import       a module import
 //%explain infix        a fixity declaration
 //%explain fixity       the start of a fixity declaration
 //%explain typedef      a type declaration
