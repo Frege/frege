@@ -38,10 +38,11 @@
 package frege.run;
 
 /**
- * <p> This is a marker interface all function values will implement. </p>
+ * <p> This is a marker interface all function values will implement. 
+ * It stands for "function returning R" </p>
  * @author ingo
  *
  */
-public interface Function {
+public interface Function<R> {
 
 }

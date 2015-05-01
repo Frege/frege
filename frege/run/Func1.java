@@ -43,11 +43,11 @@ package frege.run;
  * <p> See {@link Function} for a general discussion of untyped function values. </p>
  *
  */
-public interface Func1 extends Function {
+public interface Func1<R> extends Function<R> {
     /**
      * <p> Run the function. </p>
      *
      * @return possibly lazy result
      */
-    public Object call(final Object arg1);
+    public R call(final Object arg1);
 }
