@@ -7,7 +7,7 @@ my $n = 1;
 
 
 while ($n < 27) {
-    open J, ">frege/r78/Func$n.java" or die "can't open $!";
+    open J, ">frege/run/Func$n.java" or die "can't open $!";
     my @nargs = map {"final Object arg$_" } (1..$n);
     my $cnargs = join (", ", @nargs);
     my @args  = map { "arg$_" } (1..$n);
@@ -54,7 +54,7 @@ while ($n < 27) {
 
 LIZENZ
 
-    print J "package frege.r78;\n";
+    print J "package frege.run;\n";
     print J <<"TEXT";
 /**
  * <p> Frege functions with arity $n. </p>
@@ -62,13 +62,13 @@ LIZENZ
  * <p> See {\@link Function} for a general discussion of untyped function values. </p>
  *
  */
-public interface Func$n extends Function {
+public interface Func$n<R> extends Function<R> {
     /**
      * <p> Run the function. </p>
      *
      * \@return possibly lazy result
      */
-    public Object call($cnargs);
+    public R call($cnargs);
 }
 TEXT
     close J;
