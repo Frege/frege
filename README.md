@@ -182,8 +182,7 @@ Contact
 
 **Upcoming talks**
 
-Meet Frege friends at [JAX 2015](http://jax.de/2015/), Mainz, and join the [Frege Session](https://jax.de/2015/sessions/frege-ein-haskell-fuer-die-jvm)
-at April 21st, 9:45. 
+Meet Frege friends at JavaOne 2015, San Francisco. Details to be announced.
 
 **For discussions**
 
