@@ -139,6 +139,7 @@ A number of tools are **written in Frege**:
 * the Frege [standard library]( http://www.frege-lang.org/doc/frege/Prelude.html),
 * the Frege [command-line REPL](https://github.com/Frege/frege-repl),
 * the Frege web-based, full-stack [interactive online REPL](http://try.frege-lang.org/),
+* the [FregeFX REPL](https://github.com/Dierk/frepl-gui/blob/master/README.adoc) - a JavaFX view on the REPL,
 * the Frege [Eclipse plugin](https://github.com/Frege/eclipse-plugin), 
 * and the documentation tool.
 This should speak for itself regarding stability, functional completeness and performance of the language.
@@ -158,7 +159,7 @@ The awesome QuickCheck library for advanced unit testing comes bundled with the 
 Related Projects
 ----------------
 
-* The REPL projects, consisting of [core JSR 223 scripting support](https://github.com/Frege/frege-interpreter), [interface for the command-line](https://github.com/Frege/frege-repl) and [online REPL](https://github.com/Frege/try-frege), all written and maintained by Marimuthu Madasamy
+* The REPL projects, consisting of [core JSR 223 scripting support](https://github.com/Frege/frege-interpreter), [interface for the command-line](https://github.com/Frege/frege-repl) and [online REPL](https://github.com/Frege/try-frege), all written and maintained by Marimuthu Madasamy, and the [FregeFX REPL](https://github.com/Dierk/frepl-gui/blob/master/README.adoc) with a JavaFX view by Dierk König
 * [Maven Compiler Plugin for the Frege language](https://github.com/Frege/frege-maven-plugin), by Mark Derricut 
 * [Frege compiler/library as an OSGi bundle](https://github.com/talios/frege-bundle), by Mark Derricut 
 * [Apache Maven Tile for the Frege Programming Language](https://github.com/talios/frege-maven-tile), by Mark Derricut 
