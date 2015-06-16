@@ -701,13 +701,13 @@ unop: '!' | '?' ;
 
 fixity:
       INFIX  INTCONST   { \f\i -> do
-                                    t <- infixop (yyline i) NOP1 (atoi (Token.value i) - 1)
+                                    t <- infixop (yyline i) NOP1 (Token.value i)
                                     YYM.return (FixDcl {pos=Pos f i, opid=t, ops=[]}) }
     | INFIXL INTCONST   { \f\i -> do
-                                    t <- infixop (yyline i) LOP1 (atoi (Token.value i) - 1)
+                                    t <- infixop (yyline i) LOP1 (Token.value i)
                                     YYM.return (FixDcl {pos=Pos f i, opid=t, ops=[]}) }
     | INFIXR INTCONST   { \f\i -> do
-                                    t <- infixop (yyline i) ROP1 (atoi (Token.value i) - 1)
+                                    t <- infixop (yyline i) ROP1 (Token.value i)
                                     YYM.return (FixDcl {pos=Pos f i, opid=t, ops=[]}) }
     ;
 
