@@ -2,8 +2,11 @@
 module frege.compiler.common.Types 
         inline (isFun)
     where 
-        
+
+import  Data.TreeMap as Map(member, keys, TreeSet, TreeMap)
+
 import  frege.compiler.types.Types as T
+import  Compiler.types.Global as G
 import  frege.compiler.classes.Nice(Nice)
 
 --- tell if the 'SigmaT' represents a function type. 
@@ -17,3 +20,105 @@ isRhoFun (RhoTau _ tau) g = isTauFun tau g
 --- tell if the 'TauT' represents a function type.
 isTauFun fun g | [TCon {name}, _, _] <- Tau.flat fun, name.nice g ~ ´->$´ = true
                | otherwise =  false
+
+
+--- find all unbound 'MetaTv's in a 'Sigma'
+unboundSigmaTvs g sigma = keys (unboundSigmaTvs' g sigma TreeSet.empty)
+
+--- find all unbound 'MetaTv's in a 'Rho'
+unboundRhoTvs g rho = keys (unboundRhoTvs' g rho TreeSet.empty) 
+
+--- find all unbound 'MetaTv's in a 'Tau'
+unboundTauTvs g tau = keys (unboundTauTvs' g tau TreeSet.empty) 
+
+
+--- accumulate unbound 'MetaTv's of a 'Sigma'
+unboundSigmaTvs' g (ForAll{rho}) acc = unboundRhoTvs' g rho acc
+
+--- accumulate unbound 'MetaTv's from the components of a 'Rho'
+unboundRhoTvs' g RhoFun{context, sigma, rho} acc = 
+    unboundRhoTvs' g rho (
+        unboundSigmaTvs' g sigma (
+            fold (unboundCtxTvs' g) acc context))
+unboundRhoTvs' g RhoTau{context, tau} acc = 
+    unboundTauTvs' g tau (fold (unboundCtxTvs' g) acc context)
+
+--- accumulate unbound 'MetaTv's of a 'Context'
+unboundCtxTvs' g acc Ctx{pos, cname, tau}  = unboundTauTvs' g tau acc
+
+--- accumulate unbound 'MetaTv's of a 'Tau'
+unboundTauTvs' ∷ Global → TauT 𝖆 → TreeSet Int → TreeSet Int
+unboundTauTvs' g (TApp a b) acc =
+    unboundTauTvs' g a (unboundTauTvs' g b acc)
+unboundTauTvs' g (TSig s) acc = unboundSigmaTvs' g s acc
+unboundTauTvs' g (Meta m) acc = case m  of
+    -- This is what we are looking for.
+    -- If the meta type variable has no entry in the type substitution map,
+    -- then it is unbound.
+    Flexi{uid} →  case g.tySubst.lookupI uid of
+        Just t  → unboundTauTvs' g t acc    -- follow substitution
+        Nothing → acc.insertI uid ()        -- would print as t<uid>
+    Rigid{} →  acc
+
+unboundTauTvs' g TVar{} acc = acc
+unboundTauTvs' g TCon{} acc = acc
+
+--- substitute 'MetaTv' unique ids in a 'Sigma'
+substSigmaUID :: TreeMap Int Int → Sigma → Sigma
+substSigmaUID m sigma = sigma.{rho ← substRhoUID m}
+
+--- substitute 'MetaTv' unique ids in a 'Rho'
+substRhoUID :: TreeMap Int Int → Rho → Rho
+substRhoUID m (r@RhoFun{})  = r.{context ← map (substCtxUID m), 
+                                 sigma   ← substSigmaUID m, 
+                                 rho     ← substRhoUID m}
+substRhoUID m (r@RhoTau{})  = r.{context ← map (substCtxUID m), 
+                                 tau     ← substTauUID m}
+
+--- substitute 'MetaTv' unique ids in a 'Context'
+substCtxUID :: TreeMap Int Int -> Context -> Context
+substCtxUID m ctx = ctx.{tau <- substTauUID m}
+
+--- substitute 'MetaTv' unique ids in a 'Tau'
+substTauUID :: TreeMap Int Int -> Tau -> Tau
+substTauUID m tau = case tau  of
+    TApp a b →  TApp (substTauUID m a) (substTauUID m b)
+    TCon{} →  tau
+    TVar{} →  tau
+    TSig s →  TSig (substSigmaUID m s)
+    Meta v →  case v  of
+        Flexi{uid} | Just n <- m.lookupI uid → Meta v.{uid=n}  
+        _  →  tau
+
+--- A list of unused MetaTv UID for substitution
+--- Experience shows that real UIDs are quite big, like 17432, so it should be [1,2,3,...]
+smallUIDs :: Global -> [Int]
+smallUIDs g = [ n | n <- [1..], not (member n g.tySubst) ] 
+
+
+class BetterReadable t where
+    {-- 
+        Make a type better readable (like in error messages)
+        by replacing the UIDs of unbound 'MetaTv's with small numbers.
+        
+        This should cause types like
+        > t12345 -> t54231 -> t54312
+        to become
+        > t1 -> t2 -> t3
+
+        Note: The result of 'betterReadable' is a fake type
+        and must not be used in actual type inference! 
+    -}
+    betterReadable :: Global -> t -> t
+
+instance BetterReadable Sigma where
+    betterReadable g s = substSigmaUID (Map.fromList subst) s where
+        subst = zip (unboundSigmaTvs g s) (smallUIDs g)
+
+instance BetterReadable Rho where
+    betterReadable g s = substRhoUID (Map.fromList subst) s where
+        subst = zip (unboundRhoTvs g s) (smallUIDs g)
+
+instance BetterReadable Tau where
+    betterReadable g s = substTauUID (Map.fromList subst) s where
+        subst = zip (unboundTauTvs g s) (smallUIDs g)
