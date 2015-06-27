@@ -1206,8 +1206,8 @@ calts:
 
 
 lambda:
-      '\\' pattern lambda           { \_\p\l   -> Lam p l}
-    | '\\' pattern ARROW  expr      { \_\p\_\x -> Lam p x}
+      '\\' pattern lambda           { \_\p\l   -> Lam p l false}
+    | '\\' pattern ARROW  expr      { \_\p\_\x -> Lam p x false}
     ;
 
 

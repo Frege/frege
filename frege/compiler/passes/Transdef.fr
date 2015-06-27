@@ -49,6 +49,7 @@ import Compiler.enums.TokenID
 import Compiler.enums.Visibility
 import Compiler.enums.SymState
 import Compiler.enums.Literals
+import Compiler.enums.CaseKind
 
 import  Compiler.types.Kinds
 import  Compiler.types.Positions
@@ -70,6 +71,7 @@ import  Compiler.common.Resolve as R(resolveVName, resolveXName, defaultXName)
 import  Compiler.common.SymbolTable
 import  Compiler.common.Binders
 import  Compiler.common.Desugar as Des()
+import  Compiler.common.Trans(patternRefutable)
 
 import  Compiler.classes.Nice
 
@@ -208,7 +210,7 @@ transdef env fname (d@FunDcl {positions}) = do
         case g.findit aname of
             Just sym
                 | SymV {pos} <- sym = do
-                    let funex = foldr Lam d.expr d.pats
+                    let funex = foldr (\p\e → Lam p e false) d.expr d.pats
                         -- lamNil p e = Lam p e Nothing
                     x <- transExpr env fname funex
                     case varcon x of
@@ -731,11 +733,39 @@ transExpr env fname ex = do
                                 Enter.enter1 (Local u) def
                                 return env
                             _ = error "onlyLocal possible"
-        Lam {pat,ex}  -> do
-                        pat <- transPatUnique  fname pat
-                        let nenv = U.patNames pat
-                        ex  <- transExpr (nenv++env) fname ex
-                        return (D.Lam {pat,ex,typ=Nothing})
+        Lam {pat=spat,ex,fromDO}  -> do
+                        g ← getST           -- mark environment *before* transPat  
+                        pat <- transPatUnique  fname spat
+                        -- check if we had a refutable pattern in 
+                        --    do pat <- ....
+                        if fromDO && patternRefutable g pat
+                        then do
+                            -- transform to: \do$1 -> case do$1 of  { spat -> ex; _ -> fail "..." } 
+                            putST g         -- "undo" transPat in state
+                            duid <- uniqid  -- get a unique id for that extra variable we need
+                            let ptok  = (getpos spat).first
+                                etok  = (getpos ex). first
+                                snam  = contextName ptok ("do$" ++ show duid)
+                                unam  = contextName ptok ("_")
+                                fnam  = contextName etok "fail"
+                                fstr  = Lit{pos=getpos ex, kind=LString, 
+                                            value = "\"pattern failed in do block, "
+                                                    ++ g.unpack g.thisPack 
+                                                    ++ " line " ++ show ptok.line
+                                                    ++ "\""}
+                                dovar = Vbl{name = snam}    -- do$123
+                                unvar = Vbl{name = unam}    -- _
+                                fvar  = Vbl{name = fnam}    -- fail
+                                docas = Case{ckind=CNormal, ex=dovar, alts=[
+                                            CAlt{pat=spat, ex},
+                                            CAlt{pat=unvar, ex = fvar `nApp` fstr}
+                                            ]}
+                                doex  = Lam{pat=dovar, ex=docas, fromDO=false}
+                            transExpr env fname doex
+                        else do
+                            let nenv = U.patNames pat
+                            ex  <- transExpr (nenv++env) fname ex
+                            return (D.Lam {pat,ex,typ=Nothing})
         Ann {ex,typ} -> do
                         ex  <- transExpr env fname ex
                         typ <- transSigma typ
