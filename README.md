@@ -144,6 +144,7 @@ A number of tools are **written in Frege**:
 * the [FregeFX REPL](https://github.com/Dierk/frepl-gui/blob/master/README.adoc) - a JavaFX view on the REPL,
 * the Frege [Eclipse plugin](https://github.com/Frege/eclipse-plugin), 
 * and the documentation tool.
+
 This should speak for itself regarding stability, functional completeness and performance of the language.
 
 The documentation is provisional and the library supports almost all of the Haskell 2010 standard library
@@ -183,9 +184,11 @@ If you are interested in contributing, here are some hot topics:
 Contact
 -------
 
-**Upcoming talks**
+**Upcoming events**
 
-Meet Frege friends at JavaOne 2015, San Francisco. Details to be announced.
+* [Frege Day at Canoo](http://www.canoo.com/blog/2015/06/30/frege-day-2015/) Sept. 11th 2015, Basel, Switzerland. Meet us all there!
+* Meet Frege friends at JavaOne 2015, San Francisco. 
+  Session ID: CON6946, Title: Script Bowl 2015: The Emerging Languages Take Over
 
 **For discussions**
 
@@ -220,6 +223,7 @@ Links
 * [Language reference](http://www.frege-lang.org/doc/Language.pdf)
 * [Author's Blog](http://fregepl.blogspot.com/), [Dierk's Blog](http://www.canoo.com/blog/tag/frege/), the [Frege Goodness](http://dierk.github.io/FregeGoodness/html/index.html) series
 * [edX Functional Programming course FP101x](https://www.edx.org/course/introduction-functional-programming-delftx-fp101x) with exercises in Frege
+* Functional Programming [13 videos](https://www.youtube.com/playlist?list=PLoJC20gNfC2gpI7Dl6fg8uj1a-wfnWTH8) by Dr. Erik Meijer
 * Introduction to Frege: [video](https://www.parleys.com/play/543fa326e4b06e1184ae41e6/chapter44/about), [slides](http://de.slideshare.net/Mittie/frege-purely-functional-programming-on-the-jvm)
 
 Recommended reading
