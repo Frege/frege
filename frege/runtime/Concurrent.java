@@ -12,9 +12,11 @@ package frege.runtime;
  */
 public class Concurrent {
 
+	private static Object lock = new Object();
+
 	/**
      * The fork/join pool for ad hoc parallelism used by Frege runtime system..
-     * 
+     *
      * @see Concurrent#fork Concurrent#setFregeForkJoindPool
      */
    private static java.util.concurrent.ForkJoinPool fjpool = null;
@@ -39,7 +41,7 @@ public class Concurrent {
      */
     public static java.util.concurrent.ForkJoinPool
     		setFregeForkJoinPool(java.util.concurrent.ForkJoinPool pool) {
-    	synchronized (Runtime.emptyString) {
+    	synchronized (lock) {
     		if (fjpool == null) {
     			fjpool = pool;
     		}
@@ -76,7 +78,7 @@ public class Concurrent {
      */
     public static java.util.concurrent.ExecutorService
     		setFregeExecutorService(java.util.concurrent.ExecutorService svc) {
-    	synchronized (Runtime.emptyString) {
+    	synchronized (lock) {
     		if (execService == null) {
     			execService = svc;
     		}
@@ -123,7 +125,7 @@ public class Concurrent {
     	frege.runtime.Lazy a = val.apply(true).result();
         if (java.util.concurrent.ForkJoinTask.inForkJoinPool())
         	java.util.concurrent.ForkJoinTask.adapt(a).fork();
-        else synchronized (Runtime.emptyString) {		// make sure 2 threads can't do that
+        else synchronized (lock) {		// make sure 2 threads can't do that
         	if (fjpool == null) {				        // at the same time
         		fjpool = new java.util.concurrent.ForkJoinPool(
         					2 * java.lang.Runtime.getRuntime().availableProcessors());
