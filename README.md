@@ -187,8 +187,10 @@ Contact
 **Upcoming events**
 
 * [Frege Day at Canoo](http://www.canoo.com/blog/2015/06/30/frege-day-2015/) Sept. 11th 2015, Basel, Switzerland. Meet us all there!
-* Meet Frege friends at JavaOne 2015, San Francisco. 
-  Session ID: CON6946, Title: Script Bowl 2015: The Emerging Languages Take Over
+* Meet Frege friends at [all Frege events at JavaOne 2015, San Francisco](https://events.rainfocus.com/oow15/catalog/oracle.jsp?event=javaone&search=Frege&search.event=javaoneEvent). 
+    _Session_: Frege: Purely Functional Programming for the JVM [CON4286]
+    _Panel_: Script Bowl 2015: The Emerging Languages Take Over [CON6946]
+    _Tutorial_:Purely Functional Programming on the JVM: The Red Pill [TUT4296]
 
 **For discussions**
 
