@@ -51,28 +51,53 @@ Since the purity information is carried through the **type system**, the compile
 > Frege is **strongly** and **statically** typed, even though we haven't declared any types in the code above.
 > If not declared, the types are _inferred_. When declared, the given types are checked against the inferred ones.
 
-**2. No mutable state**
+**2. Expressive code**
 
 Much can be achieved in Frege in one line of code and here is an example that you can paste into the
-[Online REPL](http://try.frege-lang.org/). It calculates the fixpoint of the cosine function, i.e. the
+[Online REPL](http://try.frege-lang.org/). It calculates [pythagorean triples](https://en.wikipedia.org/wiki/Pythagorean_triple) below `10` with the help of a list comprehension:
+
+    [ (x,y,z) | x <- [1..10], y <- [x..10], z <- [x..10], x*x + y*y == z*z ]
+    
+After execution you should see a list of triples containing the solutions `(3, 4, 5)` and `(6, 8, 10)`. 
+    
+Such a comprehension reads almost like a SQL statement: 
+* _select_ the triple `(x,y,z)`
+* with `x` drawn _from_ the list of `1` to `10`, `y` from `x` to `10`, and `z` from `x` to `10`
+* _where_ `x*x + y*y == z*z`
+
+> There are much more elegant and efficient ways to calculate the triples but those are a bit less obvious.
+
+**3. No mutable state**
+
+Mutable state is the source of many bugs and makes code less modular. 
+Frege allows interesting ways to avoid it.
+That style is very unfamiliar to many developers that come from the imperative world.
+Be brave. It is different but there are a huge benefits to be discovered.
+
+Let's go for a more advanced example where we calculate the fixpoint of the cosine function, i.e. the
 value where [`cos(x) == x`](http://www.wolframalpha.com/input/?i=cos+0.7390851332151607).
 
 Implementations in imperative languages usually involve introducing local mutable state. Not so in Frege:
 
     import frege.prelude.Math (cos)
-    (fst . head . dropWhile (uncurry (!=))) (zip cs (tail cs)) where cs = iterate cos 1.0
+    cosines = iterate cos 1.0
+    pairsOf xs = zip xs (tail xs)
+    head [ x | (x,y) <- pairsOf cosines, x == y] 
 
 After execution it should show you the value
 
      0.7390851332151607
 
-The code is most likely incomprehensible for a Frege/Haskell newcomer at first but you would not believe how
-obvious and straightforward it is once you know the parts.
-* `cs` is an _infinite_ list (a stream in Java terms) of cosine values that starts with `cos 1.0` and then `iterate`s to `cos(cos(1.0))`, `cos(cos(cos(1.0)))`, and so forth.
-* `zip cs (tail cs)` produces an infinite list of pairs of any two adjacent values in `cs`.
-* `uncurry` holds onto each element of a given pair and the `(!=)` function compares these elements for in-equality.
-* `dropWhile` reads from the infinite list as long as the cosine values in each pair are not equal.
-* The remaining list (the infinite list of pairs of equal cosine values) has a first pair called `head` and `fst` returns the first element of that pair, which yields the final result.
+The code is most likely incomprehensible for a Frege/Haskell newcomer at first but it becomes
+less intimidating once you know the parts. With a bit of experience, you may even find it
+clear and obvious.
+* Again, we have a list comprehension. We get a list of `x` values but we only need the first element, the `head`.
+* The `x` comes from an `(x,y)` pair where `x == y`.
+* The `(x,y)` pair is drawn from a list of pairs of cosine values.
+* The `cosines` are an _infinite_ list of cosine values that starts with `cos 1.0` and then `iterate`s to `cos(cos(1.0))`, `cos(cos(cos(1.0)))`, and so forth.
+* Please note that the `=` signs do _not_ denote assignment but a definition. There are no assignment in Frege!
+* The `pairsOf` function works on any list of values to create pairs of any adjacent values.
+It uses `zip`, which is an often-used construction for this task but the details are not relevant here.
 
 This code is **pure**. The inferred type is `Double`.
 The code does not rely on any mutable state (not even internally). Therefore it is _threadsafe_ and the result can be _automatically cached_.
