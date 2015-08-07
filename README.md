@@ -102,7 +102,7 @@ It uses `zip`, which is an often-used construction for this task but the details
 This code is **pure**. The inferred type is `Double`.
 The code does not rely on any mutable state (not even internally). Therefore it is _threadsafe_ and the result can be _automatically cached_.
 
-What's in for me?
+What's in it for me?
 -----------------
 **For the Java programmer**
 
