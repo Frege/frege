@@ -277,7 +277,7 @@ doc/index.html: $(RUNTIME)
 
 docu: fregec.jar
 	javadoc -private -sourcepath . -d $(DOC) -encoding UTF-8 frege.runtime
-	$(JAVA) -cp fregec.jar frege.tools.Doc -v -d $(DOC) -x frege.compiler,frege.runtime,frege.S,frege.V,frege.PreludePr fregec.jar
+	$(JAVA) -cp fregec.jar frege.tools.Doc -v -d $(DOC) -x frege.compiler,frege.runtime,frege.S,frege.V,frege.PreludePr,frege.run fregec.jar
 	$(JAVA) -cp fregec.jar frege.tools.MakeDocIndex $(DOC)
 
 

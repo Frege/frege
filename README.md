@@ -102,7 +102,7 @@ It uses `zip`, which is an often-used construction for this task but the details
 This code is **pure**. The inferred type is `Double`.
 The code does not rely on any mutable state (not even internally). Therefore it is _threadsafe_ and the result can be _automatically cached_.
 
-What's in for me?
+What's in it for me?
 -----------------
 **For the Java programmer**
 
@@ -221,6 +221,8 @@ Contact
     *Panel*: Script Bowl 2015: The Emerging Languages Take Over [CON6946]
 
     *Tutorial*: Purely Functional Programming on the JVM: The Red Pill [TUT4296]
+* [DEVOXX](http://www.devoxx.be) Antwerp, 9.-13. Nov 2015
+* [OOP](http://www.oop-konferenz.de) Munich, 26.-30. Jan 2016 (more details to come)
 
 **For discussions**
 
