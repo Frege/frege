@@ -50,7 +50,7 @@ import java.lang.annotation.*;
  * with the annotations defined here.<br>
  * This makes it possible to recreate a symbol table of an imported package
  * up to the expressions for variable symbols. Used in the compiler for imports,
- * in the documentation tool and possibly other tools.</p>
+ * in the documentation tool, and possibly other tools.</p>
  */
 public class Meta {
     /**
@@ -352,12 +352,12 @@ public class Meta {
                                                   // Case: ord CKind
         String     varval()        default "";    // local Vbl name or Literal value
         int[]      alts()          default {};    // case alternatives or lambda
-                                                  // first halve are expression indexes for patterns
-                                                  // second halve are expression indexes for expressions
+                                                  // first half are expression indexes for patterns
+                                                  // second half are expression indexes for expressions
                                                   // For Let, the number of elements is a multiple of 3
                                                   // and each value bound by the let is a triple (v, s, x)
                                                   // where v is an index of an Expr that describes the local variable
-                                                  //       s is a sigma index or -1 if v was not aannotated
+                                                  //       s is a sigma index or -1 if v was not annotated
                                                   //       x is the index of an Expr for the expression defining v
         int        subx1()         default 0;     // index of 1st subexpression, set for Ann, App, If, Case and Let
         int        subx2()         default 0;     // index of 2nd subexpression, set for App, If
