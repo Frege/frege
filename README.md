@@ -214,6 +214,7 @@ Contact
 
 * [Frege Day at Canoo](http://www.canoo.com/blog/2015/06/30/frege-day-2015/) Sept. 11th 2015, Basel, Switzerland. Meet us all there!
 * [Berlin Expert Days](http://bed-con.org/2015/talks/Frege---konsequent-funktionale-Programmierung-auf-der-JVM) Sept. 17./18. 2015, Berlin, Germany.
+* [Frege Talk & Tutorial at JDD 2015](http://jdd.org.pl) Oct. 12./13. 2015, Krakow, Poland
 * Meet Frege friends at [all Frege events at JavaOne 2015, San Francisco](https://events.rainfocus.com/oow15/catalog/oracle.jsp?event=javaone&search=Frege&search.event=javaoneEvent). 
 
     *Session*: Frege: Purely Functional Programming for the JVM [CON4286]
