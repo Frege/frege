@@ -95,7 +95,7 @@ clear and obvious.
 * The `x` comes from an `(x,y)` pair where `x == y`.
 * The `(x,y)` pair is drawn from a list of pairs of cosine values.
 * The `cosines` are an _infinite_ list of cosine values that starts with `cos 1.0` and then `iterate`s to `cos(cos(1.0))`, `cos(cos(cos(1.0)))`, and so forth.
-* Please note that the `=` signs do _not_ denote assignment but a definition. There are no assignment in Frege!
+* Please note that the `=` signs do _not_ denote assignment but a definition. There are no assignments in Frege!
 * The `pairsOf` function works on any list of values to create pairs of any adjacent values.
 It uses `zip`, which is an often-used construction for this task but the details are not relevant here.
 
