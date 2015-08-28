@@ -222,6 +222,7 @@ Contact
     *Panel*: Script Bowl 2015: The Emerging Languages Take Over [CON6946]
 
     *Tutorial*: Purely Functional Programming on the JVM: The Red Pill [TUT4296]
+* Language Day [Hochschule der Medien](https://www.hdm-stuttgart.de) Stuttgart, 06. Nov 2015
 * [DEVOXX](http://www.devoxx.be) Antwerp, 9.-13. Nov 2015
 * [OOP](http://www.oop-konferenz.de) Munich, 26.-30. Jan 2016 (more details to come)
 
