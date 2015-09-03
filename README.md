@@ -260,7 +260,7 @@ Links
 * [InfoQ Article on Frege's history, current state, and future plans](http://www.infoq.com/news/2015/08/frege-haskell-for-jvm)
 * [Author's Blog](http://fregepl.blogspot.com/), [Dierk's Blog](http://www.canoo.com/blog/tag/frege/)
 * [edX Functional Programming course FP101x](https://www.edx.org/course/introduction-functional-programming-delftx-fp101x) with exercises in Frege (next start Oct 15th 2015)
-* <img align="right" src="https://raw.githubusercontent.com/Dierk/FregeGoodness/master/cover-small.jpg">Functional Programming [13 videos](https://www.youtube.com/playlist?list=PLoJC20gNfC2gpI7Dl6fg8uj1a-wfnWTH8) by Dr. Erik Meijer
+* [<img align="right" src="https://raw.githubusercontent.com/Dierk/FregeGoodness/master/FregeGoodness.png">](http://dierk.gitbooks.io/fregegoodness)Functional Programming [13 videos](https://www.youtube.com/playlist?list=PLoJC20gNfC2gpI7Dl6fg8uj1a-wfnWTH8) by Dr. Erik Meijer
 * Introduction to Frege: [video](https://www.parleys.com/play/543fa326e4b06e1184ae41e6/chapter44/about), [slides](http://de.slideshare.net/Mittie/frege-purely-functional-programming-on-the-jvm)
 * The [Frege Goodness](http://dierk.gitbooks.io/fregegoodness) free ebook 
 
