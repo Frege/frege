@@ -4,13 +4,14 @@ What is Frege? [![Build Status](https://travis-ci.org/Frege/frege.svg)](https://
 [![Join the chat at https://gitter.im/Frege/frege](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/Frege/frege?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
 
 <img align="right" src="resources/Frege_logo.png"/>
-Frege is a **pure** functional programming language for the JVM in the spirit of Haskell.
-It enjoys a strong static type system with powerful type inference and
+Frege is a Haskell for the JVM.
+
+Like any Haskell, it is purely functional, 
+enjoys a strong static type system with global type inference and
 [non-strict](http://en.wikipedia.org/wiki/Non-strict_programming_language) - also known as _lazy_ - evaluation.
 
-Frege programs are compiled to Java and run on the JVM.
-
-The similarity to Haskell is actually strong enough that many users call it "_a_ Haskell for the JVM".
+Frege compiles to Java, runs on the JVM, and uses any Java library you want. 
+It can be used inside any Java project.
 
 A Taste of Frege
 ----------------
@@ -123,7 +124,7 @@ But unlike other approaches,
 doesn't undermine the language guarantees.
 
 > When calling Java from Frege, you have to declare the Java types in rigid Frege terms in order to
-> preserve the Frege language characteristics, especially purity, thread safety, and lazy evaluation.
+> preserve the Haskell language characteristics, especially purity, thread safety, and lazy evaluation.
 
 Learning Frege essentially means that **you will also learn Haskell** and thus your effort pays off twice, since
 you also get to know a very popular non-JVM language with 25+ years of development, a great community,
@@ -212,7 +213,6 @@ Contact
 
 **Upcoming events**
 
-* [Frege Day at Canoo](http://www.canoo.com/blog/2015/06/30/frege-day-2015/) Sept. 11th 2015, Basel, Switzerland. Meet us all there!
 * [Berlin Expert Days](http://bed-con.org/2015/talks/Frege---konsequent-funktionale-Programmierung-auf-der-JVM) Sept. 17./18. 2015, Berlin, Germany.
 * [Frege Talk & Tutorial at JDD 2015](http://jdd.org.pl) Oct. 12./13. 2015, Krakow, Poland
 * Meet Frege friends at [all Frege events at JavaOne 2015, San Francisco](https://events.rainfocus.com/oow15/catalog/oracle.jsp?event=javaone&search=Frege&search.event=javaoneEvent). 
