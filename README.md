@@ -1,6 +1,7 @@
-What is Frege? [![Build Status](https://travis-ci.org/Frege/frege.svg)](https://travis-ci.org/Frege/frege)
+What is Frege? 
 ==============
 
+[![Build Status](https://travis-ci.org/Frege/frege.svg)](https://travis-ci.org/Frege/frege)
 [![Join the chat at https://gitter.im/Frege/frege](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/Frege/frege?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
 
 <img align="right" src="resources/Frege_logo.png"/>
@@ -147,6 +148,11 @@ From now on you can also enjoy on the JVM:
 * pattern matching, list comprehensions, do-notation, point-free style, operators, modules
 * functors, monoids, semigroups, monads, and all your other beloved mathematical abstractions.
 
+Frege aims at compiling most "vanilla" Haskell code that has no external dependencies "as is"
+or with only minimal, obvious changes. Likewise, Frege code that makes no use of JVM specifics should
+easily run through other Haskell compilers. We are currently in the progress of coming closer to this goal
+by ironing out insubstantial differences. 
+
 The Name
 --------
 The Frege programming language is named after and in honor of Gottlob Frege
@@ -181,7 +187,7 @@ See the [Getting Started](https://github.com/Frege/frege/wiki/Getting-Started) p
 getting started at the command-line or read the [Eclipse plugin](https://github.com/Frege/eclipse-plugin) page.
 You can develop [Frege inside Intellij IDEA](https://github.com/Frege/frege/wiki/Using-Frege-in-Intellij-IDEA)
 and there is build automation support for
-Maven, Gradle, and Leinigen.
+Maven, Gradle, Leinigen, SBT, and Bazel.
 
 The awesome QuickCheck library for advanced unit testing comes bundled with the language.
 
@@ -224,6 +230,7 @@ Contact
     *Tutorial*: Purely Functional Programming on the JVM: The Red Pill [TUT4296]
 * Language Day [Hochschule der Medien](https://www.hdm-stuttgart.de) Stuttgart, 06. Nov 2015
 * [DEVOXX](http://www.devoxx.be) Antwerp, 9.-13. Nov 2015
+* [GOTO](http://gotocon.com/berlin-2015) Berlin, 2./3. Dec 2015
 * [OOP](http://www.oop-konferenz.de) Munich, 26.-30. Jan 2016 (more details to come)
 
 **For discussions**
