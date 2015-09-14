@@ -249,6 +249,12 @@ some project members and Frege users hang out. You can use any IRC client
 you like or Freenode's [WebChat interface](https://webchat.freenode.net)
 if you don't want to install IRC software.
 
+**Staying up to date**
+
+[Twitter: @fregelang](https://twitter.com/fregelang), 
+[Facebook: fregelang](https://www.facebook.com/fregelang), 
+[Reddit: r/frege](https://www.reddit.com/r/frege)
+
 **For issues only**
 
 If you find a bug or have an idea for enhancements, please let us know by opening an issue in the
