@@ -374,8 +374,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 
 %start package
 
-%right      SOMEOP
-%right      '-'
+%right      SOMEOP '-'
 %right      ARROW
 
 %%
@@ -1230,7 +1229,7 @@ elsex:
 binex:
       binex SOMEOP binex                { mkapp }
     | binex '-'    binex                { mkapp }
-    | '-' binex                         { \m\x -> nApp (Vbl (contextName m "negate")) x}
+    | '-' topex                         { \m\x -> nApp (Vbl (contextName m "negate")) x}
     | topex
     ;
 

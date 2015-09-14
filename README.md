@@ -1,16 +1,18 @@
-What is Frege? [![Build Status](https://travis-ci.org/Frege/frege.svg)](https://travis-ci.org/Frege/frege)
+What is Frege? 
 ==============
 
+[![Build Status](https://travis-ci.org/Frege/frege.svg)](https://travis-ci.org/Frege/frege)
 [![Join the chat at https://gitter.im/Frege/frege](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/Frege/frege?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
 
 <img align="right" src="resources/Frege_logo.png"/>
-Frege is a **pure** functional programming language for the JVM in the spirit of Haskell.
-It enjoys a strong static type system with powerful type inference and
+Frege is a Haskell for the JVM.
+
+Like any Haskell, it is purely functional, 
+enjoys a strong static type system with global type inference and
 [non-strict](http://en.wikipedia.org/wiki/Non-strict_programming_language) - also known as _lazy_ - evaluation.
 
-Frege programs are compiled to Java and run on the JVM.
-
-The similarity to Haskell is actually strong enough that many users call it "_a_ Haskell for the JVM".
+Frege compiles to Java, runs on the JVM, and uses any Java library you want. 
+It can be used inside any Java project.
 
 A Taste of Frege
 ----------------
@@ -51,33 +53,58 @@ Since the purity information is carried through the **type system**, the compile
 > Frege is **strongly** and **statically** typed, even though we haven't declared any types in the code above.
 > If not declared, the types are _inferred_. When declared, the given types are checked against the inferred ones.
 
-**2. No mutable state**
+**2. Expressive code**
 
 Much can be achieved in Frege in one line of code and here is an example that you can paste into the
-[Online REPL](http://try.frege-lang.org/). It calculates the fixpoint of the cosine function, i.e. the
+[Online REPL](http://try.frege-lang.org/). It calculates [pythagorean triples](https://en.wikipedia.org/wiki/Pythagorean_triple) below `10` with the help of a list comprehension:
+
+    [ (x,y,z) | x <- [1..10], y <- [x..10], z <- [x..10], x*x + y*y == z*z ]
+    
+After execution you should see a list of triples containing the solutions `(3, 4, 5)` and `(6, 8, 10)`. 
+    
+Such a comprehension reads almost like a SQL statement: 
+* _select_ the triple `(x,y,z)`
+* with `x` drawn _from_ the list of `1` to `10`, `y` from `x` to `10`, and `z` from `x` to `10`
+* _where_ `x*x + y*y == z*z`
+
+> There are much more elegant and efficient ways to calculate the triples but those are a bit less obvious.
+
+**3. No mutable state**
+
+Mutable state is the source of many bugs and makes code less modular. 
+Frege allows interesting ways to avoid it.
+That style is very unfamiliar to many developers that come from the imperative world.
+Be brave. It is different but there are a huge benefits to be discovered.
+
+Let's go for a more advanced example where we calculate the fixpoint of the cosine function, i.e. the
 value where [`cos(x) == x`](http://www.wolframalpha.com/input/?i=cos+0.7390851332151607).
 
 Implementations in imperative languages usually involve introducing local mutable state. Not so in Frege:
 
     import frege.prelude.Math (cos)
-    (fst . head . dropWhile (uncurry (!=))) (zip cs (tail cs)) where cs = iterate cos 1.0
+    cosines = iterate cos 1.0
+    pairsOf xs = zip xs (tail xs)
+    head [ x | (x,y) <- pairsOf cosines, x == y] 
 
 After execution it should show you the value
 
      0.7390851332151607
 
-The code is most likely incomprehensible for a Frege/Haskell newcomer at first but you would not believe how
-obvious and straightforward it is once you know the parts.
-* `cs` is an _infinite_ list (a stream in Java terms) of cosine values that starts with `cos 1.0` and then `iterate`s to `cos(cos(1.0))`, `cos(cos(cos(1.0)))`, and so forth.
-* `zip cs (tail cs)` produces an infinite list of pairs of any two adjacent values in `cs`.
-* `uncurry` holds onto each element of a given pair and the `(!=)` function compares these elements for in-equality.
-* `dropWhile` reads from the infinite list as long as the cosine values in each pair are not equal.
-* The remaining list (the infinite list of pairs of equal cosine values) has a first pair called `head` and `fst` returns the first element of that pair, which yields the final result.
+The code is most likely incomprehensible for a Frege/Haskell newcomer at first but it becomes
+less intimidating once you know the parts. With a bit of experience, you may even find it
+clear and obvious.
+* Again, we have a list comprehension. We get a list of `x` values but we only need the first element, the `head`.
+* The `x` comes from an `(x,y)` pair where `x == y`.
+* The `(x,y)` pair is drawn from a list of pairs of cosine values.
+* The `cosines` are an _infinite_ list of cosine values that starts with `cos 1.0` and then `iterate`s to `cos(cos(1.0))`, `cos(cos(cos(1.0)))`, and so forth.
+* Please note that the `=` signs do _not_ denote assignment but a definition. There are no assignment in Frege!
+* The `pairsOf` function works on any list of values to create pairs of any adjacent values.
+It uses `zip`, which is an often-used construction for this task but the details are not relevant here.
 
 This code is **pure**. The inferred type is `Double`.
 The code does not rely on any mutable state (not even internally). Therefore it is _threadsafe_ and the result can be _automatically cached_.
 
-What's in for me?
+What's in it for me?
 -----------------
 **For the Java programmer**
 
@@ -98,7 +125,7 @@ But unlike other approaches,
 doesn't undermine the language guarantees.
 
 > When calling Java from Frege, you have to declare the Java types in rigid Frege terms in order to
-> preserve the Frege language characteristics, especially purity, thread safety, and lazy evaluation.
+> preserve the Haskell language characteristics, especially purity, thread safety, and lazy evaluation.
 
 Learning Frege essentially means that **you will also learn Haskell** and thus your effort pays off twice, since
 you also get to know a very popular non-JVM language with 25+ years of development, a great community,
@@ -120,6 +147,11 @@ From now on you can also enjoy on the JVM:
 * lazy evaluation on infinite data structures
 * pattern matching, list comprehensions, do-notation, point-free style, operators, modules
 * functors, monoids, semigroups, monads, and all your other beloved mathematical abstractions.
+
+Frege aims at compiling most "vanilla" Haskell code that has no external dependencies "as is"
+or with only minimal, obvious changes. Likewise, Frege code that makes no use of JVM specifics should
+easily run through other Haskell compilers. We are currently in the progress of coming closer to this goal
+by ironing out insubstantial differences. 
 
 The Name
 --------
@@ -155,7 +187,7 @@ See the [Getting Started](https://github.com/Frege/frege/wiki/Getting-Started) p
 getting started at the command-line or read the [Eclipse plugin](https://github.com/Frege/eclipse-plugin) page.
 You can develop [Frege inside Intellij IDEA](https://github.com/Frege/frege/wiki/Using-Frege-in-Intellij-IDEA)
 and there is build automation support for
-Maven, Gradle, and Leinigen.
+Maven, Gradle, Leinigen, SBT, and Bazel.
 
 The awesome QuickCheck library for advanced unit testing comes bundled with the language.
 
@@ -165,10 +197,11 @@ Related Projects
 * The REPL projects, consisting of [core JSR 223 scripting support](https://github.com/Frege/frege-interpreter), [interface for the command-line](https://github.com/Frege/frege-repl) and [online REPL](https://github.com/Frege/try-frege), all written and maintained by Marimuthu Madasamy, and the [FregeFX REPL](https://github.com/Dierk/frepl-gui/blob/master/README.adoc) with a JavaFX view by Dierk König
 * [Maven Compiler Plugin for the Frege language](https://github.com/Frege/frege-maven-plugin), by Mark Derricut 
 * [Frege compiler/library as an OSGi bundle](https://github.com/talios/frege-bundle), by Mark Derricut 
-* [Apache Maven Tile for the Frege Programming Language](https://github.com/talios/frege-maven-tile), by Mark Derricut 
+* [Apache Maven Tile for the Frege Programming Language](https://github.com/talios/frege-maven-tile), by Mark Derricut
 * [A Leiningen plugin to compile Frege code](https://github.com/Frege/frege-lein-plugin), by Sean Corfield
 * [Gradle Frege plugin](https://github.com/Frege/frege-gradle-plugin), by Mark Perry and Dierk König
 * [Real World Frege](https://github.com/Dierk/Real_World_Frege/), by Dierk König
+* [sbt Frege plugin](https://github.com/earldouglas/sbt-frege), by James Douglas
 
 Contributions
 -------------
@@ -186,14 +219,16 @@ Contact
 
 **Upcoming events**
 
-* [Frege Day at Canoo](http://www.canoo.com/blog/2015/06/30/frege-day-2015/) Sept. 11th 2015, Basel, Switzerland. Meet us all there!
+* [Berlin Expert Days](http://bed-con.org/2015/talks/Frege---konsequent-funktionale-Programmierung-auf-der-JVM) Sept. 17./18. 2015, Berlin, Germany.
+* [Frege Talk & Tutorial at JDD 2015](http://jdd.org.pl) Oct. 12./13. 2015, Krakow, Poland
 * Meet Frege friends at [all Frege events at JavaOne 2015, San Francisco](https://events.rainfocus.com/oow15/catalog/oracle.jsp?event=javaone&search=Frege&search.event=javaoneEvent). 
-
-    *Session*: Frege: Purely Functional Programming for the JVM [CON4286]
-
-    *Panel*: Script Bowl 2015: The Emerging Languages Take Over [CON6946]
-
-    *Tutorial*: Purely Functional Programming on the JVM: The Red Pill [TUT4296]
+  * *Session*: Frege: Purely Functional Programming for the JVM [CON4286]
+  * *Panel*: Script Bowl 2015: The Emerging Languages Take Over [CON6946]
+  * *Tutorial*: Purely Functional Programming on the JVM: The Red Pill [TUT4296]
+* Language Day [Hochschule der Medien](https://www.hdm-stuttgart.de) Stuttgart, 06. Nov 2015
+* [DEVOXX](http://www.devoxx.be) Antwerp, 9.-13. Nov 2015
+* [GOTO](http://gotocon.com/berlin-2015) Berlin, 2./3. Dec 2015
+* [OOP](http://www.oop-konferenz.de) Munich, 26.-30. Jan 2016 (more details to come)
 
 **For discussions**
 
@@ -214,6 +249,12 @@ some project members and Frege users hang out. You can use any IRC client
 you like or Freenode's [WebChat interface](https://webchat.freenode.net)
 if you don't want to install IRC software.
 
+**Staying up to date**
+
+[Twitter: @fregelang](https://twitter.com/fregelang), 
+[Facebook: fregelang](https://www.facebook.com/fregelang), 
+[Reddit: r/frege](https://www.reddit.com/r/frege)
+
 **For issues only**
 
 If you find a bug or have an idea for enhancements, please let us know by opening an issue in the
@@ -226,10 +267,12 @@ Links
 ----
 * [Frege Wiki](https://github.com/Frege/frege/wiki/_pages)
 * [Language reference](http://www.frege-lang.org/doc/Language.pdf)
-* [Author's Blog](http://fregepl.blogspot.com/), [Dierk's Blog](http://www.canoo.com/blog/tag/frege/), the [Frege Goodness](http://dierk.github.io/FregeGoodness/html/index.html) series
-* [edX Functional Programming course FP101x](https://www.edx.org/course/introduction-functional-programming-delftx-fp101x) with exercises in Frege
+* [InfoQ Article on Frege's history, current state, and future plans](http://www.infoq.com/news/2015/08/frege-haskell-for-jvm)
+* [Author's Blog](http://fregepl.blogspot.com/), [Dierk's Blog](http://www.canoo.com/blog/tag/frege/)
+* [edX Functional Programming course FP101x](https://www.edx.org/course/introduction-functional-programming-delftx-fp101x) with exercises in Frege (next start Oct 15th 2015)
 * Functional Programming [13 videos](https://www.youtube.com/playlist?list=PLoJC20gNfC2gpI7Dl6fg8uj1a-wfnWTH8) by Dr. Erik Meijer
-* Introduction to Frege: [video](https://www.parleys.com/play/543fa326e4b06e1184ae41e6/chapter44/about), [slides](http://de.slideshare.net/Mittie/frege-purely-functional-programming-on-the-jvm)
+* [<img align="right" src="https://raw.githubusercontent.com/Dierk/FregeGoodness/master/FregeGoodness.png">](http://dierk.gitbooks.io/fregegoodness)Introduction to Frege: [video](https://www.parleys.com/play/543fa326e4b06e1184ae41e6/chapter44/about), [slides](http://de.slideshare.net/Mittie/frege-purely-functional-programming-on-the-jvm)
+* The [Frege Goodness](http://dierk.gitbooks.io/fregegoodness) free ebook 
 
 Recommended reading
 * [John Hughes: Why functional programming matters](http://www.cs.kent.ac.uk/people/staff/dat/miranda/whyfp90.pdf)
