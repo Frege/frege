@@ -19,7 +19,8 @@ public class Concurrent {
      *
      * @see Concurrent#fork Concurrent#setFregeForkJoindPool
      */
-   private static java.util.concurrent.ForkJoinPool fjpool = null;
+   private static java.util.concurrent.ForkJoinPool fjpool = new java.util.concurrent.ForkJoinPool(
+			2 * java.lang.Runtime.getRuntime().availableProcessors());
 
 	/**
      * <p>Set the {@link java.util.concurrent.ForkJoinPool} that should be used by the
@@ -125,11 +126,7 @@ public class Concurrent {
     	frege.runtime.Lazy a = val.apply(true).result();
         if (java.util.concurrent.ForkJoinTask.inForkJoinPool())
         	java.util.concurrent.ForkJoinTask.adapt(a).fork();
-        else synchronized (lock) {		// make sure 2 threads can't do that
-        	if (fjpool == null) {				        // at the same time
-        		fjpool = new java.util.concurrent.ForkJoinPool(
-        					2 * java.lang.Runtime.getRuntime().availableProcessors());
-        	}
+        else {
         	fjpool.submit(a);
         }
         return true;
