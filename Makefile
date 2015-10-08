@@ -56,7 +56,7 @@ COMPS   = frege/compiler
 FREGE    = $(JAVA) -Xss4m -Xmx1800m -cp build
 
 #	compile using the fregec.jar in the working directory
-FREGECJ  = $(FREGE)  -jar fregec.jar  -d build -hints
+FREGECJ  = $(FREGE)  -cp fregec.jar frege.compiler.Main -d build -hints
 
 #	compile compiler1 with fregec.jar, uses prelude sources from shadow/
 FREGEC0  = $(FREGECJ) -prefix a -sp shadow:.
