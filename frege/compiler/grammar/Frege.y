@@ -188,12 +188,14 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type getfield        (Token, Bool,Exp)
 //%type getfields       [(Token,Bool,Exp)]
 //%type unex            Exp
+//%type apats           [Exp]
 //%type term            Exp
 //%type appex           Exp
 //%type binex           Exp
 //%type expr            Exp
 //%type topex           Exp
 //%type lambda          Exp
+//%type lambdabody      Exp
 //%type primary         Exp
 //%type literal         Exp
 //%type exprSC          [Exp]
@@ -311,6 +313,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%explain funhead      left hand side of a function or pattern binding
 //%explain binex        binary expression
 //%explain unex         unary expression
+//%explain apats        lambda patterns
 //%explain appex        function application
 //%explain primary      a primary expression
 //%explain term         a term
@@ -344,6 +347,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%explain exprSC       list of expressions separated by ','
 //%explain exprSS       list of expressions separated by ';'
 //%explain lambda       a lambda abstraction
+//%explain lambdabody   a lambda body
 //%explain field        field
 //%explain fields       field list
 //%explain getfield     field
@@ -1140,10 +1144,10 @@ literal:
     ;
 
 pattern:
-    expr                           
+    expr
     ;
 
-aeq: ARROW | '=';                   
+aeq: ARROW | '=';
 
 
 lcqual:
@@ -1205,8 +1209,12 @@ calts:
 
 
 lambda:
-      '\\' pattern lambda           { \_\p\l   -> Lam p l false}
-    | '\\' pattern ARROW  expr      { \_\p\_\x -> Lam p x false}
+    '\\' apats lambdabody           { \_\ps\b  -> foldr (\p\x -> Lam p x false) b ps }
+    ;
+
+lambdabody:
+    lambda
+    | ARROW expr                    { \_\x -> x }
     ;
 
 
@@ -1252,6 +1260,11 @@ appex:
 unex:
     primary
     | unop unex                        { \u\p -> nApp (Vbl {name=Simple u}) p}
+    ;
+
+apats:
+    unex                                { single }
+    | unex apats                        { (:) }
     ;
 
 qualifiers:

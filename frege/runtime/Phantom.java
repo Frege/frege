@@ -19,10 +19,12 @@ public class Phantom {
 		public interface JavaFX extends RealWorld {}
 		/** Software transactional memory */
 		public interface STM extends RealWorld {}
-		public interface XXX extends RealWorld {}
-		public interface YYY extends RealWorld {}
-		public interface AAA extends XXX, YYY {}
-	
+		/** Subtypes to play with */
+		public interface XorY extends RealWorld {}
+		public interface XorZ extends RealWorld {}
+		public interface XXX extends XorY, XorZ {}
+		public interface YYY extends XorY {}
+		public interface ZZZ extends XorZ {}
 	/**
 	 *	this should not be exposed, but ... 
 	 */
