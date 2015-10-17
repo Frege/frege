@@ -204,7 +204,7 @@ compiler: $(COMPF)/Main.class
 $(COMPF)/grammar/Frege.class: frege/compiler/grammar/Frege.fr $(COMPF)/common/Desugar.class
 	$(FREGEC2) -make frege/compiler/grammar/Frege.fr
 frege/compiler/grammar/Frege.fr: frege/compiler/grammar/Frege.y
-	@echo We should have 6 shift/reduce conflicts in the grammar.
+	@echo We should have 5 shift/reduce conflicts in the grammar.
 	$(YACC) -v frege/compiler/grammar/Frege.y
 	$(FREGE) -cp fregec.jar frege.tools.YYgen -m State  frege/compiler/grammar/Frege.fr
 
