@@ -145,6 +145,13 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type infix           Def
 //%type fixity          Def
 //%type typedef         Def
+//%type scontext        ContextS
+//%type scontexts       [ContextS]
+//%type ccontext        [ContextS]
+//%type sicontext       ContextS
+//%type sicontexts      [ContextS]
+//%type icontext        [ContextS]
+//%type insthead        Def
 //%type classdef        Def
 //%type instdef         Def
 //%type derivedef       Def
@@ -188,12 +195,14 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type getfield        (Token, Bool,Exp)
 //%type getfields       [(Token,Bool,Exp)]
 //%type unex            Exp
+//%type apats           [Exp]
 //%type term            Exp
 //%type appex           Exp
 //%type binex           Exp
 //%type expr            Exp
 //%type topex           Exp
 //%type lambda          Exp
+//%type lambdabody      Exp
 //%type primary         Exp
 //%type literal         Exp
 //%type exprSC          [Exp]
@@ -296,7 +305,14 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%explain boundvars    type variables bound in a forall
 //%explain rop13        ':'
 //%explain aeq          '='
+//%explain scontext     simple constraint
+//%explain scontexts    simple constraints
+//%explain ccontext     type class context
 //%explain classdef     a type class declaration
+//%explain icontext     instance context
+//%explain sicontexts   instance constraints
+//%explain sicontext    instance constraint
+//%explain insthead     instance head
 //%explain instdef      an instance declaration
 //%explain derivedef    an instance derivation
 //%explain wheredef     declarations local to a class, instance or type
@@ -311,6 +327,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%explain funhead      left hand side of a function or pattern binding
 //%explain binex        binary expression
 //%explain unex         unary expression
+//%explain apats        lambda patterns
 //%explain appex        function application
 //%explain primary      a primary expression
 //%explain term         a term
@@ -344,6 +361,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%explain exprSC       list of expressions separated by ','
 //%explain exprSS       list of expressions separated by ';'
 //%explain lambda       a lambda abstraction
+//%explain lambdabody   a lambda body
 //%explain field        field
 //%explain fields       field list
 //%explain getfield     field
@@ -918,31 +936,101 @@ simplekind:
     | '(' kind ')'          { \_\b\_ -> b }
     ;
 
-classdef:
-    CLASS CONID tyvar wheredef       {
-        \_\i\(tv::TauS)\defs -> ClaDcl {pos = yyline i, vis = Public, name = Token.value i,
-                        clvar=tv, supers=[], defs = defs, doc = Nothing}
-    }
-    | CLASS CONID tau EARROW varid wheredef {
-        \_\i\tau\_\v\defs -> do
-            ctxs <- tauToCtx tau
-            sups <- classContext (Token.value i) ctxs (v.value)
-            YYM.return (ClaDcl {pos = yyline i, vis = Public, name = Token.value i,
-                             clvar = TVar (yyline v) KVar v.value,
-                             supers = sups, defs = defs, doc = Nothing})
-    }
+scontext: 
+    qconid tyvar                { \c\v -> Ctx {pos=Pos (SName.id c) v.pos.last, cname=c, tau=v} }
     ;
 
 
+scontexts:
+    scontext                    { single }
+    | scontext ','              { \c\_ -> [c] }
+    | scontext ',' scontexts    { liste  }
+    ;
+
+ccontext:
+    scontext                    { single }
+    | '(' scontexts ')'         { \_\x\_ -> x }
+    ;
+
+
+classdef:
+    CLASS ccontext EARROW CONID tyvar wheredef {
+        \_\ctxs\_\c\v\defs -> do
+            sups <- classContext (Token.value c) ctxs (v::TauS).var
+            return ClaDcl{
+                    pos = yyline c, 
+                    vis = Public,
+                    name = Token.value c,
+                    clvar = v,
+                    supers = sups,
+                    defs,
+                    doc = Nothing}
+    }
+    | CLASS ccontext wheredef {
+        \kw\ctxs\defs -> case ctxs of
+            Ctx{pos,cname,tau}:rest -> do
+                unless (null rest) 
+                    (yyerror (yyline kw) "classname missing after contexts")
+                when (SName.{ty?} cname)
+                    (yyerror (yyline cname.id) "classname must not be qualified") 
+                return ClaDcl {pos, vis = Public, name=cname.id.value,
+                               clvar = tau, supers = [],
+                               defs, doc = Nothing}
+            _ -> Prelude.error "fatal: empty ccontext (cannot happen)" 
+    }
+    ;
+
+sicontext: 
+    qconid simpletype             { \c\t -> Ctx {pos=Pos (SName.id c) t.getpos.last, cname=c, tau=t} }
+    ;
+
+sicontexts:
+    sicontext                     { single }
+    | sicontext ','               { \c\_ -> [c] }
+    | sicontext ',' sicontexts    { liste  }
+    ;
+
+icontext:
+    sicontext                    { single }
+    | '(' sicontexts ')'         { \_\x\_ -> x }
+    ;
+
+insthead:
+    icontext EARROW tyname simpletype {
+        \ctxs\ea\cls\tau -> InsDcl {
+            pos = yyline ea,
+            vis = Public,
+            clas = cls,
+            typ = ForAll [] (RhoTau ctxs tau),
+            defs = [],
+            doc = Nothing}
+    }
+    | icontext {
+        \ctxs -> case ctxs of
+            Ctx{pos, cname, tau}:rest -> do
+                unless (null rest) 
+                        (yyerror pos "classname missing after instance contexts")
+                return InsDcl {
+                    pos, vis = Public, clas = cname,
+                    typ = ForAll [] (RhoTau [] tau),
+                    defs = [],
+                    doc = Nothing,
+                    }
+            _ -> Prelude.error "fatal: empty instance context"
+    }
+    ;
+
 instdef:
-    INSTANCE tyname sigma wheredef {
-        \ins\t\r\defs -> InsDcl {pos = yyline ins, vis = Public, clas=t, typ=r, defs=defs, doc=Nothing}
+    INSTANCE insthead wheredef {
+        \ins\head\defs -> (head::Def).{defs, pos = yyline ins}
     }
     ;
 
 
 derivedef:
-    DERIVE tyname sigma     { \d\t\r -> DrvDcl {pos = yyline d, vis = Public, clas=t, typ=r, doc=Nothing}}
+    DERIVE insthead     { 
+        \d\(i::Def) -> DrvDcl {pos = yyline d, vis = Public, clas=i.clas, typ=i.typ, doc=Nothing}
+    }
     ;
 
 datadef:
@@ -1092,7 +1180,7 @@ typedef:
                                                             doc=Nothing}}
     ;
 
-wheredef :
+wheredef:
                                   { [] }
     | WHERE '{' '}'               { \_\_\_ -> []}
     | WHERE '{' localdefs '}'   { \_\_\defs\_ -> defs}
@@ -1140,10 +1228,10 @@ literal:
     ;
 
 pattern:
-    expr                           
+    expr
     ;
 
-aeq: ARROW | '=';                   
+aeq: ARROW | '=';
 
 
 lcqual:
@@ -1205,8 +1293,12 @@ calts:
 
 
 lambda:
-      '\\' pattern lambda           { \_\p\l   -> Lam p l false}
-    | '\\' pattern ARROW  expr      { \_\p\_\x -> Lam p x false}
+    '\\' apats lambdabody           { \_\ps\b  -> foldr (\p\x -> Lam p x false) b ps }
+    ;
+
+lambdabody:
+    lambda
+    | ARROW expr                    { \_\x -> x }
     ;
 
 
@@ -1252,6 +1344,11 @@ appex:
 unex:
     primary
     | unop unex                        { \u\p -> nApp (Vbl {name=Simple u}) p}
+    ;
+
+apats:
+    unex                                { single }
+    | unex apats                        { (:) }
     ;
 
 qualifiers:
