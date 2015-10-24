@@ -145,6 +145,13 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type infix           Def
 //%type fixity          Def
 //%type typedef         Def
+//%type scontext        ContextS
+//%type scontexts       [ContextS]
+//%type ccontext        [ContextS]
+//%type sicontext       ContextS
+//%type sicontexts      [ContextS]
+//%type icontext        [ContextS]
+//%type insthead        Def
 //%type classdef        Def
 //%type instdef         Def
 //%type derivedef       Def
@@ -298,7 +305,14 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%explain boundvars    type variables bound in a forall
 //%explain rop13        ':'
 //%explain aeq          '='
+//%explain scontext     simple constraint
+//%explain scontexts    simple constraints
+//%explain ccontext     type class context
 //%explain classdef     a type class declaration
+//%explain icontext     instance context
+//%explain sicontexts   instance constraints
+//%explain sicontext    instance constraint
+//%explain insthead     instance head
 //%explain instdef      an instance declaration
 //%explain derivedef    an instance derivation
 //%explain wheredef     declarations local to a class, instance or type
@@ -845,7 +859,7 @@ tau:
     | forall             { TSig }
     | tapp ARROW tau     { \a\f\b ->  case a of
                             TSig s -> TSig (ForAll [] (RhoFun [] s (RhoTau [] b))) 
-                            _      -> TApp (TApp (TCon (yyline f) (With1 baseToken f.{tokid=CONID, value="->"})) a) b 
+                            _      -> TApp (TApp (TCon (yyline f) (fromBase f.{tokid=CONID, value="->"})) a) b 
                          }
     ;
 
@@ -873,12 +887,12 @@ simpletype:
                             let
                                 tus = t:ts;
                                 i = length tus;
-                                tname = With1 baseToken c.{tokid=CONID, value=tuple i}
+                                tname = fromBase c.{tokid=CONID, value=tuple i}
                             in  (TCon (yyline c) tname).mkapp tus
                         }
     | '(' tau '|' tauSB ')' { \_\t\e\ts\_ -> mkEither (yyline e) t ts }
     | '[' tau ']'      {\a\t\_ -> TApp (TCon (yyline a)
-                                             (With1 baseToken a.{tokid=CONID, value="[]"}))
+                                             (fromBase a.{tokid=CONID, value="[]"}))
                                         t }
     ;
 
@@ -892,10 +906,10 @@ tyvar:
 
 tyname:
     qconid
-    | '[' ']'               { \(a::Token)\_ -> With1 baseToken a.{tokid=CONID, value="[]"} }
-    | '(' ')'               { \(a::Token)\_ -> With1 baseToken a.{tokid=CONID, value="()"} }
-    | '(' commata ')'       { \(z::Token)\n\_ -> With1 baseToken z.{tokid=CONID, value=tuple (n+1)} }
-    | '(' ARROW ')'         { \_\(a::Token)\_ -> With1 baseToken a.{tokid=CONID, value="->"} }
+    | '[' ']'               { \(a::Token)\_ -> fromBase a.{tokid=CONID, value="[]"} }
+    | '(' ')'               { \(a::Token)\_ -> fromBase a.{tokid=CONID, value="()"} }
+    | '(' commata ')'       { \(z::Token)\n\_ -> fromBase z.{tokid=CONID, value=tuple (n+1)} }
+    | '(' ARROW ')'         { \_\(a::Token)\_ -> fromBase a.{tokid=CONID, value="->"} }
     ;
 
 kind:
@@ -922,31 +936,101 @@ simplekind:
     | '(' kind ')'          { \_\b\_ -> b }
     ;
 
-classdef:
-    CLASS CONID tyvar wheredef       {
-        \_\i\(tv::TauS)\defs -> ClaDcl {pos = yyline i, vis = Public, name = Token.value i,
-                        clvar=tv, supers=[], defs = defs, doc = Nothing}
-    }
-    | CLASS CONID tau EARROW varid wheredef {
-        \_\i\tau\_\v\defs -> do
-            ctxs <- tauToCtx tau
-            sups <- classContext (Token.value i) ctxs (v.value)
-            YYM.return (ClaDcl {pos = yyline i, vis = Public, name = Token.value i,
-                             clvar = TVar (yyline v) KVar v.value,
-                             supers = sups, defs = defs, doc = Nothing})
-    }
+scontext: 
+    qconid tyvar                { \c\v -> Ctx {pos=Pos (SName.id c) v.pos.last, cname=c, tau=v} }
     ;
 
 
+scontexts:
+    scontext                    { single }
+    | scontext ','              { \c\_ -> [c] }
+    | scontext ',' scontexts    { liste  }
+    ;
+
+ccontext:
+    scontext                    { single }
+    | '(' scontexts ')'         { \_\x\_ -> x }
+    ;
+
+
+classdef:
+    CLASS ccontext EARROW CONID tyvar wheredef {
+        \_\ctxs\_\c\v\defs -> do
+            sups <- classContext (Token.value c) ctxs (v::TauS).var
+            return ClaDcl{
+                    pos = yyline c, 
+                    vis = Public,
+                    name = Token.value c,
+                    clvar = v,
+                    supers = sups,
+                    defs,
+                    doc = Nothing}
+    }
+    | CLASS ccontext wheredef {
+        \kw\ctxs\defs -> case ctxs of
+            Ctx{pos,cname,tau}:rest -> do
+                unless (null rest) 
+                    (yyerror (yyline kw) "classname missing after contexts")
+                when (SName.{ty?} cname)
+                    (yyerror (yyline cname.id) "classname must not be qualified") 
+                return ClaDcl {pos, vis = Public, name=cname.id.value,
+                               clvar = tau, supers = [],
+                               defs, doc = Nothing}
+            _ -> Prelude.error "fatal: empty ccontext (cannot happen)" 
+    }
+    ;
+
+sicontext: 
+    qconid simpletype             { \c\t -> Ctx {pos=Pos (SName.id c) t.getpos.last, cname=c, tau=t} }
+    ;
+
+sicontexts:
+    sicontext                     { single }
+    | sicontext ','               { \c\_ -> [c] }
+    | sicontext ',' sicontexts    { liste  }
+    ;
+
+icontext:
+    sicontext                    { single }
+    | '(' sicontexts ')'         { \_\x\_ -> x }
+    ;
+
+insthead:
+    icontext EARROW tyname simpletype {
+        \ctxs\ea\cls\tau -> InsDcl {
+            pos = yyline ea,
+            vis = Public,
+            clas = cls,
+            typ = ForAll [] (RhoTau ctxs tau),
+            defs = [],
+            doc = Nothing}
+    }
+    | icontext {
+        \ctxs -> case ctxs of
+            Ctx{pos, cname, tau}:rest -> do
+                unless (null rest) 
+                        (yyerror pos "classname missing after instance contexts")
+                return InsDcl {
+                    pos, vis = Public, clas = cname,
+                    typ = ForAll [] (RhoTau [] tau),
+                    defs = [],
+                    doc = Nothing,
+                    }
+            _ -> Prelude.error "fatal: empty instance context"
+    }
+    ;
+
 instdef:
-    INSTANCE tyname sigma wheredef {
-        \ins\t\r\defs -> InsDcl {pos = yyline ins, vis = Public, clas=t, typ=r, defs=defs, doc=Nothing}
+    INSTANCE insthead wheredef {
+        \ins\head\defs -> (head::Def).{defs, pos = yyline ins}
     }
     ;
 
 
 derivedef:
-    DERIVE tyname sigma     { \d\t\r -> DrvDcl {pos = yyline d, vis = Public, clas=t, typ=r, doc=Nothing}}
+    DERIVE insthead     { 
+        \d\(i::Def) -> DrvDcl {pos = yyline d, vis = Public, clas=i.clas, typ=i.typ, doc=Nothing}
+    }
     ;
 
 datadef:
@@ -1096,7 +1180,7 @@ typedef:
                                                             doc=Nothing}}
     ;
 
-wheredef :
+wheredef:
                                   { [] }
     | WHERE '{' '}'               { \_\_\_ -> []}
     | WHERE '{' localdefs '}'   { \_\_\defs\_ -> defs}
@@ -1319,11 +1403,11 @@ term:
     | qconid                        { \qc  -> Con {name=qc} }
     | qconid '{'        '}'         { \qc\_\z    -> ConFS {name=qc, fields=[]}}
     | qconid '{' fields '}'         { \qc\_\fs\z -> ConFS {name=qc, fields=fs}}
-    | '(' ')'                       { \z\_   -> Con (With1 baseToken z.{tokid=CONID, value="()"})}
-    | '(' commata ')'               { \z\n\_ -> Con (With1 baseToken z.{tokid=CONID, value=tuple (n+1)})}
+    | '(' ')'                       { \z\_   -> Con (fromBase z.{tokid=CONID, value="()"})}
+    | '(' commata ')'               { \z\n\_ -> Con (fromBase z.{tokid=CONID, value=tuple (n+1)})}
     | '(' unop ')'                  { \_\x\_ -> Vbl {name=Simple x} }
     | '(' operator ')'              { \_\o\_ -> (varcon o) (opSname o)}
-    | '(' '-' ')'                   { \_\m\_ -> (Vbl (With1 baseToken m)) }
+    | '(' '-' ')'                   { \_\m\_ -> (Vbl (fromBase m)) }
     | '(' operator expr ')'         { \z\o\x\_ ->  let -- (+1) --> flip (+) 1
                                         flp = Vbl (contextName z "flip") 
                                         op  = (varcon o) (opSname o)
@@ -1334,25 +1418,25 @@ term:
     | '(' binex '-' ')'             { \_\x\o\_ ->  -- (1+) --> (+) 1
                                         nApp ((varcon o) (Simple o)) x}
     | '(' expr ',' exprSC ')'       { \a\e\x\es\_ -> fold nApp (Con 
-                                                                   (With1 baseToken x.{tokid=CONID, value=tuple (1+length es)})
+                                                                   (fromBase x.{tokid=CONID, value=tuple (1+length es)})
                                                                    )
                                                               (e:es)}
     | '(' expr ';' exprSS ')'       { \a\e\(x::Token)\es\_ -> fold nApp (Vbl 
-                                                                   (With1 baseToken x.{tokid=VARID, value="strictTuple" ++ show (1+length es)})
+                                                                   (fromBase x.{tokid=VARID, value="strictTuple" ++ show (1+length es)})
                                                                     )
                                                               (e:es)}
     | '(' expr ')'                  { \_\x\_ -> Term x }
-    | '[' ']'                       { \a\z ->  Con (With1 baseToken z.{tokid=CONID, value="[]"})}
+    | '[' ']'                       { \a\z ->  Con (fromBase z.{tokid=CONID, value="[]"})}
     | '[' exprSC ']'                { \b\es\z -> 
-                                                foldr (\a\as -> nApp (nApp (Con (With1 baseToken b.{tokid=CONID, value=":"})) a) as)
-                                                       (Con (With1 baseToken z.{tokid=CONID, value="[]"}))
+                                                foldr (\a\as -> nApp (nApp (Con (fromBase b.{tokid=CONID, value=":"})) a) as)
+                                                       (Con (fromBase z.{tokid=CONID, value="[]"}))
                                                        es}
     | '[' exprSC DOTDOT ']'         { \a\b\c\d   -> do mkEnumFrom   a b c d}
     | '[' exprSC DOTDOT expr ']'    { \a\b\c\d\e -> do mkEnumFromTo a b c d e}
     | '[' expr '|' lcquals ']'      { \(a::Token)\e\b\qs\(z::Token) -> do {
                 let {nil = z.{tokid=CONID, value="[]"}};
                 listComprehension (yyline b) e qs
-                                            (Con {name = With1 baseToken nil})
+                                            (Con {name = fromBase nil})
                                     }}
     ;
 
