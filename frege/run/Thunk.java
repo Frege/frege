@@ -184,7 +184,7 @@ public class Thunk<R> implements Lazy<R> {
 	 * @param it a possibly lazy value. <b>This must never be null!</b>
 	 */
 	@SuppressWarnings("unchecked")
-	Thunk(Object it) {
+	Thunk(R it) {
 		if (it instanceof Lazy) {
 			eval = (Lazy<R>)it;
 		}
@@ -209,22 +209,28 @@ public class Thunk<R> implements Lazy<R> {
 		// it will return the black hole, and this will, in turn,
 		// give a Class Cast Exception later.
 		// Different threads will have to wait anyway due to the "synchronized".
-		// item = BlackHole.it;
-		Object o = eval.call();
-		Lazy<R>  t = null;
+		item = BlackHole.it;
+		Object o = eval;
 		// algebraic datatypes are instances of Lazy, but their call() is the identity
 		// hence we know when to finish if either 
 		// * the result o is not Lazy 
 		// * or if it is the same reference as eval.
-		while (o  instanceof Lazy && (t = (Lazy<R>)o) != eval) {
-			eval = t;
+		do {
+			eval = (Lazy<R>) o;
 			o = eval.call();
-		}
+		} while (o instanceof Lazy && o!=eval);
 		item = o;
 		eval = null;	// make sure all the closed over things are not referenced anymore
 		return (R)item;
 	}
 
+	/**
+	 * <p>tell if this Thunk is already evaluated.</p>
+	 * @return true, if it is already evaluated, false otherwise
+	 */
+	boolean isEvaluated() {
+		return item != null;
+	}
 	
 	/**
 	 * <p>Evaluate an object if it is a lazy value.</p>
