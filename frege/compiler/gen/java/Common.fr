@@ -1,0 +1,342 @@
+--- Code that is (hopefully) common among several java code generators
+
+module frege.compiler.gen.java.Common where
+
+import frege.Prelude hiding (<+>)
+
+import Data.TreeMap(values, insert)
+import Data.Bits(BitSet.member)
+import Lib.PP(pretty, text, <+>, </>)
+
+import Compiler.common.Annotate(anno)
+import Compiler.common.Errors as E()
+import Compiler.enums.Flags(TRACEZ)
+import Compiler.enums.RFlag(RValue)
+import Compiler.types.Global(StIO, StG, Symbol, SymInfo8, Global(), GenSt(),
+            getST, changeST,
+            javaLangNames, primitiveTypes)
+import Compiler.types.Symbols(SymD, SymT, SymV)
+import Compiler.types.JNames(JName, memberOf)
+import Compiler.types.QNames(TName)
+import Compiler.types.Packs(pPreludeIO, pPreludeArrays)
+import Compiler.types.ConstructorField(ConField)
+import Compiler.types.Tokens(Token)
+import Compiler.types.Strictness(Strictness)
+import Compiler.enums.TokenID(QUALIFIER)
+import Compiler.types.Types(Sigma, Rho, Tau,
+                                ForAll, RhoFun, RhoTau, TApp, TCon, TVar,
+                                Meta, TSig)
+import Compiler.types.Kinds(KGen)
+import Compiler.classes.Nice(nice, nicer)
+import Compiler.gen.java.Abstract
+
+import Compiler.Utilities as U(unifySigma, substSigma, javaName, returnType)
+
+--- the 'JName' of the class generated for this package
+mainClass :: Global -> JName
+mainClass g = if jn.base  `elem` javaLangNames then jn else jn.{qual=""}
+    where jn = g.packClass g.thisPack
+
+--- latin ƒ can be used to obscure plain function names in a predictable way 
+latinF    = "ƒ" 
+
+--- construct a 'BitSet' that holds the given attributes
+attrs ∷ [JAttr] → Attributes
+attrs = fold Attributes.unionE Attributes.empty
+
+--- just @final@
+!attrFinal = attrs [JFinal]
+
+--- @final public static@
+!attrTop   = attrs [JFinal, JPublic, JStatic]
+
+--- The type for enum constants.
+--- Using @short@ for this, java methods get a signature that is different.
+jtEnum    = Nativ "short" []
+
+--- 'JType' of 'String'
+jtString = Nativ { typ = "java.lang.String", typeargs = []}
+
+--- 'JType' of 'Algebraic'
+jtAlgebraic = Ref {jname = JName "frege.runtime" "Algebraic", typeargs = []}
+
+--- 'JType' of 'Value'
+jtValue     = Ref {jname = JName "frege.runtime" "Value", typeargs = []}
+
+
+--- Java name of the runtime class that provides support for exceptions 
+jnWrapped   = JName "frege.runtime" "WrappedCheckedException"
+
+
+--- Java name of @Thunk@
+jnThunk   = JName "frege.run" "Thunk"
+
+--- Java name of @Lazy@
+jnLazy   = JName "frege.run" "Lazy"
+
+--- used to match @m~p@ patterns
+jnFind = memberOf (JName "frege.runtime" "Regex9") "findResult" 
+
+---  given T, creates 'JType' Thunk<T>
+inThunk t = Ref jnThunk [t]
+
+---  given T, creates 'JType' Lazy<T>
+inLazy t = Ref jnLazy [t]
+
+{--
+    Check if argument is 'Mutable' @a b@, and if so, return @b@
+-}
+isMutable (TApp (TApp con _) b) 
+    | TCon{name = TName pack "Mutable"} <- con,
+      pack == pPreludeIO = Just b
+    | otherwise          = Nothing
+isMutable _ = Nothing
+
+
+{--
+    Check if a type is a 'JArray' where @t@ is not a type variable.
+    If so, return a 'JType' that encodes the true java array type.
+    
+    Example:
+    
+    > arrayTau (JArray s Int) = Just (Nativ "int[]")
+-}
+arrayTau :: Global -> Tau -> Maybe JType
+arrayTau g tau
+    | Just t <- isMutable tau = arrayTau g t
+    | TApp con b <- tau,
+      TCon{name = TName pack "JArray"} <- con,
+      pack == pPreludeArrays = case arrayTau g b of
+        Just (sub@Nativ{typ, typeargs}) -> Just Nativ{typ="[]", typeargs=[sub]}
+        _ -> case tauJT g b of
+            Something -> Just Something     -- will cause casting to correct type if needed
+            jt -> Just Nativ{typ="[]", typeargs=[jt]}
+    | otherwise = Nothing
+
+{--
+    Compute the java type of a function/constructor argument.
+    - strict type: a concrete type like @int@, @java.lang.String@, @TList@ or @Func@
+    - lazy frege type: Lazy
+    - otherwise: Object
+    -}
+argType :: Global -> (JType -> JType) ->  Sigma -> JType
+argType g f = f . sigmaJT g
+
+{--
+    - If the 'RAlways' flag is set, the return type will always be @Lazy@
+    - If the 'RValue' flag is on, the return type will be @int@, @String@ or @TList@
+    - Otherwise, lazy as well as non lazy results may be returned. For native types, 
+      this means the return type is @Something@. Frege types are returned as @Lazy@.
+-}
+returnJType mode rjt = if RValue `member` mode 
+    then strict rjt
+    else lazy rjt
+
+--- Compute the 'JType' for a given 'Sigma' type 
+sigmaJT g (ForAll _ rho)        = rhoJT g rho
+
+
+--- Compute the 'JType' for a given 'Rho' type
+rhoJT   g (fun@RhoFun _ _ _)    = Func a (tauJT g r)
+    where
+        (r, args) = returnType fun
+        a = length args    
+rhoJT   g (RhoTau {tau})        = tauJT g tau
+
+
+--- Compute the 'JType' for a given 'Tau' type
+tauJT   g (app@TApp a b)
+     | Just (a,b) ← app.getFun     
+        = case tauJT g b of
+                func@Func{} → func.{args <- succ}
+                other       → Func 1 other 
+     | Just array <- arrayTau g app = array 
+     | otherwise = case app.flat of
+         (TCon {pos,name}):rest -> taujtApp g name rest app
+         other                  -> Something     -- we know nothing about it
+ 
+tauJT   g (ty@TCon {pos, name})    = taujtApp g name [] ty
+ 
+tauJT   g (TVar {var,kind})
+     | kind == KGen             = targ var 
+     | otherwise                = Something
+tauJT   g (Meta meta)
+     | meta.kind == KGen        = TArg ("GT" ++ show meta.uid)
+     | otherwise                = Something
+tauJT   g (TSig sig)            = sigmaJT g sig
+
+
+taujtApp g qname rest app
+    | Just (sym@SymT{}) <- g.findit qname = case sym of
+        SymT {product=true, newt=true} ->
+             let sigmas = [ ConField.typ f | sym@SymD {flds} <- values sym.env, f <- flds ]
+             in case sigmas of
+                 []     -> Prelude.error (nice sym g ++ " has no fields")                     
+                 (s:_)  -> (sigmaJT g . flip substSigma s . unifySigma g sym.typ) rsig
+                    where
+                        rsig = ForAll [] (RhoTau [] app) 
+        SymT {product,nativ,enum,pur}
+              -- U.pri
+              | Just s <- nativ = if s `elem` primitiveTypes
+                                    then Nativ {typ=s, typeargs=[]}
+                                    else Nativ {typ=s, 
+                                              typeargs = map (boxed . tauJT g) args}
+              | enum            = jtEnum
+              | otherwise       = Ref {jname = javaName g qname, typeargs = []}
+              where args = [ jt | (KGen, jt) <- zip sym.typ.kinds rest ]     
+        other -> undefined   -- can not happen because catched in U.findT
+    | otherwise = Prelude.error (nice qname g ++ " not a type")
+
+--- make a type argument from a name
+targ s = TArg {var = if s ~ ´^any(\d+)?$´ then "?" else "Τ" ++ s}
+                                                      -- ^ this is a greek uppercase Tau
+--- reconstruct & print Java code tokens
+reconstruct ∷ [Token] → StIO ()
+reconstruct xs = work xs
+    where
+        work ∷ [Token] → StIO ()
+        work [] = return ()
+        work (x:xs)
+            | not (null x.qual) = work (x.qual ++ (x.{qual=[]} : xs))
+        work [x] = U.println (tval x) >> U.println ""
+        work (a:b:xs) = do
+            U.print (tval a)
+            unless (a.vor b) do
+                if (a.line != b.line) then U.println "" else U.print " "
+            work (b:xs)
+
+        tval ∷ Token → String
+        tval Token{tokid, value}  = case tokid  of
+            QUALIFIER → value ++ "."
+            _ → value
+
+
+--- make the lazy form of a java type
+lazy :: JType -> JType
+lazy jt = case jt of
+    Lazy{yields}        -> jt
+    Nativ{typ}          -> Lazy (boxed jt)
+    Something           -> Lazy jt
+    TArg{var}           -> Lazy jt
+    Func{}              -> Lazy jt
+    Ref{jname}          -> Lazy jt
+
+
+--- make sure a native type is not primitive
+autoboxed jt
+    | Nativ{} <- jt    = boxed jt
+    | otherwise        = jt
+
+
+--- create the boxed form of a java type
+boxed (Lazy x) = x
+boxed (Nativ "boolean" []) = Nativ {typ = "java.lang.Boolean", typeargs = []}
+boxed (Nativ "byte" [])    = Nativ {typ = "java.lang.Byte", typeargs = []}
+boxed (Nativ "short" [])   = Nativ {typ = "java.lang.Short", typeargs = []}
+boxed (Nativ "char" [])    = Nativ {typ = "java.lang.Character", typeargs = []}
+boxed (Nativ "int" [])     = Nativ {typ = "java.lang.Integer", typeargs = []}
+boxed (Nativ "long" [])    = Nativ {typ = "java.lang.Long", typeargs = []}
+boxed (Nativ "double" [])  = Nativ {typ = "java.lang.Double", typeargs = []}
+boxed (Nativ "float" [])   = Nativ {typ = "java.lang.Float", typeargs = []}
+boxed x = x
+
+--- create the unboxed form of a boxed java type
+strict x = case boxed x of
+    Nativ {typ = "java.lang.Boolean", typeargs = []}   -> Nativ "boolean"  []
+    Nativ {typ = "java.lang.Byte", typeargs = []}      -> Nativ "byte"  []
+    Nativ {typ = "java.lang.Short", typeargs = []}     -> Nativ "short"  []
+    Nativ {typ = "java.lang.Character", typeargs = []} -> Nativ "char" []
+    Nativ {typ = "java.lang.Integer", typeargs = []}   -> Nativ "int" []
+    Nativ {typ = "java.lang.Long", typeargs = []}      -> Nativ "long" []
+    Nativ {typ = "java.lang.Double", typeargs = []}    -> Nativ "double" []
+    Nativ {typ = "java.lang.Float", typeargs = []}     -> Nativ "float" []
+    other -> other
+
+{--
+    Tell if a java type is a mapped Frege type
+    -}
+wasFrege Ref{}          = true
+wasFrege Lazy{yields}   = wasFrege yields
+wasFrege Func{}         = true
+wasFrege _              = false
+
+
+{--
+     Check if a given java type is a primitive one.
+     Return 'Nothing' if this is no primitive type
+     or 'Just' _s_, where _s_ is a string like "int" that describes the type.
+-}
+isPrimitive (Nativ s _) | s `elem` primitiveTypes   = Just s
+isPrimitive _ = Nothing
+
+
+--- show a java expression for debugging purposes
+showJex ∷ JExpr → String
+showJex jex | length sex < 48 = sex
+            | otherwise       = "complicated java expression"
+            where
+                sex = (PP.pretty 1000 (anno jex)).replaceAll '[\r\n]' " "
+
+{--
+ * Check if a 'JExpr' is cheap enough so that we can save a local variable
+ *
+ * Cheap java expressions are:
+ * 1. a local variable
+ * 2. literal, this, null etc.
+ * 3. a static variable X.m
+ -}
+cheap (JAtom _) = true
+cheap (JStMem _ _) = true
+cheap _ = false
+
+--- make a statement comment
+sComment = (JLocal • JComment)
+
+{--
+    Get 'SymInfo' for given symbol from cache or produce it and put it there
+    -}
+symInfo :: Symbol -> StG SymInfo8
+symInfo sym = do
+    g <- getST
+    case g.gen.symi8.lookup sym of
+        Just si -> do
+                E.logmsg TRACEZ sym.pos (
+                    text "got symInfo:" <+> text (nice sym g) <+> text (show sym.sid)
+                    </> text "si.returnJT" <+> si.returnJT.anno
+                    </> text "si.retSig  " <+> text (nice si.retSig g)
+                    -- </> text "
+                    )
+                return si
+        other -> case sym of
+            SymV{} -> do
+                let (r, as) = U.returnTypeN sym.depth sym.typ.rho
+                    rjt = rhoJT g r
+                    sjts = zipWith (argType g) (strictFuns sym.strsig) as
+                    si = SI8{returnJT = returnJType sym.rkind rjt, retSig = ForAll [] r, argJTs = sjts, argSigs = as}
+                changeST Global.{gen <- GenSt.{symi8 <- insert sym si}}
+                E.logmsg TRACEZ sym.pos (
+                    text "put symInfo:" <+> text (nice sym g) <+> text (show sym.sid)
+                    </> text "si.returnJT" <+> si.returnJT.anno
+                    </> text "si.retSig  " <+> text (nice si.retSig g)
+                    -- </> text "
+                    )
+                return si
+            SymD{} -> do
+                let (r, as) = U.returnType sym.typ.rho
+                    rjt = tauJT g r
+                    sjts = zipWith (argType g) (map (bool strict lazy . ConField.strict) sym.flds) as
+                    si = SI8{returnJT = rjt, argJTs = sjts, argSigs = as,  retSig = ForAll [] (RhoTau [] r)}
+                changeST Global.{gen <- GenSt.{symi8 <- insert sym si}}     
+                return si
+            _ -> error ("symInfo for " ++ nicer sym g ++ ", allowed only for functions/variables")
+
+--- map a strictness signature to a (infinite) list of 'Bool'  
+boolS :: Strictness -> [Bool]  
+boolS U      = repeat false
+boolS (S ss) = map Strictness.isStrict ss ++ repeat false
+
+--- map a strictness signatire to am infinte list of functions
+strictFuns :: Strictness → [JType -> JType]
+strictFuns U = repeat lazy
+strictFuns (S ss) = map (bool strict lazy . Strictness.isStrict) ss
+    
