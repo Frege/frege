@@ -45,9 +45,9 @@ package frege.run;
  */
 public interface Func22<R> extends Function<R> {
     /**
-     * <p> Run the function. </p>
+     * <p> Apply the function uncurried. </p>
      *
      * @return possibly lazy result
      */
-    public R call(final Object arg1, final Object arg2, final Object arg3, final Object arg4, final Object arg5, final Object arg6, final Object arg7, final Object arg8, final Object arg9, final Object arg10, final Object arg11, final Object arg12, final Object arg13, final Object arg14, final Object arg15, final Object arg16, final Object arg17, final Object arg18, final Object arg19, final Object arg20, final Object arg21, final Object arg22);
+    public R apply(final Object arg1, final Object arg2, final Object arg3, final Object arg4, final Object arg5, final Object arg6, final Object arg7, final Object arg8, final Object arg9, final Object arg10, final Object arg11, final Object arg12, final Object arg13, final Object arg14, final Object arg15, final Object arg16, final Object arg17, final Object arg18, final Object arg19, final Object arg20, final Object arg21, final Object arg22);
 }

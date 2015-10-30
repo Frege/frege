@@ -45,9 +45,9 @@ package frege.run;
  */
 public interface Func1<R> extends Function<R> {
     /**
-     * <p> Run the function. </p>
+     * <p> Apply the function uncurried. </p>
      *
      * @return possibly lazy result
      */
-    public R call(final Object arg1);
+    public R apply(final Object arg1);
 }
