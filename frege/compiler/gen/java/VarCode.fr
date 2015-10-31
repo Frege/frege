@@ -5,7 +5,7 @@ module frege.compiler.gen.java.VarCode where
 import frege.Prelude hiding (<+>)
 
 import Data.TreeMap(TreeMap)
-import Lib.PP(text, <>, <+>)
+import Lib.PP(text, <>, <+>, <+/>)
 import Data.Bits(BitSet, BitSet.member)
 
 import Compiler.enums.Flags(TRACEG)
@@ -14,14 +14,18 @@ import Compiler.classes.Nice(nice, nicer)
 import Compiler.types.Global(Symbol, StG, Global(),
                                 getST, changeST)
 import Compiler.types.Symbols(SymV)
+import Compiler.types.Expression(Expr, ExprT)
+import Compiler.types.Positions(Positioned)
 import Compiler.common.Errors as E(logmsg)
 import Compiler.common.Annotate(anno)
 
 import Compiler.Utilities as U(javaName)
+import frege.compiler.Transform     as T()
 
 import Compiler.gen.java.Common
 import Compiler.gen.java.Abstract
 import Compiler.gen.java.Bindings
+import Compiler.gen.java.Match
 
 varCode ∷ TreeMap Symbol Binding → Symbol → StG [JDecl]
 varCode binds sym = do
@@ -76,7 +80,7 @@ topFun (sym@SymV {expr = Just dx}) binds = do
         methName  = (javaName g sym.name).base
 
     stmts ← compiling sym (genFunction sym si.returnJT methArgs binds)
-    
+
     let worker      = JMethod {attr = attrs [JFinal, JPublic, JStatic],
                        gargs = targs sym.typ,
                        jtype = si.returnJT,
@@ -121,7 +125,7 @@ genFunction (sym@SymV {expr = Just dex}) rmode args binds = do
         -- g <- getST
         ex <- dex
         if not (RTailRec `member` sym.rkind) 
-            then pure []  -- genLambda rmode ex args binds
+            then genLambda rmode ex args binds
             else do
                 g <- getST
                 let
@@ -136,39 +140,57 @@ genFunction (sym@SymV {expr = Just dex}) rmode args binds = do
                                          name = nm ++ "f",
                                          init = Just (JAtom nm)} | (_,sig,jt,nm) <- args ]
                     stmts = map JLocal decls
-                code <- pure []  -- genLambda rmode ex fargs binds
+                code <-  genLambda rmode ex fargs binds
                 pure [JCond "tailrecursion: while" (JAtom "true") (stmts ++ code)]
 genFunction sym rmode args binds = error "genFunction: no function"
 
-{- Generate code for a top level function 
-topFunold (sym@SymV {expr = Just dx}) binds = do
-    x <- dx
+{--
+  * Code for outer lambdas.
+  *
+  * Set's up a 'Binding' for the corresponding method argument and
+  * 'match'es its pattern against it with the enclosed expression as continuation.
+  -}
+genLambda rm (Lam {pat, ex}) ((arg@(_, _, _, s)) : args) binds = do
     g <- getST
-    si <- symInfo sym
-    E.logmsg TRACEG sym.pos (text ("topFun: " ++ nice sym.name g ++ " :: "
-              ++ nicer sym.typ.rho g 
-              ++ ", depth=" ++ show sym.depth
-              ++ ", rstate=" ++ show sym.rkind))
+    ps <- T.patternStrictness pat
+    let komplett = T.patsComplete g [pat]
+        badguard = T.openCaseWhen g ex
+        assert = isNothing komplett
+         -- mustthrow = not assert && isNothing badguard
+        margs = map JAtom [show ((last g.genEnv).name.nice g),
+                                                 show (getpos pat)] ++ [JAtom s]
+        -- construct new NoMatch("Module.foo", 42, arg$1)
+        jthrow = [JThrow (JNew (Ref jnNoMatch []) margs)]
  
-    let argNames    = drop (sum (map Symbol.depth g.genEnv)) GenJava7.argNames
-        argAttr     = if RTailRec `member` sym.rkind then BitSet.empty else attrFinal 
-        -- (rty, _) = U.returnTypeN sym.depth sym.typ.rho
-        -- staticWorker = null sym.typ.rho.context
-        constrargs  = map unFinal (zipWith (makeConstraintArg g)  sym.typ.rho.context  ctxNames)
-        -- when this is a tail recursive function, we write "Ctx fctx$1"
-        unFinal (farg@(attr,  sig, t, nm))
-            | RTailRec `member` sym.rkind   = (empty, sig, t, nm++"f")
-            | otherwise                     = farg
-        -- rjt         = rhoJT g rty
-        wrjt        = si.returnJT
-        workerArgs  = argDefs argAttr si argNames
-        -- modew       = jtRmode wrjt  -- wmode sym.rkind
-        workerName  = (U.javaName g sym.name).base -- if staticWorker then (workerMethod g sym).base else workName g sym
+    (_, code) <- match assert pat (adaptArg g arg ps)
+                            (genLambda rm ex args) binds
+    case komplett of
+         Just p -> do
+             E.warn (getpos pat) (text "function pattern is refutable, "
+                             <> text "consider adding a case for "
+                             <+/> text (nicer p g))
+             pure (code ++ jthrow)
+         _ -> case badguard of
+             Just (Left x) -> do
+                 E.warn (getpos x) (text "guard (" <> text (nicer x g) <> text  ") may evaluate to false.")
+                 pure (code ++ jthrow)
+             Just (Right p) -> do
+                 E.warn (getpos p) (text"pattern guard (" <> text (nicer p g) <> text ") may fail to match.")
+                 pure (code ++ jthrow)
+             Nothing -> pure code
  
-    stmts           <- compiling sym (genFunction sym wrjt (workerArgs) binds)
-     -- lClass <- prepareLazy sym  {- if staticWorker
-     --             then return (JComment "has static worker")
-     --             else lazyClass sym -}
  
-topFunold _ _ = error "topFun: no function"
--}
+genLambda rm x [] binds {-
+    | Lam {pat} <- x = do
+        g <- getST
+        E.fatal (getpos x) (text ("genLambda: argument for " ++ nice pat g ++ " missing"))
+    | otherwise -} = do
+        g <- getST
+        E.logmsg TRACEG (getpos x) (text ("genLambda[]: " ++ nice x g)) 
+        genReturn rm x binds
+ 
+genLambda _ x _ _ = do
+    g <- getST
+    E.fatal (getpos x) (text ("genLambda: bad expression: " ++ nice x g))
+    
+genReturn _ _ _ = return [JReturn (JAtom{name="null"})]
