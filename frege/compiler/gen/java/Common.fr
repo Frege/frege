@@ -23,9 +23,9 @@ import Compiler.types.ConstructorField(ConField)
 import Compiler.types.Tokens(Token)
 import Compiler.types.Strictness(Strictness)
 import Compiler.enums.TokenID(QUALIFIER)
-import Compiler.types.Types(Sigma, Rho, Tau,
+import Compiler.types.Types(Sigma, Rho, Tau, Context,
                                 ForAll, RhoFun, RhoTau, TApp, TCon, TVar,
-                                Meta, TSig)
+                                Meta, TSig, Ctx)
 import Compiler.types.Kinds(KGen)
 import Compiler.classes.Nice(nice, nicer)
 import Compiler.gen.java.Abstract
@@ -190,6 +190,14 @@ taujtApp g qname rest app
 --- make a type argument from a name
 targ s = TArg {var = if s ~ ´^any(\d+)?$´ then "?" else "Τ" ++ s}
                                                       -- ^ this is a greek uppercase Tau
+
+--- type arguments for sigma type
+targs :: Sigma -> [JType]
+targs = filter (("?" !=) . JType.var) 
+             . map (targ . fst) 
+             . filter ((KGen==) . snd) 
+             . Sigma.bound
+             
 --- reconstruct & print Java code tokens
 reconstruct ∷ [Token] → StIO ()
 reconstruct xs = work xs
@@ -335,8 +343,58 @@ boolS :: Strictness -> [Bool]
 boolS U      = repeat false
 boolS (S ss) = map Strictness.isStrict ss ++ repeat false
 
---- map a strictness signatire to am infinte list of functions
+--- map a strictness signature to an infinte list of functions
 strictFuns :: Strictness → [JType -> JType]
 strictFuns U = repeat lazy
 strictFuns (S ss) = map (bool strict lazy . Strictness.isStrict) ss
+
+
+--- generate an infinite supply of names with the given prefix
+xxxNames xxx = zipWith (++) (repeat xxx) (map show [1..])
+
+
+--- arg$1, arg$2, arg$3, ....
+private argNames = xxxNames "arg$"
+
+--- ctx$1, ctx$2, ctx$3, ...
+private ctxNames = xxxNames "ctx$"
+
+--- mem1, mem2, mem3 ...
+memNames = xxxNames "mem"
+
+--- Compute a list of argument names we can use for a new function
+--- This drops the ones from 'argNames' that are currently used in outer scopes.
+getArgs ∷ Global → [String]
+getArgs g = drop used argNames
+    where 
+        used = sum (map _.depth g.genEnv)
     
+
+--- Compute a list of context names we can use for a new function
+--- This drops the ones from 'ctxNames' that are currently used in outer scopes.
+getCtxs ∷ Global -> [String]
+getCtxs g = drop used ctxNames
+    where
+        used = sum . map (length . _.context . _.rho . _.typ) $ g.genEnv
+
+{--
+    @makeConstraintDef (Ctx cname tau) "ctx3"@ = final Ccname<tau> ctx3
+-}
+constraintDef ∷ Global → Context → String → JDecl
+constraintDef g (Ctx {cname,tau}) s =
+         JMember {
+             attr = attrFinal,
+             jtype = Ref (U.javaName g cname) [],
+             name = s,
+             init = Nothing}
+
+  
+{--
+    @makeConstraintArg (Ctx cname tau) "arg3"@ = (final,  Ccname<tau>, "ctx3")
+  -}
+constraintArg ∷ Global → Context → String → FormalArg
+constraintArg g ctx s = (def.attr; 
+                            (ForAll [] (RhoTau [ctx] ctx.tau)); 
+                            def.jtype; 
+                            def.name)
+     where !def = constraintDef g ctx s

@@ -2,23 +2,28 @@
 
 module frege.compiler.gen.java.VarCode where
 
+import frege.Prelude hiding (<+>)
+
 import Data.TreeMap(TreeMap)
-import Lib.PP(text)
+import Lib.PP(text, <>, <+>)
+import Data.Bits(BitSet, BitSet.member)
 
 import Compiler.enums.Flags(TRACEG)
+import Compiler.enums.RFlag(RTailRec)
 import Compiler.classes.Nice(nice, nicer)
-import Compiler.types.Global(Symbol, StG,
-                                getST)
+import Compiler.types.Global(Symbol, StG, Global(),
+                                getST, changeST)
 import Compiler.types.Symbols(SymV)
 import Compiler.common.Errors as E(logmsg)
+import Compiler.common.Annotate(anno)
 
-import Compiler.Utilities as U()
+import Compiler.Utilities as U(javaName)
 
 import Compiler.gen.java.Common
 import Compiler.gen.java.Abstract
 import Compiler.gen.java.Bindings
 
-varCode :: TreeMap Symbol Binding -> Symbol -> StG [JDecl]
+varCode ∷ TreeMap Symbol Binding → Symbol → StG [JDecl]
 varCode binds sym = do
     g <- getST
     E.logmsg TRACEG sym.pos (text ("varCode for " ++ nicer sym g))
@@ -26,13 +31,144 @@ varCode binds sym = do
     case sym of 
         SymV{expr = Just{}}
             | null si.argSigs = pure [comment]  -- nust be CAF
-            | otherwise = funDef binds sym
+            | otherwise = funDef sym binds 
             where
                 comment = JComment (nicer sym g) 
         _  = error ("varCode: no SymV? " ++ nicer sym g)
 
-funDef :: TreeMap Symbol Binding -> Symbol -> StG [JDecl]
-funDef binds sym = do
-    g <- getST
-    E.logmsg TRACEG sym.pos (text ("compiling " ++ sym.nice g))
+--- Generate code for a function with arguments
+funDef ∷ Symbol → TreeMap Symbol Binding → StG [JDecl]
+funDef sym binds = do
+    g   ← getST
+    if g.toplevel
+    then topFun sym binds
+    else localFun sym binds
+
+--- Generate code for a top level function
+topFun ∷ Symbol → TreeMap Symbol Binding → StG [JDecl]
+topFun (sym@SymV {expr = Just dx}) binds = do
+    g   ← getST
+    E.logmsg TRACEG sym.pos (text "topFun:" 
+                <+> text (nice sym.name g) <> text " :: "
+                <> text (nicer sym.typ.rho g) 
+                <> text ", depth="  <> anno sym.depth
+                <> text ", rstate=" <> (text • show) sym.rkind)
+
+    -- x   ← dx                -- get expression
+    si  ← symInfo sym
+
+    let !arity = length si.argSigs
+    when (arity != sym.depth) do
+        E.fatal sym.pos (text "funDef: arity=" <> anno arity <> text ", depth=" <> anno sym.depth)
+        return ()
+    let
+        argNames = getArgs g
+        ctxNames = getCtxs g
+        isTailRec = RTailRec `member` sym.rkind
+        argAttr  = if isTailRec then empty else attrFinal
+        ctxArgs  = map (unFinal isTailRec) (zipWith (constraintArg g)  sym.typ.rho.context  ctxNames)
+        -- for polymorphic recursion, we must also change the constraints
+        unFinal ∷ Bool → FormalArg → FormalArg
+        unFinal s (arg@(a,b,c,d))
+            | s = (empty, b, c, d ++ "f")
+            | otherwise = arg
+        methArgs  = argDefs argAttr si argNames
+        methName  = (javaName g sym.name).base
+
+    stmts ← compiling sym (genFunction sym si.returnJT methArgs binds)
+    
+    let worker      = JMethod {attr = attrs [JFinal, JPublic, JStatic],
+                       gargs = targs sym.typ,
+                       jtype = si.returnJT,
+                       name  = methName,
+                       args  = ctxArgs ++ methArgs,
+                       body  = JBlock stmts}
+ 
+    defs        = [{-lClass,-} worker]
+
+    pure ([JComment ((nicer sym g) ++ "  " ++ show sym.strsig ++ "  " ++ show sym.rkind),
+         JComment (nicer sym.typ g)] ++ defs)
+
+
+topFun sym binds = do
+    g ← getST
+    error ("topFun: no SymV with expression " ++ nicer sym g)
+
+
+localFun ∷ Symbol → TreeMap Symbol Binding → StG [JDecl]
+localFun sym binds = do
+    g ← getST
+    E.logmsg TRACEG sym.pos (text ("compiling local " ++ sym.nice g))
     pure [JComment (nicer sym g)]
+
+{--
+    > compiling symbol action 
+    
+    run @action@ with @symbol@ in the current compiling environment
+    -}
+compiling ∷ Symbol → StG 𝖆 → StG 𝖆
+compiling sym action = do
+    changeST Global.{genEnv ← (sym:)}
+    r ← action
+    changeST Global.{genEnv ← tail}
+    pure r
+
+{--
+    - invokes 'genLambda' to generate code for a function
+    - wraps the code in a while statement for tail calling functions
+    -}
+genFunction (sym@SymV {expr = Just dex}) rmode args binds = do
+        -- g <- getST
+        ex <- dex
+        if not (RTailRec `member` sym.rkind) 
+            then pure []  -- genLambda rmode ex args binds
+            else do
+                g <- getST
+                let
+                    ctxs  = zipWith (constraintArg g)  sym.typ.rho.context  (getCtxs g)
+                    fargs = [ (attrFinal, sig, jt, nm ++ "f") | (_,sig,jt,nm) <- args ]
+                    decls = [ JMember { attr = attrFinal, jtype = jt,
+                                        name = nm,
+                                        init = Just (JAtom (nm++"f"))}
+                                            | (_,_,jt,nm) <- ctxs ]
+                            ++ [ JMember { attr = attrFinal,
+                                         jtype = jt,
+                                         name = nm ++ "f",
+                                         init = Just (JAtom nm)} | (_,sig,jt,nm) <- args ]
+                    stmts = map JLocal decls
+                code <- pure []  -- genLambda rmode ex fargs binds
+                pure [JCond "tailrecursion: while" (JAtom "true") (stmts ++ code)]
+genFunction sym rmode args binds = error "genFunction: no function"
+
+{- Generate code for a top level function 
+topFunold (sym@SymV {expr = Just dx}) binds = do
+    x <- dx
+    g <- getST
+    si <- symInfo sym
+    E.logmsg TRACEG sym.pos (text ("topFun: " ++ nice sym.name g ++ " :: "
+              ++ nicer sym.typ.rho g 
+              ++ ", depth=" ++ show sym.depth
+              ++ ", rstate=" ++ show sym.rkind))
+ 
+    let argNames    = drop (sum (map Symbol.depth g.genEnv)) GenJava7.argNames
+        argAttr     = if RTailRec `member` sym.rkind then BitSet.empty else attrFinal 
+        -- (rty, _) = U.returnTypeN sym.depth sym.typ.rho
+        -- staticWorker = null sym.typ.rho.context
+        constrargs  = map unFinal (zipWith (makeConstraintArg g)  sym.typ.rho.context  ctxNames)
+        -- when this is a tail recursive function, we write "Ctx fctx$1"
+        unFinal (farg@(attr,  sig, t, nm))
+            | RTailRec `member` sym.rkind   = (empty, sig, t, nm++"f")
+            | otherwise                     = farg
+        -- rjt         = rhoJT g rty
+        wrjt        = si.returnJT
+        workerArgs  = argDefs argAttr si argNames
+        -- modew       = jtRmode wrjt  -- wmode sym.rkind
+        workerName  = (U.javaName g sym.name).base -- if staticWorker then (workerMethod g sym).base else workName g sym
+ 
+    stmts           <- compiling sym (genFunction sym wrjt (workerArgs) binds)
+     -- lClass <- prepareLazy sym  {- if staticWorker
+     --             then return (JComment "has static worker")
+     --             else lazyClass sym -}
+ 
+topFunold _ _ = error "topFun: no function"
+-}
