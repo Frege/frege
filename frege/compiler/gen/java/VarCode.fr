@@ -4,23 +4,31 @@ module frege.compiler.gen.java.VarCode where
 
 import frege.Prelude hiding (<+>)
 
-import Data.TreeMap(TreeMap)
-import Lib.PP(text, <>, <+>, <+/>)
+import Data.TreeMap(TreeMap, insert)
+import Lib.PP(text, <>, <+>, <+/>, </>)
 import Data.Bits(BitSet, BitSet.member)
+import Data.List(partitioned)
 
 import Compiler.enums.Flags(TRACEG)
-import Compiler.enums.RFlag(RTailRec)
+import Compiler.enums.RFlag(RTailRec, RSimple, RValue)
+import Compiler.enums.CaseKind(CKind)
 import Compiler.classes.Nice(nice, nicer)
 import Compiler.types.Global(Symbol, StG, Global(),
-                                getST, changeST)
+                                getST, changeST, uniqid)
 import Compiler.types.Symbols(SymV)
-import Compiler.types.Expression(Expr, ExprT)
+import Compiler.types.Expression(Expr, ExprT, CAlt, CAltT, flatx)
+import Compiler.types.Patterns(Pattern, PatternT)
 import Compiler.types.Positions(Positioned)
+import Compiler.types.Types(RhoT, SigmaT, TauT, Rho, Sigma, Tau)
+import Compiler.types.Strictness(allLazy, Strictness)
+import Compiler.types.QNames(QName)
+import Compiler.types.JNames(JName)
 import Compiler.common.Errors as E(logmsg)
 import Compiler.common.Annotate(anno)
 
 import Compiler.Utilities as U(javaName)
-import frege.compiler.Transform     as T()
+import frege.compiler.Transform     as T(patternRefutable, patternStrictness)
+import frege.compiler.Typecheck     as TY(mainSigma, tc, tauString, sigBool)
 
 import Compiler.gen.java.Common
 import Compiler.gen.java.Abstract
@@ -103,6 +111,18 @@ localFun ∷ Symbol → TreeMap Symbol Binding → StG [JDecl]
 localFun sym binds = do
     g ← getST
     E.logmsg TRACEG sym.pos (text ("compiling local " ++ sym.nice g))
+    pure [JComment (nicer sym g)]
+
+innerFun ∷ Symbol → TreeMap Symbol Binding → StG [JDecl]
+innerFun sym binds = do
+    g ← getST
+    E.logmsg TRACEG sym.pos (text ("compiling inner " ++ sym.nice g))
+    pure [JComment (nicer sym g)]
+
+innerCaf ∷ Symbol → TreeMap Symbol Binding → Bool → StG [JDecl]
+innerCaf sym binds mutual = do
+    g ← getST
+    E.logmsg TRACEG sym.pos (text ("compiling inner " ++ sym.nice g))
     pure [JComment (nicer sym g)]
 
 {--
@@ -193,4 +213,374 @@ genLambda _ x _ _ = do
     g <- getST
     E.fatal (getpos x) (text ("genLambda: bad expression: " ++ nice x g))
     
-genReturn _ _ _ = return [JReturn (JAtom{name="null"})]
+--- runs 'genStmts' to generate code that returns the value
+genReturn :: JType -> Expr -> TreeMap Symbol Binding -> StG [JStmt]
+genReturn jt ex tree = genStmts return jt ex tree 
+    where
+        return x = [JReturn x]
+
+{--
+  * [usage] @genStmt rkind expression bindings@
+  * [returns] A list of statements where the last one is a @return@
+  *           or a @continue@ for a tailcall or a @throw@ from an
+  *           incomplete case statement
+  * This is called for return expressions only.
+  -}
+genStmts :: (JX -> [JStmt]) -> JType -> Expr -> TreeMap Symbol Binding -> StG [JStmt]
+genStmts jret rm (x@Case {ckind,ex=cex,alts=calts}) binds = genCaseStmt jret rm x binds
+ 
+genStmts jret rm (x@Let {env, ex}) binds = do
+     case env of
+         [k] -> do
+             symv <- U.findV k
+
+             -- change
+             -- >   let !name = simple in ex
+             -- to
+             -- >   case simple of name -> ex
+             case symv.expr of
+                 Just vx
+                     | symv.depth == 0,
+                       symv.strsig.isStrict,
+                       RSimple `member` symv.rkind,
+                       RhoTau [] t <- symv.typ.rho = do
+                                        vx <- vx
+                                        genCaseStmt jret rm (cas vx) binds
+                     where
+                         cas vx = Case CWhen vx [alt] x.typ
+                         alt = CAlt {ex, pat = PVar symv.pos symv.name.uid symv.name.base}
+                 _ -> genLet jret rm x binds
+         _ -> genLet jret rm x binds
+ 
+genStmts jret rm (x@Let {env,ex}) binds = genLet jret rm x binds
+ 
+genStmts jret rm (x@(Ifte c t e _)) binds {-| not (T.isSimple x) -} = do
+         g <- getST
+         cbnd <- genExpression false strict c binds
+         tstm <- genStmts jret rm t binds
+         estm <- genStmts jret rm e binds
+         pure [sComment (nicer x g), 
+            JCond "if" (strictBind cbnd).jex tstm, 
+            JBlockX "else" estm]
+ 
+ 
+genStmts jret rm ex binds
+     {- | T.isSimple ex -} = do                                -- return or tailcall
+         g   <- getST
+         case ex of
+             App _ _ _
+                 | Vbl {name}:args <- map fst (flatx ex),
+                   Just (sym@SymV {sid}) <- g.findit name,
+                   sid == (head (g.genEnv)).sid,
+                   length args == sym.depth = do
+                        -- tail call
+                        let argNames = map (++"f") (take (length sym.typ.rho.context) (getCtxs g) ) ++
+                                    (getArgs g) 
+                        call <- genExpr true rm ex binds
+                        case call.jex of
+                            JInvoke{args} -> do
+                            -- si <- symInfo sym
+                            -- abinds   <- sequence (zipWith genEx si.argJTs args)
+                                let assigns = zipWith JAssign (map JAtom argNames) args --(map Binding.jex abinds)
+                                pure (comment:assigns ++ [JEx (JAtom "continue tailrecursion")])
+                            JNewClass{
+                                args=[], 
+                                decls=[JMethod{
+                                    name="eval", 
+                                    args=[], 
+                                    body=JBlock [JReturn JInvoke{args}]}]} -> do
+                                let assigns = zipWith JAssign (map JAtom argNames) args --(map Binding.jex abinds)
+                                pure (comment:assigns ++ [JEx (JAtom "continue tailrecursion")])
+                            _ -> do
+                                E.error (getpos ex) (text "can't make tail recursion for"
+                                    </> PP.nest 4 (text (nicer ex g))
+                                    </> text "from"
+                                    </> PP.nest 4 (PP.group (anno call.jex)))
+                                return [JEx (JAtom "continue tailrecursion")]
+                 where
+                    comment = sComment ("tailcall  " ++ nicer ex g)
+                    -- genEx tt aex = genExpr false tt aex binds
+             _ = do
+                 -- small hack to find out if this is actually a return ...
+                 let realReturn
+                        | [JReturn _]  <- jret (JAtom "x") = true
+                        | otherwise = false  
+                 bnd <- genExpr realReturn rm ex binds
+                 pure (  sComment ("return " ++ show rm ++ "  " ++ nicer ex g)
+                       : sComment (show bnd)
+                       : jret bnd.jex)
+
+genCaseStmt :: (JX -> [JStmt]) -> JType -> Expr -> TreeMap Symbol Binding -> StG [JStmt] 
+{--
+  * The code for case statements can and will be optimized in various ways.
+ 
+  * First, if the case expression is of the form @Con x1 x2 ... xn@, we can avoid
+  * actual construction of the value if all the patterns are of
+  * the form @Con p1 p2 ... pn@ or @_@ or @v@ where v is not used on the right hand side.
+  * Indeed, every definition of a function with multiple arguments and more than one
+  * alternative
+  * > fun p1a p1b p1c = alt1
+  * > fun p2a p2b p2c = alt2
+  * > ...
+  * results in code like
+  * > \_a\_b\_c -> case (_a, _b, _c) of
+  * >    (p1a, p1b, p1c)  -> alt1
+  * >    (p2a, p2b, p2c)  -> alt2
+  * >    ...
+  * so naive implementation would cause an extra tuple construction on every function
+  * call - this tuple would be created just to get deconstructed right away.
+  *
+  * Second, if we know that the set of patterns covers all possibilities, we
+  * can avoid if-statements on the last alternative. In addition, we do not need
+  * to arrange for the case that the pattern is not matched.
+  * Therefore, we have a sophisticated algorithm to find this out, see 'T.patsComplete'
+  *
+  * The generated java code looks like this:
+  * >  // compute case expression if needed
+  * >  if (p1a matches) {
+  * >    if (p1b matches) {
+  * >        if (p1c matches) {
+  * >            code for alternative1
+  * >  }}} // fall through to next alternative
+  * >  if (p2a matches) {
+  * >        ... like above ...
+  * >  }
+  * >  ... yet more alternatives ....
+  * >  throw new NoMatch("xy.fr", 345, case expression)
+  -}
+genCaseStmt jret rm (x@Case {ckind,ex=cex,alts=calts}) binds = do
+         g <- getST
+     -- case Con a b c  ... avoid actual creation of value unless a pattern is not
+     -- itself a constructor application or a variable that is not referenced in its scope
+         capp <- constrApp cex                      -- Just (Con, args) if this is Con a1 a2 ... an
+         pats <- foldM conUVarAlt true calts        -- true if all patterns are Con _ or _
+         stri <- patternStrictness (head calts).pat -- strsig of 1st pattern
+         -- rmex <- patternRMode (head calts).pat
+         bcex <- genExpression false (if stri.isStrict then strict else lazy) cex binds              -- code for ordinary expression
+         let makeBexs                                -- binds for cex or constr args
+                 | pats, Just (con, xs) <- capp = case stri of
+                         S ss -> mapM exStr (zip xs (ss ++ allLazy))
+                         U    -> mapM exStr (zip xs allLazy)
+                 | otherwise = pure [bcex]
+         bexs <- makeBexs
+         let con = if pats then maybe Nothing (Just • fst) capp else Nothing      -- constructor in case ex, if any
+             complete
+                 | T.caseOtherwise g x = Nothing         -- case true of true -> ...
+                 | otherwise = T.patsComplete g (map CAlt.pat ralts)
+             -- ralts are the alternatives that have no guard that could fail
+             -- only the patterns of those alts are considered in deciding
+             -- whether to throw exceptions or not
+             -- walts are the alternatives that have an open case when
+             (walts, ralts) = partitioned (isJust • T.openCaseWhen g • CAlt.ex) calts
+             -- We will give a hint as to which guard is most likely
+             -- causing trouble. If the patterns would be complete if there were
+             -- no guards, then it is most likely the guard on an otherwise irrefutable
+             -- pattern, if there is none, we assume it is the guard of the last alternative
+             -- that has a guard.
+             badguard = case T.patsComplete g (map CAlt.pat calts) of -- would it be complete
+                 Just _  -> Nothing       -- case could not be made safe by adding guards
+                 Nothing -> case filter (not • T.patternRefutable g • CAlt.pat) walts of
+                     walt:_ -> T.openCaseWhen g walt.ex
+                     []     -> case reverse walts of
+                         walt:_ -> T.openCaseWhen g walt.ex
+                         []     -> Nothing
+ 
+             comment = sComment ("case  " ++ nice cex g ++ "  ... "
+                         ++ (if ckind == CWhen then "(guard)" else ""))
+             throw binds
+                 | ckind == CWhen  = pure []                     -- guards always fall through
+                 | Nothing <- con,
+                   [bex1] <- binds = throwEx (strictBind  bex1)
+                 | otherwise       = throwEx (strictBind  bcex)      -- construct case ex for throw
+             throwEx arg
+                 | isJust complete, Just (Left x) <- badguard = do
+                     when (ckind != CNoWarn) do
+                         E.warn (getpos x) (text "guard (" <> text (nicer x g) <> text ") may evaluate to false.")
+                     pure (jthrow arg)
+                 | isJust complete, Just (Right p) <- badguard = do
+                     when (ckind != CNoWarn) do
+                         E.warn (getpos p) (text "pattern guard (" <> text (nicer p g) <> text ") may fail to match.")
+ 
+                     pure (jthrow arg)
+                 | Just p <- complete = do
+                     when (ckind != CNoWarn) do
+                         E.warn (last calts).pat.getpos (text "pattern match is not exhaustive,"
+                                 <+> text "consider adding a case for "
+                                 <+> text (nicer p g))
+                     pure (jthrow arg)
+                 | otherwise = pure []                   -- no throw neeeded
+ 
+             throwargs exb = map JAtom [show ((Prelude.last g.genEnv).name.nice g),
+                                                 show (getpos x)] ++ [Binding.jex exb]
+             jthrow exb = [JThrow (JNew (Ref jnNoMatch []) (throwargs exb))]
+ 
+         (nbexs, code) <- genAlts complete binds [] con bexs calts    -- make alternatives
+         jthrow <- throw nbexs                               -- make throw statement
+         pure (comment : concat (reverse (jthrow:code)))
+ 
+     where
+         genAlts complete binds codes con bexs ((calt@CAlt {pat, ex}):alts) = do
+             g <- getST
+             let last = finalAlt g calt || null alts
+             -- when = T.openCaseWhen g ex
+                 noif = last && isNothing complete
+                 poss = map (getpos • CAlt.pat)  alts
+                 unreachable p = E.warn p (text "equation or case alternative cannot be reached.")
+             (codes, nbexs) <- genAlt noif binds codes con bexs calt
+             if last
+                 then do
+                     when (ckind != CNoWarn) do
+                         forM_ poss unreachable
+                     pure (nbexs, codes)
+                 else genAlts complete binds codes con nbexs alts
+         genAlts complete binds codes con bexs alts = error "genAlts: null alts"
+ 
+         genAlt noif binds codes mbcon bexs (alt@CAlt {pat,ex})
+             | Nothing  <- mbcon = do
+                 g <- getST
+                 if patternRefutable g pat && ckind == CNormal
+                 then do
+                    (rbex, code1) <- realize "$" (head bexs)
+                    (nbex, code) <- match noif pat rbex (genStmts jret rm ex) binds
+                    pure ((altComm g:(code1++code)):codes, [nbex])
+                 else do
+                    (nbex, code) <- match noif pat (head bexs) (genStmts jret rm ex) binds
+                    pure ((altComm g:code):codes, [nbex])  
+                 
+                 
+             | Just con <- mbcon = do
+                 g <- getST
+                 stri <- patternStrictness pat
+                 case pat of
+                     PCon {qname} -> do
+                         sym <- U.findD qname
+                         if sym.sid == Symbol.sid con then do
+                                 let nbexs = case stri of
+                                         S ss -> zipWith (bexStr g) bexs (ss ++ allLazy)
+                                         _    -> bexs
+                                 code <- matchCon noif pat con nbexs (genStmts jret rm ex) binds
+                                 g <- getST
+                                 pure ((altComm g:code):codes, nbexs)
+                             else do
+                                 E.warn (getpos pat) (text "case alternative will never be taken")
+                                 pure ([]:codes, bexs)
+                     _  -> do
+                         g <- getST
+                         -- uvar <- conUVarAlt true alt
+                         -- if uvar then do
+                         code <- genStmts jret rm ex binds
+                         pure ((altComm g:code):codes, bexs)
+             | otherwise = undefined
+             where
+                 altComm g = sComment ("... of  " ++ nice pat g ++ " -> " ++ nicer ex g)
+ 
+ 
+         exStr  (ex, stri)
+             | Strictness.isStrict stri = genExpression false strict  ex binds
+             | otherwise                = genExpression false lazy    ex binds
+         bexStr g bind stri
+             | Strictness.isStrict stri = strictBind bind
+             | otherwise = bind
+             -- check if an expression is a constructor application
+         constrApp (ex@App _ _ _) = case map fst (flatx ex) of
+             Con {name}:xs -> do
+                 sym <- U.findD name
+                 if length sym.flds == length xs
+                     then pure (Just (sym, xs))
+                     else pure Nothing            -- for example:  case (,) a of mktuple -> mktuple b
+             _ -> pure Nothing
+         constrApp _ = pure Nothing      -- for example: let a = 1 in Just a
+         -- check if a pattern is a constructor application or an unused variable
+         conUVarAlt false _ = pure false
+         conUVarAlt true (CAlt {pat = PCon {pos}}) = pure true
+         conUVarAlt true (CAlt {pat = PVar {var,uid}, ex}) = do
+             sym  <- U.findV (Local uid var)
+             refs <- T.references [sym.sid] ex
+             pure (refs == 0) 
+         conUVarAlt _ _ = pure false
+         -- check if there could match anything else after this alternative has matched
+         finalAlt g (CAlt {pat,ex})
+             | T.patternRefutable g pat = false
+             | Just _ <- T.openCaseWhen g ex = false
+             | otherwise = true
+genCaseStmt jret rm nocase binds = error "genCaseStmt: no case"
+
+genLet :: (JX -> [JStmt]) -> JType -> Expr -> TreeMap Symbol Binding -> StG [JStmt] 
+genLet jret rm (x@Let {env,ex}) binds = do
+         g <- getST
+         syms <- mapM U.findV env
+         case syms of
+            [sym] = do
+                c <- selfReferentialCAF sym
+                if c then genLetClass syms else genLetSingle sym
+            _     = genLetClass syms
+
+     where
+         selfReferentialCAF (sym@SymV {expr = Just x, depth = 0}) = do
+            refs <- x >>= T.references [sym.sid]
+            return (refs > 0)
+         selfReferentialCAF _ = return false
+         
+         -- generate a single inner function or a non self recursive caf
+         genLetSingle sym = do
+            g <- getST
+            let letbinds = mkbind g JAtom binds sym
+            decls <- gen false letbinds sym
+            stmts <- genStmts jret rm ex letbinds
+            return (comment g : (map JLocal decls ++ stmts))
+            
+         -- generate declaration of inner function or caf
+         gen mutual binds sym
+            | sym.depth == 0 = innerCaf sym binds mutual 
+            | otherwise      = innerFun sym binds 
+         
+         -- set up simple bindings, generate the mutually dependent items in a class
+         -- instantiate that class and make bindings that access the bindings from outside
+         genLetClass syms = do
+            g <- getST
+            let innerbinds = fold (mkbind g JAtom) binds syms
+            decls <- mapM (gen true innerbinds) syms
+            u <- uniqid
+            let letcl = JClass{attr = attrFinal, 
+                    jtype, extend = Nothing, implement = [], defs = concat decls}
+                -- udecls = map (\JLocal decl -> decl) decls
+                jtype = Ref{jname = JName{qual="", base}, typeargs=[]}
+                base = "Let$" ++ show u
+                name = "let$" ++ show u
+                var = JMember{attr=attrFinal, jtype, name, 
+                        init = Just (JNew jtype [])}
+                member n = JExMem{jex = JAtom name, name=n, targs=[]}
+                letbinds = fold (mkbind g member) binds syms
+            stmts <- genStmts jret rm ex letbinds
+            return (comment g : JLocal letcl : JLocal var : stmts) 
+         comment g = sComment (nicer x g)
+         mkbind :: Global -> (String -> JX)  -> TreeMap Symbol Binding -> Symbol -> TreeMap Symbol Binding
+         mkbind g prefix binds sym = insert sym bind binds 
+            where
+                bind = Bind{stype=nicer sym.typ g, 
+                            ftype=sym.typ, jtype=bjt, 
+                            jex=prefix name}
+                bjt = mode jt
+                jt  = sigmaJT g sym.typ
+                mode = if sym.depth > 0 then strict
+                        else if RValue `member` sym.rkind
+                            then strict else lazy
+                name = (U.javaName g sym.name).base
+genLet jret _ ex binds = do
+     g <- getST
+     E.fatal (getpos ex) (text("genLet: not a let  " ++ nice ex g))
+
+--- genExpression returnexpression f expr binds
+--- Generate java code for expression.
+--- The target java type is determined by @expr@ and modified with @f@ 
+genExpression :: Bool -> (JType -> JType) -> Expr -> TreeMap Symbol Binding -> StG Binding
+genExpression ret stri x binds = do
+    g <- getST
+    let nt = sigmaJT g (unJust x.typ) 
+    genExpr ret (stri nt) x binds
+
+genExpr rflg rm ex binds = do
+    g <- getST
+    let ft = unJust (Expr.typ ex)
+    E.error (getpos ex) (text ("Cannot genSimple: " ++ nicer ex g ++ " :: " ++ nicer ft g))
+    return (newBind g TY.sigBool (JAtom "cannotgenexpression"))
