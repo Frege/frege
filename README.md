@@ -217,16 +217,10 @@ If you are interested in contributing, here are some hot topics:
 Contact
 -------
 
-**Upcoming events**
+**Meet Frege friends in person**
 
-* Meet Frege friends at [all Frege events at JavaOne 2015, San Francisco](https://events.rainfocus.com/oow15/catalog/oracle.jsp?event=javaone&search=Frege&search.event=javaoneEvent). 
-  * *Session*: Frege: Purely Functional Programming for the JVM [CON4286]
-  * *Panel*: Script Bowl 2015: The Emerging Languages Take Over [CON6946]
-  * *Tutorial*: Purely Functional Programming on the JVM: The Red Pill [TUT4296]
-* Language Day [Hochschule der Medien](https://www.hdm-stuttgart.de) Stuttgart, 06. Nov 2015
-* [DEVOXX](http://www.devoxx.be) Antwerp, 9.-13. Nov 2015
-* [GOTO](http://gotocon.com/berlin-2015) Berlin, 2./3. Dec 2015
-* [OOP](http://www.oop-konferenz.de) Munich, 26.-30. Jan 2016 (more details to come)
+Talk to us at any of the [upcoming events](https://github.com/Frege/frege/wiki/Talks)
+or view historic [presentation slides and videos](https://github.com/Frege/frege/wiki/Talks#historic)!
 
 **For discussions**
 
