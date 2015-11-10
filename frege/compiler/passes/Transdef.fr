@@ -329,24 +329,27 @@ transdef env fname (d@DatDcl {pos}) = do
             foreach umethods (updPolyAnn symt fields) 
             foreach cmethods (chgPolyAnn symt fields)                                                                                          
             return ()
+        -- determine type of update function for polymorphic fields
+        -- data Rec a = R { v::a, f :: forall b . a -> [b] -> [b] }
+        -- upd$f :: Rec a -> (f :: forall b . a -> [b] -> [b]) -> Rec a
+        -- NOTE Issue 203: the type of the record could only be changed if 
+        --                 f was the only field that mentions outer bound type a
+        --                 Hence, poly-update will not be possible here.   
         updPolyAnn :: Symbol -> [ConField QName] -> Symbol -> StG ()
         updPolyAnn dtyp flds meth = do
             g <- getST
-            E.logmsg TRACE5 (Symbol.pos meth) (text ("polymorphic update " ++ nice meth g))
+            
             case find ((meth.name.base ==)•("upd$"++)•unJust•ConField.name) flds of
                 Just cf -> do
-                    let mtyp = ForAll (dtyp.typ.bound ++ additional) rho1 where
+                    E.logmsg TRACE5 (Symbol.pos meth) (text "polymorphic update " 
+                        <+> text (nice meth g)
+                        <+> text " :: " 
+                        <+> text (nice cf.typ g))
+                    let mtyp = ForAll (dtyp.typ.bound) rho1 where
                                 rho1 = RhoFun [] dtyp.typ.{bound=[]} rho2
                                 rho2 = RhoFun [] cft ret
-                        -- freeInT = U.freeTVars dtyp.typ.rho
-                        freeInF = U.freeTVars (map fst cf.typ.bound) cf.typ.rho
-                        binders = [ b | b <- allBinders g, b `notElem` cf.typ.vars,
-                                                           b `notElem` dtyp.typ.vars ]
-                        repl = TM.fromList (zipWith ren freeInF binders)
-                        additional = map (\tau -> (tau.var,tau.kind)) (values repl)
-                        ren tau r = (tau.var, tau.{var=r})
-                        ret = U.substRho repl dtyp.typ.rho
-                        cft = cf.typ.{rho <- U.substRho repl} 
+                        ret = dtyp.typ.rho
+                        cft = cf.typ 
                     changeSym meth.{typ = mtyp, anno = true}
                     E.logmsg TRACE5 meth.pos (text (nice meth g ++ " :: " ++ nicer mtyp g))
                     return ()
@@ -366,7 +369,7 @@ transdef env fname (d@DatDcl {pos}) = do
                     -- field (forall f.b -> f -> X)
                     -- forall a b . T a b 
                     -- we want:
-                    -- forall a b c . T a b -> (forall g. (forall f.b -> f -> X) -> c -> g -> X) -> T a c
+                    -- forall a b . T a b -> (forall g . (forall f.b -> f -> X) -> b -> g -> X) -> T a b
                     --        -----                                                                        outerbound
                     --                -------------------------------------------------------------------  rho1
                     --                ------                                                               rho2
@@ -376,7 +379,7 @@ transdef env fname (d@DatDcl {pos}) = do
                     --                                                                              -----  ret
                     --                                                             -------------           rho4    
                     let
-                        result =  ForAll outerbound                                     -- a b c
+                        result =  ForAll outerbound                                     -- a b 
                             RhoFun{
                                 context=[], 
                                 sigma=ForAll [] dtyp.typ.rho,                           -- T a b
@@ -386,23 +389,21 @@ transdef env fname (d@DatDcl {pos}) = do
                                         RhoFun{
                                             context=rho4.context, 
                                             sigma=cf.typ,                               -- forall f.b -> f -> X
-                                            rho=rho4.{context=[]}},                     -- c -> g -> X 
-                                    rho = ret}}                                         -- T a c
+                                            rho=rho4.{context=[]}},                     -- b -> g -> X 
+                                    rho = ret}}                                         -- T a b
                         binders1 = [ TVar{pos = meth.pos, kind = KVar, var = b} 
                                             | b <- allBinders g, b `notElem` cf.typ.vars,
                                               b `notElem` dtyp.typ.vars ]
                         tvarbound tau = (tau.var, tau.kind)
                         freeInF = map Tau.var (U.freeTVars cf.typ.vars cf.typ.rho)      -- b
-                        replInF = take (length freeInF) binders1                        -- c
-                        additional = map tvarbound replInF
-                        outerbound = dtyp.typ.bound ++ additional                       -- a b c
+                        outerbound = dtyp.typ.bound -- additional                       -- a b 
                         binders2 = drop (length freeInF) binders1
                         tvars = take (length cf.typ.bound) binders2                     -- g
-                        treefg  = TM.fromList (zip cf.typ.vars tvars)                 -- f -> g
-                        treebc  = TM.fromList (zip freeInF replInF)                   -- b -> c
+                        treefg  = TM.fromList (zip cf.typ.vars tvars)                   -- f -> g
+                        treebc  = empty -- TM.fromList (zip freeInF replInF)            -- b -> c
                         rho4b    = U.substRho treefg cf.typ.rho                         -- b -> g -> X
-                        rho4     = U.substRho treebc rho4b                              -- c -> g -> X
-                        ret      = U.substRho treebc dtyp.typ.rho                       -- T a c
+                        rho4     = U.substRho treebc rho4b                              -- b -> g -> X
+                        ret      = U.substRho treebc dtyp.typ.rho                       -- T a b
                      
                     changeSym meth.{typ = result, anno = true}
                     E.logmsg TRACE5 meth.pos (text (nice meth g ++ " :: " ++ nicer result g))
