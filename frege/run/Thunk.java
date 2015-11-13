@@ -176,23 +176,25 @@ public class Thunk<R> implements Lazy<R> {
 	 * @param it a lazy value. <b>This must never be null!</b>
 	 */
 	Thunk(Lazy<R> it) { eval = it; }
-	/**
-	 * <p>Create a Thunk from some Object.</p>
-	 * <p>It is checked wether the argument is, in fact, a {@link Lazy}, and if so, the
-	 * behaviour is just as with the other constructor. If, however, the argument is an
-	 * ordinary value, this Thunk will only wrap it and return it when called. </p> 
-	 * @param it a possibly lazy value. <b>This must never be null!</b>
-	 */
-	@SuppressWarnings("unchecked")
-	Thunk(R it) {
-		if (it instanceof Lazy) {
-			eval = (Lazy<R>)it;
-		}
-		else {
-			item = it;
-			eval = null;
-		}
-	}
+	// only used internally
+	private Thunk()   { eval = null; }
+//	/**
+//	 * <p>Create a Thunk from some Object.</p>
+//	 * <p>It is checked wether the argument is, in fact, a {@link Lazy}, and if so, the
+//	 * behaviour is just as with the other constructor. If, however, the argument is an
+//	 * ordinary value, this Thunk will only wrap it and return it when called. </p> 
+//	 * @param it a possibly lazy value. <b>This must never be null!</b>
+//	 */
+//	@SuppressWarnings("unchecked")
+//	Thunk(R it) {
+//		if (it instanceof Lazy) {
+//			eval = (Lazy<R>)it;
+//		}
+//		else {
+//			item = it;
+//			eval = null;
+//		}
+//	}
 	
 	/** 
 	 * <p> evaluate the {@link Lazy}, and update this Thunk, unless it is already evaluated. </p>
@@ -271,36 +273,37 @@ public class Thunk<R> implements Lazy<R> {
 	 * 
 	 * <p>This is, in a sense, the exact opposite of {@link Thunk#call}. 
 	 * Whereas the latter evaluates a {@link Thunk}, unless already evaluated,
-	 * this method constructs a {@link Thunk} value unless it is already a {@link Lazy} 
-	 * one.</p>
+	 * this method constructs a {@link Thunk} value unless it is statically known
+	 * to be a {@link Lazy}. 
+	 * </p>
 	 * 
 	 * <p>Because all {@link Algebraic} types implement {@link Lazy}, 
-	 * this will create a wrapper for native values only.</p>
+	 * this should create an extra wrapper for native values only.</p>
 	 * 
 	 *   @param  val some value
 	 *   @return If the argument is already {@link Lazy}, it is returned properly casted.
 	 *           Otherwise it is wrapped in a {@link Thunk.Value} and returned.
 	 *   @author ingo 
 	 */
-	@SuppressWarnings("unchecked")
-	public final static<X>  Lazy<X> delayed(X val) {
-		if (val instanceof Lazy) return (Lazy<X>) val;
-		return new Thunk<X>(val);
+	public final static<X>  Lazy<X>  lazy(Lazy<X> val) { return val; }
+	
+	public final static<X>  Lazy<X>  lazy(X val) {
+		final Thunk<X> thunk = new Thunk<X>();
+		thunk.item = val;
+		return thunk;
 	}
 	
 	/**
 	 * <p>Static form of the constructor</p>
 	 
 	 * <p>For statically known {@link Thunk}s, this is the identity.</p>
-	 * <p>{@link Lazy} instances are wrapped in a {@link Thunk}, this makes them shared.</p>
-	 * <p>Other things are passed to the constructor. In any case, the returned value is
-	 * a compile time {@link Thunk}.</p>
+	 * <p>Other {@link Lazy} instances are wrapped in a {@link Thunk}, this makes them shared.</p>
 	 * 
 	 * @return a {@link Thunk}, no matter what.
 	 */
 	public final static<R> Thunk<R> shared(Thunk<R> v)  { return v; }
 	public final static<R> Thunk<R> shared(Lazy<R> v)   { return new Thunk<R>(v); }
-	public final static<R> Thunk<R> shared(R v) 		{ return new Thunk<R>(v); }
+	// public final static<R> Thunk<R> shared(R v) 		{ return new Thunk<R>(v); }
 	
 	/***
 	 * <p>Utility function to get some value and clearing it at the same time.</p>

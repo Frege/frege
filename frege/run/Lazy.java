@@ -8,6 +8,7 @@ import java.util.concurrent.Callable;
  * @author ingo
  *
  */
+// @FunctionalInterface
 public interface Lazy<R> extends Callable<R> {
 
 	/**
