@@ -1,25 +1,13 @@
---- Definitions for the abstract Java language the compiler emits.
-
-module frege.compiler.gen.java.Abstract where
+--- Internal form of abstract Java and instances 
+module Compiler.gen.java.Abstract where
 
 import frege.Prelude hiding(<+>, break)
-
-import Compiler.types.JNames
-import Compiler.types.Types
-import Data.Bits
+import Compiler.gen.java.Basics public
 import Compiler.common.Annotate
 import Lib.PP hiding (line)
-
-{--
-    Java Attributes like *@final@*, *@static@* etc.
- -}
-data JAttr = JUnchecked | JFinal | JPrivate | JPublic | JProtected | JStatic | JAbstract
-
-
-derive Enum JAttr
-
-
-derive Bounded JAttr
+import Data.Bits(BitSet(member))
+import Compiler.common.Mangle(romanUpper)
+import Compiler.types.JNames
 
 
 instance Anno JAttr where
@@ -31,48 +19,18 @@ instance Anno JAttr where
     anno JStatic    = text "static"
     anno JAbstract  = text "abstract"
 
-
-type Attributes =  BitSet JAttr
-type FormalArg  = (Attributes, Sigma, JType, String)
-
 --- annotate attributes
 annoAttrs :: Attributes -> DOCUMENT
 annoAttrs flags
     | null flags = PP.nil
     | otherwise  = (PP.spread . map anno . filter (BitSet.`member` flags)) [minBound .. maxBound]
 
-
-
-{--
-    abstract Java Type
- -}
-data JType =
-
-      !Ref   { jname :: JName,  typeargs :: [JType] }
-                        --- frege type (extends Algebraic)
-
-    | !TArg  { var   :: String }
-                        --- type argument @A@
-
-    | !Nativ { typ   :: String, typeargs :: [JType] }
-                        {-- 
-                            Native or array type
-
-                            An array type looks like
-                            >  Nativ { type = "[]", typeargs = [elem]}
-                            where @elem@ is the element type.
-                        -} 
-
-    | !Lazy  { yields :: JType }
-                        --- a Thunk for some type
-
-    | !Func  { args :: Int, yields :: JType }
-                        {-- function that can take so many
-                            arguments before yielding a result -} 
-
-    | Something         {-- something unknown that can be casted
-                            to the desired type -} 
-
+instance Anno JTVar where
+    anno (JTVar s UNBOUNDED)     = text s
+    anno (JTVar s (SUPER jt))    = text s <+> text "super" <+> anno jt
+    anno (JTVar s (EXTENDS jts)) = text s <+> text "extends" 
+                                         <+> sep " &" (map anno jts)
+    annoList = annoSome "<" "," ">" 
 
 annoGenerics ∷ [JType] → DOCUMENT
 annoGenerics [] = DOCUMENT.NONE
@@ -81,99 +39,28 @@ annoGenerics xs = annoSome "<" "," ">" xs
 instance Anno JType where
     anno (Ref  {jname,typeargs})    = text (show jname) <> annoGenerics typeargs
     anno (TArg var          )       = text var
+    anno Wild{bounds}               = anno (JTVar "?" bounds)
     anno Nativ{typ="[]",
                typeargs=[jt]}       = anno jt <> text "[]"
     anno (Nativ {typ,typeargs} )    = text typ  <> annoGenerics typeargs
-    anno (Lazy {yields})            = text "frege.run.Lazy<" <> anno yields <> text ">"
-        --| wasFrege yields           = -- (text "/*" <> anno yields <> text "*/") <+> 
-        --                                text "frege.runtime.Lazy"
-        --| otherwise                 = -- (text "/*" <> anno yields <> text "*/") <+> 
-        --                                text "java.lang.Object"
-    anno Func{args, yields}         = text "frege.run.Func" 
-                                        <> text (show args)
+    anno (Lazy {yields})            = text "Lazy<" <> anno yields <> text ">"
+    anno Func{args, yields}         = text "Func." 
+                                        <> text (romanUpper args)
                                         <> annoGenerics [yields]
-    anno Something                  = text ("java.lang.Object")
-
-derive Eq JType
-
-
---- compute the raw java type name
-rawName :: JType -> String
-rawName Ref{jname}      = show jname
-rawName TArg{var}       = var
-rawName Nativ{typ="[]", typeargs=[jt]} = show jt ++ "[]"
-rawName Nativ{typ}      = typ
-rawName Lazy{yields}    = rawName yields
-rawName Func{args, yields} = "Func" ++ show args -- ++ show yields
-rawName Something       = "Object"
-
-
+    anno Something                  = text ("Object")
 
 instance Show JType where
-    show Lazy{yields}       = "Lazy<" ++ show yields ++ ">"
-    show (t@Func{yields})   = rawName t ++ "<" ++ show yields ++ ">"
-    show Something          = "Something"
-    show jt                 = rawName jt
+    show jt = nice.replaceAll´\n\s*´ " " 
+        where
+            nice = pretty 100 (anno jt)
 
-{--
-    abstract Java Expression
- -}
-type JX = JExpr
-
-
-data JExpr =
-    JAtom {!name :: String}              --- local variable, null, this, true, false, literal etc.
-    | JNew {!jt :: JType, !args :: [JExpr]}                 --- @new Foo(...)@
-    | JNewClass {!jt :: JType, !args ::  [JExpr], 
-                                !decls :: [JDecl]}          --- @new Foo(...) {...}@
-    | JLambda {!fargs :: [FormalArg], !code :: (JExpr|JStmt)}       --- @(int a) -> return a+1@
-    | JNewArray {!jt :: JType, !jex :: JExpr}               --- @new Foo[...]@
-    | JInvoke {!jex :: JExpr, !args :: [JExpr]}             --- @foo(...)@
-    | JStMem {!jname :: JName, !targs :: [JType]}           --- @X.name@
-    | JExMem {!jex :: JExpr, !name :: String, 
-                !targs :: [JType]}                          --- obj.m
-    | JCast {!jt :: JType, !jex :: JExpr }                  --- (T)(x)
-    | JUnop { !op :: String, !jex :: JExpr }                --- @!x@
-    | JBin {!j1 :: JExpr, !op::String, !j2 :: JExpr}        --- @a + b@
-    | JQC {!j1 :: JExpr, !j2 :: JExpr, !j3 :: JExpr}        --- a ? b : c
-    | JArrayGet {!j1, !j2 :: JExpr }                        --- arr[i]
-    where
-        ---  Syntactic precedence of java constructs
-        ---  Higher numbers mean more tight binding.
-        prec JLambda{} = 1
-        prec JQC{}     = 2
-        prec JBin{}    = 3
-        prec JUnop{}   = 4
-        prec JCast{}   = 5
-        prec JArrayGet{} = 6
-        prec JExMem{}  = 9
-        prec JStMem{}  = 9
-        prec JInvoke{} = 9
-        prec JAtom{}   = 9
-        prec JNew{}    = 7
-        prec JNewClass{} = 7
-        prec JNewArray{} = 7
-        --- subex e x
-        --- print @x@ or @(x)@ depending on relative precedence to @e@
-        subex :: JExpr -> JExpr -> PP.DOCUMENT
-        subex e x
-                  | prec e == 3 && prec x <= 3  = text "(" <> anno x <> text ")"
-                  | prec x < prec e             = text "(" <> anno x <> text ")"
-                  | otherwise                   = anno x
-        --- create a 'JAtom'
-        atom   = JAtom
-        --- create an instance member without type arguments
-        jexmem x s = JExMem{jex=x, name=s, targs=[]}
-        --- @invoke args expr@ ---> expr.(args)
-        invoke = flip JInvoke
-        --- @new args type@    ---> new type(args)
-        new    = flip JNew
-        --- @cast type expr@   ---> (type) expr
-        cast   = JCast
-        --- @xmem "name" expr@  ---> expr.name
-        xmem   = flip jexmem
-        --- @static X.y@ ---> X.y
-        static = flip JStMem []
+--- subex e x
+--- print @x@ or @(x)@ depending on relative precedence to @e@
+subex :: JExpr -> JExpr -> PP.DOCUMENT
+subex e x
+          | e.prec == 3 && x.prec <= 3  = text "(" <> anno x <> text ")"
+          | x.prec < e.prec             = text "(" <> anno x <> text ")"
+          | otherwise                   = anno x
 
 
 instance Anno JExpr where
@@ -186,22 +73,22 @@ instance Anno JExpr where
                             jns = ´\.´.splitted (show jn)
                             a = (joined "." • init) jns
                             b = last jns
-    anno (e@JInvoke (JExMem jex s gs) exs) = e.subex jex <~/> PP.nest 4 (
+    anno (e@JInvoke (JExMem jex s gs) exs) = (e `subex` jex) <~/> PP.nest 4 (
                                     text "." <> annoGenerics gs <> text s <> annoList exs)
     -- anno (e@JInvoke (JExMemG jex s gs) exs) = e.subex jex <~/> PP.nest 4 (
     --                                text "." <> annoGenerics gs <> text s <> annoList exs)
-    anno (e@JInvoke x exs) = e.subex x <> annoList exs
-    anno (e@JCast jt x) = text "(" <> jt.anno <> text ")" <> e.subex x
+    anno (e@JInvoke x exs) = (e `subex` x) <> annoList exs
+    anno (e@JCast jt x) = text "(" <> jt.anno <> text ")" <> (e `subex` x)
     anno (JStMem (JName "" b) []) = text b
     anno (JStMem (JName a b) gs) = text a <> text "." <> annoGenerics gs <> text b
-    anno (e@JExMem jex s gs) = e.subex jex <> text "." <> annoGenerics gs <> text s
+    anno (e@JExMem jex s gs) = (e `subex` jex) <> text "." <> annoGenerics gs <> text s
     -- anno (e@JExMem jex s)     = e.subex jex <> text "." <> text s
-    anno (un@JUnop op j1) = text op <+> un.subex j1
-    anno (bin@JBin j1 op j2) = bin.subex j1 <+> text op <+> bin.subex j2
-    anno (jqc@JQC j1 j2 j3) = jqc.subex j1
-                        <+> PP.nest 4    (text "?" <+> jqc.subex j2
-                                    <+/> (text ":" <+> jqc.subex j3))
-    anno (get@JArrayGet{j1, j2}) = get.subex j1 <> text "[" <> anno j2 <> text "]"
+    anno (un@JUnop op j1) = text op <+> (un `subex` j1)
+    anno (bin@JBin j1 op j2) = (bin `subex` j1) <+> text op <+> (bin `subex` j2)
+    anno (jqc@JQC j1 j2 j3) = (jqc `subex` j1)
+                        <+> PP.nest 4    (text "?" <+> (jqc `subex` j2)
+                                    <+/> (text ":" <+> (jqc `subex` j3)))
+    anno (get@JArrayGet{j1, j2}) = (get `subex` j1) <> text "[" <> anno j2 <> text "]"
     anno (JNewClass jt exs decls) = text "new"
                             <+> jt.anno
                             <>  annoList exs
@@ -218,29 +105,6 @@ instance Anno JExpr where
                             <+> jt.anno
                             <>  text "[" <> anno ex <> text "]"
 
-
-
-{--
-    abstract Java Statement
- -}
-data JStmt =
-    !JError String          --- code that makes javac fail (generated by incomplete code generation)
-    | JEmpty                --- empty statement
-    | !JBlock  {stmts::[JStmt]}        --- { statements }
-    | !JReturn JExpr         --- return expr
-    | !JThrow  JExpr         --- throw expr
-    | !JAssert JExpr         --- assert expr
-    | !JEx     JExpr
-    | !JAssign JExpr JExpr   --- a = b
-    | !JLocal  {decl::JDecl}
-    | !JCond   {keyword :: String, jex :: JExpr, stmts :: [JStmt]}   --- if/while (cond) { ... }
-    | !JBlockX {keyword :: String, stmts :: [JStmt]}      --- try/else/catch ... { .... }
-    | !JCase   {jex :: JExpr, stmt :: JStmt }
-
-
---- placeholder for pipehole optimization
-postOpt x = x
-
 instance Anno JStmt where
     anno (JError s) = (JComment s).anno </> text "FIX: incomplete code generation;"
     anno JEmpty = text ";"
@@ -256,34 +120,6 @@ instance Anno JStmt where
                         <+>  anno  (JBlock stmts)
     anno (JBlockX k stmts) = text k <+> anno (JBlock stmts)
     anno (JCase x stmt) = text "case" <+> x.anno <> text ":" <+> anno stmt
-
-{--
-    abstract Java Declaration
- -}
-data JDecl =
-      JComment String   --- > // this is a java comment
-    | !JClass {attr::Attributes, jtype :: JType,
-                extend :: Maybe JType, implement :: [JType], defs :: [JDecl] }
-                        {--
-                            > class Name extends Foo implements Bar, Baz {
-                            > ...
-                            > }
-                        -}
-
-    | !JInterface {attr::Attributes, jtype :: JType,
-                implement :: [JType], defs :: [JDecl] }
-                        {--
-                            > interface Name extends Bar, Baz {
-                            > ...
-                            > }
-                        -}
-
-
-    | !JMethod {attr::Attributes, gargs :: [JType], jtype:: JType, name :: String,
-               args::[FormalArg], body:: JStmt}
-    | !JConstr {attr::Attributes, jtype::JType, args::[FormalArg], body:: JStmt}
-    | !JMember {attr::Attributes, jtype::JType, name::String, init::Maybe JExpr}
-    | !JWhile  {body::JStmt}
 
 --- annotate list of classes that are implemented
 annoImplements _ [] = PP.nil
