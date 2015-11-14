@@ -10,6 +10,7 @@ import Lib.PP(pretty, text, <+>, </>)
 
 import Compiler.common.Annotate(anno)
 import Compiler.common.Errors as E()
+import Compiler.common.Mangle(mangleJtv)
 import Compiler.enums.Flags(TRACEZ)
 import Compiler.enums.RFlag(RValue)
 import Compiler.types.Global(StIO, StG, Symbol, SymInfo8, Global(), GenSt(),
@@ -27,7 +28,7 @@ import Compiler.enums.TokenID(QUALIFIER)
 import Compiler.types.Types(Sigma, Rho, Tau, Context,
                                 ForAll, RhoFun, RhoTau, TApp, TCon, TVar,
                                 Meta, TSig, Ctx)
-import Compiler.types.Kinds(KGen)
+import Compiler.types.Kinds(Kind)
 import Compiler.classes.Nice(nice, nicer)
 import Compiler.gen.java.Abstract
 
@@ -56,13 +57,13 @@ attrs = fold Attributes.unionE Attributes.empty
 jtEnum    = Nativ "short" []
 
 --- 'JType' of 'String'
-jtString = Nativ { typ = "java.lang.String", typeargs = []}
+jtString = Nativ { typ = "String", gargs = []}
 
 --- 'JType' of 'Algebraic'
-jtAlgebraic = Ref {jname = JName "frege.runtime" "Algebraic", typeargs = []}
+jtAlgebraic = Ref {jname = JName "frege.runtime" "Algebraic", gargs = []}
 
 --- 'JType' of 'Value'
-jtValue     = Ref {jname = JName "frege.runtime" "Value", typeargs = []}
+jtValue     = Ref {jname = JName "frege.runtime" "Value", gargs = []}
 
 
 --- Java name of the runtime class that provides support for exceptions 
@@ -110,10 +111,10 @@ arrayTau g tau
     | TApp con b <- tau,
       TCon{name = TName pack "JArray"} <- con,
       pack == pPreludeArrays = case arrayTau g b of
-        Just (sub@Nativ{typ, typeargs}) -> Just Nativ{typ="[]", typeargs=[sub]}
+        Just (sub@Nativ{typ, gargs}) -> Just Nativ{typ="[]", gargs=[sub]}
         _ -> case tauJT g b of
             Something -> Just Something     -- will cause casting to correct type if needed
-            jt -> Just Nativ{typ="[]", typeargs=[jt]}
+            jt -> Just Nativ{typ="[]", gargs=[jt]}
     | otherwise = Nothing
 
 {--
@@ -162,9 +163,7 @@ tauJT   g (app@TApp a b)
  
 tauJT   g (ty@TCon {pos, name})    = taujtApp g name [] ty
  
-tauJT   g (TVar {var,kind})
-     | kind == KGen             = targ var 
-     | otherwise                = Something
+tauJT   g (TVar {var,kind})     = TArg (mangleJtv var)
 tauJT   g (Meta meta)
      | meta.kind == KGen        = TArg ("GT" ++ show meta.uid)
      | otherwise                = Something
@@ -183,25 +182,37 @@ taujtApp g qname rest app
         SymT {product,nativ,enum,pur}
               -- U.pri
               | Just s <- nativ = if s `elem` primitiveTypes
-                                    then Nativ {typ=s, typeargs=[]}
+                                    then Nativ {typ=s, gargs=[]}
                                     else Nativ {typ=s, 
-                                              typeargs = map (boxed . tauJT g) args}
+                                              gargs = map (boxed . tauJT g) args}
               | enum            = jtEnum
-              | otherwise       = Ref {jname = javaName g qname, typeargs = []}
+              | otherwise       = Ref {jname = javaName g qname, gargs = []}
               where args = [ jt | (KGen, jt) <- zip sym.typ.kinds rest ]     
         other -> undefined   -- can not happen because catched in U.findT
     | otherwise = Prelude.error (nice qname g ++ " not a type")
 
---- make a type argument from a name
-targ s = TArg {var = if s ~ ´^any(\d+)?$´ then "?" else "Τ" ++ s}
+--- make a formal java type variable from a name and a kind 
+targ ∷ String -> Kind -> JTVar
+targ s k = JTVar{var, bounds}
+    where
+        var = mangleJtv s
+        bounds = case kArity k of
+            0 → UNBOUNDED
+            k → EXTENDS [ Kinded k (TArg var:replicate k unboundedWild) ]
+
+--- given a 'Kind', returns number of type arguments needed to get to a 'KType'
+kArity ∷ Kind → Int
+kArity (KApp _ r)  = 1 + kArity r
+kArity _           = 0
+
+
+
+ 
                                                       -- ^ this is a greek uppercase Tau
 
 --- type arguments for sigma type
-targs :: Sigma -> [JType]
-targs = filter (("?" !=) . JType.var) 
-             . map (targ . fst) 
-             . filter ((KGen==) . snd) 
-             . Sigma.bound
+targs :: Sigma -> [JTVar]
+targs = map (uncurry targ) . Sigma.bound
              
 --- reconstruct & print Java code tokens
 reconstruct ∷ [Token] → StIO ()
@@ -234,6 +245,7 @@ lazy jt = case jt of
     Func{}              → Lazy jt
     Ref{jname}          → Lazy jt
     Wild{bounds}        → Lazy jt
+    Kinded{gargs}       → if wasFrege (head gargs) then jt else Lazy jt
 
 
 --- make sure a native type is not primitive
@@ -244,26 +256,26 @@ autoboxed jt
 
 --- create the boxed form of a java type
 boxed (Lazy x) = x
-boxed (Nativ "boolean" []) = Nativ {typ = "Boolean", typeargs = []}
-boxed (Nativ "byte" [])    = Nativ {typ = "Byte", typeargs = []}
-boxed (Nativ "short" [])   = Nativ {typ = "Short", typeargs = []}
-boxed (Nativ "char" [])    = Nativ {typ = "Character", typeargs = []}
-boxed (Nativ "int" [])     = Nativ {typ = "Integer", typeargs = []}
-boxed (Nativ "long" [])    = Nativ {typ = "Long", typeargs = []}
-boxed (Nativ "double" [])  = Nativ {typ = "Double", typeargs = []}
-boxed (Nativ "float" [])   = Nativ {typ = "Float", typeargs = []}
+boxed (Nativ "boolean" []) = Nativ {typ = "Boolean",    gargs = []}
+boxed (Nativ "byte" [])    = Nativ {typ = "Byte",       gargs = []}
+boxed (Nativ "short" [])   = Nativ {typ = "Short",      gargs = []}
+boxed (Nativ "char" [])    = Nativ {typ = "Character",  gargs = []}
+boxed (Nativ "int" [])     = Nativ {typ = "Integer",    gargs = []}
+boxed (Nativ "long" [])    = Nativ {typ = "Long",       gargs = []}
+boxed (Nativ "double" [])  = Nativ {typ = "Double",     gargs = []}
+boxed (Nativ "float" [])   = Nativ {typ = "Float",      gargs = []}
 boxed x = x
 
 --- create the unboxed form of a boxed java type
 strict x = case boxed x of
-    Nativ {typ = "Boolean", typeargs = []}   -> Nativ "boolean"  []
-    Nativ {typ = "Byte", typeargs = []}      -> Nativ "byte"  []
-    Nativ {typ = "Short", typeargs = []}     -> Nativ "short"  []
-    Nativ {typ = "Character", typeargs = []} -> Nativ "char" []
-    Nativ {typ = "Integer", typeargs = []}   -> Nativ "int" []
-    Nativ {typ = "Long", typeargs = []}      -> Nativ "long" []
-    Nativ {typ = "Double", typeargs = []}    -> Nativ "double" []
-    Nativ {typ = "Float", typeargs = []}     -> Nativ "float" []
+    Nativ {typ = "Boolean",   gargs = []}   → Nativ "boolean"  []
+    Nativ {typ = "Byte",      gargs = []}   → Nativ "byte"  []
+    Nativ {typ = "Short",     gargs = []}   → Nativ "short"  []
+    Nativ {typ = "Character", gargs = []}   → Nativ "char" []
+    Nativ {typ = "Integer",   gargs = []}   → Nativ "int" []
+    Nativ {typ = "Long",      gargs = []}   → Nativ "long" []
+    Nativ {typ = "Double",    gargs = []}   → Nativ "double" []
+    Nativ {typ = "Float",     gargs = []}   → Nativ "float" []
     other -> other
 
 {--
