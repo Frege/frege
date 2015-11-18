@@ -4,7 +4,7 @@ module frege.compiler.gen.java.Common where
 
 import frege.Prelude hiding (<+>)
 
-import Data.TreeMap(values, insert)
+import Data.TreeMap(values, insert, lookup, TreeMap Map)
 import Data.Bits(BitSet.member)
 import Lib.PP(pretty, text, <+>, </>)
 
@@ -162,14 +162,16 @@ tauJT   g (app@TApp a b)
      | Just array <- arrayTau g app = array 
      | otherwise = case app.flat of
          (TCon {pos,name}):rest -> taujtApp g name rest app
+         (h@TVar{}):rest        -> Kinded{arity = length rest, gargs = map (tauJT g) rest}
          other                  -> Something     -- we know nothing about it
  
 tauJT   g (ty@TCon {pos, name})    = taujtApp g name [] ty
  
 tauJT   g (TVar {var,kind})     = TArg (mangleJtv var)
 tauJT   g (Meta meta)
-     | meta.kind == KGen        = TArg ("GT" ++ show meta.uid)
-     | otherwise                = Something
+     | meta.isFlexi            = TArg ("Flexi" ++ show meta.uid)
+     | otherwise               = TArg ("Rigid" ++ show meta.uid)
+     -- otherwise                = Something
 tauJT   g (TSig sig)            = sigmaJT g sig
 
 
@@ -187,12 +189,61 @@ taujtApp g qname rest app
               | Just s <- nativ = if s `elem` primitiveTypes
                                     then Nativ {typ=s, gargs=[]}
                                     else Nativ {typ=s, 
-                                              gargs = map (boxed . tauJT g) args}
+                                              gargs = args}
               | enum            = jtEnum
-              | otherwise       = Ref {jname = javaName g qname, gargs = []}
-              where args = [ jt | (KGen, jt) <- zip sym.typ.kinds rest ]     
+              | otherwise       = Ref {jname = javaName g qname, gargs = args}
+              where args = map fst (zip (map (boxed . tauJT g) rest ++ wilds) sym.typ.bound)     
         other -> undefined   -- can not happen because catched in U.findT
     | otherwise = Prelude.error (nice qname g ++ " not a type")
+
+
+--- an infinite list of unbounded 'Wild'cards
+wilds  = repeat unboundedWild
+
+{--
+    > jtype `asKind` ĸ
+    Create higher kind representation of a java type for kinds with ĸ arrows.
+
+    A type with higher kinded type constructor, like 'Maybe', (->) or 
+    [] will be mapped to a Java generic type.
+    
+    > Maybe Int ⇒ TMaybe<java.lang.Integer>
+    
+    This is fine as long as we don't need to abstract over the type constructor.
+    In that case we use another representation:
+    
+    > Maybe a       ⇒ Kind.U<TMaybe<?>, A>
+    > Either a b    ⇒ Kind.B<TEither<?,?>, A, B>
+    >               ⇒ Kind.U<TEither<A,?>, B>
+    
+    It so happens that every type with a type constructor of kind ĸ (ĸ > 0),
+    where ĸ is the arity of the kind 
+    (i.e. how many type arguments to supply before we reach type of kind \*), 
+    implements the @Kind@ interfaces 1..ĸ and thus can be passed to functions
+    that expect a higher kinded type like:
+    
+    > fmap ∷ Functor f ⇒ (a → b) → f a → f b
+    
+    which reads in Java as:
+    
+    > public <F extends Kind.U<F,?>, A, B>
+    >    Kind.U<F, B> fmap(CFunctor<F>, Func.U<A,B>, Kind.U<F,A>)
+-}
+asKind ∷ JType → Int → JType
+asKind jt n
+    | jt.{gargs?},
+      length jt.gargs >= n
+                     = kind n jt.gargs
+    | otherwise      = error ("type does not have kind %d: %s".format n (show jt))               -- a type without type arguments
+    where
+        kind n args = Kinded n (ft:rargs)
+            where
+                nargs = length args
+                ws    = take n wilds        -- n wildcards "?"
+                -- replace trailing n type args with "?"
+                ft    = jt.{gargs <- (++ws) . take (nargs-n) }
+                rargs = drop (nargs - n) jt.gargs  
+
 
 --- make a formal java type variable from a name and a kind 
 targ ∷ String -> Kind -> JTVar
@@ -208,10 +259,50 @@ kArity ∷ Kind → Int
 kArity (KApp _ r)  = 1 + kArity r
 kArity _           = 0
 
+--- equality of 2 Java types up to type var renaming
+unifyJT ∷ JType → JType → Map String JType → Maybe (Map String JType)
+unifyJT ta tb subst = case ta  of
+        Ref{jname, gargs}   →  case tb of
+            Ref{}   | ta.jname == tb.jname
+                    = unifyArgs ta.gargs tb.gargs subst
+            _ → Nothing 
+        TArg{var} → case tb of 
+            TArg{}  | var == tb.var = Just subst
+                    | otherwise 
+                    =  case lookup var subst of
+                        Just jt     → if jt == tb then Just subst else Nothing
+                        Nothing     → Just (insert var tb subst)
+            _ → Nothing 
+        Wild{}      = case ta.bounds of
+                UNBOUNDED 
+                    | Wild UNBOUNDED ← tb       = Just subst
+                    | otherwise = Nothing
+                EXTENDS xs
+                    | Wild (EXTENDS ys) ← tb    = unifyArgs xs ys subst
+                SUPER tc
+                    | Wild (SUPER td) ← tb      = unifyJT tc td subst
+                _ → Nothing 
+        Nativ{typ, gargs} →  case tb of
+            Nativ{} | ta.typ == tb.typ
+                    = unifyArgs ta.gargs tb.gargs subst
+            _ → Nothing
+        Kinded{arity, gargs} →  case tb of
+            Kinded{} | ta.arity == tb.arity     = unifyArgs gargs tb.gargs subst
+            _ → Nothing 
+        Lazy{yields} →  case tb of 
+            Lazy{}  = unifyJT yields tb.yields subst
+            _ → Nothing 
+        Func{gargs, yields} →  case tb of
+            Func{}  = unifyJT yields tb.yields subst >>= unifyArgs gargs tb.gargs
+            _ → Nothing
+        Something →  if tb == Something then Just subst else Nothing
+    where
+        unifyArgs [] [] subst = Just subst
+        unifyArgs (x:xs) (y:ys) subst = 
+            unifyJT x y subst >>= unifyArgs xs ys
+        unifyArgs _ _ _ = Nothing
 
 
- 
-                                                      -- ^ this is a greek uppercase Tau
 
 --- type arguments for sigma type
 targs :: Sigma -> [JTVar]
@@ -280,6 +371,13 @@ strict x = case boxed x of
     Nativ {typ = "Double",    gargs = []}   → Nativ "double" []
     Nativ {typ = "Float",     gargs = []}   → Nativ "float" []
     other -> other
+
+--- Tell if we can pass some value when a Lazy is required.
+--- This is based on the consideration whether javac will accept it.
+implementsLazy ∷ JType → Bool
+implementsLazy Ref{}    = true
+implementsLazy Lazy{}   = true
+implementsLazy _        = false
 
 {--
     Tell if a java type is a mapped Frege type

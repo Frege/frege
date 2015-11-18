@@ -13,9 +13,10 @@ module frege.compiler.gen.java.Bindings
 
 import frege.Prelude hiding(<+>)
 
--- import Data.TreeMap (insert)
+import Data.TreeMap (TreeMap Map)
 import Data.List as DL(zip4)
 import Data.Bits(BitSet.member)
+
 
 import  Compiler.common.Errors as E()
 -- import  frege.lib.PP hiding(group, break, line)
@@ -69,6 +70,15 @@ isKnownJT Something             = false
 isKnownJT Lazy{yields}          = isKnownJT yields
 isKnownJT _                     = true
 
+
+--implementsLazy TArg{}   = false
+--implementsLazy Wild{}   = false
+--implementsLazy Nativ{}  = false
+--implementsLazy Kinded{} = false
+--implementsLazy Func{}   = false
+--implementsLazy Something  = false
+
+
 {-
     Something       strict, unknown
     Ref             strict, known
@@ -88,10 +98,6 @@ returnType mode rjt = if RValue `member` mode
     then strict rjt
     else lazy rjt
 
--- unFunc argjt = case argjt of
---             Func{args, yields}  -> Lambda
---             other               -> other
-
     
 {--
     generate method signature from strictness info and argument types
@@ -103,12 +109,13 @@ argDefs attr sis argNms
 protected argdef g attr s sig nm = (attr, sig, argType g (bool strict lazy (Strictness.isStrict s)) sig, nm)
 
 {--
-    Compute formal argument list for a eval method.
-    By definition, all arguments must be Objects. (see @frege.runtime.Func@_N_)
+    Compute formal argument list for a lambda method.
+    By definition, all arguments must be 'Lazy'. (see @frege.run.Func@)
     -}
-evalArgDef attr sigmas argNms = zipWith (argdef attr) sigmas argNms
+evalArgDef :: Global -> Attributes -> [Sigma] -> [String] -> [FormalArg]
+evalArgDef g attr sigmas argNms = zipWith (argdef attr) sigmas argNms
     where
-        argdef attr sigma name = (attr, sigma, Lazy Something, name)     
+        argdef attr sigma name = (attr; sigma; lazy . rhoJT g . _.rho $ sigma; name)     
 {--
     convert an arg quadrupel to a 'Binding'
     -}
@@ -130,11 +137,15 @@ adaptArg g a s = adaptBind g (arg2Bind g a) s
 --- instantiate 'Binding' for an Argument
 instArg g a = adaptSigma g (arg2Bind g a)
 
---- Java expression for the *delayed* method.
-methodDelay = JStMem (memberOf jnThunk "delayed") []
+--- Java expression for the *lazy* method.
+methodLazy = JStMem (memberOf jnThunk "lazy") []
 
---- Java expression for the *forced* method. The argument is the expected type.
-methodForced to = JStMem (memberOf jnThunk "forced") [to]
+--- Java expression for the *shared* method.
+methodShared = JStMem (memberOf jnThunk "shared") []
+
+
+-- Java expression for the *forced* method. The argument is the expected type.
+-- methodForced to = JStMem (memberOf jnThunk "forced") [to]
 
 --- Invoke method with single argument
 invokeSingle meth arg = JInvoke meth [arg]
@@ -143,22 +154,19 @@ invokeSingle meth arg = JInvoke meth [arg]
 --- force a lazy 'Binding'
 force :: Binding -> Binding
 force Bind{stype, ftype, jtype = Lazy{yields}, jex}
-    | wasFrege yields = Bind{stype, ftype, jtype = yields, 
-                                    jex = JInvoke JExMem{jex, name="forced", targs=[yields]} []}
-    | otherwise       = Bind{stype, ftype, jtype = boxd, 
-                                    jex = invokeSingle (methodForced boxd) jex}
-    where boxd = boxed yields
+                    = Bind{stype, ftype, jtype = boxed yields, 
+                            jex = JInvoke JExMem{jex, name="call", targs=[]} []}
+
 force bind 
-    | traceLn("unneeded force: " ++ show bind) = bind
-    | otherwise                                = bind
+    = error("unneeded force: " ++ show bind)
 
 --- Force a lazy @bind@ and give it type @to@
 --- This is only possible for 'Bindings' having type @Lazy Something@
 forceTo :: Binding -> JType -> Binding
 forceTo bind to
-    | Lazy Something <- bind.jtype = bind.{jtype=boxd, jex <- invokeSingle (methodForced boxd)}
+    | Lazy Something <- bind.jtype = (force bind).{jtype=boxed to, jex <- JCast to}
     | otherwise = error("cannot forceTo: " ++ show bind ++ " to " ++ show to)
-    where boxd = boxed to
+
      
 {-- 
     Delay a 'Binding'
@@ -169,7 +177,7 @@ forceTo bind to
 delayAs :: Binding -> JType ->  Binding
 delayAs bind as
     | Lazy Something <- bind.jtype = bind.{jtype = lazy as, 
-                                        jex <- invokeSingle methodDelay}
+                                        jex <- invokeSingle methodLazy}
     | otherwise = error ("cannot delay " ++ show bind ++ "  as  " ++ show as) 
 
 {--
@@ -202,64 +210,73 @@ castAs bind as
 infixl 5 adapt
 {--
     Adapt a binding to a given target type
+    
+    Note that all adaptions should be justified through type checking.
+    In particular, we are not doing Java type checking here.
+    
     -}
 adapt :: Binding -> JType -> Binding
 adapt bind toType
-    | bind.jtype == toType = bind     -- nothing to do
+    -- bind.jtype == toType = bind     -- nothing to do
+    | Just _ <- unifyJT bind.jtype toType Map.empty = accept
     | otherwise = case bind.jtype of
-        Ref{} -> case toType of
-            Lazy{yields}
-                | yields == bind.jtype  = accept    -- every Ref is Lazy
-                | yields == Something   = accept    -- every Ref is Object
-            Something                   = accept    -- every Ref is Object
-            others                      = cannot
-        Nativ{}   -> case toType of
-            Nativ{}                     = casted
-            Lazy{yields}
-                | yields == bind.jtype  = accept    -- every Nativ is an Object
-                | yields == boxed bind.jtype = accept
-                | Nativ{} <- yields     = bind `adapt` yields `adapt` toType    -- lazy downcast? 
-                | yields == Something   = accept    -- every Nativ is an Object
-            Something                   = accept    -- every Nativ is an Object
-            others                      = cannot
-        Lazy Something -> case toType of
-            Lazy{yields}
-                | wasFrege yields       = delayAs bind yields
-                | otherwise             = accept
-            others                      = forcedto
-        Lazy{yields} -> case toType of
-            Lazy Something              = accept
-            Something                   = forced
-            others | toType == yields   = forced
-                   | otherwise          = forced `adapt` toType
-        Func{} -> case toType of
-            Lazy Func{}                 = accept
-            Lazy Something              = accept
-            Something                   = accept
-            others                      = cannot
-        -- Func{args} -> case toType of
-        --     Lambda                      = accept
-        --     Func{} | args==toType.args  = accept
-        --     Lazy{yields}
-        --         | yields == bind.jtype  = accept
-        --         | yields == Lambda      = accept
-        --         | yields == Something   = accept
-        --         | Func{} <- yields,
-        --           args==yields.args     = accept
-        --     Something                   = accept
-        --     others                      = cannot
-        Something -> case toType of
-            Lazy Something              = accept
-            Lazy other                  = bind `adapt` Lazy Something `adapt` toType
-            _ | Just{} <- isPrimitive toType      
-                                        = bind `adapt` boxed toType `adapt` toType
-              | isStrictJT toType       = casted
-            others                      = cannot   
-        TArg{var} -> case toType of
-            Something                   = accept
-            Lazy Something              = accept
-            Lazy x | x == bind.jtype    = accept
-            others                      = cannot  
+        Lazy{yields} = case toType of
+            Lazy{}  = cannot                -- because types are not equal
+            _       = adapt forced toType
+        _ -> cannot
+        --Ref{} -> case toType of
+        --    Lazy{yields}
+        --        | yields == bind.jtype  = accept    -- every Ref is Lazy
+        --        | yields == Something   = accept    -- every Ref is Object
+        --    Something                   = accept    -- every Ref is Object
+        --    others                      = cannot
+        --Nativ{}   -> case toType of
+        --    Nativ{}                     = casted
+        --    Lazy{yields}
+        --        | yields == bind.jtype  = accept    -- every Nativ is an Object
+        --        | yields == boxed bind.jtype = accept
+        --        | Nativ{} <- yields     = bind `adapt` yields `adapt` toType    -- lazy downcast? 
+        --        | yields == Something   = accept    -- every Nativ is an Object
+        --    Something                   = accept    -- every Nativ is an Object
+        --    others                      = cannot
+        --Lazy Something -> case toType of
+        --    Lazy{yields}
+        --        | wasFrege yields       = delayAs bind yields
+        --        | otherwise             = accept
+        --    -- others                      = forcedto
+        --Lazy{yields} -> case toType of
+        --    Lazy Something              = accept
+        --    Something                   = forced
+        --    others | toType == yields   = forced
+        --           | otherwise          = forced `adapt` toType
+        --Func{} -> case toType of
+        --    Lazy Func{}                 = accept
+        --    Lazy Something              = accept
+        --    Something                   = accept
+        --    others                      = cannot
+        -- -- Func{args} -> case toType of
+        -- --     Lambda                      = accept
+        -- --     Func{} | args==toType.args  = accept
+        -- --     Lazy{yields}
+        -- --         | yields == bind.jtype  = accept
+        -- --         | yields == Lambda      = accept
+        -- --         | yields == Something   = accept
+        -- --         | Func{} <- yields,
+        -- --           args==yields.args     = accept
+        -- --     Something                   = accept
+        -- --     others                      = cannot
+        --Something -> case toType of
+        --    Lazy Something              = accept
+        --    Lazy other                  = bind `adapt` Lazy Something `adapt` toType
+        --    _ | Just{} <- isPrimitive toType      
+        --                                = bind `adapt` boxed toType `adapt` toType
+        --      | isStrictJT toType       = casted
+        --    others                      = cannot   
+        --TArg{var} -> case toType of
+        --    Something                   = accept
+        --    -- Lazy Something              = accept
+        --    -- Lazy x | x == bind.jtype    = accept
+        --    others                      = cannot  
     where
         accept   = bind.{jtype = toType}
         casted   = castAs bind toType
