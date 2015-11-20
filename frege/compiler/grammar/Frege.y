@@ -105,6 +105,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type packagename     (String, Position)
 //%type packagename1    (String, Position)
 //%type nativename      String
+//%type nativespec      (String, Maybe [TauS])
 //%type nativepur       (Bool, Bool)
 //%type docs            String
 //%type opstring        String
@@ -322,6 +323,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%explain nativedef    a declaration of a native item
 //%explain impurenativedef    a declaration of a native item
 //%explain nativename   a valid java identifier
+//%explain nativespec   a native generic type
 //%explain nativepur    a native data type
 //%explain documentation documentation
 //%explain funhead      left hand side of a function or pattern binding
@@ -1043,16 +1045,30 @@ nativepur:
     | NATIVE            { \_   -> (false, false) }
     ;
 
+nativespec:
+      nativename                { \x    -> (x; Nothing) }
+    | nativename simpletypes    { \x\gs -> (x; Just gs) }
+    | nativename SOMEOP         { \x\d -> do
+                                    if d.value == "<>"
+                                    then return  (x; Just [])
+                                    else do
+                                        yyerror (yyline d) "diamond operator <> expected"
+                                        return (x; Nothing)
+                                }
+    ;
+
 datainit:
-    DATA CONID '=' nativepur nativename {
-        \dat\d\docu\pur\jt -> JavDcl {pos=yyline d, vis=Public, name=Token.value d,
-                                    jclas=jt, vars=[], defs=[], 
+    DATA CONID '=' nativepur nativespec {
+        \dat\d\docu\pur\(jt,gargs) -> JavDcl {pos=yyline d, vis=Public, name=Token.value d,
+                                    jclas=jt, vars=[], defs=[],
+                                    gargs = maybe [] (\x -> if null x then [] else x) gargs, 
                                     isPure = fst pur, isMutable = snd pur, 
                                     doc=Nothing}
     }
-    | DATA CONID dvars '=' nativepur nativename {
-        \dat\d\ds\docu\pur\jt -> JavDcl {pos=yyline d, vis=Public, name=Token.value d,
-                                    jclas=jt, vars=ds, defs=[], 
+    | DATA CONID dvars '=' nativepur nativespec {
+        \dat\d\ds\docu\pur\(jt,gargs) -> JavDcl {pos=yyline d, vis=Public, name=Token.value d,
+                                    jclas=jt, vars=ds, defs=[],
+                                    gargs = maybe [] (\x -> if null x then ds else x) gargs, 
                                     isPure = fst pur, isMutable = snd pur,
                                     doc=Nothing}
     }
