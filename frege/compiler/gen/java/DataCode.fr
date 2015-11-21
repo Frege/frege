@@ -14,6 +14,7 @@ import Compiler.types.Symbols
 import Compiler.types.AbstractJava
 import Compiler.gen.java.VarCode(varCode)
 import Compiler.gen.java.Common
+import Compiler.gen.java.Bindings(assign)
 import Compiler.enums.Flags(TRACEG)
 
 --- Generate code for @data@ definitions
@@ -77,17 +78,17 @@ dataCode (sym@SymT{product = true}) = do
     g ← getST 
     E.logmsg TRACEG sym.pos (text ("dataCode for " ++ nicer sym g))
     
+    con <- conDecls $ head [ con | con@SymD{} ← values sym.env ] 
     sub <- subDecls sym
     
-    let dcon = head [ con | con@SymD{} ← values sym.env ]
-        jtype = rhoJT g sym.typ.rho
+    let jtype = rhoJT g sym.typ.rho
         result = JClass{attr = attrTop, 
                         name = (javaName g sym.name).base, 
                         gvars = targs sym.typ, 
                         extend = Nothing, 
-                        implement = Lazy jtype : 
+                        implement = jtValue : Lazy jtype : 
                                 map (asKinded jtype) [1..kArity sym.kind], 
-                        defs = [callMethod jtype]}
+                        defs = [callMethod jtype] ++ con ++ sub}
         comment = JComment ("data " ++ sym.name.base ++ " :: " ++ show sym.kind)
     pure [comment, result]
 
@@ -98,16 +99,45 @@ dataCode sym = do
             <+> text (nice sym g) 
         )
 
+{-- 
+    Given a data constructor symbol, make 
+    - member declarations for the fields 
+    - a private java constructor that initializes the arguments 
+    - a public "mk" method with the same argument list as the constructor 
+-}
+conDecls ∷ Symbol → StG [JDecl]
+conDecls (sym@SymD{}) = do
+    si  ←   symInfo sym
+    g   ←   getST
+    let arity   = length sym.flds
+        decls   = [comment, constr, constructorMethod sym.cid, make] 
+                    ++ members
+        comment     = JComment (nice sym g)
+        jtype       = si.returnJT
+        constrargs  = argDefs attrFinal si (getArgs g)
+        args        = take arity (map JAtom (getArgs g))
+        constr      = JConstr {attr = attrs [JPrivate], jtype,
+                             args = constrargs,
+                             body = JBlock super}
+        namedfields = namedFields sym.flds
+        super = zipWith (assign g) namedfields constrargs
+        make  = JMethod {attr = attrs [JPublic, JFinal, JStatic],
+                         gvars = targs sym.typ, jtype, name = "mk",
+                         args = constrargs,
+                         body = JBlock [JReturn (JNew jtype args)]}
+        members = zipWith mkMember namedfields constrargs
+    return decls
+conDecls _ = error "no SymD"
+
+--- generate
+--- >final public int constructor() { return n; }
+constructorMethod n = atomMethod "constructor" (Nativ "int" []) (show n)
+
 {--
     generate
     > final public T call() { return this; }
 -}
-callMethod t = JMethod{attr = attrs [JFinal, JPublic], 
-                gvars=[], 
-                jtype = t, 
-                name = "call", 
-                args = [], 
-                body = JBlock [ JReturn (JAtom "this") ]}
+callMethod t = atomMethod "call" t "this"
 
 {-- 
     Generate the code for everything in a namespace of a type
