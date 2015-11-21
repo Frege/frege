@@ -325,6 +325,7 @@ public class Meta {
         boolean  publik()       default true;   // will it be imported by default
         int      kind()			default 0;		// index of kind
         boolean  mutable()		default false;	// indicates IO mutability
+        int[]	 gargs();						// generic type argument tau indexes
     }
     
     @Retention(RetentionPolicy.RUNTIME)
