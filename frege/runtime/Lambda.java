@@ -49,7 +49,7 @@ public abstract class Lambda implements Lazy, Applicable, Value {
 	 * @see frege.runtime.Value#_constructor()
 	 */
 	@Override
-	public int _constructor() {
+	public int constructor() {
 		return 0;
 	}
 	

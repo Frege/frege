@@ -45,5 +45,5 @@ public interface Value {
 	/**
 	 * @return the zero based constructor number for algebraic data types, and 0 for functions.
 	 */
-	public int _constructor();
+	public int constructor();
 }
