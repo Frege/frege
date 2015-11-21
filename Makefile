@@ -100,7 +100,7 @@ clean:
 
 distclean: clean
 	@echo "[1;42mMaking $@[0m"
-	$(RM) frege/Version.fr lib y.output y.tab.c
+	$(RM) frege/Version.fr fallback.jar fregec.jar lib y.output y.tab.c
 
 sanitycheck:
 	@echo "[1;42mMaking $@[0m"
@@ -277,6 +277,4 @@ $(BUILD_FREGE_COMPILER)/Main.class \
 $(FREGE_COMPILER)/grammar/Frege.fr \
 $(BUILD_FREGE_COMPILER)/grammar/Frege.class: lib/fregec.jar
 
-test \
-tools \
-$(BUILD_FREGE)/PreludeProperties.class: fregec.jar
+compiler2: runtime
