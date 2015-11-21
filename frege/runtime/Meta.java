@@ -64,8 +64,6 @@ public class Meta {
         long        time()      default 0;
         /** <p>The documentation of the package.</p> */
         String      doc()       default "";
-        /** <p>Operator table.</p> */
-        Operator[]  ops()       default {};
         /** <p>Name of imported packages.</p> */
         String[]    imps()      default {};
         /** <p>Namespaces of imported packages.</p> */
@@ -93,21 +91,7 @@ public class Meta {
         /** <p>Table of kinds.</p> */
         Kind[]      kinds()     default {};
     }
-    
-        
 
-    /**
-     * <p>Information from the infix* definitions.</p>
-     */
-    @Retention(RetentionPolicy.RUNTIME)
-    public @interface Operator {        // infix 10 `==`
-        /** <p>Operator name.</p> */
-        public String   name();         // "=="
-        /** <p>How the operator associates (0=left, 1=right, 2=none).</p> */
-        public int      kind();         // 0=Left, 1=Right, 2=None
-        /** <p>Precedence 1 to 16.</p> */
-        public int      prec();         // 10
-    }
 
 
     /**
