@@ -79,7 +79,7 @@ PRELUDE  = \
 #	shadow Prelude files in the order they must be compiled
 SPRELUDE  = $(addprefix shadow/, $(PRELUDE))
 
-.PHONY: all clean diffs dist distclean docu fregec.jar fregec6.jar fregec7.jar runtime sanitycheck savejava shadow-prelude test test.jar tools
+.PHONY: all clean diffs dist distclean docu fregec.jar fregec6.jar fregec7.jar rebuild runtime sanitycheck savejava shadow-prelude test tools
 
 all: runtime compiler fregec.jar
 	@echo "[1;42mMaking $@[0m"
@@ -183,7 +183,7 @@ $(BUILD)/fregec6.jar: fallback.jar savejava
 #	Avoid recompilation of everything, just remake the compiler with itself and jar it.
 #	One should have a fallback.jar, just in case ....
 #
-test-jar: $(BUILD)/fallback.jar
+rebuild: $(BUILD)/fallback.jar
 	@echo "[1;43mMaking $@[0m"
 	$(FREGEC2) -make frege.compiler.Main frege.ide.Utilities
 	$(RM) $(BUILD)/fregec.jar
