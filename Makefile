@@ -145,7 +145,7 @@ $(BUILD)/fregec7.jar: savejava
 
 fregec6.jar: $(BUILD)/fregec6.jar
 
-$(BUILD)/fregec6.jar: fallback.jar savejava
+$(BUILD)/fregec6.jar: fregec.jar savejava
 	@echo "[1;43mMaking $@[0m"
 	@echo The following will probably only work if you just made a fregec.jar
 	@echo Adapting the sources for dumb old java6 ....
@@ -178,15 +178,14 @@ $(BUILD)/fregec6.jar: fallback.jar savejava
 
 #
 #	Avoid recompilation of everything, just remake the compiler with itself and jar it.
-#	One should have a fallback.jar, just in case ....
 #
-rebuild: $(BUILD)/fallback.jar
+rebuild:
 	@echo "[1;43mMaking $@[0m"
 	$(FREGEC2) -make frege.compiler.Main frege.ide.Utilities
 	$(RM) $(BUILD)/fregec.jar
 	jar -cf $(BUILD)/fregec.jar -C $(BUILD) frege
 	jar -uvfe $(BUILD)/fregec.jar frege.compiler.Main
-	$(CP) $(BUILD)/fregec.jar ../eclipse-plugin/lib/fregec.jar
+	#$(CP) $(BUILD)/fregec.jar ../eclipse-plugin/lib/fregec.jar
 
 test: compiler
 	@echo "[1;42mMaking $@[0m"
