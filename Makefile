@@ -23,8 +23,8 @@
 
 DOC                   = ../frege.github.com/doc
 BUILD                 = build
-BUILD6                = $(BUILD)/frege6
-BUILD7                = $(BUILD)/frege7
+BUILD6                = $(BUILD)
+BUILD7                = $(BUILD)
 BUILD_TEST            = $(BUILD)/test
 BUILD_FREGE           = $(BUILD)/frege
 BUILD_FREGE_COMPILER  = $(BUILD_FREGE)/compiler
@@ -47,7 +47,7 @@ MKDIR    = mkdir -p
 FREGE    = $(JAVA) -Xss4m -Xmx1800m -cp $(BUILD)
 
 #	compile using the fregec.jar in the working directory
-FREGECJ  = $(FREGE) -jar lib/fregec.jar -d $(BUILD) -hints
+FREGECJ  = $(FREGE) -jar fregec.jar -d $(BUILD) -hints
 
 #	compile compiler1 with fregec.jar, uses prelude sources from shadow/
 FREGEC0  = $(FREGECJ) -prefix a -sp shadow:.
@@ -80,10 +80,13 @@ PRELUDE  = \
 #	shadow Prelude files in the order they must be compiled
 SPRELUDE  = $(addprefix shadow/, $(PRELUDE))
 
-.PHONY: all clean diffs dist distclean docu fregec.jar fregec6.jar fregec7.jar rebuild runtime sanitycheck savejava shadow-prelude test tools
+.PHONY: all clean diffs dist distclean docu fetch-fregec.jar rebuild runtime sanitycheck savejava shadow-prelude test tools
 
 all: runtime compiler fregec.jar
 	@echo "[1;42mMaking $@[0m"
+
+fetch-fregec.jar:
+	curl -H 'Accept: application/vnd.github.v3.raw' -kL -o fregec.jar https://github.com/Frege/frege/releases/download/3.23.288/frege$(FREGEC_VERSION).jar
 
 shadow-prelude:
 	@echo "[1;43mMaking $@[0m"
@@ -101,16 +104,11 @@ clean:
 
 distclean: clean
 	@echo "[1;42mMaking $@[0m"
-	$(RM) dist frege/Version.fr fregec.jar lib y.output y.tab.c
+	$(RM) dist frege/Version.fr fallback.jar fregec.jar y.output y.tab.c
 
 sanitycheck:
 	@echo "[1;42mMaking $@[0m"
 	$(JAVA) -version
-
-lib/fregec.jar:
-	$(MKDIR) lib
-	curl -H 'Accept: application/vnd.github.v3.raw' -kL -o $@ https://github.com/Frege/frege/releases/download/3.23.288/frege$(FREGEC_VERSION).jar
-	$(CP) $@ .
 
 dist: fregec.jar
 	@echo "[1;42mMaking $@[0m"
@@ -122,9 +120,7 @@ fregec.jar: test
 	jar -uvfe $@ frege.compiler.Main
 	java -jar $@ -version
 
-fregec7.jar: $(BUILD)/fregec7.jar
-
-$(BUILD)/fregec7.jar: savejava
+fregec7.jar:: savejava
 	@echo "[1;43mMaking $@[0m"
 	@echo The following will probably only work if you just made a compiler
 	$(RM) $(BUILD7)
@@ -142,9 +138,7 @@ $(BUILD)/fregec7.jar: savejava
 	jar -uvfe $@ frege.compiler.Main
 	$(CP) $@ ../eclipse-plugin/lib/fregec.jar
 
-fregec6.jar: $(BUILD)/fregec6.jar
-
-$(BUILD)/fregec6.jar: fregec.jar savejava
+fregec6.jar: fregec.jar savejava
 	@echo "[1;43mMaking $@[0m"
 	@echo The following will probably only work if you just made a fregec.jar
 	@echo Adapting the sources for dumb old java6 ....
@@ -218,7 +212,7 @@ $(FREGE_COMPILER)/grammar/Frege.fr: $(FREGE_COMPILER)/grammar/Frege.y
 	@echo "[1;43mMaking $@[0m"
 	@echo We should have 5 shift/reduce conflicts in the grammar.
 	$(YACC) -v $<
-	$(FREGE) -cp lib/fregec.jar frege.tools.YYgen -m State $@
+	$(FREGE) -cp fregec.jar frege.tools.YYgen -m State $@
 
 frege/Version.fr: .git/index
 	@echo "[1;43mMaking $@[0m"
@@ -270,12 +264,6 @@ savejava:
 	@echo "[1;42mMaking $@[0m"
 	perl scripts/savejava.pl
 
-compiler compiler1 compiler2 fregec.jar runtime: $(BUILD)
+runtime: $(BUILD)
 
-compiler1 \
-compiler2 \
-$(BUILD_FREGE_COMPILER)/Main.class \
-$(FREGE_COMPILER)/grammar/Frege.fr \
-$(BUILD_FREGE_COMPILER)/grammar/Frege.class: lib/fregec.jar
-
-compiler2: runtime
+compiler compiler1 compiler2: $(BUILD) runtime
