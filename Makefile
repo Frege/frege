@@ -23,8 +23,8 @@
 
 DOC                   = ../frege.github.com/doc
 BUILD                 = build
-BUILD6                = $(BUILD)/build6
-BUILD7                = $(BUILD)/build7
+BUILD6                = $(BUILD)/frege6
+BUILD7                = $(BUILD)/frege7
 BUILD_TEST            = $(BUILD)/test
 BUILD_FREGE           = $(BUILD)/frege
 BUILD_FREGE_COMPILER  = $(BUILD_FREGE)/compiler
@@ -79,7 +79,7 @@ PRELUDE  = \
 #	shadow Prelude files in the order they must be compiled
 SPRELUDE  = $(addprefix shadow/, $(PRELUDE))
 
-.PHONY: all clean diffs dist distclean docu runtime sanitycheck savejava shadow-prelude test test.jar tools
+.PHONY: all clean diffs dist distclean docu fregec.jar fregec6.jar fregec7.jar runtime sanitycheck savejava shadow-prelude test test.jar tools
 
 all: runtime compiler fregec.jar
 	@echo "[1;42mMaking $@[0m"
@@ -110,21 +110,25 @@ lib/fregec.jar:
 	$(MKDIR) lib
 	curl -H 'Accept: application/vnd.github.v3.raw' -kL -o $@ https://github.com/Frege/frege/releases/download/3.23.288/frege3.23.401-g7c45277.jar
 
-dist: fregec.jar
+dist: $(BUILD)/fregec.jar
 	@echo "[1;42mMaking $@[0m"
 	perl scripts/mkdist.pl
 
-fregec.jar: test
-	@echo "[1;43mMaking $@[0m"
-	jar -cf fregec.jar -C $(BUILD) frege
-	jar -uvfe fregec.jar frege.compiler.Main
-	java -jar fregec.jar -version
+fregec.jar: $(BUILD)/fregec.jar
 
-fallback.jar: fregec.jar
+$(BUILD)/fregec.jar: test
+	@echo "[1;43mMaking $@[0m"
+	jar -cf $@ -C $(BUILD) frege
+	jar -uvfe $@ frege.compiler.Main
+	java -jar $@ -version
+
+$(BUILD)/fallback.jar: $(BUILD)/fregec.jar
 	@echo "[1;43mMaking $@[0m"
 	$(CP) $< $@
 
-fregec7.jar: savejava
+fregec7.jar: $(BUILD)/fregec7.jar
+
+$(BUILD)/fregec7.jar: savejava
 	@echo "[1;43mMaking $@[0m"
 	@echo The following will probably only work if you just made a compiler
 	$(RM) $(BUILD7)
@@ -142,7 +146,9 @@ fregec7.jar: savejava
 	jar -uvfe $@ frege.compiler.Main
 	$(CP) $@ ../eclipse-plugin/lib/fregec.jar
 
-fregec6.jar: fallback.jar savejava
+fregec6.jar: $(BUILD)/fregec6.jar
+
+$(BUILD)/fregec6.jar: fallback.jar savejava
 	@echo "[1;43mMaking $@[0m"
 	@echo The following will probably only work if you just made a fregec.jar
 	@echo Adapting the sources for dumb old java6 ....
@@ -177,13 +183,13 @@ fregec6.jar: fallback.jar savejava
 #	Avoid recompilation of everything, just remake the compiler with itself and jar it.
 #	One should have a fallback.jar, just in case ....
 #
-test-jar: fallback.jar
+test-jar: $(BUILD)/fallback.jar
 	@echo "[1;43mMaking $@[0m"
 	$(FREGEC2) -make frege.compiler.Main frege.ide.Utilities
-	$(RM) fregec.jar
-	jar -cf fregec.jar -C $(BUILD) frege
-	jar -uvfe fregec.jar frege.compiler.Main
-	$(CP) fregec.jar ../eclipse-plugin/lib/fregec.jar
+	$(RM) $(BUILD)/fregec.jar
+	jar -cf $(BUILD)/fregec.jar -C $(BUILD) frege
+	jar -uvfe $(BUILD)/fregec.jar frege.compiler.Main
+	$(CP) $(BUILD)/fregec.jar ../eclipse-plugin/lib/fregec.jar
 
 test: compiler
 	@echo "[1;42mMaking $@[0m"
