@@ -4,7 +4,7 @@ module frege.compiler.gen.java.DataCode where
 import frege.Prelude hiding (<+>)
 
 import Compiler.common.Errors as E()
-import Compiler.common.Mangle(mangled)
+-- import Compiler.common.Mangle(mangled)
 import Compiler.Utilities (javaName)
 import Lib.PP(text, <+>)
 import Data.TreeMap(values, TreeMap.empty emptyTree)
@@ -12,6 +12,7 @@ import Compiler.classes.Nice
 import Compiler.types.Global
 import Compiler.types.Symbols
 import Compiler.types.AbstractJava
+import Compiler.types.Types(pSigma)
 import Compiler.gen.java.VarCode(varCode)
 import Compiler.gen.java.Common
 import Compiler.gen.java.Bindings(assign)
@@ -70,27 +71,49 @@ dataCode (sym@SymT{product = true, newt = true}) = do
     Product types are data types with a single constructor with more than one field.
     For this, we generate a plain old Java class that implements @Lazy@. 
 
-    A type with type variables is mapped to a generic class. 
+    A higher kinded type constructor is mapped to a generic class. 
     In this case, also the appropriate Kinded instances will be generated.
 
 -}
-dataCode (sym@SymT{product = true}) = do
+dataCode (sym@SymT{ product = true }) = do
     g ← getST 
     E.logmsg TRACEG sym.pos (text ("dataCode for " ++ nicer sym g))
     
     con <- conDecls $ head [ con | con@SymD{} ← values sym.env ] 
     sub <- subDecls sym
-    
+
     let jtype = rhoJT g sym.typ.rho
-        result = JClass{attr = attrTop, 
+        kindeds = map (asKinded jtype) [1..kArity sym.kind]
+        gvars = targs sym.typ
+        coerces = map (coerceDecl gvars) kindeds
+    let result = JClass{attr = attrTop, 
                         name = (javaName g sym.name).base, 
-                        gvars = targs sym.typ, 
+                        gvars, 
                         extend = Nothing, 
-                        implement = jtValue : Lazy jtype : 
-                                map (asKinded jtype) [1..kArity sym.kind], 
-                        defs = [callMethod jtype] ++ con ++ sub}
+                        implement = jtValue : Lazy jtype : kindeds, 
+                        defs = con ++ [callMethod jtype] ++ coerces ++ sub}
         comment = JComment ("data " ++ sym.name.base ++ " :: " ++ show sym.kind)
     pure [comment, result]
+
+{--
+    Native data types are mapped to a class that acts as namespace
+    for the subdefinitions, if any.
+-}
+dataCode (sym@SymT{ nativ = Just _ }) = do                               -- nativ
+     g  ←   getST
+     E.logmsg TRACEG sym.pos (text ("dataCode for " ++ nicer sym g))
+     
+     sub    ← subDecls sym
+     
+     -- lazyDefs <- lazyDeclarations vals
+     let result 
+            | null sub = JComment "no local functions for this type"
+            | otherwise = JClass {attr = attrTop,
+                                    name = (javaName g sym.name).base,
+                                    gvars = [], 
+                                    extend = Nothing, implement = [],
+                                    defs = sub}
+     stio [JComment (nice sym g), result]
 
 dataCode sym = do
     g ← getST
@@ -98,6 +121,24 @@ dataCode sym = do
             text "dataCode: argument is "
             <+> text (nice sym g) 
         )
+
+{--
+    Generate the method that coerces from a 'Kinded' representation
+    upwards to the original, for example for kind 1:
+    > static<A> Foo<A> coerce(Kinded.U<Foo<?>, A> it) { return (Foo<A>) it; }
+    
+-}
+coerceDecl gvars jt = 
+            JMethod{attr = attrTop, gvars, 
+                    jtype = original, 
+                    name = "coerce", 
+                    args = [(attrs [JFinal], pSigma, jt, "it")], 
+                    body = JBlock [stmt]}
+    where
+        original = fromKinded jt
+        stmt = JReturn 
+                JCast{jt=original, jex=JAtom "it"}
+
 
 {-- 
     Given a data constructor symbol, make 
