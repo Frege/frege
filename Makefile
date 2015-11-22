@@ -217,7 +217,7 @@ $(FREGE_COMPILER)/grammar/Frege.fr: $(FREGE_COMPILER)/grammar/Frege.y
 	@echo "[1;43mMaking $@[0m"
 	@echo We should have 5 shift/reduce conflicts in the grammar.
 	$(YACC) -v $<
-	$(FREGE) -cp fregec.jar frege.tools.YYgen -m State $@
+	$(FREGE) -cp lib/fregec.jar frege.tools.YYgen -m State $@
 
 frege/Version.fr: .git/index
 	@echo "[1;43mMaking $@[0m"
