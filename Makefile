@@ -101,7 +101,7 @@ clean:
 
 distclean: clean
 	@echo "[1;42mMaking $@[0m"
-	$(RM) dist frege/Version.fr fallback.jar fregec.jar lib y.output y.tab.c
+	$(RM) dist frege/Version.fr fregec.jar lib y.output y.tab.c
 
 sanitycheck:
 	@echo "[1;42mMaking $@[0m"
@@ -110,14 +110,13 @@ sanitycheck:
 lib/fregec.jar:
 	$(MKDIR) lib
 	curl -H 'Accept: application/vnd.github.v3.raw' -kL -o $@ https://github.com/Frege/frege/releases/download/3.23.288/frege$(FREGEC_VERSION).jar
+	$(CP) $@ .
 
-dist: $(BUILD)/fregec.jar
+dist: fregec.jar
 	@echo "[1;42mMaking $@[0m"
 	perl scripts/mkdist.pl
 
-fregec.jar: $(BUILD)/fregec.jar
-
-$(BUILD)/fregec.jar: test
+fregec.jar: test
 	@echo "[1;43mMaking $@[0m"
 	jar -cf $@ -C $(BUILD) frege
 	jar -uvfe $@ frege.compiler.Main
