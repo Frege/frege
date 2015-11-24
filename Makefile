@@ -23,8 +23,8 @@
 
 DOC                   = ../frege.github.com/doc
 BUILD                 = build
-BUILD6                = $(BUILD)
-BUILD7                = $(BUILD)
+BUILD6                = $(BUILD)6
+BUILD7                = $(BUILD)7
 BUILD_TEST            = $(BUILD)/test
 BUILD_FREGE           = $(BUILD)/frege
 BUILD_FREGE_COMPILER  = $(BUILD_FREGE)/compiler
@@ -86,7 +86,7 @@ all: runtime compiler fregec.jar
 	@echo "[1;42mMaking $@[0m"
 
 fetch-fregec.jar:
-	curl -H 'Accept: application/vnd.github.v3.raw' -kL -o fregec.jar https://github.com/Frege/frege/releases/download/3.23.288/frege$(FREGEC_VERSION).jar
+	curl -H 'Accept: application/vnd.github.v3.raw' -kL -o fregec.jar `grep curl .travis.yml | sed 's/.*https:/https/'`
 
 shadow-prelude:
 	@echo "[1;43mMaking $@[0m"
@@ -187,10 +187,6 @@ test: compiler
 	$(MKDIR) $(BUILD_TEST)
 	$(FREGECC) -d $(BUILD_TEST) tests/qc
 	$(JAVA) -Xss4m -cp $(BUILD) frege.tools.Quick -v $(BUILD_TEST)
-
-$(BUILD_FREGE)/PreludeProperties.class: frege/PreludeProperties.fr $(BUILD_FREGE_COMPILER)/Main.class
-	@echo "[1;43mMaking $@[0m"
-	$(FREGECC) -make frege/PreludeProperties.fr
 
 # 	$(BUILD_FREGE_TOOLS)/Doc.class $(BUILD_FREGE_TOOLS)/YYgen.class $(BUILD_FREGE_TOOLS)/LexConvt.class
 tools: $(BUILD_FREGE_COMPILER)/Main.class
