@@ -36,7 +36,6 @@ BUILD_AFREGE_COMPILER = $(BUILD_AFREGE)/compiler
 
 BUILD_BFREGE          = $(BUILD)/bfrege
 BUILD_BFREGE_COMPILER = $(BUILD_BFREGE)/compiler
-FREGEC_VERSION        = 3.23.365-g185c1b5
 
 JAVAC    = javac -encoding UTF-8
 YACC     = `which byacc || which byaccj || which pbyacc || false`
