@@ -1,0 +1,400 @@
+-- Module      :  Data.Arr
+-- Copyright   :  (c) The University of Glasgow, 1994-2000
+-- License     :  BSD Style, full text in LICENSE.txt
+-- Adapted to Frege by Lech Głowiak
+
+package Data.Arr where
+
+import Data.Ix
+
+-- Idea to use AElem and make it ArraElem is by Ingo Wechsung on Stackoverflow.
+{-- Wrapper layer that allows lazy semantics for array elements what is not possible when using Frege's
+ types that correspond to Java primitive types.
+ -}
+protected data AElem a = AE () a
+private mkAE :: a -> AElem a
+private mkAE = AE ()
+private unAE :: AElem a -> a
+private unAE (AE _ x) = x
+derive ArrayElement (AElem a)
+derive Eq (AElem a)
+
+{-
+Following note is copied from GHC/Arr.hs and Trac #n does not refer to Frege's issue tracker.
+Note [Double bounds-checking of index values]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+When you index an array, a!x, there are two possible bounds checks we might make:
+
+  (A) Check that (inRange (bounds a) x) holds.
+
+      (A) is checked in the method for 'index'
+
+  (B) Check that (index (bounds a) x) lies in the range 0..n,
+      where n is the size of the underlying array
+
+      (B) is checked in the top-level function (!), in safeIndex.
+
+Of course it *should* be the case that (A) holds iff (B) holds, but that
+is a property of the particular instances of index, bounds, and inRange,
+so GHC This cannot guarantee it.
+
+ * If you do (A) and not (B), then you might get a seg-fault,
+   by indexing at some bizarre location.  Trac #1610
+
+ * If you do (B) but not (A), you may get no complaint when you index
+   an array out of its semantic bounds.  Trac #2120
+
+At various times we have had (A) and not (B), or (B) and not (A); both
+led to complaints.  So now we implement *both* checks (Trac #2669).
+
+For 1-d, 2-d, and 3-d arrays of Int we have specialised instances to avoid this.
+-}
+
+--- The type of immutable non-strict arrays with indices in @i@ and elements in @e@.
+data Array i e = Array{
+    !lower :: i --- the index lower bound
+    !upper :: i --- the index upper bound
+    !cache :: Int --- cached size of array
+    aelems :: (JArray (AElem e)) --- elements of array
+    } where
+    --- The bounds with which an array was constructed.
+    bounds :: Ix i => Array i e -> (i,i)
+    bounds (Array l u _ _) = (l,u)
+
+    --- Gets n-th value bypassing indexing
+    unsafeAt :: Ix i => Array i e -> Int -> e
+    unsafeAt (Array _ _ _ es) n =
+            case es.elemAt n of AE _ e -> e
+
+    --- The number of elements in the array.
+    numElements :: Ix i => Array i e -> Int
+    numElements (Array _ _ n _) = n
+
+    --- The list of indices of an array in ascending order.
+    indices :: Ix i => Array i e -> [i]
+    indices (Array l u _ _) = range (l,u)
+
+    --- The list of elements of an array in index order.
+    elems :: Ix i => Array i e -> [e]
+    elems (arr@(Array l u n ies)) = [arr.unsafeAt i | i <- [0 .. n - 1]]
+
+    --- The list of associations of an array in index order.
+    assocs :: Ix i => Array i e -> [(i, e)]
+    assocs (arr@(Array l u n es)) = [(i, arr !! i) | i <- range (l,u)]
+
+
+--- Mutable, non-strict arrays in the 'ST' monad.
+data STArray s i e = STArray{
+    !lower :: i --- the index lower bound
+    !upper :: i --- the index upper bound
+    !cache :: Int --- cached size of array
+    aelems :: (ArrayOf s (AElem e)) --- elements of array
+    } where
+    --- Construct STArray with indexed between given bounds and filled with initial value
+    new :: (Ix i) => (i,i) -> e -> ST s (STArray s i e)
+    new (l,u) initial =
+        case safeRangeSize (l,u) of
+          n -> fmap (\es -> (STArray l u n es)) (JArray.fromList (replicate n (mkAE initial)))
+
+    --- The bounds with which an array was constructed.
+    bounds :: STArray s i e -> (i,i)
+    bounds (STArray l u _ _) = (l,u)
+
+    --- The number of elements in the array.
+    numElements :: STArray s i e -> Int
+    numElements (STArray _ _ n _) = n
+
+    --- Get value at given index
+    read :: (Ix i) => STArray s i e -> i -> ST s e
+    read (marr@(STArray l u n _)) i =
+        unsafeReadSTArray marr (safeIndex (l,u) n i)
+
+    private unsafeReadSTArray :: (Ix i) => STArray s i e -> Int -> ST s e
+    private unsafeReadSTArray (STArray _ _ _ marr) i = fmap unAE (marr.getElemAt i)
+
+    --- Set value at given index
+    write :: (Ix i) => STArray s i e -> i -> e -> ST s ()
+    write (marr@(STArray l u n _)) i e =
+        unsafeWriteSTArray marr (safeIndex (l,u) n i) e
+
+    private unsafeWriteSTArray :: (Ix i) => STArray s i e -> Int -> e -> ST s ()
+    private unsafeWriteSTArray (STArray _ _ _ marr) i e = marr.setElemAt i (mkAE e)
+
+infixl 9  !!
+infixl 9  //
+
+private arrEleBottom :: a
+private arrEleBottom = error "(Array.!): undefined array element"
+
+{--
+ Construct an array with the specified bounds and containing values
+ for given indices within these bounds.
+
+ If some index is present more then once in association list then
+ value will be the last association with that index in the list.
+ If some index is absent in association list then value for that
+ index will (lazily) evaluate to the bottom.
+
+ Bounds argument and indices in association list are strictly
+ evaluated in order to validate indices.
+ -}
+array :: (Ix i) => (i,i) -> [(i, e)] -> Array i e
+array (l,u) ies
+    = let n = safeRangeSize (l,u)
+      in unsafeArray' (l,u) n
+                      [(safeIndex (l,u) n i, e) | (i, e) <- ies]
+
+private unsafeArray :: Ix i => (i,i) -> [(Int, e)] -> Array i e
+private unsafeArray b ies = unsafeArray' b (rangeSize b) ies
+
+private unsafeArray' :: Ix i => (i,i) -> Int -> [(Int, e)] -> Array i e
+private unsafeArray' (l,u) n ies = ST.run (JArray.fromList (replicate n (mkAE arrEleBottom)) >>= (\marr -> foldr (fill marr) (done l u n marr) (wrapIes ies)))
+
+private fill :: ArrayOf s (AElem e) -> (Int, (AElem e)) -> ST s a -> ST s a
+private fill marr (i, e) next = setElemAt marr i e >> next
+
+private done :: Ix i => i -> i -> Int -> ArrayOf s (AElem e) -> ST s (Array i e)
+private done l u n marr = readonly (\arr -> Array l u n arr) marr
+
+private wrapIes :: [(Int, e)] -> [(Int, AElem e)]
+private wrapIes = map (\(i, e)->(i, mkAE e))
+
+private safeRangeSize :: Ix i => (i, i) -> Int
+private safeRangeSize (l,u) = let r = rangeSize (l, u)
+                      in if (r < 0) then (negRange ())
+                                    else r
+
+private negRange :: () -> Int
+private negRange () = error "Negative range size"
+
+private safeIndex :: Ix i => (i, i) -> Int -> i -> Int
+private safeIndex (l,u) n i
+  | (0 <= i') && (i' < n) = i'
+  | otherwise             = badSafeIndex i' n
+  where
+    i' = index (l,u) i
+
+private lessSafeIndex :: Ix i => (i, i) -> Int -> i -> Int
+-- See Note [Double bounds-checking of index values]
+-- Do only (A), the semantic check
+private lessSafeIndex (l,u) n i = index (l,u) i
+
+private badSafeIndex :: Int -> Int -> Int
+private badSafeIndex i' n = error ("Error in array index; " ++ show i' ++
+                        " not in range [0.." ++ show n ++ ")")
+
+--- Construct an array from a pair of bounds and a list of values in index order.
+listArray :: (Ix i) => (i,i) -> [e] -> Array i e
+listArray (l,u) es =
+    case safeRangeSize (l,u) of
+      n -> if (n == length es)
+              then Array l u n fromL
+              else error "List length does not match range size"
+              where fromL = ST.run (JArray.fromList (map mkAE es) >>= readonly id)
+
+
+--- The value at the given index in an array.
+(!!) :: Ix i => Array i e -> i -> e
+(arr@(Array l u n _)) !! i = arr.unsafeAt $ safeIndex (l,u) n i
+
+--- A right fold over the elements.
+foldrElems :: Ix i => (a -> b -> b) -> b -> Array i a -> b
+foldrElems f b0 = \(arr@(Array _ _ n _)) ->
+  let
+    go i | i == n    = b0
+         | otherwise = f (arr.unsafeAt i) (go (i+1))
+  in go 0
+
+--- A left fold over the elements.
+foldlElems :: Ix i => (b -> a -> b) -> b -> Array i a -> b
+foldlElems f b0 = \(arr@(Array _ _ n _)) ->
+  let
+    go i | i == (-1) = b0
+         | otherwise = f (go (i-1)) (arr.unsafeAt i)
+  in go (n-1)
+
+--- A strict right fold over the elements.
+foldrElems' :: Ix i => (a -> b -> b) -> b -> Array i a -> b
+foldrElems' f b0 = \(arr@(Array _ _ n _)) ->
+  let
+    go i a | i == (-1) = a
+           | otherwise = go (i-1) (f (arr.unsafeAt i) $! a)
+  in go (n-1) b0
+
+--- A strict left fold over the elements.
+foldlElems' :: Ix i => (b -> a -> b) -> b -> Array i a -> b
+foldlElems' f b0 = \(arr@(Array _ _ n _)) ->
+  let
+    go i a | i == n    = a
+           | otherwise = go (i+1) (a `seq` f a (arr.unsafeAt i))
+  in go 0 b0
+
+--- A left fold over the elements with no starting value.
+foldl1Elems :: Ix i => (a -> a -> a) -> Array i a -> a
+foldl1Elems f = \(arr@(Array _ _ n _)) ->
+  let
+    go i | i == 0    = arr.unsafeAt 0
+         | otherwise = f (go (i-1)) (arr.unsafeAt i)
+  in
+    if n == 0 then error "foldl1: empty Array" else go (n-1)
+
+--- A right fold over the elements with no starting value.
+foldr1Elems :: Ix i => (a -> a -> a) -> Array i a -> a
+foldr1Elems f = \(arr@(Array _ _ n _)) ->
+  let
+    go i | i == n-1  = arr.unsafeAt i
+         | otherwise = f (arr.unsafeAt i) (go (i + 1))
+  in
+    if n == 0 then error "foldr1: empty Array" else go 0
+
+{--
+ The 'accumArray' function deals with repeated indices in the association
+ list using an /accumulating function/ which combines the values of
+ associations with the same index.
+ For example, given a list of values of some index type, @hist@
+ produces a histogram of the number of occurrences of each index within
+ a specified range:
+
+ > hist :: (Ix a, Num b) => (a,a) -> [a] -> Array a b
+ > hist bnds is = accumArray (+) 0 bnds [(i, 1) | i<-is, Ix.inRange bnds i]
+
+ If the accumulating function is strict, then 'accumArray' is strict in
+ the values, as well as the indices, in the association list.  Thus,
+ unlike ordinary arrays built with 'array', accumulated arrays should
+ not in general be recursive.
+-}
+accumArray :: (Ix i)
+        => (e -> a -> e)        -- accumulating function
+        -> e                    -- initial value
+        -> (i,i)                -- bounds of the array
+        -> [(i, a)]             -- association list
+        -> Array i e
+
+accumArray f initial (l,u) ies =
+      let n = safeRangeSize (l,u) :: Int
+      in unsafeAccumArray' f initial (l,u) n [(safeIndex (l,u) n i, e) | (i, e) <- ies]
+
+private unsafeAccumArray :: (Ix i) => (e -> a -> e) -> e -> (i,i) -> [(Int, a)] -> Array i e
+private unsafeAccumArray f initial b ies = unsafeAccumArray' f initial b (rangeSize b) ies
+
+private unsafeAccumArray' :: (Ix i) => (e -> a -> e) -> e -> (i,i) -> Int -> [(Int, a)] -> Array i e
+private unsafeAccumArray' f initial (l,u) n ies =
+    let empty = JArray.fromList (replicate n (mkAE initial))
+    in ST.run (empty >>= (\arr -> foldr (adjust f arr) (done l u n arr) ies))
+
+private adjust :: (e -> a -> e) -> ArrayOf s (AElem e) -> (Int, a) -> ST s b -> ST s b
+-- See NB on 'fill'
+private adjust f marr (i, new) next
+  = (marr.getElemAt i) >>= (\old -> marr.setElemAt i (mkAE (f (unAE old) new))) >> next
+
+{-- Constructs an array identical to the first argument except that it has
+ been updated by the associations in the right argument.
+ For example, if @m@ is a 1-origin, @n@ by @n@ matrix, then
+
+ > m//[((i,i), 0) | i <- [1..n]]
+
+ is the same matrix, except with the diagonal zeroed.
+
+ Repeated indices in the association list are handled as for 'array'.
+-}
+(//) :: (Ix i) => Array i e -> [(i, e)] -> Array i e
+(arr@(Array l u n _)) // ies =
+    unsafeReplace arr [(safeIndex (l,u) n i, e) | (i, e) <- ies]
+
+private unsafeReplace :: (Ix i) => Array i e -> [(Int, e)] -> Array i e
+private unsafeReplace arr ies = ST.run do
+                      STArray l u n marr <- thawSTArray arr
+                      foldr (fill marr) (done l u n marr) (wrapIes ies)
+
+{--
+ @'accum' f@ takes an array and an association list and accumulates
+ pairs from the list into the array with the accumulating function @f@.
+ Thus 'accumArray' can be defined using 'accum':
+
+ > accumArray f z b = accum f (array b [(i, z) | i <- range b])
+-}
+accum :: (Ix i) => (e -> a -> e) -> Array i e -> [(i, a)] -> Array i e
+accum f (arr@(Array l u n _)) ies =
+    unsafeAccum f arr [(safeIndex (l,u) n i, e) | (i, e) <- ies]
+
+private unsafeAccum :: (Ix i) => (e -> a -> e) -> Array i e -> [(Int, a)] -> Array i e
+private unsafeAccum f arr ies = ST.run do
+    STArray l u n marr <- thawSTArray arr
+    foldr (adjust f marr) (done l u n marr) ies
+
+--- Map elements with function
+amap :: (Ix i) => (a -> b) -> Array i a -> Array i b
+amap f (Array l u n arr) = ST.run do
+           marr <- JArray.map (lift f) arr
+           done l u n marr
+
+private lift :: (a->b) -> (AElem a -> AElem b)
+private lift f = \(AE _ a) -> mkAE (f a)
+{--
+'ixmap' allows for transformations on array indices.
+It may be thought of as providing function composition on the right
+with the mapping that the original array embodies.
+
+A similar transformation of array values may be achieved using 'fmap'
+from the 'Array' instance of the 'Functor' class.
+-}
+ixmap :: (Ix i, Ix j) => (i,i) -> (i -> j) -> Array j e -> Array i e
+ixmap (l,u) f arr =
+    array (l,u) [(i, arr !! f i) | i <- range (l,u)]
+
+private eqArray :: (Ix i, Eq e) => Array i e -> Array i e -> Bool
+private eqArray (arr1@(Array l1 u1 n1 elems)) (arr2@(Array l2 u2 n2 elems2)) =
+    if n1 == 0 then n2 == 0 else
+    l1 == l2 && u1 == u2 &&
+    and [arr1.unsafeAt i == arr2.unsafeAt i | i <- [0 .. n1 - 1]]
+
+private cmpArray :: (Ix i, Ord e) => Array i e -> Array i e -> Ordering
+private cmpArray arr1 arr2 = compare (arr1.assocs) (arr2.assocs)
+
+private cmpIntArray :: (Ord e) => Array Int e -> Array Int e -> Ordering
+private cmpIntArray (arr1@(Array l1 u1 n1 elems)) (arr2@(Array l2 u2 n2 elems2)) =
+    if n1 == 0 then
+        if n2 == 0 then EQ else LT
+    else if n2 == 0 then GT
+    else case compare l1 l2 of
+             EQ    -> foldr cmp (compare u1 u2) [0 .. (n1 `min` n2) - 1]
+             other -> other
+  where
+    cmp i rest = case compare (arr1.unsafeAt i) (arr2.unsafeAt i) of
+        EQ    -> rest
+        other -> other
+
+
+-- Array instances
+
+instance (Ix i) => Functor (Array i) where
+    fmap = amap
+
+instance (Ix i, Eq e) => Eq (Array i e) where
+    (==) = eqArray
+    hashCode (arr@(Array l u n elems)) = 31 * (31 * l.hashCode + u.hashCode) + elems.hashCode
+
+instance (Ix i, Ord e) => Ord (Array i e) where
+    (<=>) = cmpArray
+
+instance (Ix a, Show a, Show b) => Show (Array a b) where
+    show a = "array " ++ show (a.bounds) ++ " " ++ show (a.assocs)
+
+-- Moving between mutable and immutable
+-- JArray.map is much simplier compared to Haskell, hope not _too_ simple.
+
+--- Create mutable copy of an array
+thawSTArray :: (Ix i) => Array i e -> ST s (STArray s i e)
+thawSTArray (Array l u n arr) = do
+        marr <- (JArray.map id arr)
+        return (STArray l u n marr)
+
+--- Create immutable copy of an array
+freezeSTArray :: (Ix i) => STArray s i e -> ST s (Array i e)
+freezeSTArray (STArray l u n src) =
+  do
+    target <- JArray.fromList (replicate n (mkAE arrEleBottom)) -- target :: ArrayOf AElem e
+    let cpyElem i marr | i == n = return marr
+                       | otherwise = (src.getElemAt i) >>= (marr.setElemAt i) >> (cpyElem (i+1) marr)
+    newMarr <- cpyElem 0 target
+    done l u n newMarr
