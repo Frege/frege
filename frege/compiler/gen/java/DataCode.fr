@@ -14,6 +14,7 @@ import Compiler.types.Symbols
 import Compiler.types.AbstractJava
 import Compiler.types.Types(pSigma)
 import Compiler.gen.java.VarCode(varCode)
+import Compiler.gen.java.Match(variantType, conGetter)
 import Compiler.gen.java.Common
 import Compiler.gen.java.Bindings(assign)
 import Compiler.enums.Flags(TRACEG)
@@ -31,7 +32,7 @@ dataCode :: Symbol → StG [JDecl]
 -}
 dataCode (sym@SymT{enum = true}) = do
     g ← getST
-    E.logmsg TRACEG sym.pos (text ("dataCode for " ++ nicer sym g))
+    E.logmsg TRACEG sym.pos (text ("dataCode for enum " ++ nicer sym g))
 
     sub <- subDecls sym
 
@@ -56,7 +57,7 @@ dataCode (sym@SymT{enum = true}) = do
 -}
 dataCode (sym@SymT{product = true, newt = true}) = do
     g ← getST
-    E.logmsg TRACEG sym.pos (text ("dataCode for " ++ nicer sym g))
+    E.logmsg TRACEG sym.pos (text ("dataCode for newtype " ++ nicer sym g))
     
     sub <- subDecls sym
     let result = JClass{attr = attrs [JAbstract, JPublic, JStatic], 
@@ -77,7 +78,7 @@ dataCode (sym@SymT{product = true, newt = true}) = do
 -}
 dataCode (sym@SymT{ product = true }) = do
     g ← getST 
-    E.logmsg TRACEG sym.pos (text ("dataCode for " ++ nicer sym g))
+    E.logmsg TRACEG sym.pos (text ("dataCode for product " ++ nicer sym g))
     
     con <- conDecls $ head [ con | con@SymD{} ← values sym.env ] 
     sub <- subDecls sym
@@ -96,12 +97,85 @@ dataCode (sym@SymT{ product = true }) = do
     pure [comment, result]
 
 {--
+    Sum types are algebraic data types with more than one constructor,
+    where at least one constructor has at least one field. For example
+    
+    > data Maybe a = Just a | Nothing        -- Maybe type 
+
+    Translation is like
+
+    > public abstract static class TMaybe<A>
+    >               implements Value, Lazy<TMaybe<A>>, 
+    >               Kinded.U<TMaybe<?>, A> {
+    >   public call() { return this; }  // Lazy<...>
+    >   public DJust<A> isJust()       { return null; }
+    >   public DNothing<A> isNothing() { return null; }
+    >   
+    >   public static DJust<A> extends TMaybe<A> {
+    >       public int constrcutor() { return 0; }  -- Value
+    >       public DJust<A> isJust() { return this; }
+    >       // constructor and fields
+    >   }
+    >   public static DNothing<A> extends TMaybe<A> {
+    >       public int constrcutor() { return 1; }  -- Value
+    >       public DNothing<A> isNothing() { return this; }
+    >       private DNothing() {}
+    >       private static DNothing<?> singleton = new DNothing<String>();
+    >       public static<A> mk() { return (DNothing<A>) singleton; }
+    >   }
+    >   // coerce functions
+    >   // sub definitions
+    > }
+-}
+dataCode (sym@SymT{ nativ = Nothing, product = false, newt = false }) = do
+    g   ←   getST
+    E.logmsg TRACEG sym.pos (text ("dataCode for native " ++ nicer sym g))
+    
+    -- constructors
+    let csyms = [ con | con@SymD{} ← values sym.env ]
+    
+    sub     ←   subDecls sym
+    cons    ←   mapM conDecls csyms
+    
+    let jtype = rhoJT g sym.typ.rho
+        kindeds = map (asKinded jtype) [1..kArity sym.kind]
+        gvars = targs sym.typ
+        coerces = map (coerceDecl gvars) kindeds
+        -- make 
+        -- public isXXX() { return null; }
+        isMethod what con = JMethod{attr=attrs [JPublic], 
+                                gvars=[], 
+                                jtype = variantType g jtype con, 
+                                name = conGetter con.name, 
+                                args = [], 
+                                body = JBlock{stmts = [JReturn (JAtom what)]}} 
+        subclass con defs = JClass{attr = attrTop, 
+                        name = (javaName g con.name).base, 
+                        gvars, 
+                        extend = Just jtype, 
+                        implement = [], 
+                        defs = isMethod "this" con  : defs}
+
+        result = JClass{attr = attrs [JPublic, JStatic, JAbstract], 
+                        name = (javaName g sym.name).base, 
+                        gvars, 
+                        extend = Nothing, 
+                        implement = jtValue : Lazy jtype : kindeds, 
+                        defs = [callMethod jtype] 
+                                ++ map (isMethod "null") csyms
+                                ++ zipWith subclass csyms cons 
+                                ++ coerces 
+                                ++ sub}
+
+    return [JComment (nice sym g), result]
+
+{--
     Native data types are mapped to a class that acts as namespace
     for the subdefinitions, if any.
 -}
 dataCode (sym@SymT{ nativ = Just _ }) = do                               -- nativ
      g  ←   getST
-     E.logmsg TRACEG sym.pos (text ("dataCode for " ++ nicer sym g))
+     E.logmsg TRACEG sym.pos (text ("dataCode for native " ++ nicer sym g))
      
      sub    ← subDecls sym
      
@@ -113,7 +187,7 @@ dataCode (sym@SymT{ nativ = Just _ }) = do                               -- nati
                                     gvars = [], 
                                     extend = Nothing, implement = [],
                                     defs = sub}
-     stio [JComment (nice sym g), result]
+     pure [JComment (nice sym g), result]
 
 dataCode sym = do
     g ← getST
@@ -151,21 +225,32 @@ conDecls (sym@SymD{}) = do
     si  ←   symInfo sym
     g   ←   getST
     let arity   = length sym.flds
-        decls   = [comment, constr, constructorMethod sym.cid, make] 
+        decls   = [comment, constr, constructorMethod sym.cid]
+                    ++ (if arity == 0 then [single, singleton] else [make]) 
                     ++ members
         comment     = JComment (nice sym g)
-        jtype       = si.returnJT
+        jtype       = variantType g si.returnJT sym
         constrargs  = argDefs attrFinal si (getArgs g)
         args        = take arity (map JAtom (getArgs g))
-        constr      = JConstr {attr = attrs [JPrivate], jtype,
+        constr      = JConstr {attr = attrs [JPrivate], 
+                             jtype = Ref (javaName g sym.name).{qual=""} [],
                              args = constrargs,
                              body = JBlock super}
         namedfields = namedFields sym.flds
         super = zipWith (assign g) namedfields constrargs
+        single = JMember{attr = attrs [JStatic, JPrivate], 
+                        jtype = jtype.{gargs <- map (const unboundedWild)}, 
+                        name = "singleton", 
+                        init = Just $
+                                JNew{jt=jtype.{gargs ← map (const Something)}, args=[]}}
         make  = JMethod {attr = attrs [JPublic, JFinal, JStatic],
                          gvars = targs sym.typ, jtype, name = "mk",
                          args = constrargs,
                          body = JBlock [JReturn (JNew jtype args)]}
+        singleton = make.{
+            attr = attrs [JUnchecked, JPublic, JFinal, JStatic],
+            args = [],
+            body = JBlock [JReturn JCast{jt=jtype, jex=JAtom "singleton"}]}
         members = zipWith mkMember namedfields constrargs
     return decls
 conDecls _ = error "no SymD"
