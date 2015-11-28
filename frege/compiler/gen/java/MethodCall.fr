@@ -1,0 +1,245 @@
+--- Code generation for method calls
+module frege.compiler.gen.java.MethodCall where
+
+import Compiler.Utilities as U()
+
+import Compiler.classes.Nice(nice, nicer)
+
+import Compiler.types.AbstractJava
+import Compiler.types.Types(unST, Sigma, ForAll, RhoTau, RhoFun)
+import Compiler.types.Symbols(SymbolT)
+import Compiler.types.Global
+import Compiler.types.JNames(JName, memberOf)
+
+import Compiler.common.Types as CT(tauRho)
+
+import frege.compiler.tc.Methods (NIKind, niKind)
+
+import Compiler.gen.java.Common
+import Compiler.gen.java.Bindings 
+
+returnTau sigma = (fst • U.returnType) (Sigma.rho sigma)
+sigmaTau f (ForAll [] (RhoTau [] ty)) = f ty
+sigmaTau f (ForAll [] rhofun) = sigmaTau f (ForAll [] (tauRho rhofun))
+sigmaTau f _ = Nothing
+
+niSpecial g ty
+     | Just _ <- U.isUnit ty        = true
+     | Just _ <- U.isMaybe ty       = true
+     | Just _ <- U.isException g ty = true
+     | Just _ <- unST ty          = true
+     -- Just x <- U.isList ty        = true
+     | otherwise = false
+ 
+
+--- Tells if a native symbol is wrapped 
+wrapped g (sym@SymV {nativ = Just item, throwing}) = not (null throwing) || niSpecial g rty
+     where
+         (rty, _) = U.returnType sym.typ.rho
+wrapped g SymV {} = false
+wrapped g SymD {} = false
+wrapped g _ = error "wrapped: no symv"
+ 
+{--
+    Tell if a native function must be called through it's wrapper.
+  
+    This is the case when it is wrapped for some other reason
+    than that the return type is 'Maybe'.
+  -}
+wrappedOnly g (sym@SymV {nativ = Just _, throwing}) 
+        = not (null throwing) || niSpecial g rty && isNothing (U.isMaybe rty)
+    where
+        (rty, _) = U.returnType sym.typ.rho
+wrappedOnly g sym = error "wrappedOnly - no native function"
+-- 
+-- 
+--- returns a binding for a direct call of a native method
+nativeCall g (sym@SymV {nativ = Just item}) abinds = newBind g bsig (call jrty args)
+    where
+        taus = [ tau | Just tau <- map (sigmaTau Just) sigmas ]
+        brty = baserty rty
+        bsig = ForAll [] (RhoTau [] brty)
+        args | [tau] <- taus, Just _ <- U.isUnit tau = []   -- no arguments
+             | otherwise = zipWith (argEx g)  abinds taus
+        bjt = tauJT g brty
+        jrty = strict  bjt
+        -- retmode = maxStrict jrty         
+        (rty, sigmas) = U.returnType sym.typ.rho
+        argEx g bind tau
+             | Just x <- U.isMaybe tau = JQC checknothing (JAtom "null") (justm1 x).jex
+             -- Just x <- arrayTau g tau = JCast x bind.jex
+             | otherwise = sbind.jex
+             where
+                 sbind = primitiveBind  bind
+                 checknothing = JBin con "==" (JAtom "0")
+                 con = JInvoke JStMem{jname=JName{qual="frege.runtime.Runtime", base= "constructor"}, targs=[]} [sbind.jex]
+                 justm1 x = adaptSigma g  Bind{stype = nicer x g, 
+                                 ftype = ForAll [] (RhoTau [] x), 
+                                 jtype = Lazy Something,            -- i.e. Object 
+                                 jex   = m1ex}
+                 m1ex = JExMem just "mem1" []
+                 just = JInvoke (JExMem sbind.jex "_Just" []) []
+        baserty r
+             | Just (_, x) <- unST r       = baserty x
+             | Just (_, x) <- U.isException g r = baserty x
+             | Just x <- U.isMaybe r       = baserty x
+             | Just _ <- U.isUnit r        = r
+             | otherwise                   = r
+        call jrty args = case niKind item of
+             NIOp -> case args of
+                 [a,b] -> JBin a item b
+                 [a]   -> JUnop item a
+                 _     -> JAtom "null"           -- error was flagged before
+             NINew -> JNew jrty args
+             NICast -> case args of
+                 [a] -> JInvoke (JAtom item) args    -- was: JCast (Ref (JName "" item) []) a
+                 _   -> JAtom "null"
+             NIMethod -> case args of
+                 (a:as) -> case item of
+                     "clone" -> JCast jrty (JInvoke (JExMem a item []) as) -- due to java brain damage
+                     _ -> JInvoke (JExMem a item []) as
+                 _ -> JAtom "null"
+             NIMember -> case args of
+                 [a] -> (JExMem a (tail item) [])
+                 _ -> JAtom "null"
+             NINewArray -> JNewArray jrty (head args)
+             -- NINewArray -> JNewArray  (Ref (JName "" (niArr item)) []) (head args)
+             NIStatic -> case sigmas of
+                 (_:_) -> JInvoke (JAtom item) args
+                 _ -> JAtom item
+             NIArrayGet -> case args of
+                [a,b] -> JArrayGet a b
+                _     -> JAtom "bad array get"      -- error was flaggend before
+             NIArraySet -> case args of
+                [a,b,c] -> JBin (JArrayGet a b) "=" c
+                _     -> JAtom "bad array set"      -- error was flagged before 
+nativeCall g sym abinds = error ("nativeCall: no function " 
+    ++ show sym.pos.first.line
+    ++ ", " ++ nicer sym g)
+-- 
+wrapCode g jreturn rtau (sym@SymV {nativ = Just item, throwing}) abinds
+    | Just (stau, atau) <- unST rtau = let
+            sjt     = tauJT g stau           -- type #1 for parameterization of ST s a
+            ajt     = tauJT g atau          -- return type of the ST action
+            ssig    = ForAll [] (RhoTau [] stau)
+            mktup x = JReturn x
+            code    = wrapCode g mktup atau sym abinds 
+            try     = JBlockX "try" code
+            rbody
+                | null throwing   = code
+                | otherwise = try : catches
+                where
+                    catches = map mkCatch throwing
+                    mkCatch t = JBlockX (catch t) [JThrow wrap]
+                    wrap = (JX.invoke [JAtom "ex"] . JX.static . memberOf jnWrapped)
+                            "wrapIfNeeded" 
+                
+            ret     = jreturn fun -- (JNew jtFun [mkST])
+            fun     = JCast{jt = lambda, 
+                            jex = JLambda{
+                                fargs = [(attrFinal, ssig, sjt, "_state")], 
+                                code  = Right (JBlock rbody)}}
+            lambda  = Func [sjt, autoboxed ajt]
+        in [ret]
+    | Just (exs, mtau) <- U.isException g rtau = let
+            -- mjt = tauJT g mtau
+            -- xjt = tauJT g (TCon {pos = sym.pos, name = TName pPreludeBase "JException"})
+            
+ 
+            code    = wrapCode g (jreturn . right) mtau sym abinds
+            try     = JBlockX "try" code
+            mkCatch exs go = case U.isException g exs of
+                    Just (lty, rty) -> JBlockX (catch rty) r : mkCatch lty (left . go)
+                    Nothing -> [JBlockX (catch exs) [(jreturn . go) $ (JAtom "ex")]]
+                where
+                    r = [(jreturn . go . right) (JAtom "ex")]
+                    
+            -- catch   = JBlockX "catch (Exception ex)" [left]
+        in try : reverse ( mkCatch exs left )
+    | Just atau <- U.isMaybe rtau = let
+            -- ajt    = tauJT g atau
+            -- bind   = nativeCall g sym abinds
+            mkmb   = {- case isPrimitive ajt of
+                 Just prim ->
+                     JInvoke (JStMem (JName base ("_" ++ prim++ "ToMaybe")) []) [bind.jex]
+                 Nothing   -> -}
+                     JInvoke (JStMem (JName base "_toMaybe") []) [bind.jex]
+         in [jreturn mkmb]
+    -- | Just atau <- U.isList rtau = let
+    --         ajt    = tauJT g atau
+    --         -- bind   = nativeCall g sym abinds
+    --         mklst  = case isPrimitive ajt of
+    --              Just _  -> bind.jex
+    --              Nothing -> JInvoke (JStMem (JName base "_toList") []) [bind.jex]
+    --      in [jreturn mklst]
+     | Just _ <- U.isUnit rtau = let
+            -- bind   = nativeCall g sym abinds
+            unit   = JStMem (JName (base ++ ".TUnit") "Unit") []
+         in [JEx bind.jex, jreturn unit]
+     | otherwise = [jreturn (strictBind bind).jex]
+     where
+        bind    = nativeCall g sym abinds
+        base    = "PreludeBase"
+        right x = (JInvoke (JStMem (JName (base ++ ".TEither.DRight") "mk") []) [x])
+        left  x = (JInvoke (JStMem (JName (base ++ ".TEither.DLeft")  "mk") []) [x])
+        catch rty = case tauJT g rty of
+                        Nativ{typ, gargs} -> "catch (" ++ typ ++ " ex)"
+                        other -> error ("bad exception type " ++ show other)        
+wrapCode g jreturn rtau sym abinds = error "wrapCode: no SymV"
+ 
+ 
+{--
+    code for native functions and/or members
+  -}
+methCode :: Global -> Symbol -> SymInfo8 -> [JDecl]
+methCode g (sym@SymV {nativ = Just item}) si = [
+        JComment ((nice sym g) ++ "  " ++ show sym.strsig ++ "  " ++ show sym.rkind),
+        JComment (nicer sym.typ g),
+        JComment item] ++
+                (if arity > 0 then defs 
+                 else if wrapped g sym || niKind item != NIStatic 
+                    then [member]
+                    else [])
+    where
+        rjt         = tauJT g rty
+        rArgs       = evalArgDef g attrFinal si.argSigs (getArgs g)
+        wArgs       = argDefs attrFinal si (getArgs g)
+        bnds        = sym.typ.bound
+        name        = U.javaName g sym.name                        -- X.foo
+        -- fname       = {-U.fName-} name                                 -- X.Ffoo
+        ftargs      = targs sym.typ                                -- <a,b,c>
+        -- ftype       = (Ref (fname) ftargs)                         -- Ffoo<a,b,c>
+        -- dftype      = defining ftype
+        args        = if haswrapper then wArgs else rArgs
+        haswrapper  = arity > 0 && wrapped g sym || (not (null bnds))
+        -- callWrapper = (toBoxed bndWrapper).jex
+        -- bndWrapper  = bndWcode invWrapper
+        -- invWrapper  = JInvoke (JX.static name)
+        jreturn     = if arity > 0 then JReturn else JEx
+        bndWcode  x = newBind g (ForAll [] (RhoTau [] rty))  x
+ 
+        wcode       = if wrapped g sym
+                        then wrapCode g jreturn rty sym (map (instArg g) args)
+                        else let
+                                bind = nativeCall g sym (map (instArg g) args)
+                            in [jreturn bind.jex]
+        wrappers    = if haswrapper then [{- inst, -} wrapper] else [{-inst-}]
+        wrapper     = JMethod {attr = attrs [JPublic, JStatic, JFinal],
+                                 gvars = ftargs, jtype = si.returnJT, name = name.base,
+                                 args = wArgs, body = JBlock wcode}
+        defs        = wrappers
+        unex  [(JEx x)] = (strictBind (bndWcode x)).jex
+        unex  _ = error "unex: need list with 1 ex"
+        member = JMember {attr = attrs [JPublic, JStatic, JFinal],
+                          jtype = rjt,
+                          name = (U.javaName g sym.name).base,
+                          init = Just (unex wcode)}
+ 
+        (rty, atys) = U.returnType sym.typ.rho
+        arity       = length atys
+ 
+methCode g sym _ = Prelude.error ("line " ++ show sym.pos.first.line 
+                    ++ ": can not compile " ++ nice sym g)
+         
+ 
+
