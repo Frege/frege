@@ -1046,15 +1046,9 @@ nativepur:
     ;
 
 nativespec:
-      nativename                { \x    -> (x; Nothing) }
-    | nativename simpletypes    { \x\gs -> (x; Just gs) }
-    | nativename SOMEOP         { \x\d -> do
-                                    if d.value == "<>"
-                                    then return  (x; Just [])
-                                    else do
-                                        yyerror (yyline d) "diamond operator <> expected"
-                                        return (x; Nothing)
-                                }
+      nativename                { \x     ->  (x; Just []) }
+    | nativename simpletypes    { \x\gs  ->  (x; Just gs) }
+    | nativename '{' '}'        { \x\_\_ ->  (x; Nothing) }
     ;
 
 datainit:
