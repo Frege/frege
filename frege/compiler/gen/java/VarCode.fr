@@ -10,9 +10,12 @@ import Data.Bits(BitSet, BitSet.member)
 import Data.List(partitioned)
 
 import Compiler.enums.Flags(TRACEG)
-import Compiler.enums.RFlag(RTailRec, RSimple, RValue)
+import Compiler.enums.RFlag(RTailRec, RSimple, RValue, RSafeTC)
 import Compiler.enums.CaseKind(CKind)
+import Compiler.enums.Visibility(Private)
+
 import Compiler.classes.Nice(nice, nicer)
+
 import Compiler.types.Global(Symbol, StG, Global(),
                                 getST, changeST, uniqid)
 import Compiler.types.Symbols(SymV, SymL)
@@ -23,11 +26,15 @@ import Compiler.types.Types(RhoT, SigmaT, TauT, Rho, Sigma, Tau)
 import Compiler.types.Strictness(allLazy, Strictness)
 import Compiler.types.QNames(QName)
 import Compiler.types.JNames(JName)
+
 import Compiler.common.Errors as E(logmsg)
 import Compiler.common.Annotate(anno)
+import Compiler.common.Trans   as T(patternRefutable)
 
-import Compiler.Utilities as U(javaName)
-import frege.compiler.Transform     as T(patternRefutable, patternStrictness)
+import Compiler.passes.Strict(patternStrictness, openCaseWhen, caseOtherwise)
+
+import Compiler.Utilities   as U(javaName)
+
 -- import frege.compiler.Typecheck     as TY(mainSigma, tc, tauString, sigBool)
 
 import Compiler.gen.java.Common
@@ -50,8 +57,8 @@ varCode binds sym = do
     si <- symInfo sym
     case sym of 
         SymV{expr = Just{}}
-            -- null si.argSigs = pure [comment]  -- nust be CAF
-            | not (null si.argSigs) = funDef sym binds 
+            | null si.argSigs = cafCode sym binds  -- nust be CAF
+            | otherwise       = funDef sym binds 
         SymV {nativ = Just _, over} 
             | null over = do
                 g   ← getST
@@ -123,6 +130,106 @@ topFun sym binds = do
     g ← getST
     error ("topFun: no SymV with expression " ++ nicer sym g)
 
+{--
+    code for non-functions
+    - if there are constraints, we make a static function with constraint args.
+    - else, if the code is easy, we make a Thunk<type> and write the code in the eval function.
+    - else we just initialize
+    
+    A caf counts as easy if the code contains only
+    - literals
+    - native function calls
+    - constructors
+    - other easy cafs
+  -}
+cafCode (sym@SymV {depth = 0, expr = Just dx}) binds = do
+    x   <- dx
+    g   <- getST
+    let bnds = sym.typ.bound
+        ctxNames = getCtxs g
+ 
+    let (rtyp, _) = U.returnTypeN 0 sym.typ.rho
+        symtyp = ForAll bnds rtyp
+        -- mode  = argMode g (if rlazy then U else S[]) symtyp
+        rlazy = not sym.strsig.isStrict 
+                 || not (RValue `member` sym.rkind)
+        rsimple = RSimple `member` sym.rkind
+        recursive = not (RSafeTC `member` sym.rkind)        
+        ctxs  = if null bnds then [] else sym.typ.rho.context
+        cargs = zipWith (constraintArg g) ctxs ctxNames
+        jtype = sigmaJT g symtyp
+        rtype = returnType sym.rkind jtype
+
+    let comp = if null cargs && rsimple
+         then do
+             ecode <- compiling sym (genExpr false rtype x binds)
+             pure (Left ecode)
+         else do
+             let badguard = openCaseWhen g x
+                 jthrow = [JThrow (JNew (Ref (JName "frege.runtime" "GuardFailed") []) [
+                                                     JAtom (show (nicer sym g)),
+                                                     JAtom (show sym.pos)])]
+             code <- compiling sym (genReturn jtype x binds)
+             case badguard of
+                 Just (Left x) -> do
+                     E.warn (getpos x) (text "guard (" <> text (nicer x g) <> text ") may evaluate to false.")
+                     pure (Right (code ++ jthrow))
+                 Just (Right p) -> do
+                     E.warn (getpos p) (text "pattern guard (" <> text (nicer p g) <> text ") may fail to match.")
+                     pure (Right (code ++ jthrow))
+                 Nothing -> pure (Right code)
+ 
+    escode <- comp
+ 
+    let name  = U.javaName g sym.name           -- P.foo
+        left (Left c) = c
+        left _ =  error "no ecode"
+        right (Right c) = c
+        right _ =  error "no scode"
+        ecode  = left escode
+        scode  = right escode
+
+        comms = reverse [
+                 JComment (either show (const "no binding") escode),
+                 JComment ((nice sym g) ++ "  " ++ show sym.strsig ++ "  " ++ show sym.rkind),
+                 JComment (nicer sym.typ g), JComment (nicer x g)]
+        jexpr = (adapt ecode rtype).jex
+        static = JStatic
+        publik = if sym.vis == Private then JPrivate else JPublic
+        cafV  = JMember { attr = attrs [publik, JFinal, static], jtype = rtype,
+                           name = name.base,
+                           init = Just jexpr}
+        newu  = thunkIt (Right (JBlock scode)) ((autoboxed . strict) rtype)
+        theU
+             | rlazy = newu
+             | otherwise = (JX.invoke [] . JX.xmem "eval" ) newu
+                                 
+        vMeth = JMethod { attr = attrs [JPublic, JFinal],
+                           gvars = [],
+                           -- @eval@ absolutely must return Lazy<T>
+                           jtype = autoboxed rtype,
+                           name = "call", args = [], body = JBlock scode }
+        cafU  = JMember { attr = attrs [publik, JFinal, static], jtype = rtype,
+                           name = cafV.name,
+                           init = Just theU}
+        cafF  = JMethod { attr = cafV.attr, jtype = rtype,
+                           gvars = [], name = cafV.name,
+                           args = cargs, body = JBlock fbody }
+ 
+        fbody
+            | recursive = [JReturn newu]
+            | otherwise = scode
+
+    let !caf = case (not (null cargs), rsimple) of
+             --cargs  simple, selfrec
+
+             (false, false)    -> cafU
+             (false, true )    -> cafV
+             (true,  _    )    -> cafF
+
+    pure (reverse (caf:comms))
+ 
+cafCode _ binds = error "cafCode: no caf"
 
 localFun ∷ Symbol → TreeMap Symbol Binding → StG [JDecl]
 localFun sym binds = do
@@ -198,9 +305,9 @@ genFunction sym rmode args binds = error "genFunction: no function"
   -}
 genLambda rm (Lam {pat, ex}) ((arg@(_, _, _, s)) : args) binds = do
     g <- getST
-    ps <- T.patternStrictness pat
+    ps <- patternStrictness pat
     let komplett = T.patsComplete g [pat]
-        badguard = T.openCaseWhen g ex
+        badguard = openCaseWhen g ex
         assert = isNothing komplett
          -- mustthrow = not assert && isNothing badguard
         margs = map JAtom [show ((last g.genEnv).name.nice g),
@@ -391,13 +498,13 @@ genCaseStmt jret rm (x@Case {ckind,ex=cex,alts=calts}) binds = do
          bexs <- makeBexs
          let con = if pats then maybe Nothing (Just • fst) capp else Nothing      -- constructor in case ex, if any
              complete
-                 | T.caseOtherwise g x = Nothing         -- case true of true -> ...
+                 | caseOtherwise g x = Nothing         -- case true of true -> ...
                  | otherwise = T.patsComplete g (map CAlt.pat ralts)
              -- ralts are the alternatives that have no guard that could fail
              -- only the patterns of those alts are considered in deciding
              -- whether to throw exceptions or not
              -- walts are the alternatives that have an open case when
-             (walts, ralts) = partitioned (isJust • T.openCaseWhen g • CAlt.ex) calts
+             (walts, ralts) = partitioned (isJust • openCaseWhen g • CAlt.ex) calts
              -- We will give a hint as to which guard is most likely
              -- causing trouble. If the patterns would be complete if there were
              -- no guards, then it is most likely the guard on an otherwise irrefutable
@@ -406,9 +513,9 @@ genCaseStmt jret rm (x@Case {ckind,ex=cex,alts=calts}) binds = do
              badguard = case T.patsComplete g (map CAlt.pat calts) of -- would it be complete
                  Just _  -> Nothing       -- case could not be made safe by adding guards
                  Nothing -> case filter (not • T.patternRefutable g • CAlt.pat) walts of
-                     walt:_ -> T.openCaseWhen g walt.ex
+                     walt:_ -> openCaseWhen g walt.ex
                      []     -> case reverse walts of
-                         walt:_ -> T.openCaseWhen g walt.ex
+                         walt:_ -> openCaseWhen g walt.ex
                          []     -> Nothing
  
              comment = sComment ("case  " ++ nice cex g ++ "  ... "
@@ -527,7 +634,7 @@ genCaseStmt jret rm (x@Case {ckind,ex=cex,alts=calts}) binds = do
          -- check if there could match anything else after this alternative has matched
          finalAlt g (CAlt {pat,ex})
              | T.patternRefutable g pat = false
-             | Just _ <- T.openCaseWhen g ex = false
+             | Just _ <- openCaseWhen g ex = false
              | otherwise = true
 genCaseStmt jret rm nocase binds = error "genCaseStmt: no case"
 
