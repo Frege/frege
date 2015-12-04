@@ -11,6 +11,7 @@ import Data.List(partitioned)
 
 import Compiler.enums.Flags(TRACEG)
 import Compiler.enums.RFlag(RTailRec, RSimple, RValue, RSafeTC)
+import Compiler.enums.Literals
 import Compiler.enums.CaseKind(CKind)
 import Compiler.enums.Visibility(Private)
 
@@ -42,6 +43,7 @@ import Compiler.types.AbstractJava
 import Compiler.gen.java.Bindings
 import Compiler.gen.java.Match
 import Compiler.gen.java.MethodCall(methCode)
+import Compiler.gen.java.Constants(findConst)
 
 varCode ∷ TreeMap Symbol Binding → Symbol → StG [JDecl]
 varCode _ (SymL{sid, pos, vis, name, alias})  = do
@@ -712,8 +714,48 @@ genExpression ret stri x binds = do
     let nt = sigmaJT g (unJust x.typ) 
     genExpr ret (stri nt) x binds
 
+{-- 
+    Generate code for simple Frege expressions
+    
+    > genExpr inReturn jtype expr binds
+    1. @inReturn@ tells us if we are in a return expression, that is,
+    if this constitutes one of the results of a function/CAF.
+    2. @jtype@ is the expected java type of the expression
+    3. @expr@ is a simple Frege expression - no let or case
+    4. @binds@ the active bindings 
+-}
+
+genExpr _ rt (Lit {kind, value, typ = Just sigma}) binds
+    | kind != LRegex && kind != LBig = do
+            g <- getST
+            let v
+                    | kind `elem` [LInt, LLong, LDouble, LFloat] = value.replaceAll ´_´ ""
+                    | otherwise = value
+            pure (adapt (newBind g sigma  (JAtom v)) rt)
+
 genExpr rflg rm ex binds = do
     g <- getST
     let ft = unJust (Expr.typ ex)
-    E.error (getpos ex) (text ("Cannot genSimple: " ++ nicer ex g ++ " :: " ++ nicer ft g))
-    return (newBind g ft (JAtom "cannotgenexpression"))
+        result bind = do
+            let abind = adapt bind rm
+            E.logmsg TRACEG (getpos ex) (text "genExpr result: " <+> (text . show) abind)
+            pure bind 
+    E.logmsg TRACEG (getpos ex)  (text "genExpr: "
+            <+> text (nicer ex g) 
+            <+> text " @@ "
+            <+> text (nicer ft g))
+    case ex of
+        -- Literals, except regular expressions and big integers are just 'JAtoms'
+        -- > 1_234 = 1234
+        -- Regular expressions and Big Integers need java code for initialization
+        -- and are thus handled by findConst/makeConstants
+        Lit{kind, value, typ = Just sigma}
+            | kind `elem` [LInt, LLong, LDouble, LFloat] 
+                = result (newBind g sigma (JAtom (value.replaceAll ´_´ "")))
+            | kind `elem` [LRegex, LBig] 
+                = findConst ex >>= result . newBind g sigma . JX.static
+            | otherwise 
+                = result (newBind g sigma (JAtom value)) 
+        _   = do
+            E.error (getpos ex) (text ("Cannot genSimple: " ++ nicer ex g ++ " :: " ++ nicer ft g))
+            return (newBind g ft (JAtom "cannotgenexpression"))
