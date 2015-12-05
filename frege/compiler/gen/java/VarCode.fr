@@ -4,7 +4,7 @@ module frege.compiler.gen.java.VarCode where
 
 import frege.Prelude hiding (<+>)
 
-import Data.TreeMap(TreeMap, insert)
+import Data.TreeMap(TreeMap, insert, lookup)
 import Lib.PP(text, <>, <+>, <+/>, </>)
 import Data.Bits(BitSet, BitSet.member)
 import Data.List(partitioned)
@@ -16,6 +16,7 @@ import Compiler.enums.CaseKind(CKind)
 import Compiler.enums.Visibility(Private)
 
 import Compiler.classes.Nice(nice, nicer)
+import Compiler.instances.Nicer(nicerctx, nicectx)
 
 import Compiler.types.Global(Symbol, StG, Global(),
                                 getST, changeST, uniqid)
@@ -23,10 +24,11 @@ import Compiler.types.Symbols(SymV, SymL)
 import Compiler.types.Expression(Expr, ExprT, CAlt, CAltT, flatx)
 import Compiler.types.Patterns(Pattern, PatternT)
 import Compiler.types.Positions(Positioned)
-import Compiler.types.Types(RhoT, SigmaT, TauT, Rho, Sigma, Tau)
+import Compiler.types.Types(RhoT, SigmaT, TauT, Rho, Sigma, Tau, Ctx, pSigma)
 import Compiler.types.Strictness(allLazy, Strictness)
 import Compiler.types.QNames(QName)
-import Compiler.types.JNames(JName)
+import Compiler.types.JNames(JName, memberOf)
+import Compiler.types.Positions
 
 import Compiler.common.Errors as E(logmsg)
 import Compiler.common.Annotate(anno)
@@ -35,6 +37,7 @@ import Compiler.common.Trans   as T(patternRefutable)
 import Compiler.passes.Strict(patternStrictness, openCaseWhen, caseOtherwise)
 
 import Compiler.Utilities   as U(javaName)
+import Compiler.tc.Util     as TU(reducedCtx, impliesG)
 
 -- import frege.compiler.Typecheck     as TY(mainSigma, tc, tauString, sigBool)
 
@@ -45,7 +48,7 @@ import Compiler.gen.java.Match
 import Compiler.gen.java.MethodCall(methCode)
 import Compiler.gen.java.Constants(findConst)
 
-varCode ∷ TreeMap Symbol Binding → Symbol → StG [JDecl]
+varCode ∷ TreeMap Int Binding → Symbol → StG [JDecl]
 varCode _ (SymL{sid, pos, vis, name, alias})  = do
     g ← getST
     pure [JComment ("alias " 
@@ -77,7 +80,7 @@ varCode binds sym = do
         _  = error ("varCode: no SymV? " ++ nicer sym g)
 
 --- Generate code for a function with arguments
-funDef ∷ Symbol → TreeMap Symbol Binding → StG [JDecl]
+funDef ∷ Symbol → TreeMap Int Binding → StG [JDecl]
 funDef sym binds = do
     g   ← getST
     if g.toplevel
@@ -85,7 +88,7 @@ funDef sym binds = do
     else localFun sym binds
 
 --- Generate code for a top level function
-topFun ∷ Symbol → TreeMap Symbol Binding → StG [JDecl]
+topFun ∷ Symbol → TreeMap Int Binding → StG [JDecl]
 topFun (sym@SymV {expr = Just dx}) binds = do
     g   ← getST
     E.logmsg TRACEG sym.pos (text "topFun:" 
@@ -233,7 +236,7 @@ cafCode (sym@SymV {depth = 0, expr = Just dx}) binds = do
  
 cafCode _ binds = error "cafCode: no caf"
 
-localFun ∷ Symbol → TreeMap Symbol Binding → StG [JDecl]
+localFun ∷ Symbol → TreeMap Int Binding → StG [JDecl]
 localFun sym binds = do
     g ← getST
     E.logmsg TRACEG sym.pos (text ("compiling local " ++ sym.nice g))
@@ -242,7 +245,7 @@ localFun sym binds = do
                     <+> text " yet.") 
     pure [JComment (nicer sym g)]
 
-innerFun ∷ Symbol → TreeMap Symbol Binding → StG [JDecl]
+innerFun ∷ Symbol → TreeMap Int Binding → StG [JDecl]
 innerFun sym binds = do
     g ← getST
     E.logmsg TRACEG sym.pos (text ("compiling inner " ++ sym.nice g))
@@ -251,7 +254,7 @@ innerFun sym binds = do
                     <+> text " yet.") 
     pure [JComment (nicer sym g)]
 
-innerCaf ∷ Symbol → TreeMap Symbol Binding → Bool → StG [JDecl]
+innerCaf ∷ Symbol → TreeMap Int Binding → Bool → StG [JDecl]
 innerCaf sym binds mutual = do
     g ← getST
     E.fatal sym.pos (text "can't compiler inner CAF " 
@@ -349,7 +352,7 @@ genLambda _ x _ _ = do
     E.fatal (getpos x) (text ("genLambda: bad expression: " ++ nice x g))
     
 --- runs 'genStmts' to generate code that returns the value
-genReturn :: JType -> Expr -> TreeMap Symbol Binding -> StG [JStmt]
+genReturn :: JType -> Expr -> TreeMap Int Binding -> StG [JStmt]
 genReturn jt ex tree = genStmts return jt ex tree 
     where
         return x = [JReturn x]
@@ -361,7 +364,7 @@ genReturn jt ex tree = genStmts return jt ex tree
   *           incomplete case statement
   * This is called for return expressions only.
   -}
-genStmts :: (JX -> [JStmt]) -> JType -> Expr -> TreeMap Symbol Binding -> StG [JStmt]
+genStmts :: (JX -> [JStmt]) -> JType -> Expr -> TreeMap Int Binding -> StG [JStmt]
 genStmts jret rm (x@Case {ckind,ex=cex,alts=calts}) binds = genCaseStmt jret rm x binds
  
 genStmts jret rm (x@Let {env, ex}) binds = do
@@ -445,7 +448,7 @@ genStmts jret rm ex binds
                        : sComment (show bnd)
                        : jret bnd.jex)
 
-genCaseStmt :: (JX -> [JStmt]) -> JType -> Expr -> TreeMap Symbol Binding -> StG [JStmt] 
+genCaseStmt :: (JX -> [JStmt]) -> JType -> Expr -> TreeMap Int Binding -> StG [JStmt] 
 {--
   * The code for case statements can and will be optimized in various ways.
  
@@ -640,7 +643,7 @@ genCaseStmt jret rm (x@Case {ckind,ex=cex,alts=calts}) binds = do
              | otherwise = true
 genCaseStmt jret rm nocase binds = error "genCaseStmt: no case"
 
-genLet :: (JX -> [JStmt]) -> JType -> Expr -> TreeMap Symbol Binding -> StG [JStmt] 
+genLet :: (JX -> [JStmt]) -> JType -> Expr -> TreeMap Int Binding -> StG [JStmt] 
 genLet jret rm (x@Let {env,ex}) binds = do
          g <- getST
          syms <- mapM U.findV env
@@ -689,8 +692,8 @@ genLet jret rm (x@Let {env,ex}) binds = do
             stmts <- genStmts jret rm ex letbinds
             return (comment g : JLocal letcl : JLocal var : stmts) 
          comment g = sComment (nicer x g)
-         mkbind :: Global -> (String -> JX)  -> TreeMap Symbol Binding -> Symbol -> TreeMap Symbol Binding
-         mkbind g prefix binds sym = insert sym bind binds 
+         mkbind :: Global -> (String -> JX)  -> TreeMap Int Binding -> Symbol -> TreeMap Int Binding
+         mkbind g prefix binds sym = insert sym.sid bind binds 
             where
                 bind = Bind{stype=nicer sym.typ g, 
                             ftype=sym.typ, jtype=bjt, 
@@ -705,10 +708,126 @@ genLet jret _ ex binds = do
      g <- getST
      E.fatal (getpos ex) (text("genLet: not a let  " ++ nice ex g))
 
+envCtxs g = [ ctx | s <- reverse (Global.genEnv g),
+                                     not (null (Symbol.typ s).bound),
+                                     ctx <- (Symbol.typ s).rho.context ]
+
+
+resolveConstraint pos (ctx@Ctx {cname, tau}) = do
+         g <- getST
+         E.logmsg TRACEG pos (text "resolveConstraint: " <+> text (nicerctx [ctx] g))
+         if make then makeCtx else findCtx
+     where
+         tauflat = tau.flat
+         tcon  = head tauflat 
+         make | TCon {name} <- tcon = true
+              | otherwise = false
+ 
+         findCtx | Meta tv <- tau, tv.isFlexi = do
+                         g <- getST
+                         E.fatal pos (text ("unknwon context: " ++ nice cname g ++ " " ++ nice tau g))
+                         pure (JAtom "null")
+                 | otherwise = do
+             g <- getST
+             let
+                 ctxsnms = zip (envCtxs g) allCtxNames
+                 implies = impliesG g
+             E.logmsg TRACEG pos (text ("findCtx: looking for  " ++ nice cname g ++ " " ++ nice tau g))
+             E.logmsg TRACEG pos (text ("findCtx: we have  " ++ nicectx (envCtxs g) g))
+             let ok = [ name | (ctx1, name) <- ctxsnms, ctx1 `implies` ctx]
+             E.logmsg TRACEG pos (text ("findCtx: ok= " ++ show ok))
+             if (null ok)
+                 then do 
+                    E.error pos (text ("FATAL: Cant find context for " 
+                            ++ nice cname g ++ " " ++ nice tau g))
+                    E.error pos (text ("This is a compiler error. Sorry."))
+                    pure (JAtom "UNKNOWN_CONTEXT")
+                 else pure ((JAtom • head) ok)
+         makeCtx  = do
+             csym <- U.findC cname
+             case tcon of
+                 TCon {name} -> case filter ((name ==) • fst) csym.insts of
+                     (_,iname):_ -> do
+                         inst <- U.findI iname
+                         g <- getST
+                         let crho = RhoTau [] tau
+                             csig = ForAll [] crho
+                         E.logmsg TRACEG pos (text ("makeCtx: unify " ++ nice inst.typ g ++ "  with  "
+                                 ++ nice csig g))
+ 
+                         let tree = U.unifySigma g inst.typ csig
+                             rho  = U.substRho tree inst.typ.rho
+                         -- rhojt <- rhoJT rho
+                         E.logmsg TRACEG pos (text ("makeCtx substituted: " ++ nice rho g))
+                         -- let subctx = map (TC.reducedCtx g) rho.context
+                         args <- mapM (resolveConstraint pos) rho.context
+                         let jiname = U.javaName g inst.name
+                         let jit    = Ref jiname []              -- jitjts
+                             jex    = if null args
+                                 then JStMem (memberOf jiname "it") [] 
+                                 else JNew jit args
+                         E.logmsg TRACEG pos (text ("makeCtx: " ++ showJex jex))
+                         pure jex
+                     [] -> do
+                         g <- getST
+                         E.fatal pos (text ("makeCtx: instance " ++ nice cname g ++ " " ++ nice tau g ++ " not found."))
+                 other -> do
+                     g <- getST
+                     E.fatal pos (text ("makeCtx: head is " ++ nice other g))
+
+
+
+{--
+    Instantiate a pattern bound symbol at a given type.
+    This is interesting only for polymorphic functions that have a @forall@
+    type and constraints, like
+    
+    > f :: forall e.Num e => [e] -> [e] @@ Num a => [a] -> [a]
+
+    Here, we need to apply the 'Num' constraint to @f@
+    to get a @Func<Lazy<List<A>>, List<A>>@
+    
+    We return:
+        (Func<Lazy<List<A>>, List<A>>)(Lazy<List<A>> arg$n -> 
+            ((Func<Num<A>, Lazy<List<A>>, List<A>>)f).apply(ctx1, arg$n);
+    Or, in the case of CAFS:
+        ((Func<Num<A>, List<A>)f).apply(ctx1)
+    -}
+instPatternBound :: Position -> Binding -> Sigma -> StG Binding
+instPatternBound pos bindns sigma = do
+    g <- getST
+    E.logmsg TRACEG pos (text ("instPatternBound: "
+                             ++ show bindns 
+                             ++ " @@ " ++ nice sigma g))
+    let bind  = strictBind bindns   -- make sure we don't hit a Lazy<Lambda>
+    let inst  = U.sigmaInst g bind.ftype sigma
+        strho = U.substRho (U.unifySigma g bind.ftype sigma) bind.ftype.rho
+    E.logmsg TRACEG pos (text ("instPatternBound: gargs = " ++ show (map (flip nice g) inst)))
+    E.logmsg TRACEG pos (text ("instPatternBound: strho = " ++ nice strho g))
+    -- let contexts = map  (reducedCtx  g) strho.context
+    ctxs     <- mapM (resolveConstraint pos) strho.context
+    
+    let varjt = lambdaType (rhoJT g strho)       -- Func<....>
+        rjt   = withoutConstr varjt
+        argjt = case rjt of 
+            Func{}  → take (length rjt.gargs-1) rjt.gargs
+            _       → [] 
+        casted = JCast{jt=varjt, jex=bind.jex}
+        fargs = [(attrFinal;pSigma;jt;nm) | (jt,nm) ← zip argjt (getArgs g)] 
+        args = map JAtom (take (length argjt) (getArgs g))
+        inv = JInvoke (JExMem{jex=casted, name="apply", targs=[]}) (ctxs++args)
+        lam = if null ctxs then casted
+            else if null args then inv 
+            else JLambda{fargs, code = Left inv}
+    return (newBind g (ForAll [] strho.{context=[]}) (JCast rjt lam)).{jtype = rjt}  
+    --return (adapt result.{ftype <- Sigma.{rho <- Rho.{context=[]}},
+    --               stype =  nice strho.{context=[]} g } bind.jtype)
+
+
 --- genExpression returnexpression f expr binds
 --- Generate java code for expression.
 --- The target java type is determined by @expr@ and modified with @f@ 
-genExpression :: Bool -> (JType -> JType) -> Expr -> TreeMap Symbol Binding -> StG Binding
+genExpression :: Bool -> (JType -> JType) -> Expr -> TreeMap Int Binding -> StG Binding
 genExpression ret stri x binds = do
     g <- getST
     let nt = sigmaJT g (unJust x.typ) 
@@ -739,12 +858,26 @@ genExpr rflg rm ex binds = do
         result bind = do
             let abind = adapt bind rm
             E.logmsg TRACEG (getpos ex) (text "genExpr result: " <+> (text . show) abind)
-            pure bind 
+            pure abind 
     E.logmsg TRACEG (getpos ex)  (text "genExpr: "
             <+> text (nicer ex g) 
+            <+> text " :: "
+            <+> text (nicer ft g)
             <+> text " @@ "
-            <+> text (nicer ft g))
+            <+> anno rm)
     case ex of
+        -- Local Variables are being lookued up in the bindings
+        Vbl{name=Local{uid, base}, pos, typ}
+            | Just b <- lookup uid binds = case b.ftype of
+                    ForAll{bound, rho}
+                        | not (null bound) = instPatternBound pos b ft >>= result  
+                    _                      = result b
+            | otherwise = do
+                E.error pos (text "FATAL COMPILER ERROR "
+                    <+> text (nicer ex g)
+                    <+> text " not bound")
+                sym <- U.findV ex.name
+                result (newBind g sym.typ (JAtom ("UNBOUND." ++ ex.name.base)))
         -- Literals, except regular expressions and big integers are just 'JAtoms'
         -- > 1_234 = 1234
         -- Regular expressions and Big Integers need java code for initialization

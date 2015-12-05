@@ -152,22 +152,29 @@ sigmaJT g (ForAll bnd rho)
 
 
 --- Compute the 'JType' for a given 'Rho' type
-rhoJT   g (fun@RhoFun _ _ _)    = Func{
-                                    gargs  = map (sigmaJT g) args ++ [yields],
+rhoJT   g (fun@RhoFun ctxs _ _)    = Func{
+                                    gargs  =
+                                        map (ctxJT g) ctxs 
+                                        ++ map (sigmaJT g) args 
+                                        ++ [yields],
                                     }
     where
         (r, args) = returnType fun
         yields = autoboxed (tauJT g r)
 
-rhoJT   g (RhoTau {tau})        = tauJT g tau
+rhoJT   g (RhoTau {context, tau})
+    | null context        = tauJT g tau
+    | otherwise           = Func{ gargs = map (ctxJT g) context ++ [tauJT g tau]}
 
+--- Compute the 'JType' for a given 'Context'
+ctxJT g (Ctx{pos, cname, tau}) = Constr (javaName g cname) [tauJT g tau]
 
 --- Compute the 'JType' for a given 'Tau' type
 tauJT   g (app@TApp a b)
      | Just (a,b) ← app.getFun     
         = case tauJT g b of
-                func@Func{} → func.{gargs <- (autoboxed (tauJT g a):)}
-                other       → Func {gargs =  [autoboxed (tauJT g a), autoboxed other]} 
+                func@Func{} → func.{gargs <- (lazy (tauJT g a):)}
+                other       → Func {gargs =  [lazy (tauJT g a), autoboxed other]} 
      | Just array <- arrayTau g app = array 
      | otherwise = case app.flat of
          (TCon {pos,name}):rest -> taujtApp g name rest app
@@ -190,7 +197,7 @@ taujtApp g qname rest app
              let sigmas = [ ConField.typ f | sym@SymD {flds} <- values sym.env, f <- flds ]
              in case sigmas of
                  []     -> Prelude.error (nice sym g ++ " has no fields")                     
-                 (s:_)  -> (sigmaJT g . flip substSigma s . unifySigma g sym.typ) rsig
+                 (s:_)  -> (lambdaType . sigmaJT g . flip substSigma s . unifySigma g sym.typ) rsig
                     where
                         rsig = ForAll [] (RhoTau [] app) 
         SymT {product,nativ,enum,pur}
@@ -311,6 +318,9 @@ unifyJT ta tb subst = case ta  of
         Func{gargs} →  case tb of
             Func{}  = unifyArgs gargs tb.gargs subst
             _ → Left (ta, tb)
+        Constr{jname, gargs}    → case tb of
+            Constr{} = unifyArgs gargs tb.gargs subst
+            _ → Left (ta, tb)
         Something →  if tb == Something then Right subst else Left (ta, tb)
     where
         unifyArgs [] [] subst = Right subst
@@ -349,6 +359,7 @@ reconstruct xs = work xs
 lazy :: JType -> JType
 lazy jt = case jt of
     Lazy{yields}        → jt
+    Constr{}            → jt
     Nativ{typ}          → Lazy (boxed jt)
     Something           → Lazy jt
     TArg{var}           → Lazy jt
@@ -413,6 +424,29 @@ wasFrege _              = false
 isPrimitive (Nativ s _) | s `elem` primitiveTypes   = Just s
 isPrimitive _ = Nothing
 
+{--
+    Make the type of a function pointer canonical,
+    that is, make the result 'strict' and all the 
+    arguments lazy.
+    
+    Note that constraints always appear strict.
+-}
+lambdaType (Func gargs) =
+        Func (map lazy (take (k-1) gargs) ++ map boxed (drop (k-1) gargs))
+    where
+        !k = length gargs 
+lambdaType Lazy{yields=f@Func{}} = Lazy (lambdaType f)
+lambdaType x = x
+
+--- is this a constraint
+isConstr Constr{} = true
+isConstr _        = false
+
+{--
+    drop the constraints from a function type 
+-}
+withoutConstr (Func gargs)  = Func (dropWhile isConstr gargs)
+withoutConstr it            = it
 
 --- show a java expression for debugging purposes
 showJex ∷ JExpr → String
@@ -453,9 +487,10 @@ symInfo sym = do
         other -> case sym of
             SymV{} -> do
                 let (r, as) = U.returnTypeN sym.depth sym.typ.rho
-                    rjt = rhoJT g r
+                    rjt = lambdaType (rhoJT g r)
                     sjts = zipWith (argType g) (strictFuns sym.strsig) as
-                    si = SI8{returnJT = returnJType sym.rkind rjt, retSig = ForAll [] r, argJTs = sjts, argSigs = as}
+                    fjts = map lambdaType sjts
+                    si = SI8{returnJT = returnJType sym.rkind rjt, retSig = ForAll [] r, argJTs = fjts, argSigs = as}
                 changeST Global.{gen <- GenSt.{symi8 <- insert sym si}}
                 E.logmsg TRACEZ sym.pos (
                     text "put symInfo:" <+> text (nice sym g) <+> text (show sym.sid)
@@ -466,9 +501,10 @@ symInfo sym = do
                 return si
             SymD{} -> do
                 let (r, as) = U.returnType sym.typ.rho
-                    rjt = tauJT g r
+                    rjt = lambdaType (tauJT g r)
                     sjts = zipWith (argType g) (map (bool strict lazy . ConField.strict) sym.flds) as
-                    si = SI8{returnJT = rjt, argJTs = sjts, argSigs = as,  retSig = ForAll [] (RhoTau [] r)}
+                    fjts = map lambdaType sjts
+                    si = SI8{returnJT = rjt, argJTs = fjts, argSigs = as,  retSig = ForAll [] (RhoTau [] r)}
                 changeST Global.{gen <- GenSt.{symi8 <- insert sym si}}     
                 return si
             _ -> error ("symInfo for " ++ nicer sym g ++ ", allowed only for functions/variables")
@@ -493,6 +529,8 @@ private argNames = xxxNames "arg$"
 
 --- ctx$1, ctx$2, ctx$3, ...
 private ctxNames = xxxNames "ctx$"
+
+allCtxNames = id ctxNames
 
 --- mem1, mem2, mem3 ...
 memNames = xxxNames "mem"
@@ -519,7 +557,7 @@ constraintDef ∷ Global → Context → String → JDecl
 constraintDef g (Ctx {cname,tau}) s =
          JMember {
              attr = attrFinal,
-             jtype = Ref (U.javaName g cname) [],
+             jtype = Constr (U.javaName g cname) [],
              name = s,
              init = Nothing}
 
@@ -548,8 +586,8 @@ protected argdef g attr s sig nm = (attr, sig, argType g (bool strict lazy (Stri
     Compute formal argument list for a lambda method.
     By definition, all arguments must be 'Lazy'. (see @frege.run.Func@)
     -}
-evalArgDef :: Global -> Attributes -> [Sigma] -> [String] -> [FormalArg]
-evalArgDef g attr sigmas argNms = zipWith (argdef attr) sigmas argNms
+lambdaArgDef :: Global -> Attributes -> [Sigma] -> [String] -> [FormalArg]
+lambdaArgDef g attr sigmas argNms = zipWith (argdef attr) sigmas argNms
     where
         argdef attr sigma name = (attr; sigma; lazy . rhoJT g . _.rho $ sigma; name)
 
@@ -588,13 +626,13 @@ thunkIt code jt = JNew{jt=jtThunk jt,
                     args = [JLambda{fargs = [], code}]}
 
 --- make a 'JExpr' lazy by wrapping it in @Thunk.lazy()@
-lazyJX :: JExpr -> JType -> JExpr
-lazyJX jx jt = JInvoke{jex = JStMem{jname=memberOf jnThunk "lazy", targs=[jt]}, args=[jx]}
+lazyJX :: JType -> JExpr -> JExpr
+lazyJX jt jx = JInvoke{jex = JStMem{jname=memberOf jnThunk "lazy", targs=[jt]}, args=[jx]}
 
---- make a 'JExpr' lazy, unless it is already
-lazyJXifNeeded :: JExpr -> JType -> JExpr
-lazyJXifNeeded jx jt = JCast{jt=lazy jt, 
+--- make a 'JExpr' lazy at runtime, unless it is already (instanceof)
+lazyJXifNeeded :: JType -> JExpr -> JExpr
+lazyJXifNeeded jt jx = JCast{jt=lazy jt, 
     jex = JQC{j1 = JBin{j1=jx, op=" instanceof ", j2=JAtom "Lazy"}, 
                 j2=jx, 
-                j3=lazyJX jx jt}}
+                j3=lazyJX jt jx}}
 
