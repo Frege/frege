@@ -2,9 +2,12 @@
 module Compiler.gen.java.PrettyJava where
 
 import frege.Prelude hiding(<+>, break)
+
+import Compiler.enums.Flags(COMMENTS, isOn)
+
 import Compiler.types.AbstractJava
 import Compiler.common.Annotate
-import Compiler.common.AnnotateG
+import Compiler.common.AnnotateG(notNil, AnnoG)
 import Lib.PP hiding (line)
 import Data.Bits(BitSet(member))
 import Compiler.common.Mangle(romanUpper, mangleJtv)
@@ -80,6 +83,7 @@ subexG g e x
 
 
 instance AnnoG JExpr where
+    annoListG g = annoSomeG g "(" "," ")"
     annoG g (JAtom {name}) = text name
     annoG g (JNew jt exs) = text "new" <+> annoG g jt <> annoListG g exs
     annoG g (e@JInvoke (JExMem jex s gs) exs) = (e `subex` jex) <~/> PP.nest 4 (
@@ -90,6 +94,30 @@ instance AnnoG JExpr where
     --                                text "." <> annoGenerics gs <> text s <> annoList exs)
     annoG g (e@JInvoke x exs) = (e `subex` x) <> PP.nest 4 (annoListG g exs)
                 where subex = subexG g
+    annoG g (JCast jt JLambda{fargs, code})
+        | not g.hasLambdaSupport,
+          itsLazy || itsFunc = annoG g newfunc
+        where
+            itsLazy = case jt of 
+                Lazy{}  → true
+                _       → false
+            itsFunc = case jt of
+                Func{}  → true
+                _       → false
+            y (Lazy t) = t
+            y (Func gs) = last gs
+            y _ = Something
+            newfunc = JNewClass{jt, args=[], 
+                decls = if itsLazy then [lzcall] else [apply,fncall]}
+            lzcall = JMethod{
+                attr = BitSet.fromList [JPublic], 
+                gvars = [], 
+                jtype = y jt, 
+                name = "call", args = fargs, 
+                body = either (JBlock . (:[]) . JReturn) id code}
+            apply = lzcall.{name = "apply"}
+            fncall = lzcall.{jtype = jt, args = [], body = JBlock [JReturn (JAtom "this")]}
+
     annoG g (e@JCast jt x) = text "(" <> annoG g jt <> text ")" <> (e `subex` x)
                 where subex = subexG g
     annoG g JStMem{jt, name, targs} = annoG g jt <> text "." 
@@ -123,11 +151,14 @@ instance AnnoG JExpr where
                             <+> annoG g jt
                             <>  text "[" <> annoG g ex <> text "]"
 
+
+
 instance AnnoG JStmt where
     annoG g (JError s) = annoG g (JComment s) </> text "FIX: incomplete code generation;"
     annoG g JEmpty = text ";"
     annoG g (JBlock []) = text "{}"
-    annoG g (JBlock stmts) = PP.block "{" (PP.stack (map (annoG g) stmts)) "}"
+    annoG g (JBlock stmts) = PP.block "{" (PP.stack statements) "}"
+        where statements = filter notNil (map (annoG g) stmts)
     annoG g (JReturn ex) = text "return" <+> PP.nest 4 (annoG g (postOpt ex) <> text ";")
     annoG g (JThrow ex)  = text "throw"  <+> PP.nest 4 (annoG g (postOpt ex) <> text ";")
     annoG g (JAssert ex) = text "assert" <+> PP.nest 4 (annoG g (postOpt ex) <> text ";")
@@ -159,7 +190,11 @@ annoArgDef g args = bracket "(" (PP.sep "," (map (annoArg g) args)) ")"
 
 --- 'JDecl's are annotatable
 instance AnnoG JDecl where
-    annoG g (JComment s)       = text "// " <> text s -- <> PP.line
+    annoListG g xs = block "{" (items xs) "}"
+        where items = stack . filter notNil . map (annoG g)  
+    annoG g (JComment s)       = if isOn g.options.flags COMMENTS
+                                    then text "// " <> text s -- <> PP.line
+                                    else PP.nil
     annoG g (cl@JClass {attr}) = annoAttrs attr <+> text "class"
                         <+> text cl.name <> annoGenerics g cl.gvars
                         <+> bracket ""
