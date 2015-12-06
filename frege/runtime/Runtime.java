@@ -82,6 +82,16 @@ public class Runtime {
 	}
 	
 	/**
+	 * Implementation for frege.prelude.PreludeBase.Class.ForName
+	 * @throws ClassNotFoundException 
+	 */
+	@SuppressWarnings("unchecked") 
+	final public static<A> Class<A> classForName(final String x) 
+													throws ClassNotFoundException {
+		return (Class<A>) Class.forName(x);
+	}
+	
+	/**
 	 * Provide UTF-8 encoded standard printer for stdout with automatic line flushing
 	 * <p>Must be thread local so that it works in the online REPL, for instance. </p>
 	 */
