@@ -4,10 +4,13 @@ module Compiler.gen.java.PrettyJava where
 import frege.Prelude hiding(<+>, break)
 import Compiler.types.AbstractJava
 import Compiler.common.Annotate
+import Compiler.common.AnnotateG
 import Lib.PP hiding (line)
 import Data.Bits(BitSet(member))
 import Compiler.common.Mangle(romanUpper, mangleJtv)
 import Compiler.types.JNames
+import Compiler.types.Global(Global, GenSt, abbreviate, funcName)
+import Compiler.common.CompilerOptions(stdOptions)
 
 
 instance Anno JAttr where
@@ -27,155 +30,163 @@ annoAttrs flags
     | null flags = PP.nil
     | otherwise  = (PP.spread . map anno . filter (BitSet.`member` flags)) [minBound .. maxBound]
 
-instance Anno JTVar where
-    anno (JTVar s UNBOUNDED)     = text (mangleJtv s)
-    anno (JTVar s (SUPER jt))    = text (mangleJtv s) <+> text "super" <+> anno jt
-    anno (JTVar s (EXTENDS jts)) = text (mangleJtv s) <+> text "extends" 
-                                         <+> sep " &" (map anno jts)
-    annoList = annoSome "<" "," ">" 
+instance AnnoG JTVar where
+    annoG g (JTVar s UNBOUNDED)     = text (mangleJtv s)
+    annoG g (JTVar s (SUPER jt))    = text (mangleJtv s) <+> text "super" <+> annoG g jt
+    annoG g (JTVar s (EXTENDS jts)) = text (mangleJtv s) <+> text "extends" 
+                                         <+> sep " &" (map (annoG g) jts)
+    annoListG g = annoSomeG g "<" "," ">" 
 
 --- annotate formal and actual generic arguments
-annoGenerics [] = DOCUMENT.NONE
-annoGenerics xs = annoSome "<" "," ">" xs
+annoGenerics g [] = DOCUMENT.NONE
+annoGenerics g xs = annoSomeG g "<" "," ">" xs
 
-instance Anno JType where
-    anno (Ref    {jname,gargs})     = text (show jname) <> annoGenerics gargs
-    anno (Constr {jname,gargs})     = text (show jname) <> annoGenerics gargs
-    anno (TArg var          )       = text (mangleJtv var)
-    anno Wild{bounds}               = anno (JTVar "?" bounds)
-    anno Nativ{typ="[]",
-               gargs=[jt]}          = anno jt <> text "[]"
-    anno (Nativ {typ,gargs} )       = text typ  <> annoGenerics gargs
-    anno Kinded{arity, gargs}       = text "Kind." <> text (romanUpper arity) 
-                                                <> annoGenerics gargs
-    anno (Lazy {yields})            = text "Lazy<" <> anno yields <> text ">"
-    anno Func{gargs}                = text "Func." 
+instance AnnoG JType where
+    annoG g (Ref    {jname,gargs})     = text (show jname) <> annoGenerics g gargs
+    annoG g (Constr {jname,gargs})     = text (show jname) <> annoGenerics g gargs
+    annoG g (TArg var          )       = text (mangleJtv var)
+    annoG g Wild{bounds}               = annoG g (JTVar "?" bounds)
+    annoG g Nativ{typ="[]",
+               gargs=[jt]}             = annoG g jt <> text "[]"
+    annoG g (Nativ {typ,gargs} )       = text (abbreviate g typ)  <> annoGenerics g gargs
+    annoG g Kinded{arity, gargs}       = text (abbreviate g "frege.run.Kind"++".") 
+                                                <> text (romanUpper arity) 
+                                                <> annoGenerics g gargs
+    annoG g (Lazy {yields})            = text (abbreviate g "frege.run.Lazy" ++ "<") 
+                                            <> annoG g yields <> text ">"
+    annoG g Func{gargs}                = text (funcName g ++ ".") 
                                         <> text (romanUpper (length gargs - 1))
-                                        <> annoGenerics gargs
-    anno Something                  = text ("Object")
+                                        <> annoGenerics g gargs
+    annoG g Something                  = text (abbreviate g "java.lang.Object")
+
+--- nowarn: no warnings
+fakeGlobal = Global.{gen ← GenSt.{main="Blubb"}}
+    -- sorry!!!
+    -- I could also list all those unimportant fields 
+    (IO.performUnsafe CompilerOptions.standardGlobal)
 
 instance Show JType where
     show jt = nice.replaceAll´\n\s*´ " " 
         where
-            nice = pretty 100 (anno jt)
+            nice = pretty 100 (annoG fakeGlobal jt)
 
 --- subex e x
 --- print @x@ or @(x)@ depending on relative precedence to @e@
-subex :: JExpr -> JExpr -> PP.DOCUMENT
-subex e x
-          | e.prec == 3 && x.prec <= 3  = text "(" <> anno x <> text ")"
-          | x.prec < e.prec             = text "(" <> anno x <> text ")"
-          | otherwise                   = anno x
+subexG :: Global → JExpr → JExpr → PP.DOCUMENT
+subexG g e x
+          | e.prec == 3 && x.prec <= 3  = text "(" <> annoG g x <> text ")"
+          | x.prec < e.prec             = text "(" <> annoG g x <> text ")"
+          | otherwise                   = annoG g x
 
 
-instance Anno JExpr where
-    anno (JAtom {name}) = text name
-    anno (JNew jt exs) = text "new" <+> jt.anno <> annoList exs
-    --anno (JInvoke (JStMem (JName "" b) []) exs) = text b <> PP.nest 4 (annoList exs)
-    --anno (JInvoke (JStMem jn gs) exs) = text a <~/> PP.nest 4 (
-    --                        text "." <> annoGenerics gs <> text b <> annoList exs)
-    --                    where
-    --                        jns = ´\.´.splitted (show jn)
-    --                        a = (joined "." • init) jns
-    --                        b = last jns
-    anno (e@JInvoke (JExMem jex s gs) exs) = (e `subex` jex) <~/> PP.nest 4 (
-                                    text "." <> annoGenerics gs <> text s <> annoList exs)
+instance AnnoG JExpr where
+    annoG g (JAtom {name}) = text name
+    annoG g (JNew jt exs) = text "new" <+> annoG g jt <> annoListG g exs
+    annoG g (e@JInvoke (JExMem jex s gs) exs) = (e `subex` jex) <~/> PP.nest 4 (
+                                    text "." <> annoGenerics g gs 
+                                    <> text s <> annoListG g exs)
+                where subex = subexG g
     -- anno (e@JInvoke (JExMemG jex s gs) exs) = e.subex jex <~/> PP.nest 4 (
     --                                text "." <> annoGenerics gs <> text s <> annoList exs)
-    anno (e@JInvoke x exs) = (e `subex` x) <> PP.nest 4 (annoList exs)
-    anno (e@JCast jt x) = text "(" <> jt.anno <> text ")" <> (e `subex` x)
-    anno JStMem{jt, name, targs} = anno jt <> text "." <> annoGenerics targs <> text name  
-    --anno (JStMem (JName "" b) []) = text b
-    --anno (JStMem (JName a b) gs) = text a <> text "." <> annoGenerics gs <> text b
-    anno (e@JExMem jex s gs) = (e `subex` jex) <> text "." <> annoGenerics gs <> text s
-    -- anno (e@JExMem jex s)     = e.subex jex <> text "." <> text s
-    anno (un@JUnop op j1) = text op <+> (un `subex` j1)
-    anno (bin@JBin j1 op j2) = (bin `subex` j1) <+> text op <+> (bin `subex` j2)
-    anno (jqc@JQC j1 j2 j3) = (jqc `subex` j1)
+    annoG g (e@JInvoke x exs) = (e `subex` x) <> PP.nest 4 (annoListG g exs)
+                where subex = subexG g
+    annoG g (e@JCast jt x) = text "(" <> annoG g jt <> text ")" <> (e `subex` x)
+                where subex = subexG g
+    annoG g JStMem{jt, name, targs} = annoG g jt <> text "." 
+                                        <> annoGenerics g targs <> text name  
+    annoG g (e@JExMem jex s gs) = (e `subex` jex) <> text "." <> annoGenerics g gs <> text s
+                where subex = subexG g
+    annoG g (un@JUnop op j1) = text op <+> (un `subex` j1)
+                where subex = subexG g
+    annoG g (bin@JBin j1 op j2) = (bin `subex` j1) <+> text op <+> (bin `subex` j2)
+                where subex = subexG g
+    annoG g (jqc@JQC j1 j2 j3) = (jqc `subex` j1)
                         <+> PP.nest 4    (text "?" <+> (jqc `subex` j2)
                                     <+/> (text ":" <+> (jqc `subex` j3)))
-    anno (get@JArrayGet{j1, j2}) = (get `subex` j1) <> text "[" <> anno j2 <> text "]"
-    anno (JNewClass jt exs decls) = text "new"
-                            <+> jt.anno
-                            <>  annoList exs
-                            <+> (PP.block "{" (PP.stack (map anno decls)) "}")
-    anno JLambda{fargs, code} = annoArgDef fargs 
+                where subex = subexG g
+    annoG g (get@JArrayGet{j1, j2}) = (get `subex` j1) <> text "[" <> annoG g j2 <> text "]"
+                where subex = subexG g
+    annoG g (JNewClass jt exs decls) = text "new"
+                            <+> annoG g jt
+                            <>  annoListG g exs
+                            <+> annoListG g decls
+    annoG g JLambda{fargs, code} = annoArgDef g fargs 
                                 <+> PP.nest 4 (
                                         text "->" 
-                                        <+> either anno anno code)
-    anno (JNewArray jt ex)
+                                        <+> either (annoG g) (annoG g) code)
+    annoG g (JNewArray jt ex)
         | Nativ{typ="[]", gargs=[it]} <- jt 
                      = text "new"
-                            <+> it.anno
-                            <>  text "[" <> anno ex <> text "]"
+                            <+> annoG g it
+                            <>  text "[" <> annoG g ex <> text "]"
         | otherwise  = text "new"
-                            <+> jt.anno
-                            <>  text "[" <> anno ex <> text "]"
+                            <+> annoG g jt
+                            <>  text "[" <> annoG g ex <> text "]"
 
-instance Anno JStmt where
-    anno (JError s) = (JComment s).anno </> text "FIX: incomplete code generation;"
-    anno JEmpty = text ";"
-    anno (JBlock []) = text "{}"
-    anno (JBlock stmts) = PP.block "{" (PP.stack (map anno stmts)) "}"
-    anno (JReturn ex) = text "return" <+> PP.nest 4 ((postOpt ex).anno <> text ";")
-    anno (JThrow ex)  = text "throw" <+> PP.nest 4 ((postOpt ex).anno <> text ";")
-    anno (JAssert ex)  = text "assert" <+> PP.nest 4 ((postOpt ex).anno <> text ";")
-    anno (JEx ex) = (postOpt ex).anno <> text ";"
-    anno (JAssign x1 x2) = x1.anno <+> text "=" <+> (postOpt x2).anno <> text ";"
-    anno (JLocal jdecl) = jdecl.anno
-    anno (JCond k x stmts) = text k <+> bracket "(" (postOpt x).anno ")"
-                        <+>  anno  (JBlock stmts)
-    anno (JBlockX k stmts) = text k <+> anno (JBlock stmts)
-    anno (JCase x stmt) = text "case" <+> x.anno <> text ":" <+> anno stmt
+instance AnnoG JStmt where
+    annoG g (JError s) = annoG g (JComment s) </> text "FIX: incomplete code generation;"
+    annoG g JEmpty = text ";"
+    annoG g (JBlock []) = text "{}"
+    annoG g (JBlock stmts) = PP.block "{" (PP.stack (map (annoG g) stmts)) "}"
+    annoG g (JReturn ex) = text "return" <+> PP.nest 4 (annoG g (postOpt ex) <> text ";")
+    annoG g (JThrow ex)  = text "throw"  <+> PP.nest 4 (annoG g (postOpt ex) <> text ";")
+    annoG g (JAssert ex) = text "assert" <+> PP.nest 4 (annoG g (postOpt ex) <> text ";")
+    annoG g (JEx ex) = annoG g (postOpt ex) <> text ";"
+    annoG g (JAssign x1 x2) = (annoG g x1) 
+                                <+> text "=" 
+                                <+> annoG g (postOpt x2) 
+                                <> text ";"
+    annoG g (JLocal jdecl) = annoG g jdecl
+    annoG g (JCond k x stmts) = text k <+> bracket "(" (annoG g (postOpt x)) ")"
+                        <+>  annoG g  (JBlock stmts)
+    annoG g (JBlockX k stmts) = text k <+> annoG g (JBlock stmts)
+    annoG g (JCase x stmt) = text "case" <+> annoG g x <> text ":" <+> annoG g stmt
 
 --- annotate list of classes that are implemented
-annoImplements _ []  = PP.nil
-annoImplements s [x] = text s <+> anno x
-annoImplements s xs  = nest 2 $ text s <+/> PP.sep "," (map anno xs)
+annoImplements g _ []  = PP.nil
+annoImplements g s [x] = text s <+> annoG g x
+annoImplements g s xs  = nest 2 $ text s <+/> PP.sep "," (map (annoG g) xs)
 
 --- annotate a formal method argument
-annoArg :: FormalArg -> DOCUMENT
-annoArg (n, _, jt, s) = annoAttrs n <+> anno jt <+> text s
+annoArg :: Global → FormalArg → DOCUMENT
+annoArg g (n, _, jt, s) = annoAttrs n <+> annoG g jt <+> text s
 
 
 --- annotate a formal argument list
-annoArgDef  []   = text "()"
-annoArgDef  args = bracket "(" (PP.sep "," (map annoArg args)) ")"
+annoArgDef g []   = text "()"
+annoArgDef g args = bracket "(" (PP.sep "," (map (annoArg g) args)) ")"
 
 
 --- 'JDecl's are annotatable
-instance Anno JDecl where
-    anno (JComment s)       = text "// " <> text s -- <> PP.line
-    anno (cl@JClass {attr}) = annoAttrs attr <+> text "class"
-                        <+> text cl.name <> annoGenerics cl.gvars
+instance AnnoG JDecl where
+    annoG g (JComment s)       = text "// " <> text s -- <> PP.line
+    annoG g (cl@JClass {attr}) = annoAttrs attr <+> text "class"
+                        <+> text cl.name <> annoGenerics g cl.gvars
                         <+> bracket ""
-                             (maybe PP.nil ((text "extends" <+>) • JType.anno) cl.extend
-                             <+> annoImplements "implements" cl.implement) ""
-                        <+> PP.block "{" (PP.stack (map anno cl.defs)) "}"
-    anno (cl@JInterface {attr}) = annoAttrs attr <+> text "interface"
-                        <+> (text cl.name <> annoGenerics cl.gvars)
-                        <+> bracket "" (annoImplements "extends" cl.implement) ""
-                        <+> PP.block "{" (PP.stack (map anno cl.defs)) "}"
---    anno (cl@JTCInterface {attr}) = annoAttrs attr <+> text "interface"
---                        <+> JType.anno (cl.jtype)
---                        <+> bracket "" (annoImplements "extends" cl.implement) ""
---                        <+> PP.block "{" (PP.stack (map anno cl.defs)) "}"
-    anno (m@JMethod {attr}) = annoAttrs m.attr
-                        <+> annoGenerics (m.gvars)
-                        <+> m.jtype.anno
+                             (maybe PP.nil ((text "extends" <+>) • JType.annoG g) cl.extend
+                             <+> annoImplements g "implements" cl.implement) ""
+                        <+> annoListG g cl.defs
+    annoG g (cl@JInterface {attr}) = annoAttrs attr <+> text "interface"
+                        <+> (text cl.name <> annoGenerics g cl.gvars)
+                        <+> bracket "" (annoImplements g "extends" cl.implement) ""
+                        <+> annoListG g cl.defs
+
+    annoG g (m@JMethod {attr}) = annoAttrs m.attr
+                        <+> annoGenerics g (m.gvars)
+                        <+> annoG g m.jtype
                         <+> text m.name
-                        <> annoArgDef m.args
-                        <+> m.body.anno
-    anno (m@JConstr {attr}) = annoAttrs m.attr
-                        <+> xtype.anno
-                        <> annoArgDef m.args
-                        <+> m.body.anno
+                        <> annoArgDef g m.args
+                        <+> annoG g m.body
+    annoG g (m@JConstr {attr}) = annoAttrs m.attr
+                        <+> annoG g xtype
+                        <> annoArgDef g m.args
+                        <+> annoG g m.body
             where
                 xtype | m.jtype.{gargs?} = m.jtype.{gargs=[]}
-                      | otherwise           = m.jtype
-    anno (m@JMember {attr}) = annoAttrs m.attr
-                        <+> m.jtype.anno <+> text m.name
+                      | otherwise        = m.jtype
+    annoG g (m@JMember {attr}) = annoAttrs m.attr
+                        <+> annoG g m.jtype <+> text m.name
                         <+> bracket (maybe "" (const ("= ")) m.init)
-                                        (maybe PP.nil (JExpr.anno • postOpt) m.init)
+                                        (maybe PP.nil (JExpr.annoG g • postOpt) m.init)
                                     ";"
-    anno JWhile{body} = text "while (true)" <+> anno body
+    annoG g JWhile{body} = text "while (true)" <+> annoG g body
