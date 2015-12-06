@@ -77,8 +77,8 @@ public class Runtime {
 	/**
 	 * Implementation for frege.prelude.PreludeBase.getClass
 	 */
-	final public static Class<?> getClass(Object o) {
-		return o.getClass();
+	@SuppressWarnings("unchecked") final public static<A> Class<A> getClass(A o) {
+		return (Class<A>) o.getClass();
 	}
 	
 	/**
