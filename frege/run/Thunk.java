@@ -175,7 +175,7 @@ public class Thunk<R> implements Lazy<R> {
 	 * the result of evaluating the value. </p>
 	 * @param it a lazy value. <b>This must never be null!</b>
 	 */
-	Thunk(Lazy<R> it) { eval = it; }
+	public Thunk(Lazy<R> it) { eval = it; }
 	// only used internally
 	private Thunk()   { eval = null; }
 //	/**
