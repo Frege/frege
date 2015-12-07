@@ -276,7 +276,8 @@ transdef env fname (d@NatDcl {pos}) = do
                     [(sig, thrs)] = do
                         t <- transSigma sig
                         thrs <- mapM transTau thrs >>= mapM U.forceTau
-                        changeSym sym.{typ = t, throwing = thrs}
+                        gargs ← mkGargs sym.typ
+                        changeSym sym.{typ = t, throwing = thrs, gargs}
                     overloaded = do
                         over <- mapM (uncurry overload) overloaded
                         changeSym sym.{typ = ovlsigma, over}
@@ -289,6 +290,50 @@ transdef env fname (d@NatDcl {pos}) = do
                         thrs <- mapM transTau exs >>= mapM U.forceTau
                         enter sym.{sid=0, name, typ = t, throwing = thrs, vis = Protected}
                         return name
+                    -- extract and translate generic type arguments
+                    mkGargs sig = do
+                        g   ← getST
+                        let phantom = case unST . fst . U.returnType $ sig.rho of
+                                Just (TVar{var}, _) → Just var
+                                _                   → Nothing
+                            sigvars = filter 
+                                    ((!=phantom) . Just . _.var) 
+                                    (sig.tvars sym.pos)
+                            sgargs = fromMaybe sigvars d.gargs
+                        gargs ← mapM transTau sgargs >>= mapM forceTau
+                        let bound = map _.var sigvars
+                        when (length gargs > 1 && isNothing d.gargs) do
+                            E.error d.pos (
+                                text "Cannot infer the order of the generic type arguments."
+                                </> text "Please specify like so: "
+                                <+/> PP.group (
+                                        text (if d.isPure then "pure native" else "native")
+                                        <+> text d.name
+                                        <+> (if d.name == d.meth then PP.nil else text d.meth)
+                                        <+> text "{" 
+                                        <>  text (joined ", " bound)
+                                        <>  text "} :: ...." 
+                                    ))
+                        -- check that generic type arguments do not contain free type variables
+                        forM_ gargs $ \tau → do
+                            let free = freeTVnames bound (RhoTau [] tau)
+                            unless (null free) do
+                                E.error (getpos tau) (
+                                    text "Generic type argument may only use type variables"
+                                    <+/> (text "that are bound in the type "
+                                            <+> text (nicer sig g)
+                                            <+/> maybe 
+                                                    PP.nil 
+                                                    (text 
+                                                        . ("and are not the ST phantom type " ++))
+                                                    phantom)
+                                    </> (text "In particular"
+                                            <+> sep "," [ 
+                                                    text "`" <> text v <> text "´" |
+                                                    v ← free ]
+                                            <+> text "may not be used here.")
+                                    )
+                        return gargs
 
 
 transdef env fname (d@InsDcl {pos}) = do
@@ -443,7 +488,8 @@ transdef env fname (d@JavDcl {pos}) = do
             Just sym 
                 | SymT {nativ = Just nativ} <- sym = do
                     -- extract and translate generic type arguments
-                    gargs ← mapM transTau d.gargs >>= mapM forceTau
+                    sgargs = fromMaybe (sym.typ.tvars sym.pos) d.gargs
+                    gargs ← mapM transTau sgargs >>= mapM forceTau
                     let bound = map fst sym.typ.bound
                     -- check that generic type arguments do not contain free type variables
                     forM_ gargs $ \tau → do

@@ -132,7 +132,9 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type qconid          SName
 //%type tyname          SName
 //%type annoitem        Token
-//%type nativestart     Token
+//%type fitem           Token
+//%type jitem           String
+//%type methodspec      (Token, String, Maybe [TauS])
 //%type importspec      ImportItem
 //%type importspecs     [ImportItem]
 //%type memspec         ImportItem
@@ -320,7 +322,9 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%explain wheredef     declarations local to a class, instance or type
 //%explain annoitems    a list of items to annotate
 //%explain annoitem     an annotated item
-//%explain nativestart  a native item
+//%explain fitem        the frege name of the native method
+//%explain jitem        a native item
+//%explain methodspec   a specification of a native item
 //%explain nativedef    a declaration of a native item
 //%explain impurenativedef    a declaration of a native item
 //%explain nativename   a valid java identifier
@@ -770,12 +774,26 @@ nativedef:
     | impurenativedef
     ;
 
-nativestart:
-      NATIVE annoitem      { flip const }
-    | NATIVE operator      { \_\b  -> do unqualified b }
-    | NATIVE unop          { \_\b  -> b }
-    | NATIVE '-'           { \_\b  -> b }
+fitem:
+    annoitem 
+    | unop
+    | '-'
+    | operator              { \o -> do unqualified o }
     ;
+    
+jitem: 
+    nativename
+    | operator              { \o -> do unqualified o >>= return . _.value }
+    | unop                  { Token.value }
+    ;
+    
+methodspec:
+      fitem jitem gargs     { \f\j\g -> (f,j,Just g) }
+    | fitem jitem           { \f\j -> (f,j,Nothing) }
+    | fitem gargs           { \f\g -> (f,Token.value f, Just g)  }
+    | fitem                 { \f   -> (f,Token.value f, Nothing) }
+    ;
+
 
 sigex: 
     sigma THROWS tauSC      { \a\_\c -> (a, c) }
@@ -788,28 +806,11 @@ sigexs:
     ;
 
 impurenativedef:
-    nativestart DCOLON sigexs
-                    { \item\col\t -> NatDcl {pos=yyline item, vis=Public, name=item.value,
-                                                meth=item.value, txs=t, isPure=false,
-                                                gargs = Just [], 
+    NATIVE methodspec DCOLON sigexs { \_\(fr,jv,ga)\col\t ->
+                    NatDcl {pos=yyline fr, vis=Public, name=fr.value,
+                                                meth=jv, txs=t, isPure=false,
+                                                gargs = ga, 
                                                 doc=Nothing}}
-    | nativestart nativename DCOLON sigexs
-                    { \item\j\col\t -> NatDcl {pos=yyline item, vis=Public, name=item.value,
-                                                meth=j, txs=t, isPure=false,
-                                                gargs = Just [], 
-                                                doc=Nothing}}
-    | nativestart operator   DCOLON sigexs
-                    { \item\o\col\t -> do {
-                            o <- unqualified o;
-                            YYM.return (NatDcl {pos=yyline item, vis=Public, name=item.value,
-                                                meth=o.value, txs=t, isPure=false,
-                                                gargs = Just [], 
-                                                doc=Nothing})}}
-    | nativestart unop      DCOLON sigexs
-                    { \item\o\col\t -> NatDcl {pos=yyline item, vis=Public, name=item.value,
-                                                meth=Token.value o, txs=t, isPure=false,
-                                                gargs = Just [], 
-                                                doc=Nothing}} 
     ;
 
 

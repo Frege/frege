@@ -209,6 +209,7 @@ public class Meta {
         int[]	throwing()		default {};			// index of taus this function throws
         QName[] over()			default {};			// names of members this one overloads
         int		 op()			default 0;	   		// operator associativity and precedence (TokenID.ord)
+        int[]	 gargs()		default {};			// generic type argument tau indexes
     }
 
     /**
