@@ -106,6 +106,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type packagename1    (String, Position)
 //%type nativename      String
 //%type nativespec      (String, Maybe [TauS])
+//%type gargs           [TauS]
 //%type nativepur       (Bool, Bool)
 //%type docs            String
 //%type opstring        String
@@ -324,6 +325,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%explain impurenativedef    a declaration of a native item
 //%explain nativename   a valid java identifier
 //%explain nativespec   a native generic type
+//%explain gargs        native generic type arguments
 //%explain nativepur    a native data type
 //%explain documentation documentation
 //%explain funhead      left hand side of a function or pattern binding
@@ -788,21 +790,25 @@ sigexs:
 impurenativedef:
     nativestart DCOLON sigexs
                     { \item\col\t -> NatDcl {pos=yyline item, vis=Public, name=item.value,
-                                                meth=item.value, txs=t, isPure=false, 
+                                                meth=item.value, txs=t, isPure=false,
+                                                gargs = Just [], 
                                                 doc=Nothing}}
     | nativestart nativename DCOLON sigexs
                     { \item\j\col\t -> NatDcl {pos=yyline item, vis=Public, name=item.value,
-                                                meth=j, txs=t, isPure=false, 
+                                                meth=j, txs=t, isPure=false,
+                                                gargs = Just [], 
                                                 doc=Nothing}}
     | nativestart operator   DCOLON sigexs
                     { \item\o\col\t -> do {
                             o <- unqualified o;
                             YYM.return (NatDcl {pos=yyline item, vis=Public, name=item.value,
-                                                meth=o.value, txs=t, isPure=false, 
+                                                meth=o.value, txs=t, isPure=false,
+                                                gargs = Just [], 
                                                 doc=Nothing})}}
     | nativestart unop      DCOLON sigexs
                     { \item\o\col\t -> NatDcl {pos=yyline item, vis=Public, name=item.value,
-                                                meth=Token.value o, txs=t, isPure=false, 
+                                                meth=Token.value o, txs=t, isPure=false,
+                                                gargs = Just [], 
                                                 doc=Nothing}} 
     ;
 
@@ -883,7 +889,6 @@ simpletype:
     tyvar
     | tyname            { \(tn::SName) -> TCon (yyline tn.id) tn}
     | '(' tau ')'       { \_\t\_ -> t }
-    // '(' sigma ')'     { \_\s\_ -> TSig s }
     | '(' tau ',' tauSC ')'
                         {\_\t\(c::Token)\ts\_ ->
                             let
@@ -1046,23 +1051,27 @@ nativepur:
     ;
 
 nativespec:
-      nativename                { \x     ->  (x; Just []) }
-    | nativename simpletypes    { \x\gs  ->  (x; Just gs) }
-    | nativename '{' '}'        { \x\_\_ ->  (x; Nothing) }
+      nativename                { \x     ->  (x; Nothing) }
+    | nativename gargs          { \x\gs  ->  (x; Just gs) }
+    ;
+
+gargs:
+      '{' tauSC '}'             { \_\ts\_   -> ts }
+    | '{' '}'                   { \_\_      -> [] }
     ;
 
 datainit:
     DATA CONID '=' nativepur nativespec {
         \dat\d\docu\pur\(jt,gargs) -> JavDcl {pos=yyline d, vis=Public, name=Token.value d,
                                     jclas=jt, vars=[], defs=[],
-                                    gargs = maybe [] (\x -> if null x then [] else x) gargs, 
+                                    gargs,  
                                     isPure = fst pur, isMutable = snd pur, 
                                     doc=Nothing}
     }
     | DATA CONID dvars '=' nativepur nativespec {
         \dat\d\ds\docu\pur\(jt,gargs) -> JavDcl {pos=yyline d, vis=Public, name=Token.value d,
                                     jclas=jt, vars=ds, defs=[],
-                                    gargs = maybe [] (\x -> if null x then ds else x) gargs, 
+                                    gargs, 
                                     isPure = fst pur, isMutable = snd pur,
                                     doc=Nothing}
     }
