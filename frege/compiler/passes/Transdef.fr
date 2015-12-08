@@ -83,7 +83,7 @@ import frege.compiler.passes.Enter         as Enter()
 import Lib.PP (text, msgdoc, fill, </>, <+>, <+/>, sep, <>)
 import frege.compiler.Javatypes     as J()
 import frege.compiler.Kinds         as K(kiTypes, kiSigmaX)
-
+import frege.compiler.tc.Methods    as M(niKind, NIKind)
 
 
 pass = do
@@ -276,7 +276,7 @@ transdef env fname (d@NatDcl {pos}) = do
                     [(sig, thrs)] = do
                         t <- transSigma sig
                         thrs <- mapM transTau thrs >>= mapM U.forceTau
-                        gargs ← mkGargs sym.typ
+                        gargs ← mkGargs t
                         changeSym sym.{typ = t, throwing = thrs, gargs}
                     overloaded = do
                         over <- mapM (uncurry overload) overloaded
@@ -288,18 +288,41 @@ transdef env fname (d@NatDcl {pos}) = do
                         let name = U.unusedName sym.name g
                         t <- transSigma sig
                         thrs <- mapM transTau exs >>= mapM U.forceTau
-                        enter sym.{sid=0, name, typ = t, throwing = thrs, vis = Protected}
+                        gargs ← mkGargs t
+                        enter sym.{sid=0, name, typ = t, throwing = thrs, vis = Protected, gargs}
                         return name
                     -- extract and translate generic type arguments
                     mkGargs sig = do
                         g   ← getST
-                        let phantom = case unST . fst . U.returnType $ sig.rho of
+                        let nik = if sig.isFun then niKind d.meth else NIOp  -- fake
+                            (rt, sigs) = U.returnType sig.rho
+                            -- for a class method
+                            -- native foo :: C a -> b -> ST s d
+                            -- the generic types are just b and d
+                            -- a is determined by the object that method is invoked on
+                            -- s is the ST phantom type, it will never get passed
+                            -- Thus we need to exclude the type vars that occur in the
+                            -- first argument, if this is an instance method.
+                            -- get the type variable names that occur in the first argument
+                            objectvars = case nik  of
+                                NIMethod    →  case sigs of 
+                                    (objty:_) → U.freeTVnames (objty.vars) objty.rho
+                                    _ → []  -- this is obviously wrong, 
+                                            -- but will be flagged later in type checking 
+                                others      → []
+ 
+                            -- get the phantom type, if any
+                            phantom = case unST rt of
                                 Just (TVar{var}, _) → Just var
                                 _                   → Nothing
+                            -- type variables we want to avoid
+                            avoid = maybeToList phantom ++ objectvars
+                            -- type variables that are valid
                             sigvars = filter 
-                                    ((!=phantom) . Just . _.var) 
+                                    ((`notElem` avoid) . _.var) 
                                     (sig.tvars sym.pos)
-                            sgargs = fromMaybe sigvars d.gargs
+                            inferred = if nik == NIMethod || nik == NIStatic then sigvars else []
+                            sgargs = fromMaybe inferred d.gargs
                         gargs ← mapM transTau sgargs >>= mapM forceTau
                         let bound = map _.var sigvars
                         when (length gargs > 1 && isNothing d.gargs) do
@@ -314,25 +337,50 @@ transdef env fname (d@NatDcl {pos}) = do
                                         <>  text (joined ", " bound)
                                         <>  text "} :: ...." 
                                     ))
+                        when (nik != NIMethod && nik != NIStatic && isJust d.gargs) do
+                            E.error d.pos (
+                                text "generic type arguments must only be given for methods, found invalid"
+                                </> PP.group (
+                                        text (if d.isPure then "pure native" else "native")
+                                        <+> text d.name
+                                        <+> (if d.name == d.meth then PP.nil else (text . show) d.meth)
+                                        <+> text "{" 
+                                        <>  text (joined ", " . map (flip nicer g) . unJust $ d.gargs)
+                                        <>  text "} :: ...." 
+                                    ))
                         -- check that generic type arguments do not contain free type variables
                         forM_ gargs $ \tau → do
                             let free = freeTVnames bound (RhoTau [] tau)
+                                phantomError  = filter (`elem` maybeToList phantom) free
+                                instanceError = filter (`elem` objectvars) free
+                                unboundError  = filter (`notElem` sig.vars) free
+                                nicevars xs   = joined ", " (map (\x → "`" ++ x ++ "´") xs)
+                                variables [x] = "type variable " ++ nicevars [x]
+                                variables xs  = "type variables " ++ nicevars xs
                             unless (null free) do
                                 E.error (getpos tau) (
-                                    text "Generic type argument may only use type variables"
-                                    <+/> (text "that are bound in the type "
-                                            <+> text (nicer sig g)
-                                            <+/> maybe 
-                                                    PP.nil 
-                                                    (text 
-                                                        . ("and are not the ST phantom type " ++))
-                                                    phantom)
-                                    </> (text "In particular"
-                                            <+> sep "," [ 
-                                                    text "`" <> text v <> text "´" |
-                                                    v ← free ]
-                                            <+> text "may not be used here.")
+                                    text "Generic type argument "
+                                    <+> text (nicer tau g)
+                                    <+> text " is invalid because "
+                                    <+/> if not (null phantomError)
+                                        then text "it contains" <+> text (variables phantomError)
+                                            <+/>  (text "and this is the phantom type of the ST monad,"
+                                                <+> text "which is never seen by java code.")
+                                        else if not (null instanceError)
+                                        then text "it contains" <+> text (variables instanceError)
+                                            <+/> (text "already bound by the object"
+                                                <+> text "the method is invoked on.")
+                                        else text "it contains" <+> text (variables unboundError)
+                                            <+/> ((if length unboundError == 1
+                                                    then text "that is"
+                                                    else text "that are") 
+                                                <+> text "not occuring in the type "
+                                                <+> text (nicer sig g)) 
                                     )
+                        when (isNothing d.gargs && not (null gargs)) do
+                            E.hint d.pos (text "inferred generic type arguments {"
+                                <> (text . joined ", ") (map (flip nicer g) gargs)
+                                <> text "} for" <+> text (nicer sym.name g))   
                         return gargs
 
 

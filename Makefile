@@ -89,6 +89,7 @@ PRELUDE  =  frege/prelude/PreludeBase.fr \
 		frege/prelude/PreludeIO.fr \
 		frege/prelude/PreludeArrays.fr \
 		frege/java/Lang.fr \
+		frege/java/Util.fr \
 		frege/java/util/Regex.fr \
 		frege/prelude/PreludeText.fr \
 		frege/prelude/Math.fr frege/java/lang/Math.fr
