@@ -1,12 +1,14 @@
 --- Code generation for method calls
 module frege.compiler.gen.java.MethodCall where
 
+import Data.TreeMap(TreeMap)
+
 import Compiler.Utilities as U()
 
 import Compiler.classes.Nice(nice, nicer)
 
 import Compiler.types.AbstractJava
-import Compiler.types.Types(unST, Sigma, ForAll, RhoTau, RhoFun)
+import Compiler.types.Types(unST, Sigma, Tau, ForAll, RhoTau, RhoFun)
 import Compiler.types.Symbols(SymbolT)
 import Compiler.types.Global
 import Compiler.types.JNames(JName, memberOf)
@@ -53,31 +55,30 @@ wrappedOnly g sym = error "wrappedOnly - no native function"
 -- 
 -- 
 --- returns a binding for a direct call of a native method
-nativeCall g (sym@SymV {nativ = Just item, gargs}) abinds = newBind g bsig (call jrty args)
+nativeCall ∷ Global → Symbol → TreeMap String Tau → [JExpr] → Binding
+nativeCall g (sym@SymV {nativ = Just item, gargs}) subst aexs = newBind g bsig (call jrty args)
     where
-        taus = [ tau | Just tau <- map (sigmaTau Just) sigmas ]
-        brty = baserty rty
-        bsig = ForAll [] (RhoTau [] brty)
+        (rty, sigmas) = U.returnType sym.typ.rho
+        taus  = [ tau | Just tau <- map U.sigmaAsTau sigmas ]
+        brty  = U.substTau subst (baserty rty)
+        bsig  = U.tauAsSigma brty
+        targs = map (tauJT g . U.substTau subst) gargs 
         args | [tau] <- taus, Just _ <- U.isUnit tau = []   -- no arguments
-             | otherwise = zipWith (argEx g)  abinds taus
-        bjt = tauJT g brty
+             | otherwise = zipWith (argEx g)  aexs taus
+        bjt  = tauJT g brty
         jrty = strict  bjt
         -- retmode = maxStrict jrty         
-        (rty, sigmas) = U.returnType sym.typ.rho
-        argEx g bind tau
-             | Just x <- U.isMaybe tau = JQC checknothing (JAtom "null") (justm1 x).jex
+        
+        argEx g arg tau
+             | Just x <- U.isMaybe tau = JQC checknothing (JAtom "null") m1ex
              -- Just x <- arrayTau g tau = JCast x bind.jex
-             | otherwise = sbind.jex
+             | otherwise = arg
              where
-                 sbind = primitiveBind  bind
+                 -- sbind = primitiveBind  bind
                  checknothing = JBin con "==" (JAtom "0")
-                 con = JInvoke (JX.static "constructor" jtRuntime) [sbind.jex]
-                 justm1 x = adaptSigma g  Bind{stype = nicer x g, 
-                                 ftype = ForAll [] (RhoTau [] x), 
-                                 jtype = Lazy Something,            -- i.e. Object 
-                                 jex   = m1ex}
+                 con = JInvoke (JX.static "constructor" jtRuntime) [arg]
                  m1ex = JExMem just "mem1" []
-                 just = JInvoke (JExMem sbind.jex "_Just" []) []
+                 just = JInvoke (JExMem arg "isJust" []) []
         baserty r
              | Just (_, x) <- unST r       = baserty x
              | Just (_, x) <- U.isException g r = baserty x
@@ -96,7 +97,7 @@ nativeCall g (sym@SymV {nativ = Just item, gargs}) abinds = newBind g bsig (call
              NIMethod -> case args of
                  (a:as) -> case item of
                      "clone" -> JCast jrty (JInvoke (JExMem a item []) as) -- due to java brain damage
-                     _ -> JInvoke (JExMem a item []) as
+                     _ -> JInvoke (JExMem a item targs) as
                  _ -> JAtom "null"
              NIMember -> case args of
                  [a] -> (JExMem a (tail item) [])
@@ -104,7 +105,10 @@ nativeCall g (sym@SymV {nativ = Just item, gargs}) abinds = newBind g bsig (call
              NINewArray -> JNewArray jrty (head args)
              -- NINewArray -> JNewArray  (Ref (JName "" (niArr item)) []) (head args)
              NIStatic -> case sigmas of
-                 (_:_) -> JInvoke (JAtom item) args
+                 (_:_) -> case item =~~ ´^(.+)\.([\w\d\$_]+)$´ of
+                        [_, Just qual, Just base] →
+                            JInvoke (JX.static base Nativ{typ=qual, gargs=targs}) args
+                        _ → JInvoke (JAtom item) args
                  _ -> JAtom item
              NIArrayGet -> case args of
                 [a,b] -> JArrayGet a b
@@ -112,17 +116,17 @@ nativeCall g (sym@SymV {nativ = Just item, gargs}) abinds = newBind g bsig (call
              NIArraySet -> case args of
                 [a,b,c] -> JBin (JArrayGet a b) "=" c
                 _     -> JAtom "bad array set"      -- error was flagged before 
-nativeCall g sym abinds = error ("nativeCall: no function " 
+nativeCall g sym subst aexs = error ("nativeCall: no function " 
     ++ show sym.pos.first.line
     ++ ", " ++ nicer sym g)
 -- 
-wrapCode g jreturn rtau (sym@SymV {nativ = Just item, throwing}) abinds
+wrapCode g jreturn rtau (sym@SymV {nativ = Just item, throwing}) subst aexs
     | Just (stau, atau) <- unST rtau = let
-            sjt     = tauJT g stau           -- type #1 for parameterization of ST s a
+            sjt     = tauJT g stau          -- type #1 for parameterization of ST s a
             ajt     = tauJT g atau          -- return type of the ST action
             ssig    = ForAll [] (RhoTau [] stau)
             mktup x = JReturn x
-            code    = wrapCode g mktup atau sym abinds 
+            code    = wrapCode g mktup atau sym subst aexs 
             try     = JBlockX "try" code
             rbody
                 | null throwing   = code
@@ -142,7 +146,7 @@ wrapCode g jreturn rtau (sym@SymV {nativ = Just item, throwing}) abinds
     | Just (exs, mtau) <- U.isException g rtau = let
             jexs    = autoboxed (tauJT g exs)
             jmtau   = autoboxed (tauJT g mtau)   
-            code    = wrapCode g (jreturn . right jexs jmtau) mtau sym abinds
+            code    = wrapCode g (jreturn . right jexs jmtau) mtau sym subst aexs
             try     = JBlockX "try" code
             mkCatch exs go = case U.isException g exs of
                     Just (lty, rty) -> JBlockX (catch rty) r : mkCatch lty (go . left jlty jrty)
@@ -163,7 +167,7 @@ wrapCode g jreturn rtau (sym@SymV {nativ = Just item, throwing}) abinds
          in [JEx bind.jex, jreturn unit]
     | otherwise = [jreturn (strictBind bind).jex]
     where
-        bind    = nativeCall g sym abinds
+        bind    = nativeCall g sym subst aexs     -- no substitutions!
         base    = Nativ "PreludeBase" []
         tunit   = Nativ "PreludeBase.TUnit" []
         tright a b = Nativ "PreludeBase.TEither.DRight" [a,b]
@@ -173,7 +177,7 @@ wrapCode g jreturn rtau (sym@SymV {nativ = Just item, throwing}) abinds
         catch rty = case tauJT g rty of
                         Nativ{typ, gargs} -> "catch (" ++ typ ++ " ex)"
                         other -> error ("bad exception type " ++ show other)        
-wrapCode g jreturn rtau sym abinds = error "wrapCode: no SymV"
+wrapCode g jreturn rtau sym _ _ = error "wrapCode: no SymV"
  
  
 {--
@@ -207,9 +211,9 @@ methCode g (sym@SymV {nativ = Just item}) si = [
         bndWcode  x = newBind g (ForAll [] (RhoTau [] rty))  x
  
         wcode       = if wrapped g sym
-                        then wrapCode g jreturn rty sym (map (instArg g) args)
+                        then wrapCode g jreturn rty sym TreeMap.empty (map (_.jex . instArg g) args)
                         else let
-                                bind = nativeCall g sym (map (instArg g) args)
+                                bind = nativeCall g sym TreeMap.empty (map (_.jex . instArg g) args)
                             in [jreturn bind.jex]
         wrappers    = if haswrapper then [{- inst, -} wrapper] else [{-inst-}]
         wrapper     = JMethod {attr = attrs [JPublic, JStatic, JFinal],

@@ -4,7 +4,7 @@ module frege.compiler.gen.java.VarCode where
 
 import frege.Prelude hiding (<+>)
 
-import Data.TreeMap(TreeMap, insert, lookup)
+import Data.TreeMap(TreeMap, insert, lookup, each)
 import Lib.PP(text, <>, <+>, <+/>, </>)
 import Data.Bits(BitSet, BitSet.member)
 import Data.List(partitioned)
@@ -46,9 +46,9 @@ import Compiler.gen.java.Common
 import Compiler.types.AbstractJava
 import Compiler.gen.java.Bindings
 import Compiler.gen.java.Match
-import Compiler.gen.java.MethodCall(methCode)
+import Compiler.gen.java.MethodCall(methCode, wrappedOnly, wrapped, wrapCode, nativeCall)
 import Compiler.gen.java.Constants(findConst, staticConst)
-import Compiler.gen.java.Instantiation(instPatternBound)
+import Compiler.gen.java.Instantiation(instPatternBound, resolveConstraint)
 
 varCode ∷ TreeMap Int Binding → Symbol → StG [JDecl]
 varCode _ (SymL{sid, pos, vis, name, alias})  = do
@@ -206,7 +206,7 @@ cafCode (sym@SymV {depth = 0, expr = Just dx}) binds = do
         cafV  = JMember { attr = attrs [publik, JFinal, static], jtype = rtype,
                            name = name.base,
                            init = Just jexpr}
-        newu  = thunkIt (Right (JBlock scode)) ((autoboxed . strict) rtype)
+        newu  = thunkIt ((autoboxed . strict) rtype)  (Right (JBlock scode))
         theU
              | rlazy = newu
              | otherwise = (JX.invoke [] . JX.xmem "eval" ) newu
@@ -751,7 +751,8 @@ genExpr rflg rm ex binds = do
             <+> text " :: "
             <+> text (nicer ft g)
             <+> text " @@ "
-            <+> annoG g rm)
+            <+> text (show rm))
+    let genArgBind arm aex = genExpr false arm aex binds
     case ex of
         -- Local Variables are being lookued up in the bindings
         Vbl{name=Local{uid, base}, pos, typ}
@@ -777,16 +778,70 @@ genExpr rflg rm ex binds = do
             | otherwise 
                 = result (newBind g sigma (JAtom value))
         -- Function application 
-        App{} =  genApp fun args
+        App{} =  genApp fun args >>= result
             where
                 flat  = map fst (flatx ex)
                 fun   = head flat
                 args  = tail flat
-                --genApp (vbl@Vbl {pos, name, typ = Just vsigma}) args = do
-                --    sym ← U.findV name
-                --    undefined
-                genApp bad args = do
-                    E.error (getpos ex) (text "Cannot genApp: " 
+                genApp (vbl@Vbl {pos, name, typ = Just vsigma}) args = do
+                    sym ← U.findV name
+                    E.logmsg TRACEG pos (
+                            text "genApp: function " <+> text name.base <+> text " :: "
+                            <+> text (nice sym.typ g)
+                            <+> text " @@ " 
+                            <+> text (nice vsigma g)
+                        )
+                    let ari = if isJust sym.expr then sym.depth else U.arity sym
+                    case sym of
+                        some | length args > ari = noGenApp "too many args"   vbl args
+                             | length args < ari = noGenApp "not enough args" vbl args
+                        SymV{nativ = Just item} →  do
+                            -- code for native call
+                            -- substitutions
+                            let subst = U.unifySigma g sym.typ vsigma
+
+                            forM (each subst) $ \(v,tau) →
+                                E.logmsg TRACEG pos (text "nativeCall: "
+                                    <+> text v 
+                                    <+> text " = " 
+                                    <+> text (nice tau g))
+
+                            let strho       =  U.substRho subst sym.typ.rho
+                                (res, sigs) =  U.returnType strho
+                                argjts      =  map (sigmaJT g . U.substSigma subst) sigs
+                                targs       =  map (tauJT g   . U.substTau subst) sym.gargs
+                                ret         =  U.substTau subst res
+
+
+                            E.logmsg TRACEG pos (text ("nativeCall: strho = " ++ nice strho g))
+
+                            -- arguments and contexts
+                            let contexts = map  (reducedCtx g)  strho.context
+                            abinds  ←  sequence (zipWith genArgBind argjts args)
+                            ctxs    ←  mapM (resolveConstraint pos) contexts
+                            let arguments   =  ctxs ++ map (_.jex . primitiveBind) abinds
+
+                            if wrappedOnly g sym 
+                            then do
+                                let method  =  U.symJavaName g sym
+                                    stref   =  (JX.staticMember method).{targs}
+                                    call    =  newBind g (U.tauAsSigma ret)
+                                                (JInvoke stref arguments)
+                                    result  =  if isStrictJT rm then call else delayBind call
+                                pure result 
+                            else do
+                                let call 
+                                        | wrapped g sym = case wrapCode g JEx ret sym subst arguments of
+                                                (JEx ex:_) -> newBind g (U.tauAsSigma ret) ex
+                                                _ -> error "unexpected wrapCode result"
+                                        | otherwise = nativeCall g sym subst arguments
+                                    result  =  if isStrictJT rm then call else delayBind call
+                                pure result
+                        _ → noGenApp "notyet" vbl args
+                genApp bad args = noGenApp "not yet" bad args
+                noGenApp why bad args = do
+                    E.error (getpos ex) (text "Cannot genApp"
+                        <+> text "(" <> text why <> text ")"
                         <+> text (nicer bad g) 
                         <+> text " ...  @@ " 
                         <+> text (nicer (unJust bad.typ) g))
