@@ -48,6 +48,7 @@ import Compiler.gen.java.Bindings
 import Compiler.gen.java.Match
 import Compiler.gen.java.MethodCall(methCode)
 import Compiler.gen.java.Constants(findConst, staticConst)
+import Compiler.gen.java.Instantiation(instPatternBound)
 
 varCode ∷ TreeMap Int Binding → Symbol → StG [JDecl]
 varCode _ (SymL{sid, pos, vis, name, alias})  = do
@@ -708,121 +709,6 @@ genLet jret rm (x@Let {env,ex}) binds = do
 genLet jret _ ex binds = do
      g <- getST
      E.fatal (getpos ex) (text("genLet: not a let  " ++ nice ex g))
-
-envCtxs g = [ ctx | s <- reverse (Global.genEnv g),
-                                     not (null (Symbol.typ s).bound),
-                                     ctx <- (Symbol.typ s).rho.context ]
-
-
-resolveConstraint pos (ctx@Ctx {cname, tau}) = do
-         g <- getST
-         E.logmsg TRACEG pos (text "resolveConstraint: " <+> text (nicerctx [ctx] g))
-         if make then makeCtx else findCtx
-     where
-         tauflat = tau.flat
-         tcon  = head tauflat 
-         make | TCon {name} <- tcon = true
-              | otherwise = false
- 
-         findCtx | Meta tv <- tau, tv.isFlexi = do
-                         g <- getST
-                         E.fatal pos (text ("unknwon context: " ++ nice cname g ++ " " ++ nice tau g))
-                         pure (JAtom "null")
-                 | otherwise = do
-             g <- getST
-             let
-                 ctxsnms = zip (envCtxs g) allCtxNames
-                 implies = impliesG g
-             E.logmsg TRACEG pos (text ("findCtx: looking for  " ++ nice cname g ++ " " ++ nice tau g))
-             E.logmsg TRACEG pos (text ("findCtx: we have  " ++ nicectx (envCtxs g) g))
-             let ok = [ name | (ctx1, name) <- ctxsnms, ctx1 `implies` ctx]
-             E.logmsg TRACEG pos (text ("findCtx: ok= " ++ show ok))
-             if (null ok)
-                 then do 
-                    E.error pos (text ("FATAL: Cant find context for " 
-                            ++ nice cname g ++ " " ++ nice tau g))
-                    E.error pos (text ("This is a compiler error. Sorry."))
-                    pure (JAtom "UNKNOWN_CONTEXT")
-                 else pure ((JAtom • head) ok)
-         makeCtx  = do
-             csym <- U.findC cname
-             case tcon of
-                 TCon {name} -> case filter ((name ==) • fst) csym.insts of
-                     (_,iname):_ -> do
-                         inst <- U.findI iname
-                         g <- getST
-                         let crho = RhoTau [] tau
-                             csig = ForAll [] crho
-                         E.logmsg TRACEG pos (text ("makeCtx: unify " ++ nice inst.typ g ++ "  with  "
-                                 ++ nice csig g))
- 
-                         let tree = U.unifySigma g inst.typ csig
-                             rho  = U.substRho tree inst.typ.rho
-                         -- rhojt <- rhoJT rho
-                         E.logmsg TRACEG pos (text ("makeCtx substituted: " ++ nice rho g))
-                         -- let subctx = map (TC.reducedCtx g) rho.context
-                         args <- mapM (resolveConstraint pos) rho.context
-                         let jiname = U.javaName g inst.name
-                         let jit    = Constr jiname []              -- jitjts
-                             jex    = if null args
-                                 then JX.static "it" jit 
-                                 else JNew jit args
-                         E.logmsg TRACEG pos (text ("makeCtx: " ++ showJex jex))
-                         pure jex
-                     [] -> do
-                         g <- getST
-                         E.fatal pos (text ("makeCtx: instance " ++ nice cname g ++ " " ++ nice tau g ++ " not found."))
-                 other -> do
-                     g <- getST
-                     E.fatal pos (text ("makeCtx: head is " ++ nice other g))
-
-
-
-{--
-    Instantiate a pattern bound symbol at a given type.
-    This is interesting only for polymorphic functions that have a @forall@
-    type and constraints, like
-    
-    > f :: forall e.Num e => [e] -> [e] @@ Num a => [a] -> [a]
-
-    Here, we need to apply the 'Num' constraint to @f@
-    to get a @Func<Lazy<List<A>>, List<A>>@
-    
-    We return:
-        (Func<Lazy<List<A>>, List<A>>)(Lazy<List<A>> arg$n -> 
-            ((Func<Num<A>, Lazy<List<A>>, List<A>>)f).apply(ctx1, arg$n);
-    Or, in the case of CAFS:
-        ((Func<Num<A>, List<A>)f).apply(ctx1)
-    -}
-instPatternBound :: Position -> Binding -> Sigma -> StG Binding
-instPatternBound pos bindns sigma = do
-    g <- getST
-    E.logmsg TRACEG pos (text ("instPatternBound: "
-                             ++ show bindns 
-                             ++ " @@ " ++ nice sigma g))
-    let bind  = strictBind bindns   -- make sure we don't hit a Lazy<Lambda>
-    let inst  = U.sigmaInst g bind.ftype sigma
-        strho = U.substRho (U.unifySigma g bind.ftype sigma) bind.ftype.rho
-    E.logmsg TRACEG pos (text ("instPatternBound: gargs = " ++ show (map (flip nice g) inst)))
-    E.logmsg TRACEG pos (text ("instPatternBound: strho = " ++ nice strho g))
-    -- let contexts = map  (reducedCtx  g) strho.context
-    ctxs     <- mapM (resolveConstraint pos) strho.context
-    
-    let varjt = lambdaType (rhoJT g strho)       -- Func<....>
-        rjt   = withoutConstr varjt
-        argjt = case rjt of 
-            Func{}  → take (length rjt.gargs-1) rjt.gargs
-            _       → [] 
-        casted = JCast{jt=varjt, jex=bind.jex}
-        fargs = [(attrFinal;pSigma;jt;nm) | (jt,nm) ← zip argjt (getArgs g)] 
-        args = map JAtom (take (length argjt) (getArgs g))
-        inv = JInvoke (JExMem{jex=casted, name="apply", targs=[]}) (ctxs++args)
-        lam = if null ctxs then casted
-            else if null args then inv 
-            else JLambda{fargs, code = Left inv}
-    return (newBind g (ForAll [] strho.{context=[]}) (JCast rjt lam)).{jtype = rjt}  
-    --return (adapt result.{ftype <- Sigma.{rho <- Rho.{context=[]}},
-    --               stype =  nice strho.{context=[]} g } bind.jtype)
 
 
 --- genExpression returnexpression f expr binds
