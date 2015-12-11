@@ -63,8 +63,9 @@ pass = do
     where
         -- checkgroup :: [QName] -> StG ()
         checkgroup nms = do
-            foreach nms (strictName [])         -- compute strictness
             returnNames [] nms                  -- compute return type of java methods
+            foreach nms (strictName [])         -- compute strictness
+            
 
 
 {--
@@ -295,20 +296,20 @@ returnExprKind syms sym (ex@App a b typ) = do
         Vbl {name} -> do
             symf <- U.findV name
             g <- getST
-            let -- r  = symf.rkind `intersection` RState.singleton RSafeTC
+            let ari = if isJust symf.expr then symf.depth else U.arity symf
                 rwa = if RSafeTC `member` symf.rkind 
                         then RState.fromList [RSafeTC, RValue]
                         else RState.singleton RSafeTC
                 rw  | MName tname _ <- symf.name,
                       Just SymC{} <- g.findit tname 
-                    = (rwa.differenceE RValue).unionE RAlways   -- call class methods lazy
+                    = (rwa.differenceE RAlways).unionE RValue   -- call class methods lazy
                     | otherwise = rwa
             if isJust symf.nativ then stio (rw)
-              else if (length args < symf.depth) 
+              else if (length args < ari) 
                     then stio ((rw.differenceE RAlways).unionE RValue)     -- unsaturated function is a LAMBDA value
               else case symf.expr of
                     Nothing -> case name of
-                        Local{} -> stio (RState.singleton RSafeTC)  -- application of lambda/case bound
+                        Local{} -> stio (RState.fromList [RAlways, RSafeTC])  -- application of lambda/case bound
                         _       -> stio (rw)                        -- global fun
                     Just _ -> do
                         g <- getST
@@ -497,6 +498,7 @@ strictName sids nm = do
     when (v.state != StrictChecked) do
         E.logmsg TRACES v.pos (text ("strictness analysis for " ++ v.nice g))
     let ari = U.arity v             -- ... based on type
+        notLazy sym = RValue `member` sym.rkind
     case v of
         SymV {state = StrictChecked} = stio []          -- do nothing
         SymV {nativ = Just _} -> do
@@ -506,7 +508,7 @@ strictName sids nm = do
             changeSym v.{strsig, state = StrictChecked}
             stio []
         SymV {} | Just (x@Lam{ex}) <- v.gExpr g -> do
-            (x, syms) <- strictness (v.sid:sids) x
+            (x, syms) <- strictReturn (notLazy v) (v.sid:sids) x
             s <- lambdaStrictness x     -- collect strictness from patterns
             E.logmsg TRACES v.pos (text ("strictness for " ++ v.name.nice g ++ " is "
                                     ++ show (S s)
@@ -516,7 +518,7 @@ strictName sids nm = do
             stio syms
         SymV {expr = Just x} | ari > 0 = do
                 y <- x >>= eta ari 
-                (y, syms) <- strictness (v.sid:sids) y
+                (y, syms) <- strictReturn true (v.sid:sids) y
                 s <- lambdaStrictness y
                 let x  = uneta ari y
                     rs = if null s then v.strsig else S s
@@ -579,8 +581,10 @@ strictName sids nm = do
  *      the lambda strictness for the arguments
  * 6. if g is checked recursively, all arguments are strict
  -}
-strictness :: [Int] -> Expr -> StG (Expr, [Symbol])
-strictness sids x = do
+strictReturn :: Bool ->  [Int] -> Expr -> StG (Expr, [Symbol])
+strictReturn notLazy sids x = strictness sids x where
+  strictness :: [Int] -> Expr -> StG (Expr, [Symbol])
+  strictness sids x = do
         g <- getST
         E.logmsg TRACES (getpos x) (text ("strictness for: " ++ nice x g))
         let mine = if x.{env?} then map QName.uid x.env
@@ -592,7 +596,7 @@ strictness sids x = do
             Vbl {name=Local{}} -> do
                     v <- U.findV x.name
                     E.logmsg TRACES (getpos x) (text ("strictness  " ++ nice x g ++ " :: " ++ names g [v]))
-                    stio (x, [v])
+                    stio (x, if notLazy then [v] else [])
             Vbl {name} -> do
                     E.logmsg TRACES (getpos x) (text ("strictness  " ++ nice x g ++ " :: " ++ names g []))
                     stio (x, [])
@@ -687,7 +691,7 @@ strictness sids x = do
         apply ex U     = do
                             (x,_) <- strictness sids ex
                             stio (x, [])      -- lazy
-        apply ex (S[]) = strictness sids ex -- strict
+        apply ex (S[]) = strictReturn true sids ex -- strict
         apply ex (S ss) = do
             g <- getST
             case flatx ex of
