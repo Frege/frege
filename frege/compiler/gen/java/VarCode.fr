@@ -837,35 +837,53 @@ genExpr rflg rm ex binds = do
                             <+> text " @@ " 
                             <+> text (nice vsigma g)
                         )
-                    let ari = if isJust sym.expr then sym.depth else U.arity sym
+
+                    -- substitution
+                    let ari         =  if isJust sym.expr then sym.depth else U.arity sym
+                        subst       =  U.unifySigma g sym.typ vsigma
+                        strho       =  U.substRho subst sym.typ.rho
+                        (res, sigs) =  U.returnType strho
+                        argjts      =  zipWith ($)
+                                            (strictFuns sym.strsig)
+                                            (map (lambdaType . sigmaJT g . U.substSigma subst) sigs)
+                        targs       =  map (boxed . tauJT g . U.substTau subst) (sym.typ.tvars pos)
+                        ret         =  U.substTau subst res
+                        retjt       =  (returnJType sym.rkind . lambdaType . tauJT g) ret
+                        contexts    =  map  (reducedCtx g)  strho.context
+
+                    -- explain the substitution
+                    forM (each subst) $ \(v,tau) →
+                        E.logmsg TRACEG pos (text "nativeCall: "
+                            <+> text v 
+                            <+> text " = " 
+                            <+> text (nice tau g))
+
+                    E.logmsg TRACEG pos (text ("nativeCall: strho = " ++ nice strho g))
+
+                    -- resolve the contexts, if any
+                    ctxs    ←  mapM (resolveConstraint pos) contexts
+                    -- arguments
+                    abinds  ←  sequence (zipWith genArgBind argjts args)
+                    let arguments   =  ctxs ++ map  _.jex  abinds
+
                     case sym of
                         some | length args > ari = noGenApp "too many args"   vbl args
                              | length args < ari = etaWrap
+                        SymV{expr = Just _} → do
+                            let method  =  U.symJavaName g sym
+                                stref   =  (JX.staticMember method).{targs}
+                                call0   =  newBind g (U.tauAsSigma ret)
+                                                (JInvoke stref arguments)
+                                call    =  call0.{jtype = retjt}
+                                result  =  if isStrictJT rm 
+                                            then call
+                                            else if rflg || isStrictJT retjt 
+                                                then delayBind call
+                                                else call   -- lazy -> lazy and no return
+                            pure result 
                         SymV{nativ = Just item} →  do
                             -- code for native call
-                            -- substitutions
-                            let subst = U.unifySigma g sym.typ vsigma
 
-                            forM (each subst) $ \(v,tau) →
-                                E.logmsg TRACEG pos (text "nativeCall: "
-                                    <+> text v 
-                                    <+> text " = " 
-                                    <+> text (nice tau g))
-
-                            let strho       =  U.substRho subst sym.typ.rho
-                                (res, sigs) =  U.returnType strho
-                                argjts      =  map (sigmaJT g . U.substSigma subst) sigs
-                                targs       =  map (tauJT g   . U.substTau subst) sym.gargs
-                                ret         =  U.substTau subst res
-
-
-                            E.logmsg TRACEG pos (text ("nativeCall: strho = " ++ nice strho g))
-
-                            -- arguments and contexts
-                            let contexts = map  (reducedCtx g)  strho.context
-                            abinds  ←  sequence (zipWith genArgBind argjts args)
-                            ctxs    ←  mapM (resolveConstraint pos) contexts
-                            let arguments   =  ctxs ++ map (_.jex . primitiveBind) abinds
 
                             if wrappedOnly g sym 
                             then do
