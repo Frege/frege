@@ -47,4 +47,17 @@ package frege.run;
  */
 public class RunTM {
 
+	/**
+	 * <p> This is used to coerce higher ranked functions.
+	 * They are passed around as {@link Object} 
+	 * and are instantiated at the needed type when they're used. </p>
+	 * <p> Note that Frege type checking ensures that the given type is an
+	 * instance of the original polymorphic type of the function.</p>
+	 * @param it 
+	 * @return A function with the correct type.
+	 */
+	@SuppressWarnings("unchecked")
+	public static<G> G higherRank(Object it) {
+		return (G) it;
+	}
 }
