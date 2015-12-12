@@ -141,11 +141,11 @@ topFun sym binds = do
 
 {--
     code for non-functions
-    - if there are constraints, we make a static function with constraint args.
+    - if there are constraints or bound variables, we make a static methods with constraint args.
     - else, if the code is easy, we make a Thunk<type> and write the code in the eval function.
     - else we just initialize
     
-    A caf counts as easy if the code contains only
+    A CAF counts as simple if the code contains only
     - literals
     - native function calls
     - constructors
@@ -157,19 +157,16 @@ cafCode (sym@SymV {depth = 0, expr = Just dx}) binds = do
     let bnds = sym.typ.bound
         ctxNames = getCtxs g
  
-    let (rtyp, _) = U.returnTypeN 0 sym.typ.rho
-        symtyp = ForAll bnds rtyp
-        -- mode  = argMode g (if rlazy then U else S[]) symtyp
-        rlazy = not sym.strsig.isStrict 
+    let rlazy = not sym.strsig.isStrict 
                  || not (RValue `member` sym.rkind)
         rsimple = RSimple `member` sym.rkind
         recursive = not (RSafeTC `member` sym.rkind)        
         ctxs  = if null bnds then [] else sym.typ.rho.context
         cargs = zipWith (constraintArg g) ctxs ctxNames
-        jtype = sigmaJT g symtyp
+        jtype = rhoJT g sym.typ.rho.{context=[]}
         rtype = returnType sym.rkind jtype
 
-    let comp = if null cargs && rsimple
+    let comp = if null cargs && null bnds && rsimple
          then do
              ecode <- compiling sym (genExpr false rtype x binds)
              pure (Left ecode)
@@ -178,7 +175,7 @@ cafCode (sym@SymV {depth = 0, expr = Just dx}) binds = do
                  jthrow = [JThrow (JNew (Ref (JName "frege.runtime" "GuardFailed") []) [
                                                      JAtom (show (nicer sym g)),
                                                      JAtom (show sym.pos)])]
-             code <- compiling sym (genReturn jtype x binds)
+             code <- compiling sym (genReturn rtype x binds)
              case badguard of
                  Just (Left x) -> do
                      E.warn (getpos x) (text "guard (" <> text (nicer x g) <> text ") may evaluate to false.")
@@ -211,7 +208,7 @@ cafCode (sym@SymV {depth = 0, expr = Just dx}) binds = do
         newu  = thunkIt ((autoboxed . strict) rtype)  (Right (JBlock scode))
         theU
              | rlazy = newu
-             | otherwise = (JX.invoke [] . JX.xmem "eval" ) newu
+             | otherwise = (JX.invoke [] . JX.xmem "call" ) newu
 
         vMeth = JMethod { attr = attrs [JPublic, JFinal],
                            gvars = [],
@@ -222,14 +219,14 @@ cafCode (sym@SymV {depth = 0, expr = Just dx}) binds = do
                            name = cafV.name,
                            init = Just theU}
         cafF  = JMethod { attr = cafV.attr, jtype = rtype,
-                           gvars = [], name = cafV.name,
+                           gvars = targs sym.typ, name = cafV.name,
                            args = cargs, body = JBlock fbody }
  
         fbody
             | recursive = [JReturn newu]
             | otherwise = scode
 
-    let !caf = case (not (null cargs), rsimple) of
+    let !caf = case (not (null cargs) || not (null bnds), rsimple) of
              --cargs  simple, selfrec
 
              (false, false)    -> cafU
