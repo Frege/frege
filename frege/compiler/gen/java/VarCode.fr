@@ -741,10 +741,6 @@ genExpr _ rt (Lit {kind, value, typ = Just sigma}) binds
 genExpr rflg rm ex binds = do
     g <- getST
     let ft = unJust (Expr.typ ex)
-        result bind = do
-            let abind = adapt bind rm
-            E.logmsg TRACEG (getpos ex) (text "genExpr result: " <+> (text . show) abind)
-            pure abind 
     E.logmsg TRACEG (getpos ex)  (text "genExpr: "
             <+> text (nicer ex g) 
             <+> text " :: "
@@ -752,6 +748,12 @@ genExpr rflg rm ex binds = do
             <+> text " @@ "
             <+> text (show rm))
     let genArgBind arm aex = genExpr false arm aex binds
+
+        result bind = do
+            let abind = adapt bind rm
+            E.logmsg TRACEG (getpos ex) (text "genExpr result: " <+> (text . show) abind)
+            pure abind 
+
         etaWrap 
             | Func{gargs} ← rm,
               length gargs - 1 == length sigs = do
@@ -778,7 +780,7 @@ genExpr rflg rm ex binds = do
                             <+> text "no function type expected"
                             <+> text "or arity mismatch between function type and sigma")
             where
-                (_, sigs) = U.returnType ft.rho
+                (_, sigs) = U.returnType (U.unTau ft.rho)
                 pos = getpos ex
     case ex of
         -- Local Variables are being lookued up in the bindings
@@ -810,6 +812,8 @@ genExpr rflg rm ex binds = do
                 flat  = map fst (flatx ex)
                 fun   = head flat
                 args  = tail flat
+
+                -- constructors
                 genApp (con@Con {pos, name, typ = Just csigma}) args = do
                     sym     ← U.findD name
                     symt    ← U.findT sym.name.tynm
@@ -820,11 +824,39 @@ genExpr rflg rm ex binds = do
                             <+> text (nice csigma g)
                         )
                     let ari = length sym.flds
+                        subst       =  U.unifySigma g sym.typ csigma
+                        strho       =  U.substRho subst sym.typ.rho
+                        (res, sigs) =  U.returnType (U.unTau strho)
+                        argjts      =  zipWith ($)
+                                            (strictFuns sym.strsig)
+                                            (map (lambdaType . sigmaJT g . U.substSigma subst) sigs)
+                        targs       =  map (boxed . tauJT g . U.substTau subst) (symt.typ.tvars pos)
+                        ret         =  U.substTau subst res
+                        retjt       =  (lambdaType . tauJT g) ret
+                        contexts    =  map  (reducedCtx g)  strho.context
                     case symt of
                         any | length args > ari = noGenApp "too many args"   con args
                             | length args < ari = etaWrap
                         SymT{newt = true, product = true}
                             = genExpr rflg rm (head args) binds
+                        SymT{}
+                            = do
+                                -- resolve the contexts, if any
+                                ctxs    ←  mapM (resolveConstraint pos) contexts
+                                -- arguments
+                                abinds  ←  sequence (zipWith genArgBind argjts args)
+                                let arguments   =  ctxs ++ map  _.jex  abinds
+
+                                let cons = U.symJavaName g sym
+                                    jref = Ref{jname = cons, gargs = targs}
+                                    make = JX.static "mk" jref
+                                    call = JInvoke make arguments
+                                    bind = (newBind g ft call).{jtype = retjt}
+                                pure (if not rflg 
+                                            && not (isStrictJT rm)
+                                            && any isStrictJT argjts 
+                                        then delayBind bind
+                                        else bind)
                         _   = noGenApp "not yet" con args
 
                 genApp (vbl@Vbl {pos, name, typ = Just vsigma}) args = do
