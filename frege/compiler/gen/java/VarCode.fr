@@ -34,6 +34,7 @@ import Compiler.common.Errors as E(logmsg)
 import Compiler.common.Annotate(anno)
 import Compiler.common.AnnotateG(annoG)
 import Compiler.common.Trans   as T(patternRefutable)
+import Compiler.common.SymbolTable as SymTab()
 
 import Compiler.passes.Strict(patternStrictness, openCaseWhen, caseOtherwise)
 
@@ -753,6 +754,34 @@ genExpr rflg rm ex binds = do
             <+> text " @@ "
             <+> text (show rm))
     let genArgBind arm aex = genExpr false arm aex binds
+        etaWrap 
+            | Func{gargs} ← rm,
+              length gargs - 1 == length sigs = do
+                g <- getST
+                uids ← replicateM (length sigs) uniqid
+                let syms    = [ (U.patLocal pos u "η").{typ=s} | (u,s) <- zip uids sigs]
+                    atoms   = map (JAtom . ("η$" ++) . show) uids
+                    ajts    = take (length sigs) gargs
+                    ebnds   = [ (newBind g s x).{jtype=t} | 
+                                    (s,x,t) <- zip3 sigs atoms ajts]
+                    newbinds = fold (\t (s,b) → insert s.sid b t) binds (zip syms ebnds)
+                    fargs    = [(attrFinal;pSigma;jt;nm) | (jt,JAtom nm) ← zip ajts atoms]
+                    eexs     = [ Vbl{pos, name=sym.name, typ=Just sym.typ} | sym <- syms ]
+                    nex      = fold (\x y -> App x y (reduce <$> x.typ)) ex eexs
+                    reduce  ForAll{bound, rho}
+                        | RhoFun{rho=it} ← rho = ForAll [] it
+                        | RhoTau{tau=TApp (TApp TCon{name = TName _ "->"} a) b} ← rho = U.tauAsSigma b
+                        | otherwise = error ("etaWrap.reduce: " ++ nicer rho g) 
+                mapM_ SymTab.enter syms 
+                call ← genExpr true (last gargs) nex newbinds
+                let lambda = JLambda{fargs, code = Left call.jex}
+                result (newBind g ft lambda).{jtype=rm}
+            | otherwise = E.fatal pos (text "etaWrap: "
+                            <+> text "no function type expected"
+                            <+> text "or arity mismatch between function type and sigma")
+            where
+                (rtau, sigs) = U.returnType ft.rho
+                pos = getpos ex
     case ex of
         -- Local Variables are being lookued up in the bindings
         Vbl{name=Local{uid, base}, pos, typ}
@@ -795,7 +824,7 @@ genExpr rflg rm ex binds = do
                     let ari = length sym.flds
                     case symt of
                         any | length args > ari = noGenApp "too many args"   con args
-                            | length args < ari = noGenApp "not enough args" con args
+                            | length args < ari = etaWrap
                         SymT{newt = true, product = true}
                             = genExpr rflg rm (head args) binds
                         _   = noGenApp "not yet" con args
@@ -811,7 +840,7 @@ genExpr rflg rm ex binds = do
                     let ari = if isJust sym.expr then sym.depth else U.arity sym
                     case sym of
                         some | length args > ari = noGenApp "too many args"   vbl args
-                             | length args < ari = noGenApp "not enough args" vbl args
+                             | length args < ari = etaWrap
                         SymV{nativ = Just item} →  do
                             -- code for native call
                             -- substitutions
