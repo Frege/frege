@@ -14,6 +14,7 @@ import Compiler.enums.RFlag(RTailRec, RSimple, RValue, RSafeTC)
 import Compiler.enums.Literals
 import Compiler.enums.CaseKind(CKind)
 import Compiler.enums.Visibility(Private)
+import Compiler.enums.TokenID(VARID)
 
 import Compiler.classes.Nice(nice, nicer)
 import Compiler.instances.Nicer(nicerctx, nicectx)
@@ -719,6 +720,11 @@ genExpression ret stri x binds = do
     let nt = sigmaJT g (unJust x.typ) 
     genExpr ret (stri nt) x binds
 
+--- Avoid change of arity when a function is substituted for b
+--- > forall a b .ctx => (a->b)  ==> forall a b. ctx => a -> b 
+rhoTauInSigma (ForAll bs (RhoTau ctx fun)) = ForAll bs (U.rhoTau fun).{context=ctx}
+rhoTauInSigma sig = sig
+ 
 {-- 
     Generate code for simple Frege expressions
     
@@ -759,14 +765,15 @@ genExpr rflg rm ex binds = do
               length gargs - 1 == length sigs = do
                 g <- getST
                 uids ← replicateM (length sigs) uniqid
-                let syms    = [ (U.patLocal pos u "η").{typ=s} | (u,s) <- zip uids sigs]
+                let syms    = [ (U.patLocal (pos.change VARID ("η" ++ show u)) u "η").{typ=s} 
+                                    | (u,s) <- zip uids sigs]
                     atoms   = map (JAtom . ("η$" ++) . show) uids
                     ajts    = take (length sigs) gargs
                     ebnds   = [ (newBind g s x).{jtype=t} | 
                                     (s,x,t) <- zip3 sigs atoms ajts]
                     newbinds = fold (\t (s,b) → insert s.sid b t) binds (zip syms ebnds)
                     fargs    = [(attrFinal;pSigma;jt;nm) | (jt,JAtom nm) ← zip ajts atoms]
-                    eexs     = [ Vbl{pos, name=sym.name, typ=Just sym.typ} | sym <- syms ]
+                    eexs     = [ Vbl{pos=sym.pos, name=sym.name, typ=Just sym.typ} | sym <- syms ]
                     nex      = fold (\x y -> App x y (reduce <$> x.typ)) ex eexs
                     reduce  ForAll{bound, rho}
                         | RhoFun{rho=it} ← rho = ForAll [] it
@@ -780,7 +787,7 @@ genExpr rflg rm ex binds = do
                             <+> text "no function type expected"
                             <+> text "or arity mismatch between function type and sigma")
             where
-                (_, sigs) = U.returnType (U.unTau ft.rho)
+                (_, sigs) = U.returnType (ft.rho)
                 pos = getpos ex
     case ex of
         -- Local Variables are being lookued up in the bindings
@@ -899,9 +906,9 @@ genExpr rflg rm ex binds = do
                     sym ← U.findV name
                     E.logmsg TRACEG pos (
                             text "genApp: function " <+> text name.base <+> text " :: "
-                            <+> text (nice sym.typ g)
+                            <+> text (nicer sym.typ g)
                             <+> text " @@ " 
-                            <+> text (nice vsigma g)
+                            <+> text (nicer vsigma g)
                         )
 
                     -- substitution
@@ -910,30 +917,29 @@ genExpr rflg rm ex binds = do
                             | Local{} ← name, Nothing ← sym.expr = true
                             | otherwise                          = false
                         subst       =  U.unifySigma g sym.typ vsigma
-                        strho       =  U.substRho subst sym.typ.rho
-                        (ret, sigs) =  U.returnType (if lambdaBound 
-                                                            then U.unTau strho
-                                                            else U.unTau strho)
+                        rhoctx      =  U.substRho subst sym.typ.rho
+                        (res, asig) =  U.returnType vsigma.rho
+                        sigs        =  asig -- map (U.substSigma subst . rhoTauInSigma) asig
                         argjts      =  zipWith ($)
                                             (strictFuns sym.strsig)
                                             (map (lambdaType . sigmaJT g) sigs)
                         targs       =  map (boxed . tauJT g . U.substTau subst) (sym.typ.tvars pos)
-                        -- ret         =  U.substTau subst res
-                        retjt       =  (returnJType sym.rkind . lambdaType . tauJT g) ret
-                        contexts    =  map  (reducedCtx g)  strho.context
+                        ret         =  (rhoTauInSigma . U.tauAsSigma) res
+                        retjt       =  (returnJType sym.rkind . lambdaType . sigmaJT g) ret
+                        contexts    =  map  (reducedCtx g)  rhoctx.context
 
                     -- explain the substitution
                     forM (each subst) $ \(v,tau) →
                         E.logmsg TRACEG pos (text "genApp: "
                             <+> text v 
                             <+> text " = " 
-                            <+> text (nice tau g))
+                            <+> text (nicer tau g))
 
 
                     E.logmsg TRACEG pos (
                                 text "genApp: ari=" <> text (show ari) 
-                            <+> text "strho = " <+> text (nice strho g)
-                            <+> text "retjt = " <+> text (show retjt))
+                            <+> (text "args  = " <+> (text . joined " ~> " . map (flip nicer g)) sigs)
+                            <+/> text "retjt = " <+> text (show retjt))
 
                     -- resolve the contexts, if any
                     ctxs    ←  mapM (resolveConstraint pos) contexts
@@ -947,7 +953,7 @@ genExpr rflg rm ex binds = do
                         -- lambda bound functions
                         SymV{name = Local{uid}, expr = Nothing} → do
                             fun ← genExpr false (sigmaJT g vsigma) vbl binds
-                            let call0   = newBind g (U.tauAsSigma ret)
+                            let call0   = newBind g ret
                                             (JInvoke 
                                                 JExMem{jex = fun.jex, name = "apply", targs = []}
                                                 arguments)
@@ -960,7 +966,7 @@ genExpr rflg rm ex binds = do
                         SymV{expr = Just _} → do
                             let method  =  U.symJavaName g sym
                                 stref   =  (JX.staticMember method).{targs}
-                                call0   =  newBind g (U.tauAsSigma ret)
+                                call0   =  newBind g ret
                                                 (JInvoke stref arguments)
                                 call    =  call0.{jtype = retjt}
                                 result  =  if isStrictJT rm 
@@ -978,14 +984,14 @@ genExpr rflg rm ex binds = do
                             then do
                                 let method  =  U.symJavaName g sym
                                     stref   =  (JX.staticMember method).{targs}
-                                    call    =  newBind g (U.tauAsSigma ret)
+                                    call    =  newBind g ret
                                                 (JInvoke stref arguments)
                                     result  =  if isStrictJT rm then call else delayBind call
                                 pure result 
                             else do
                                 let call 
-                                        | wrapped g sym = case wrapCode g JEx ret sym subst arguments of
-                                                (JEx ex:_) -> newBind g (U.tauAsSigma ret) ex
+                                        | wrapped g sym = case wrapCode g JEx (U.substTau subst res) sym subst arguments of
+                                                (JEx ex:_) -> newBind g ret ex
                                                 _ -> error "unexpected wrapCode result"
                                         | otherwise = nativeCall g sym subst arguments
                                     result  =  if isStrictJT rm then call else delayBind call
@@ -996,7 +1002,7 @@ genExpr rflg rm ex binds = do
                             = do
                                 let inst   = JInvoke get (tail arguments)
                                     get    = JX.jexmem  (head ctxs) (latinF ++ mangled base)
-                                    bind   = (newBind g (U.tauAsSigma ret) inst).{jtype = retjt}
+                                    bind   = (newBind g ret inst).{jtype = retjt}
                                 pure bind
                         _ → noGenApp "notyet" vbl args
                 genApp bad args = noGenApp "not yet" bad args
