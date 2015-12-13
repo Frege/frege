@@ -755,7 +755,7 @@ genExpr rflg rm ex binds = do
             pure abind 
 
         etaWrap 
-            | Func{gargs} ← rm,
+            | Func{gargs} ← boxed rm,
               length gargs - 1 == length sigs = do
                 g <- getST
                 uids ← replicateM (length sigs) uniqid
@@ -770,7 +770,7 @@ genExpr rflg rm ex binds = do
                     nex      = fold (\x y -> App x y (reduce <$> x.typ)) ex eexs
                     reduce  ForAll{bound, rho}
                         | RhoFun{rho=it} ← rho = ForAll [] it
-                        | RhoTau{tau=TApp (TApp TCon{name = TName _ "->"} a) b} ← rho = U.tauAsSigma b
+                        | RhoTau{tau} ← rho, Just (a,b) ← tau.getFun = U.tauAsSigma b
                         | otherwise = error ("etaWrap.reduce: " ++ nicer rho g) 
                 mapM_ SymTab.enter syms 
                 call ← genExpr false  (last gargs) nex newbinds
@@ -795,6 +795,29 @@ genExpr rflg rm ex binds = do
                     <+> text " not bound")
                 sym <- U.findV ex.name
                 result (newBind g sym.typ (JAtom ("UNBOUND." ++ ex.name.base)))
+        Vbl{pos,name}
+            | Just (sym@SymV{}) ← g.findit name =
+                if (sym.depth > 0) then etaWrap
+                else do 
+                    let contexts    =  map  (reducedCtx g)  ft.rho.context
+                        subst       =  U.unifySigma g sym.typ ft
+                        retjt       =  (returnJType sym.rkind . lambdaType . sigmaJT g) ft
+                        targs       =  map (boxed . tauJT g . U.substTau subst) (sym.typ.tvars pos)
+                    -- resolve the contexts, if any
+                    ctxs    ←  mapM (resolveConstraint pos) contexts
+                    let item    =  U.symJavaName g sym
+                        stref   =  (JX.staticMember item).{targs}
+                        call0
+                            | null targs, null ctxs  =  newBind g ft stref
+                            | otherwise              =  newBind g ft (JInvoke stref ctxs)
+                        call    =  call0.{jtype = retjt}
+                    result call
+            | otherwise = do
+                E.error pos (
+                        text "FATAL COMPILER ERROR "
+                    <+> text (nicer ex g)
+                    <+> text "does not exist or is no variable")
+                result (newBind g ft (JAtom ("UNKNOWN." ++ name.base)))
         -- Literals, except regular expressions and big integers are just 'JAtoms'
         -- > 1_234 = 1234
         -- Regular expressions and Big Integers need java code for initialization
@@ -826,14 +849,27 @@ genExpr rflg rm ex binds = do
                     let ari = length sym.flds
                         subst       =  U.unifySigma g sym.typ csigma
                         strho       =  U.substRho subst sym.typ.rho
-                        (res, sigs) =  U.returnType (U.unTau strho)
+                        (ret, sigs) =  U.returnType strho
                         argjts      =  zipWith ($)
                                             (strictFuns sym.strsig)
-                                            (map (lambdaType . sigmaJT g . U.substSigma subst) sigs)
+                                            (map (lambdaType . sigmaJT g) sigs)
                         targs       =  map (boxed . tauJT g . U.substTau subst) (symt.typ.tvars pos)
-                        ret         =  U.substTau subst res
+                        -- ret         =  U.substTau subst res
                         retjt       =  (lambdaType . tauJT g) ret
                         contexts    =  map  (reducedCtx g)  strho.context
+
+                                        -- explain the substitution
+                    forM (each subst) $ \(v,tau) →
+                        E.logmsg TRACEG pos (text "genApp: "
+                            <+> text v 
+                            <+> text " = " 
+                            <+> text (nice tau g))
+
+                    E.logmsg TRACEG pos (
+                                text "genApp: ari=" <> text (show ari) 
+                            <+> text "strho = " <+> text (nice strho g)
+                            <+> text "retjt = " <+> text (show retjt))
+
                     case symt of
                         any | length args > ari = noGenApp "too many args"   con args
                             | length args < ari = etaWrap
@@ -870,14 +906,19 @@ genExpr rflg rm ex binds = do
 
                     -- substitution
                     let ari         =  if isJust sym.expr then sym.depth else length sigs
+                        lambdaBound 
+                            | Local{} ← name, Nothing ← sym.expr = true
+                            | otherwise                          = false
                         subst       =  U.unifySigma g sym.typ vsigma
                         strho       =  U.substRho subst sym.typ.rho
-                        (res, sigs) =  U.returnType (U.unTau strho)
+                        (ret, sigs) =  U.returnType (if lambdaBound 
+                                                            then U.unTau strho
+                                                            else U.unTau strho)
                         argjts      =  zipWith ($)
                                             (strictFuns sym.strsig)
-                                            (map (lambdaType . sigmaJT g . U.substSigma subst) sigs)
+                                            (map (lambdaType . sigmaJT g) sigs)
                         targs       =  map (boxed . tauJT g . U.substTau subst) (sym.typ.tvars pos)
-                        ret         =  U.substTau subst res
+                        -- ret         =  U.substTau subst res
                         retjt       =  (returnJType sym.rkind . lambdaType . tauJT g) ret
                         contexts    =  map  (reducedCtx g)  strho.context
 
@@ -888,7 +929,11 @@ genExpr rflg rm ex binds = do
                             <+> text " = " 
                             <+> text (nice tau g))
 
-                    E.logmsg TRACEG pos (text ("genApp: strho = " ++ nice strho g))
+
+                    E.logmsg TRACEG pos (
+                                text "genApp: ari=" <> text (show ari) 
+                            <+> text "strho = " <+> text (nice strho g)
+                            <+> text "retjt = " <+> text (show retjt))
 
                     -- resolve the contexts, if any
                     ctxs    ←  mapM (resolveConstraint pos) contexts
@@ -951,7 +996,7 @@ genExpr rflg rm ex binds = do
                             = do
                                 let inst   = JInvoke get (tail arguments)
                                     get    = JX.jexmem  (head ctxs) (latinF ++ mangled base)
-                                    bind   = (newBind g ft inst).{jtype = retjt}
+                                    bind   = (newBind g (U.tauAsSigma ret) inst).{jtype = retjt}
                                 pure bind
                         _ → noGenApp "notyet" vbl args
                 genApp bad args = noGenApp "not yet" bad args
