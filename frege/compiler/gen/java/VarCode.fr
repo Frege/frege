@@ -10,7 +10,7 @@ import Data.Bits(BitSet, BitSet.member)
 import Data.List(partitioned)
 
 import Compiler.enums.Flags(TRACEG)
-import Compiler.enums.RFlag(RTailRec, RSimple, RValue, RSafeTC)
+import Compiler.enums.RFlag(RTailRec, RSimple, RValue, RAlways, RSafeTC)
 import Compiler.enums.Literals
 import Compiler.enums.CaseKind(CKind)
 import Compiler.enums.Visibility(Private)
@@ -161,81 +161,58 @@ cafCode (sym@SymV {depth = 0, expr = Just dx}) binds = do
  
     let rlazy = not sym.strsig.isStrict 
                  || not (RValue `member` sym.rkind)
+                 || (RAlways `member` sym.rkind)
         rsimple = RSimple `member` sym.rkind
         recursive = not (RSafeTC `member` sym.rkind)        
         ctxs  = if null bnds then [] else sym.typ.rho.context
         cargs = zipWith (constraintArg g) ctxs ctxNames
         jtype = rhoJT g sym.typ.rho.{context=[]}
         rtype = returnType sym.rkind jtype
+        stype = if inmethod then rtype else jtype
+        inmethod = not (null sym.typ.bound) || not (null sym.typ.rho.context)
 
-    let comp = if null cargs && null bnds && rsimple
-         then do
-             ecode <- compiling sym (genExpr false rtype x binds)
-             pure (Left ecode)
-         else do
+    let comments = [
+            JComment ((nicer sym g) ++ "  " ++ show sym.strsig ++ "  " ++ show sym.rkind),
+            JComment (nicer sym.typ g), 
+            JComment (nicer x g)]
+        name  = U.javaName g sym.name           -- P.foo
+    
+            
+    ecode ← compiling sym (genExpr false rtype x binds)
+    scode ← do
              let badguard = openCaseWhen g x
                  jthrow = [JThrow (JNew (Ref (JName "frege.runtime" "GuardFailed") []) [
                                                      JAtom (show (nicer sym g)),
                                                      JAtom (show sym.pos)])]
-             code <- compiling sym (genReturn jtype x binds)
+             code <- compiling sym (genReturn stype x binds)
              case badguard of
                  Just (Left x) -> do
                      E.warn (getpos x) (text "guard (" <> text (nicer x g) <> text ") may evaluate to false.")
-                     pure (Right (code ++ jthrow))
+                     pure (code ++ jthrow)
                  Just (Right p) -> do
                      E.warn (getpos p) (text "pattern guard (" <> text (nicer p g) <> text ") may fail to match.")
-                     pure (Right (code ++ jthrow))
-                 Nothing -> pure (Right code)
+                     pure (code ++ jthrow)
+                 Nothing -> pure code
  
-    escode <- comp
- 
-    let name  = U.javaName g sym.name           -- P.foo
-        left (Left c) = c
-        left _ =  error "no ecode"
-        right (Right c) = c
-        right _ =  error "no scode"
-        ecode  = left escode
-        scode  = right escode
-
-        comms = reverse [
-                 JComment (either show (const "no binding") escode),
-                 JComment ((nice sym g) ++ "  " ++ show sym.strsig ++ "  " ++ show sym.rkind),
-                 JComment (nicer sym.typ g), JComment (nicer x g)]
-        jexpr = (adapt ecode rtype).jex
-        static = JStatic
-        publik = if sym.vis == Private then JPrivate else JPublic
-        cafV  = JMember { attr = attrs [publik, JFinal, static], jtype = rtype,
+    if inmethod
+    then pure (comments ++ [
+            JMethod { attr = attrTop, jtype = rtype,
+                           gvars = targs sym.typ, name = name.base,
+                           args = cargs, body = JBlock scode }
+        ])
+    else if rsimple
+    then pure (comments ++ [
+            JMember { attr = attrTop, jtype = rtype,
+                             name = name.base,
+                             init = Just ecode.jex}
+        ])
+    else pure (comments ++ [
+            JMember { attr = attrTop, jtype = rtype,
                            name = name.base,
-                           init = Just jexpr}
-        newu  = thunkIt ((autoboxed . strict) rtype)  (Right (JBlock scode))
-        theU
-             | rlazy = newu
-             | otherwise = (JX.invoke [] . JX.xmem "call" ) newu
+                           init = Just (thunkIt (autoboxed stype) (Right JBlock{stmts=scode}))}
 
-        vMeth = JMethod { attr = attrs [JPublic, JFinal],
-                           gvars = [],
-                           -- @eval@ absolutely must return Lazy<T>
-                           jtype = autoboxed rtype,
-                           name = "call", args = [], body = JBlock scode }
-        cafU  = JMember { attr = attrs [publik, JFinal, static], jtype = rtype,
-                           name = cafV.name,
-                           init = Just theU}
-        cafF  = JMethod { attr = cafV.attr, jtype = rtype,
-                           gvars = targs sym.typ, name = cafV.name,
-                           args = cargs, body = JBlock fbody }
- 
-        fbody
-            | recursive = [JReturn newu]
-            | otherwise = scode
+        ])
 
-    let !caf = case (not (null cargs) || not (null bnds), rsimple) of
-             --cargs  simple, selfrec
-
-             (false, false)    -> cafU
-             (false, true )    -> cafV
-             (true,  _    )    -> cafF
-
-    pure (reverse (caf:comms))
  
 cafCode _ binds = error "cafCode: no caf"
 
