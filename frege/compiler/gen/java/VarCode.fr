@@ -37,7 +37,7 @@ import Compiler.common.AnnotateG(annoG)
 import Compiler.common.Trans   as T(patternRefutable)
 import Compiler.common.SymbolTable as SymTab()
 import Compiler.common.Mangle(mangled)
-import Compiler.common.Types as CT(substTau, substIdTau, substIdRho, substIdSigma)
+import Compiler.common.Types as CT(substTau, substIdTau, substIdRho, substIdSigma, resultKind)
 
 import Compiler.passes.Strict(patternStrictness, openCaseWhen, caseOtherwise)
 
@@ -1016,6 +1016,7 @@ genExpr rflg rm ex binds = do
                     --vsigma  ←  (_.{bound=[]} . fst) <$> kiSigma [] [] xsigma
                     --ft      ←  (_.{bound=[]} . fst) <$> kiSigma [] [] ft
                     let symtyp = rhoTauInSigma symv.typ
+                        kind   = resultKind symtyp
                     E.logmsg TRACEG pos (
                             text "genApp: function " <+> text name.base <+> text " :: "
                             <+> text (nicer symtyp g)
@@ -1040,7 +1041,11 @@ genExpr rflg rm ex binds = do
                                             (map (lambdaType . sigmaJT g) sigs)
                         targs       =  map (boxed . tauJT g . substTau subst) (symv.typ.tvars pos)
                         ret         =  ft
-                        retjt       =  (returnJType symv.rkind . lambdaType . sigmaJT g) ret
+                        retjt       =  (returnJType symv.rkind . lambdaType . sigmaJT g) ret  
+                        coerce x    =  case kArity kind of
+                                            0   →  x
+                                            k | Kinded{} ← retjt =  x
+                                              | otherwise        =  JInvoke (JX.static "coerce" retjt) [x]
                         contexts    =  map  (reducedCtx g)  rhoctx.context
 
                     -- explain the substitution
@@ -1073,7 +1078,7 @@ genExpr rflg rm ex binds = do
                                             (JInvoke 
                                                 JExMem{jex = fun.jex, name = "apply", targs = []}
                                                 arguments)
-                                call    =  call0.{jtype = strict retjt}
+                                call    =  call0.{jex ← coerce, jtype = strict retjt}
                                 result  =  if isStrictJT rm 
                                             then call
                                             else delayBind call
@@ -1084,7 +1089,7 @@ genExpr rflg rm ex binds = do
                                 stref   =  (JX.staticMember method).{targs}
                                 call0   =  newBind g ret
                                                 (JInvoke stref arguments)
-                                call    =  call0.{jtype = retjt}
+                                call    =  call0.{jex ← coerce, jtype = retjt}
                                 result  =  if isStrictJT rm 
                                             then call
                                             else if rflg || isStrictJT retjt 
@@ -1101,13 +1106,13 @@ genExpr rflg rm ex binds = do
                                 let method  =  U.symJavaName g symv
                                     stref   =  (JX.staticMember method).{targs}
                                     call    =  newBind g ret
-                                                (JInvoke stref arguments)
+                                                (coerce (JInvoke stref arguments))
                                     result  =  if isStrictJT rm then call else delayBind call
                                 pure result 
                             else do
                                 let call 
                                         | wrapped g symv = case wrapCode g JEx res symv subst arguments of
-                                                (JEx ex:_) -> newBind g ret ex
+                                                (JEx ex:_) -> newBind g ret (coerce ex)
                                                 _ -> error "unexpected wrapCode result"
                                         | otherwise = nativeCall g symv subst arguments
                                     result  =  if isStrictJT rm then call else delayBind call
@@ -1118,7 +1123,7 @@ genExpr rflg rm ex binds = do
                             = do
                                 let inst   = JInvoke get (tail arguments)
                                     get    = JX.jexmem  (head ctxs) (latinF ++ mangled base)
-                                    bind   = (newBind g ret inst).{jtype = retjt}
+                                    bind   = (newBind g ret inst).{jtype = retjt, jex  ← coerce}
                                 pure bind
                         _ → noGenApp "unknown SymV" vbl args
                 genApp bad args = noGenApp "no Con or Vbl" bad args
