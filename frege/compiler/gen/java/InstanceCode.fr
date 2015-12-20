@@ -6,12 +6,13 @@ import frege.Prelude hiding (<+>)
 import Lib.PP (text, <+>)
 import Data.TreeMap (values)
 
-import Compiler.Utilities(javaName)
+import Compiler.Utilities(symJavaName, javaName, findC)
 
 import Compiler.types.AbstractJava
 import Compiler.types.Symbols
 import Compiler.types.Global
 import Compiler.types.Types(Ctx, TVar)
+import Compiler.types.QNames(QName)
 
 import Compiler.common.Errors as E()
 import Compiler.classes.Nice (nice, nicer)
@@ -19,6 +20,7 @@ import Compiler.classes.Nice (nice, nicer)
 import Compiler.tc.Util(sameCtx)
 
 import Compiler.gen.java.Common
+import Compiler.gen.java.VarCode(varCode)
 
 {--
     Code for type classes
@@ -34,10 +36,7 @@ classCode  (sym@SymC{tau = TVar{var,kind}}) = do           -- type class
      g <- getST
      let vals = values sym.env
      abstrFuns <- mapSt (abstractFun sym) vals
-     -- let ivals = filter (isJust • Symbol.expr) (filter Symbol.{expr?} vals) -- default implementations
-     -- implFuns <- mapSt (symCode binds) ivals
-     -- taujt    <- tauJT sym.tau
-     let name  = (javaName g sym.name).base
+     let name  = (symJavaName g sym).base
          gvars = [targ var kind]
          garg  = TArg var
          superclasses = [ Ref (javaName g nm) [garg] | nm <- sym.supers ]
@@ -86,3 +85,109 @@ abstractFun symc symx = do
             <+> text " for "
             <+> text (nice symc g) 
         ) 
+
+
+{--
+     Code for instances
+
+    > instance (Pre1 x, Pre2 y) => C (T x y)
+
+    Compiles to a class that implements the interface generated for the class (in 'classCode').
+
+    If there are constraints, the relevant instances must be passed on 
+    construction of this one, otherwise, we have a singleton class, i.e.
+
+    > instance Eq Int where ....
+    > instance Eq a => Eq (Maybe a) where ...
+
+    becomes
+
+    > class Eq_Int implements CEq<Integer> {
+    >        final public Eq_Int it = new Eq_Int();       // singleton
+    >        ...
+    > }
+    > class Eq_Maybe<A> implements CEq<TMaybe<A>> {
+    >
+    >     public Eq_Maybe(CEq<A> ctx) { ... }
+    > }  
+-}
+instanceCode (sym@SymI {sid}) = do             -- instance definition
+     g <- getST
+     csym <- findC sym.clas
+ 
+     let classes = sym.clas:csym.supers
+         -- the functions we must provide in the instance
+         superMethods = [ m.name.base | c <- classes,
+                                   SymC{env} <- g.findit c,
+                                   m@SymV{}  <- values env ]
+         -- links in types that point to instance members of this class and its superclasses
+         -- The goal is to have (links to) implementations of all super class methods. 
+         methods2 = case instTSym (Symbol.typ sym) g of
+              Just (tsym@SymT {pos}) -> [ alias |
+                                SymL {name, alias} <- values tsym.env, alias.{tynm?},    -- links
+                                alias `notElem` methods1,                 -- avoid duplicates
+                                alias.base `elem` superMethods,           -- mentioning one of our methods
+                                name.base `notElem` map QName.base methods1,
+                                SymI {clas} <- g.findit alias.tynm, -- pointing to an instance
+                                SymC {supers} <- g.findit clas,     -- of a class that is in our hierarchy
+                                clas `elem` classes || any (`elem` classes) supers]
+              _ -> error "unexpexted result from instTSym"
+         methods1 = map Symbol.name (values sym.env)
+         -- methods of super classes that are implemented in the type itself
+         methods3 = case instTSym (Symbol.typ sym) g of
+            Just (tsym@SymT {pos}) -> [ sym.name |
+                                 sym  <- values tsym.env,
+                                 sym.name.base `elem` superMethods,
+                                 sym.name.base `notElem` methods] where
+                        methods = map QName.base (methods1++methods2)
+            _ -> error "unexpexted result from instTSym" 
+         methods  = methods1 ++ methods2 ++ methods3
+ 
+     let vals = values sym.env
+ 
+     instFuns  <- mapM (instFun csym sym) methods
+     instImpls <- mapM (varCode empty) vals
+     let constraints = zipWith (constraintDef g)  sym.typ.rho.context (getCtxs g)
+         constrargs  = zipWith (constraintArg g)  sym.typ.rho.context (getArgs g)
+ 
+ 
+     let instName = symJavaName g sym
+         instjt   = case kArity csym.tau.kind of
+                        0 → t
+                        k → asKinded t k
+                    where t = rhoJT g sym.typ.rho
+         jtype = Ref instName []
+         etype = Ref (symJavaName g sym)  [instjt]
+         constructor = JConstr {attr = attrs [JPublic],
+                                 jtype = jtype,  
+                                 args = constrargs,
+                                 body = JBlock (take (length constraints)
+                                                 (zipWith JAssign
+                                                     (map JAtom (getCtxs g))
+                                                     (map JAtom (getArgs g))))}
+
+         singleton
+            | null constrargs = [JMember{attr = attrTop, jtype, name="it", 
+                init = Just (JNew jtype [])}]
+            | otherwise = [] 
+         result = JClass {attr = attrs [JPublic, JFinal, JStatic], 
+                          name = instName.base,
+                          gvars = targs sym.typ,
+                          extend = Nothing,
+                          implement = [etype],
+                          defs = (constructor : constraints)
+                             ++ singleton
+                             ++ concat instFuns
+                             ++ concat instImpls}
+     pure [JComment (nice sym g ++ " :: " ++ nice sym.typ g), result]
+
+--- If given something else than a type class this is a fatal compiler error
+instanceCode sym = do
+    g ← getST
+    E.fatal sym.pos (
+            text "instanceCode: argument is "
+            <+> text (nice sym g) 
+        ) 
+
+instFun :: Symbol -> Symbol -> QName -> StG [JDecl]
+instFun symc symt mname = pure []
