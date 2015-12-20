@@ -41,7 +41,7 @@ import Compiler.common.Types as CT(substTau, substIdTau, substIdRho, substIdSigm
 
 import Compiler.passes.Strict(patternStrictness, openCaseWhen, caseOtherwise)
 
-import Compiler.Utilities   as U(javaName)
+import Compiler.Utilities   as U(javaName, symJavaName)
 -- import Compiler.Kinds(kiSigma)
 import Compiler.tc.Util     as TU(reducedCtx, impliesG)
 
@@ -117,11 +117,6 @@ topFun (sym@SymV {expr = Just dx}) binds = do
         isTailRec = RTailRec `member` sym.rkind
         argAttr  = if isTailRec then empty else attrFinal
         ctxArgs  = map (unFinal isTailRec) (zipWith (constraintArg g)  sym.typ.rho.context  ctxNames)
-        -- for polymorphic recursion, we must also change the constraints
-        unFinal ∷ Bool → FormalArg → FormalArg
-        unFinal s (arg@(a,b,c,d))
-            | s = (empty, b, c, d ++ "f")
-            | otherwise = arg
         methArgs  = argDefs argAttr si argNames
         methName  = (javaName g sym.name).base
 
@@ -141,6 +136,116 @@ topFun (sym@SymV {expr = Just dx}) binds = do
 topFun sym binds = do
     g ← getST
     error ("topFun: no SymV with expression " ++ nicer sym g)
+
+{--
+    Code for a let/where bound function that has at least one of the following properties:
+
+    -  It is mutually recursive with some other let/where bound function
+    -  It is tail recursive
+    -  It has a type that introduces new type variables or constraints.
+
+    Such functions are generated as instance methods in some inner class provided by 'genLet'.
+    Note that at the time of generation, we have already bindings for the symbol itself
+    as well as other let bound items the code may reference.
+-}
+
+localFun ∷ Symbol → TreeMap Int Binding → StG [JDecl]
+localFun (sym@SymV {expr = Just dx}) binds = do
+    g ← getST
+    E.logmsg TRACEG sym.pos (text "localFun:" 
+                <+> text (nice sym.name g) <+> text "∷"
+                <+> text (nicer sym.typ.rho g) 
+                <>  text ", depth="  <> anno sym.depth
+                <>  text ", rstate=" <> (text • show) sym.rkind)
+
+    si  ← symInfo sym
+
+    let !arity = length si.argSigs
+    when (arity != sym.depth) do
+        E.fatal sym.pos (text "funDef: arity=" <> anno arity <> text ", depth=" <> anno sym.depth)
+        return ()
+    let
+        argNames = getArgs g
+        ctxNames = getCtxs g
+        isTailRec = RTailRec `member` sym.rkind
+        argAttr  = if isTailRec then empty else attrFinal
+        ctxArgs  = map (unFinal isTailRec) (zipWith (constraintArg g)  sym.typ.rho.context  ctxNames)
+        -- for polymorphic recursion, we must also change the constraints
+        methArgs  = argDefs argAttr si argNames
+        methName  = (javaName g sym.name).base
+
+    stmts ← compiling sym (genFunction sym si.returnJT methArgs binds)
+
+    let worker      = JMethod {attr = attrs [JFinal, JPublic],
+                       gvars = targs sym.typ,
+                       jtype = si.returnJT,
+                       name  = methName,
+                       args  = ctxArgs ++ methArgs,
+                       body  = JBlock stmts}
+ 
+    pure ([JComment ((nicer sym g) ++ "  " ++ show sym.strsig ++ "  " ++ show sym.rkind),
+           JComment (nicer sym.typ g),
+           worker])
+
+localFun sym binds = do
+    g   ←  getST
+    E.fatal sym.pos (text "invalid local fun " <+> text (sym.nice g))
+
+--- Used to remove the @final@ attributes of arguments. Needed for polymorphic recursion.
+unFinal ∷ Bool → FormalArg → FormalArg
+unFinal s (arg@(a,b,c,d))
+    | s = (empty, b, c, d ++ "f")
+    | otherwise = arg
+
+{-- 
+    Code for inner functions, such as from a let or where, which
+
+    - is not self-recursive
+    - has no bounded type vars in its type
+    - has no constraints
+
+    Results in a simple java lambda.
+-}
+innerFun ∷ Symbol → TreeMap Int Binding → StG [JDecl]
+innerFun (sym@SymV {expr = Just dx}) binds = do
+    g ← getST
+    E.logmsg TRACEG sym.pos (text "innerFun:" 
+            <+> text (nice sym.name g) <+> text "∷"
+            <+> text (nicer sym.typ.rho g) 
+            <>  text ", depth="  <> anno sym.depth
+            <>  text ", rstate=" <> (text • show) sym.rkind)
+
+
+    let arity       =  sym.depth
+        argNames    =  getArgs g
+        methArgs    =  [ (attrFinal, pSigma, jt, nm)
+                            | (jt,nm) <- zip (take arity funcjt.gargs) argNames ]
+        methName    =  (symJavaName g sym).base
+        funcjt      =  lambdaType (sigmaJT g sym.typ)
+        symx        =  sym.{rkind ← _.differenceE RAlways . _.unionE RValue}
+
+    when (arity != length funcjt.gargs - 1) do
+        E.error sym.pos (
+            text "lambda depth" <+> anno arity <+> text "does not match function type "
+                <+> text (nicer sym.typ.rho g) 
+            </> text "and its associated java type " <+> (text . show) funcjt
+            </> text "for inner function " <+> text methName
+            </> text "This is probably a compiler error you should report."
+            )
+    ex      ←   dx
+    stmts   ←   compiling symx (genLambda (last funcjt.gargs) ex methArgs binds)
+
+    let !lambda     = JLambda{fargs=methArgs, code=Right JBlock{stmts}}
+        !member     = JMember{attr = attrFinal, 
+                            jtype = funcjt, name = methName, 
+                            init = Just lambda}
+    pure [JComment ((nicer sym g) ++ " :: " ++ nicer sym.typ g),
+            member]
+
+innerFun sym binds = do
+    g   ←  getST
+    E.fatal sym.pos (text "invalid inner fun " <+> text (sym.nice g))
+
 
 {--
     code for non-functions
@@ -235,28 +340,10 @@ cafCode (sym@SymV {depth = 0, expr = Just dx}) binds = do
  
 cafCode _ binds = error "cafCode: no caf"
 
-localFun ∷ Symbol → TreeMap Int Binding → StG [JDecl]
-localFun sym binds = do
-    g ← getST
-    E.logmsg TRACEG sym.pos (text ("compiling local " ++ sym.nice g))
-    E.fatal sym.pos (text "can't compiler local fun " 
-                    <+> text (sym.nice g)
-                    <+> text " yet.") 
-    pure [JComment (nicer sym g)]
-
-innerFun ∷ Symbol → TreeMap Int Binding → StG [JDecl]
-innerFun sym binds = do
-    g ← getST
-    E.logmsg TRACEG sym.pos (text ("compiling inner " ++ sym.nice g))
-    E.fatal sym.pos (text "can't compiler inner fun " 
-                    <+> text (sym.nice g)
-                    <+> text " yet.") 
-    pure [JComment (nicer sym g)]
-
 innerCaf ∷ Symbol → TreeMap Int Binding → Bool → StG [JDecl]
 innerCaf sym binds mutual = do
     g ← getST
-    E.fatal sym.pos (text "can't compiler inner CAF " 
+    E.fatal sym.pos (text "can't compile inner CAF " 
                     <+> text (sym.nice g)
                     <+> text " yet.") 
     E.logmsg TRACEG sym.pos (text ("compiling inner " ++ sym.nice g))
@@ -649,15 +736,17 @@ genLet jret rm (x@Let {env,ex}) binds = do
          syms <- mapM U.findV env
          case syms of
             [sym] = do
-                c <- selfReferentialCAF sym
-                if c then genLetClass syms else genLetSingle sym
-            _     = genLetClass syms
+                c <- selfReferential sym
+                if c || not (null sym.typ.bound) || not (null sym.typ.rho.context) 
+                    then genLetClass syms 
+                    else genLetSingle sym
+            many  = genLetClass syms
 
      where
-         selfReferentialCAF (sym@SymV {expr = Just x, depth = 0}) = do
+         selfReferential (sym@SymV {expr = Just x}) = do
             refs <- x >>= T.references [sym.sid]
             return (refs > 0)
-         selfReferentialCAF _ = return false
+         selfReferential _ = return false
          
          -- generate a single inner function or a non self recursive caf
          genLetSingle sym = do
@@ -669,8 +758,9 @@ genLet jret rm (x@Let {env,ex}) binds = do
             
          -- generate declaration of inner function or caf
          gen mutual binds sym
-            | sym.depth == 0 = innerCaf sym binds mutual 
-            | otherwise      = innerFun sym binds 
+            | sym.depth == 0 = innerCaf sym binds mutual
+            | mutual         = localFun sym binds 
+            | otherwise      = innerFun sym binds
          
          -- set up simple bindings, generate the mutually dependent items in a class
          -- instantiate that class and make bindings that access the bindings from outside
@@ -1082,7 +1172,30 @@ genExpr rflg rm ex binds = do
                                 result  =  if isStrictJT rm 
                                             then call
                                             else delayBind call
-                            pure result 
+                            pure result
+                        -- local/inner functions
+                        SymV{name = Local{uid, base}, expr = Just _}
+                            | Just b <- lookup uid binds → do
+                                let funb    =  strictBind b
+                                    -- is this a local method or a lambda?
+                                    isLam   =  case funb.jex of
+                                                JExMem{}    = false
+                                                _           = true
+                                    jex     =  if isLam 
+                                                then JX.xmem "apply" funb.jex
+                                                else funb.jex.{targs}
+                                    call0   =  newBind g ret
+                                                    (JInvoke jex arguments)
+                                    call    =  call0.{jex ← coerce, jtype = retjt}
+                                    result  =  if isStrictJT rm 
+                                                then call
+                                                else if rflg || isStrictJT retjt 
+                                                    then delayBind call
+                                                    else call   -- lazy -> lazy and no return
+                                pure result
+                            | otherwise = E.fatal pos (text "FATAL COMPILER ERROR "
+                                    <+> text (nicer vbl g)
+                                    <+> text " not bound, but it should") 
                         -- ordinary functions
                         SymV{expr = Just _} → do
                             let method  =  U.symJavaName g symv
