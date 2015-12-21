@@ -3,24 +3,32 @@ module frege.compiler.gen.java.InstanceCode where
 
 import frege.Prelude hiding (<+>)
 
-import Lib.PP (text, <+>)
-import Data.TreeMap (values)
+import Lib.PP (text, <+>, </>)
+import Data.TreeMap as Map(values, lookup, insert, TreeMap)
+import Data.List(zip4)
 
-import Compiler.Utilities(symJavaName, javaName, findC)
+import Compiler.Utilities(symJavaName, javaName, findC, findV, forceTau, returnType)
+
+import Compiler.enums.Flags(TRACEG)
 
 import Compiler.types.AbstractJava
 import Compiler.types.Symbols
 import Compiler.types.Global
-import Compiler.types.Types(Ctx, TVar)
+import Compiler.types.Types(Ctx, TVar, Tau, SigmaT, pSigma)
+import Compiler.types.Expression
+import Compiler.types.Kinds(Kind)
 import Compiler.types.QNames(QName)
 
 import Compiler.common.Errors as E()
+import Compiler.common.Types  as CT(substIdSigma, substSigma, substRho, substTau, tauRho)
+import Compiler.common.Binders(allBinders)
 import Compiler.classes.Nice (nice, nicer)
 
 import Compiler.tc.Util(sameCtx)
 
 import Compiler.gen.java.Common
-import Compiler.gen.java.VarCode(varCode)
+import Compiler.gen.java.Bindings(newBind)
+import Compiler.gen.java.VarCode(varCode, compiling, genExpression)
 
 {--
     Code for type classes
@@ -72,7 +80,7 @@ abstractFun symc (sym@SymV{}) = do
     let !result = JMethod {attr = attrs [JPublic],
                              gvars = targs sym.typ.{bound ← filter ((!= symc.tau.var) . fst)},
                              jtype = si.returnJT,    
-                             name = latinF ++ (javaName g sym.name).base,
+                             name = latinF ++ (symJavaName g sym).base,
                              args = formalctxs ++ formalargs,
                              body = JEmpty}
     pure [JComment ((nicer sym g) ++ " :: " ++ nicer sym.typ g), result]
@@ -155,7 +163,7 @@ instanceCode (sym@SymI {sid}) = do             -- instance definition
          instjt   = case kArity csym.tau.kind of
                         0 → t
                         k → asKinded t k
-                    where t = boxed (rhoJT g sym.typ.rho)
+                    where t = boxed (rhoJT g sym.typ.rho.{context=[]})
          jtype = Ref instName []
          etype = Ref (symJavaName g csym)  [instjt]
          constructor = JConstr {attr = attrs [JPublic],
@@ -177,7 +185,7 @@ instanceCode (sym@SymI {sid}) = do             -- instance definition
                           implement = [etype],
                           defs = (constructor : constraints)
                              ++ singleton
-                             ++ concat instFuns
+                             ++ instFuns
                              ++ concat instImpls}
      pure [JComment (nice sym g ++ " :: " ++ nice sym.typ g), result]
 
@@ -189,5 +197,112 @@ instanceCode sym = do
             <+> text (nice sym g) 
         ) 
 
-instFun :: Symbol -> Symbol -> QName -> StG [JDecl]
-instFun symc symt mname = pure []
+instFun :: Symbol → Symbol → QName → StG JDecl
+instFun symc symi mname = do
+        g       ←  getST
+        sym     ←  findV mname
+        let classnames = symc.name:symc.supers
+            cmems = [ m | cln ← classnames, SymC{env} ← g.findit cln, 
+                            m ← env.lookupS mname.base ]
+        case cmems of
+            [] → E.fatal symi.pos (text "trying to instFun " <+> text (nicer mname g)
+                        <+> text " but no class member found.")
+            cmem:_ → do 
+                -- replace symc with class where method was introduced
+                symc ← findC cmem.name.tynm
+                E.logmsg TRACEG symi.pos (text "instFun" <+> text (nicer sym g)
+                    <+> text "for" <+> text (nicer cmem g))
+                -- We need to tweek the types a bit so that java type variables won't conflict.
+                -- hypothetical scenario
+                -- class C a where
+                --     op :: forall a b c. (C a, X b) => a -> b -> c
+                -- instance Y b => C (T a b)
+                --     op :: forall a b c d. (X c, Y b) => T a b -> c -> d
+                -- 1. rename all type variables in C.op that also occur in the instance head
+                --     op :: forall x y c. (C x, X y) => x -> y -> c
+                -- 2. rename also the class variable
+                --     x
+                -- 3. remove the class context and the class variable from bounds of (1)
+                --     op :: forall y c. (X y) => x -> y -> c
+                -- 4. substitute the type for renamed class variable in (3) and add the type vars
+                --     op :: forall a b y c. (X y) => T a b -> y -> c
+                -- 5. prepend the additional constraints to the ones in (4)
+                --     op :: forall a b y c. (Y b, X y) => T a b -> y -> c
+                E.logmsg TRACEG symi.pos (
+                        text (nicer sym.name g) <+> text " :: " <+> text (nicer sym.typ g)
+                        </> text (nicer cmem.name g) <+> text " :: " <+> text (nicer cmem.typ g)
+                    )
+                let otvs = filter ((`elem` symi.typ.vars) . Tau.var) (cmem.typ.tvars cmem.pos)
+                    orep = filter (`notElem` symi.typ.vars) (allBinders g)
+                    varSubst :: [Tau] -> TreeMap String Tau
+                    varSubst xs = fold (\t\v -> insert v.var v t) empty xs
+                    substBound :: TreeMap String Tau -> [(String, Kind)] -> [(String, Kind)]
+                    substBound subst xs = map (\(s,k) -> (maybe s _.var (lookup s subst),k)) xs
+                    subst1 = Map.fromList [ (tv.var, tv.{var=s}) | (s,tv) ← zip orep otvs]
+                    typ1 = ForAll (substBound subst1 cmem.typ.bound) (substRho subst1 cmem.typ.rho)
+                E.logmsg TRACEG symi.pos (
+                        text "(1) renamed type :: "
+                        <+> text (nicer typ1 g)
+                    )
+
+                let cvar = substTau subst1 symc.tau
+                E.logmsg TRACEG symi.pos (
+                        text "(2) class var is now " <+> text (nicer cvar g)
+                    )
+                
+                let classCtx = Ctx {pos=symc.pos, 
+                                    cname = symc.name, 
+                                    tau = cvar }
+                    ctxs = filter (not . sameCtx classCtx) typ1.rho.context
+                    rho3 = typ1.rho.{context = ctxs}
+                    typ3  = ForAll (filter ((!=cvar.var) . fst) typ1.bound) rho3
+                E.logmsg TRACEG symi.pos (
+                        text "(3) removed class var and class context from (1) :: "
+                        <+> text (nicer typ3 g)
+                    )
+
+                let instTau = (tauRho symi.typ.rho.{context=[]}).tau
+                    subst4 = Map.singleton cvar.var instTau
+                    methty = substIdSigma subst4 typ3
+                E.logmsg TRACEG symi.pos (
+                        text "(4) substituted instantiated typ into (3) :: "
+                        <+> text (nicer methty g)
+                    )
+
+                let fakety = methty.{
+                                bound ← (symi.typ.bound ++),  -- make sure ctx will be recognized
+                                rho ← _.{context ← (symi.typ.rho.context++)}}
+                E.logmsg TRACEG symi.pos (
+                        text "(5) added extra contexts to (4), final type :: "
+                        <+> text (nicer fakety g)
+                    )
+
+                let (ret, sigs) = returnType methty.rho
+                    ari = length sigs
+                
+                -- build & compile expression
+                uids ← replicateM ari uniqid
+                let args = take ari (getArgs g)
+                    atoms = map JAtom args
+                    vbls = [ Vbl{pos=symi.pos, name=Local{uid, base}, typ=Just typ} 
+                                | (uid,typ,base) ← zip3 uids sigs args]
+                    fun = Vbl{pos=symi.pos, name=sym.name, typ = Just methty.{bound=[]}}
+                    ex = fold app fun vbls
+                        where app a b = App{fun=a, arg=b, typ=fmap (reducedSigma g) a.typ}
+                    mt = lambdaType (sigmaJT g methty.{bound=[]})
+                    binds = Map.fromList [(uid, (newBind g sig atom).{jtype=jt})
+                                | (uid, sig, atom, jt) ← zip4 uids sigs atoms (withoutConstr mt).gargs ]
+                result ← compiling sym.{typ=fakety} (genExpression true strict ex binds)
+                
+                -- finally make the function
+                pure JMethod{attr =attrs [JPublic, JFinal], 
+                            gvars = targs methty, 
+                            jtype = tauJT g ret, 
+                            name = latinF ++ (symJavaName g sym).base, 
+                            args = [(attrFinal, pSigma, ctxJT g ctx, name) 
+                                       | (ctx,name) ← zip methty.rho.context 
+                                                          (drop (length symi.typ.rho.context) 
+                                                                (getCtxs g)) ]
+                                    ++ [(attrFinal, pSigma, jt, name)
+                                        | (jt,name) ← zip (withoutConstr mt).gargs args], 
+                            body = JBlock{stmts=[JReturn result.jex]}}
