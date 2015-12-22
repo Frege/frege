@@ -73,22 +73,6 @@ isKnownJT Lazy{yields}          = isKnownJT yields
 isKnownJT _                     = true
 
 
---implementsLazy TArg{}   = false
---implementsLazy Wild{}   = false
---implementsLazy Nativ{}  = false
---implementsLazy Kinded{} = false
---implementsLazy Func{}   = false
---implementsLazy Something  = false
-
-
-{-
-    Something       strict, unknown
-    Ref             strict, known
-    Nativ           strict, known
-    Lambda          strict, known
-    Lazy{Something} non-strict, unknown
-    Lazy{}          non-strict, known
--}
 
 {--
     - If the 'RAlways' flag is set, the return type will always be @Lazy@
@@ -120,16 +104,6 @@ adaptArg g a s = adaptBind g (arg2Bind g a) s
 
 --- instantiate 'Binding' for an Argument
 instArg g a = adaptSigma g (arg2Bind g a)
-
--- Java expression for the *lazy* method.
--- methodLazy = JX.static "lazy" (Lazy Something) 
-
--- Java expression for the *shared* method.
--- methodShared = JX.static "shared" (Lazy Something)
-
-
--- Java expression for the *forced* method. The argument is the expected type.
--- methodForced to = JStMem (memberOf jnThunk "forced") [to]
 
 --- Invoke method with single argument
 invokeSingle meth arg = JInvoke meth [arg]
@@ -168,13 +142,13 @@ delay bind = bind.{jex ← lazyIt bind.jtype, jtype ← lazy}
     where X is the roman number of the arity,
     otherwise just T.coerce
 -}
-coerceKinded Bind{stype, ftype, jtype, jex} = case jtype of
+coerceKinded g Bind{stype, ftype, jtype, jex} = case jtype of
     Kinded{arity,gargs = un:args} -> case un of
         Func{gargs} -> Bind{stype, ftype, jtype = target, jex = coex}
             where
                 target = Func (take (farity - arity) gargs ++ args)
                 name   = "coerce" ++ romanUpper (farity - 1)
-                smem   = JX.staticMember (JName "Func" name)
+                smem   = JX.staticMember (JName (funcName g) name)
                 gmem   = smem.{targs = target.gargs}
                 coex   = JInvoke gmem [jex] 
                 farity = length gargs
@@ -186,36 +160,67 @@ coerceKinded Bind{stype, ftype, jtype, jex} = case jtype of
                 coex   = JInvoke gmem [jex]
         _ -> error ("coerceKinded no suitable target type: " ++ show jtype)
     _ -> error ("coerceKinded argument not kinded: " ++ show jtype)
-         
-infixl 5 adapt -- 3299972 
+
+infixl 5 adapt  
 {--
     Adapt a binding to a given target type
-    
+
     Note that all adaptions should be justified through type checking.
-    In particular, we are not doing Java type checking here.
-    
+    In particular, we are not doing exhaustive Java type checking here.
+
+    If the conversion is undefined, this hints at a compiler error.
     -}
-adapt :: Binding -> JType -> Binding
-adapt bind toType
+adapt ∷ Global → Binding → JType → Binding
+adapt g bind toType = case adaptQ g bind toType of
+    Right newb      → newb
+    Left (from, to) → if try from to 
+                        then bind.{jtype = toType, jex ← JCast toType}
+                        else error ("Can't adapt\n" 
+                            ++ show bind 
+                            ++ "\nto  " 
+                            ++ show toType
+                            ++ "\nbecause  "
+                            ++ show from
+                            ++ "  does not match  "
+                            ++ show to)
+        where
+            try from to = case from of
+                Kinded{}
+                    | canBeKinded to from.arity
+                    = case unifyJT from (asKinded to from.arity) Map.empty of
+                                     Right _    → true
+                                     Left (f,t) → try f t
+                    | otherwise   = false
+                _ = case to of 
+                    Kinded{} 
+                        | canBeKinded from to.arity
+                        =  case unifyJT (asKinded from to.arity) to Map.empty of
+                                     Right _    → true
+                                     Left (f,t) → try f t
+                        | otherwise  = false
+                    _   = false
+
+
+adaptQ g bind toType
     = case unifyJT bind.jtype toType Map.empty of 
         Right _  = accept
         Left (f1, f2) = case bind.jtype of
             Lazy{yields}
                         = case toType of
                             -- the following maps `adapt` over Lazy
-                Lazy{}      = delay (adapt forced toType.yields)
-                _           = adapt forced toType
+                Lazy{}      = delay <$> adaptQ g forced toType.yields
+                _           = adaptQ g forced toType
             Kinded{}    = case toType of
-                Lazy to     = ensureLazy (adapt bind to)
+                Lazy to     = ensureLazy <$> adaptQ g bind to
                 Kinded{}    = cannot                -- ???
-                _           = adapt unkinded toType
+                _           = adaptQ g unkinded toType
             Nativ{}
                 | Just _ ←  isPrimitive bind.jtype, Nothing ← isPrimitive toType
-                            = adapt boxit toType
+                            = adaptQ g boxit toType
                 | Nothing ← isPrimitive bind.jtype, Just _ ←  isPrimitive toType
-                            = adapt unboxed toType
+                            = adaptQ g unboxed toType
             nonlazy     = case toType of
-                Lazy to     = ensureLazy (adapt bind to)
+                Lazy to     = ensureLazy <$> adaptQ g bind to
                 Kinded{arity} 
                     | nonlazy.{gargs?}, 
                       length nonlazy.gargs >= arity,
@@ -224,17 +229,17 @@ adapt bind toType
                 Something   = accept 
                 _           = cannot
             -- _           = cannot
-  
+          where cannot   = Left (f1, f2)
+
     where
         unboxed  = bind.{jtype = p, jex ← JCast p}
                     where p = strict bind.jtype
         boxit    = bind.{jtype ← boxed}
-        accept   = bind.{jtype = toType}
-        casted   = bind.{jtype = toType, jex ← JCast toType}
+        accept   = Right bind.{jtype = toType}
+        casted   = Right bind.{jtype = toType, jex ← JCast toType}
         forcedto = forceTo bind toType
         forced   = force bind
-        cannot   = error ("Can't adapt " ++ show bind ++ " to " ++ show toType)
-        unkinded = coerceKinded bind
+        unkinded = coerceKinded g bind
 
 --- make sure the binding can be passed as Lazy 
 ensureLazy :: Binding → Binding
@@ -247,41 +252,27 @@ ensureLazy bind  = case bind.jtype  of
 delayBind ∷  Binding → Binding 
 delayBind bind = bind.{jex ← thunkIt bind.jtype . Left, jtype ← lazy}
 
-{--
-    Tell if a 'JType' can be converted to another one without
-    code.
-    
-    This is the case when 'adapt' would just change the type or
-    when it is a downcast.
-    
-    Note: The relation can be checked only if an 'adapt' would be defined.
-    -}
-isA typa typb = case adapt pseudo typb of
-        Bind{jex = JAtom "isa"} -> true     -- code not changed
-        other                   -> false
-    where
-        pseudo = Bind{stype="pseudo", ftype = pSigma, jtype=typa, jex=JAtom "isa"}
     
 --- make sure a strict binding actually is primitive if type allows
-primitiveBind bind
+primitiveBind g bind
     | Nativ{} <- sbind.jtype,
       prim != sbind.jtype       = sbind.{jtype = prim, jex <- JX.cast prim}
     | otherwise                 = sbind
     where
-        sbind = strictBind bind
+        sbind = strictBind g bind
         prim  = strict sbind.jtype
  
 
 ---    make a binding strict
-strictBind :: Binding -> Binding
-strictBind bind = adapt bind (strict bind.jtype)
+strictBind ∷ Global → Binding → Binding
+strictBind g bind = adapt g bind (strict bind.jtype)
 
 ---    make a binding lazy
-lazyBind :: Binding -> Binding
-lazyBind bind = adapt bind (lazy bind.jtype)
+lazyBind ∷ Global → Binding → Binding
+lazyBind g bind = adapt g bind (lazy bind.jtype)
 
-adaptSigmaWith f g bind = adapt bind (f (sigmaJT g bind.ftype))
-adaptSigma       g bind = adapt bind (  (sigmaJT g bind.ftype))
+adaptSigmaWith f g bind = adapt g bind (f (sigmaJT g bind.ftype))
+adaptSigma       g bind = adapt g bind (  (sigmaJT g bind.ftype))
 
 {--
     [usage] @realize bind@
