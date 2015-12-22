@@ -21,7 +21,8 @@ import Compiler.types.Kinds(Kind)
 import Compiler.types.QNames(QName)
 
 import Compiler.common.Errors as E()
-import Compiler.common.Types  as CT(substIdSigma, substSigma, substRho, substTau, tauRho, sigmaKind)
+import Compiler.common.Types  as CT(substIdSigma, substSigma, substRho, substTau, tauRho, 
+                                    sigmaKind, tauKind)
 import Compiler.common.Binders(allBinders)
 import Compiler.classes.Nice (nice, nicer)
 
@@ -29,7 +30,7 @@ import Compiler.tc.Util(sameCtx)
 
 import Compiler.gen.java.Common
 import Compiler.gen.java.Bindings(newBind)
-import Compiler.gen.java.VarCode(varCode, compiling, genExpression)
+import Compiler.gen.java.VarCode(varCode, compiling, genExpression, genExpr)
 
 {--
     Code for type classes
@@ -258,35 +259,38 @@ instFun symc symi mname = do
                     rho3 = typ1.rho.{context = ctxs}
                     typ3  = ForAll (filter ((!=cvar.var) . fst) typ1.bound) rho3
                 E.logmsg TRACEG symi.pos (
-                        text "(3) removed class var and class context from (1) :: "
+                        text "(3) remove class var and class context from (1) :: "
                         <+> text (nicer typ3 g)
                     )
 
                 let instTau = (tauRho symi.typ.rho.{context=[]}).tau
                     subst4 = Map.singleton cvar.var instTau
                     methty = substIdSigma subst4 typ3
+                    jty4   = substJT g subst4 (lambdaType (rhoJT g typ3.rho))
                 E.logmsg TRACEG symi.pos (
-                        text "(4) substituted instantiated typ into (3) :: "
+                        text "(4) substitute instantiated typ into (3) :: "
                         <+> text (nicer methty g)
+                    )
+                E.logmsg TRACEG symi.pos (
+                        text "(4a) substitute instantiated typ into java type of (3) :: "
+                        <+> text (show jty4)
                     )
 
                 let fakety = methty.{
                                 bound ← (symi.typ.bound ++),  -- make sure ctx will be recognized
                                 rho ← _.{context ← (symi.typ.rho.context++)}}
                 E.logmsg TRACEG symi.pos (
-                        text "(5) added extra contexts to (4), final type :: "
+                        text "(5) add extra contexts to (4), final type :: "
                         <+> text (nicer fakety g)
                     )
 
-                let (ret, sigs) = returnType methty.rho
-                    kinds       = map sigmaKind . snd . returnType $ typ3.rho
-                    ari = length sigs
+                let (_, sigs)    = returnType methty.rho
+                    ari          = length sigs
                     retJT
-                        | Just _  ← isPrimitive t,
-                          Nothing ← isPrimitive o  = boxed t
-                        | otherwise = t
+                        | Just _  ← isPrimitive o  = strict t
+                        | otherwise = t 
                         where
-                            t = tauJT g ret
+                            t = returnJT jty4
                             o = (tauJT g . fst . returnType) typ3.rho
 
                 -- build & compile expression
@@ -300,19 +304,15 @@ instFun symc symi mname = do
                     ex = fold app fun vbls
                         where app a b = App{fun=a, arg=b, typ=fmap (reducedSigma g) a.typ}
                     -- manipulate function arg types and make args Kinded if so in original type 
-                    gargs0 = case lambdaType (sigmaJT g methty.{bound=[]}) of
+                    gargs0 = case jty4 of
                                 Func{gargs} → gargs
                                 other       → []
                     nctxs  = length methty.rho.context
                     cgargs = take nctxs gargs0
-                    vgargs = zipWith mkKinded (kinds ++ [KType]) (drop nctxs gargs0)
-                        where
-                            mkKinded kind jt = asKinded jt (kArity kind)  
-
-
+                    vgargs = drop nctxs gargs0
                     binds = Map.fromList [(uid, (newBind g sig atom).{jtype=lazy jt})
                                 | (uid, sig, atom, jt) ← zip4 uids sigs atoms vgargs ]
-                result ← compiling sym.{typ=fakety} (genExpression true strict ex binds)
+                result ← compiling sym.{typ=fakety} (genExpr true retJT ex binds)
 
                 -- finally make the function
                 pure JMethod{attr =attrs [JPublic, JFinal, JOverride], 
