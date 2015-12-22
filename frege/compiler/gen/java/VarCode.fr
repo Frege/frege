@@ -37,7 +37,7 @@ import Compiler.common.AnnotateG(annoG)
 import Compiler.common.Trans   as T(patternRefutable)
 import Compiler.common.SymbolTable as SymTab(changeSym)
 import Compiler.common.Mangle(mangled)
-import Compiler.common.Types as CT(substTau, substIdTau, substIdRho, substIdSigma, resultKind)
+import Compiler.common.Types as CT(substTau, substIdTau, substIdRho, substIdSigma, tauKind, sigmaKind)
 
 import Compiler.passes.Strict(patternStrictness, openCaseWhen, caseOtherwise)
 
@@ -845,6 +845,10 @@ genExpr rflg rm ex binds = do
     let genArgBind arm aex = genExpr false arm aex binds
 
         result bind = do
+            E.logmsg TRACEG (getpos ex) (text "genExpr result got: " 
+                <+> (text . show) bind
+                <+> text " needed:" 
+                <+> (text . show) rm)
             let abind = adapt bind rm
             E.logmsg TRACEG (getpos ex) (text "genExpr result: " <+> (text . show) abind)
             pure abind
@@ -874,7 +878,7 @@ genExpr rflg rm ex binds = do
                             cargs   = take n args
                             rargs   = drop n args
                             ftype   = fold (const . reduceSigma) bind.ftype cargs
-                        eargs ← zipWithM (\t x → genExpr false t x binds) (take n gargs) cargs  
+                        eargs ← zipWithM (\t x → genExpr false (lazy t) x binds) (take n gargs) cargs  
                         unwind rargs . strictBind $  
                                     bind.{stype = nicer ftype g, ftype, jtype = last gargs, 
                                     jex ← JX.invoke (map _.jex eargs) . JX.xmem "apply"}
@@ -907,9 +911,10 @@ genExpr rflg rm ex binds = do
         --     But this returns fsi, which was (String->Int), so we can finaly apply s.
         --     It must be that in every step some Func is returned and we apply then so
         --     many of our leftover arguments as this Func takes.
-        --     (It remains to be seen if we can beta reduce the inner lambda.) 
-        etaWrap sigs
-            | Func{gargs} ← boxed rm = do
+        --     (It remains to be seen if we can beta reduce the inner lambda.)
+        etaWrap sigs Lazy{yields}       =  etaWrap sigs yields
+        etaWrap sigs (rm@Kinded{})      =  etaWrap sigs (fromKinded rm)
+        etaWrap sigs (rm@Func{gargs})   = do
                 let n = length gargs - 1
                     a = length sigs
                 g <- getST
@@ -944,13 +949,13 @@ genExpr rflg rm ex binds = do
             --                <+> text (nicer ft g)
             --                <+/> text " into "
             --                <+> text (show rm)
-            --                <+> text " with arity " <+> anno (length sigs))  
-            | otherwise = E.fatal pos (text "etaWrap: "
-                            <+> text "expected function type, got "
-                            <+> text (show rm))
+            --                <+> text " with arity " <+> anno (length sigs))
             where
                 -- (_, sigs) = U.returnType (ft.rho)
                 pos = getpos ex
+        etaWrap _ rm = E.fatal (getpos ex) (text "etaWrap: "
+                            <+> text "expected function type, got "
+                            <+> text (show rm))
 
     case ex of
         -- Local Variables are being lookued up in the bindings
@@ -968,7 +973,7 @@ genExpr rflg rm ex binds = do
         Con{pos, name}
             | Just (sym@SymD{cid, flds}) ← g.findit name = 
                 if (length flds > 0) 
-                then etaWrap (snd (U.returnType ft.rho))
+                then etaWrap (snd (U.returnType ft.rho)) rm
                 else if maybe false _.enum (g.findit name.tynm)
                 then do
                     let item        =  U.symJavaName g sym
@@ -997,7 +1002,7 @@ genExpr rflg rm ex binds = do
             --    nativeCall g sym TreeMap.empty []
             | Just (sym@SymV{}) ← g.findit name =
                 if (sym.depth > 0) 
-                then etaWrap (snd (U.returnType ft.rho))
+                then etaWrap (snd (U.returnType ft.rho)) rm
                 else if isJust sym.nativ
                 then result (nativeCall g sym TreeMap.empty []) 
                 else do 
@@ -1075,7 +1080,7 @@ genExpr rflg rm ex binds = do
 
                     case symt of
                         any | nargs > ari = etaShrink (nargs - ari)
-                            | nargs < ari = etaWrap sigs
+                            | nargs < ari = etaWrap sigs rm
                             where nargs = length args
                         SymT{newt = true, product = true}
                             = genExpr rflg rm (head args) binds
@@ -1104,7 +1109,9 @@ genExpr rflg rm ex binds = do
                     --vsigma  ←  (_.{bound=[]} . fst) <$> kiSigma [] [] xsigma
                     --ft      ←  (_.{bound=[]} . fst) <$> kiSigma [] [] ft
                     let symtyp = rhoTauInSigma symv.typ
-                        kind   = resultKind symtyp
+                        (orty, atys) = U.returnType symtyp.rho
+                        kret         = kArity (tauKind orty)
+                        kargs        = map (kArity . sigmaKind) atys
                     E.logmsg TRACEG pos (
                             text "genApp: function " <+> text name.base <+> text " :: "
                             <+> text (nicer symtyp g)
@@ -1124,16 +1131,21 @@ genExpr rflg rm ex binds = do
                         rhoctx      =  substIdRho subst symtyp.rho
                         (res, sigs)    =  U.returnType rhoctx
                         -- sigs        =  map (unJust . _.typ) args
-                        argjts      =  zipWith ($)
+                        argjts      =  zipWith3 (\s t k → s (t `asKinded` k))
                                             (strictFuns symv.strsig)
                                             (map (lambdaType . sigmaJT g) sigs)
+                                            kargs
                         targs       =  map (boxed . tauJT g . substTau subst) (symv.typ.tvars pos)
                         ret         =  ft
-                        retjt       =  (returnJType symv.rkind . lambdaType . sigmaJT g) ret  
-                        coerce x    =  case kArity kind of
-                                            0   →  x
-                                            k | Kinded{} ← retjt =  x
-                                              | otherwise        =  JInvoke (JX.static "coerce" retjt) [x]
+                        retjt       =  (returnJType symv.rkind 
+                                            . (`asKinded` kret) 
+                                            . lambdaType 
+                                            . sigmaJT g) ret  
+                        coerce x    =  x
+                                        --case kArity kind of
+                                        --    0   →  x
+                                        --    k | Kinded{} ← retjt =  x
+                                        --      | otherwise        =  JInvoke (JX.static "coerce" retjt) [x]
                         contexts    =  map  (reducedCtx g)  rhoctx.context
 
                     -- explain the substitution
@@ -1143,15 +1155,17 @@ genExpr rflg rm ex binds = do
                             <+> text " = " 
                             <+> text (nicer tau g))
 
-
-                    E.logmsg TRACEG pos (
-                                text "genApp: ari=" <> text (show ari) 
-                            <+> (text "args  = " <+> (text . joined " ~> " . map (flip nicer g)) sigs)
-                            <+/> text "retjt = " <+> text (show retjt))
-
-                    if nargs < ari        then etaWrap (drop nargs sigs)
+                    if nargs < ari        then etaWrap (drop nargs sigs) rm
                     else if nargs > ari   then etaShrink (nargs-ari)
                     else do
+
+
+                      E.logmsg TRACEG pos (
+                                text "genApp: ari=" <> text (show ari) 
+                            <+/> (text "arg sigmas  = " <+> (text . joined ",  " . map (flip nicer g)) sigs)
+                            <+/> (text "arg jtypes  = " <+> (text . joined ",  " . map show) argjts)
+                            <+/> (text "retjt = " <+> text (show retjt)))
+
                       -- resolve the contexts, if any
                       ctxs    ←  mapM (resolveConstraint pos) contexts
                       -- arguments
