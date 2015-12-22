@@ -217,11 +217,12 @@ innerFun (sym@SymV {expr = Just dx}) binds = do
 
 
     let arity       =  sym.depth
+        (_, sigs)   =  U.returnType sym.typ.rho
         argNames    =  getArgs g
-        methArgs    =  [ (attrFinal, pSigma, jt, nm)
-                            | (jt,nm) <- zip (take arity funcjt.gargs) argNames ]
+        methArgs    =  [ (attrFinal, sig, lazy jt, nm)
+                            | (sig,jt,nm) <- zip3 sigs (take arity funcjt.gargs) argNames ]
         methName    =  (symJavaName g sym).base
-        funcjt      =  lambdaType (sigmaJT g sym.typ)
+        funcjt      =  lambdaType (rhoJT g sym.typ.rho)
         symx        =  sym.{rkind ← _.differenceE RAlways . _.unionE RValue}
 
     when (arity != length funcjt.gargs - 1) do
@@ -343,11 +344,18 @@ cafCode _ binds = error "cafCode: no caf"
 innerCaf ∷ Symbol → TreeMap Int Binding → Bool → StG [JDecl]
 innerCaf sym binds mutual = do
     g ← getST
-    E.fatal sym.pos (text "can't compile inner CAF " 
-                    <+> text (sym.nice g)
-                    <+> text " yet.") 
+
     E.logmsg TRACEG sym.pos (text ("compiling inner " ++ sym.nice g))
-    pure [JComment (nicer sym g)]
+
+    let memName    =  (symJavaName g sym).base
+        memAttrs   = attrs [JFinal]
+        tweak :: JDecl -> JDecl
+        tweak decl
+            | decl.{name?}, decl.{attr?} = decl.{name=memName, attr=memAttrs}
+            | otherwise = decl
+    map tweak <$> cafCode sym binds
+
+
 
 {--
     > compiling symbol action 
@@ -790,7 +798,7 @@ genLet jret rm (x@Let {env,ex}) binds = do
                             ftype=sym.typ, jtype=bjt, 
                             jex=prefix name}
                 bjt = mode jt
-                jt  = sigmaJT g sym.typ
+                jt  = lambdaType (rhoJT g sym.typ.rho)
                 mode = if sym.depth > 0 then strict
                         else if RValue `member` sym.rkind
                             then strict else lazy
@@ -997,6 +1005,14 @@ genExpr rflg rm ex binds = do
                     <+> text (nicer ex g)
                     <+> text "does not exist or is no constructor")
                 result (newBind g ft (JAtom ("UNKNOWN." ++ name.base)))
+                        -- class operations
+                        --SymV{name = MName{tynm,base}}
+                        --    | Just (SymC {tau}) <- g.findit tynm 
+                        --    = do
+                        --        let inst   = JInvoke get (tail arguments)
+                        --            get    = JX.jexmem  (head ctxs) (latinF ++ mangled base)
+                        --            bind   = (newBind g ret inst).{jtype = retjt, jex  ← coerce}
+                        --        pure bind
         Vbl{pos,name}
             --| Just (sym@SymV{depth = 0, nativ = Just _}) = do
             --    nativeCall g sym TreeMap.empty []
@@ -1008,17 +1024,31 @@ genExpr rflg rm ex binds = do
                 else do 
                     let contexts    =  map  (reducedCtx g)  ft.rho.context
                         subst       =  U.unifySigma g sym.typ ft
-                        retjt       =  (returnJType sym.rkind . lambdaType . sigmaJT g) ft
-                        targs       =  map (boxed . tauJT g . substIdTau subst) (sym.typ.tvars pos)
+                        targs       =  map (boxed . tauJT g . substTau subst) (sym.typ.tvars pos)
+                        ret         =  ft
+                        kret         = kArity (sigmaKind sym.typ)
+                        retjt       =  (returnJType sym.rkind 
+                                            . (`asKinded` kret) 
+                                            . lambdaType 
+                                            . sigmaJT g) ret
                     -- resolve the contexts, if any
                     ctxs    ←  mapM (resolveConstraint pos) contexts
-                    let item    =  U.symJavaName g sym
-                        stref   =  (JX.staticMember item).{targs}
-                        call0
-                            | null targs, null ctxs  =  newBind g ft stref
-                            | otherwise              =  newBind g ft (JInvoke stref ctxs)
-                        call    =  call0.{jtype = retjt}
-                    result call
+                    case sym.name of
+                        MName{tynm,base}
+                            | Just (SymC {tau}) <- g.findit tynm 
+                            = do
+                                let inst   = JInvoke get (tail ctxs)
+                                    get    = JX.jexmem  (head ctxs) (latinF ++ mangled base)
+                                    bind   = (newBind g ret inst).{jtype = retjt}
+                                pure bind
+                        other = do
+                            let item    =  U.symJavaName g sym
+                                stref   =  (JX.staticMember item).{targs}
+                                call0
+                                    | null targs, null ctxs  =  newBind g ft stref
+                                    | otherwise              =  newBind g ft (JInvoke stref ctxs)
+                                call    =  call0.{jtype = retjt}
+                            result call
             | otherwise = do
                 E.error pos (
                         text "FATAL COMPILER ERROR "
@@ -1141,11 +1171,6 @@ genExpr rflg rm ex binds = do
                                             . (`asKinded` kret) 
                                             . lambdaType 
                                             . sigmaJT g) ret  
-                        coerce x    =  x
-                                        --case kArity kind of
-                                        --    0   →  x
-                                        --    k | Kinded{} ← retjt =  x
-                                        --      | otherwise        =  JInvoke (JX.static "coerce" retjt) [x]
                         contexts    =  map  (reducedCtx g)  rhoctx.context
 
                     -- explain the substitution
@@ -1180,7 +1205,7 @@ genExpr rflg rm ex binds = do
                                             (JInvoke 
                                                 JExMem{jex = fun.jex, name = "apply", targs = []}
                                                 arguments)
-                                call    =  call0.{jex ← coerce, jtype = strict retjt}
+                                call    =  call0.{jtype = strict retjt}
                                 result  =  if isStrictJT rm 
                                             then call
                                             else delayBind call
@@ -1198,7 +1223,7 @@ genExpr rflg rm ex binds = do
                                                     else funb.jex   -- last resort, simple name?
                                     call0   =  newBind g ret
                                                     (JInvoke jex arguments)
-                                    call    =  call0.{jex ← coerce, jtype = retjt}
+                                    call    =  call0.{jtype = retjt}
                                     result  =  if isStrictJT rm 
                                                 then call
                                                 else if rflg || isStrictJT retjt 
@@ -1214,7 +1239,7 @@ genExpr rflg rm ex binds = do
                                 stref   =  (JX.staticMember method).{targs}
                                 call0   =  newBind g ret
                                                 (JInvoke stref arguments)
-                                call    =  call0.{jex ← coerce, jtype = retjt}
+                                call    =  call0.{jtype = retjt}
                                 result  =  if isStrictJT rm 
                                             then call
                                             else if rflg || isStrictJT retjt 
@@ -1231,13 +1256,13 @@ genExpr rflg rm ex binds = do
                                 let method  =  U.symJavaName g symv
                                     stref   =  (JX.staticMember method).{targs}
                                     call    =  newBind g ret
-                                                (coerce (JInvoke stref arguments))
+                                                    (JInvoke stref arguments)
                                     result  =  if isStrictJT rm then call else delayBind call
                                 pure result 
                             else do
                                 let call 
                                         | wrapped g symv = case wrapCode g JEx res symv subst arguments of
-                                                (JEx ex:_) -> newBind g ret (coerce ex)
+                                                (JEx ex:_) -> newBind g ret ex
                                                 _ -> error "unexpected wrapCode result"
                                         | otherwise = nativeCall g symv subst arguments
                                     result  =  if isStrictJT rm then call else delayBind call
@@ -1248,7 +1273,7 @@ genExpr rflg rm ex binds = do
                             = do
                                 let inst   = JInvoke get (tail arguments)
                                     get    = JX.jexmem  (head ctxs) (latinF ++ mangled base)
-                                    bind   = (newBind g ret inst).{jtype = retjt, jex  ← coerce}
+                                    bind   = (newBind g ret inst).{jtype = retjt}
                                 pure bind
                         _ → noGenApp "unknown SymV" vbl args
                 genApp bad args = noGenApp "no Con or Vbl" bad args
