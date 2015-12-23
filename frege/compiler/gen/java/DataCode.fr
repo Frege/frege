@@ -4,7 +4,7 @@ module frege.compiler.gen.java.DataCode where
 import frege.Prelude hiding (<+>)
 
 import Compiler.common.Errors as E()
--- import Compiler.common.Mangle(mangled)
+import Compiler.common.Binders(allBinders)
 import Compiler.Utilities (javaName)
 import Lib.PP(text, <+>)
 import Data.TreeMap(values, TreeMap.empty emptyTree)
@@ -86,7 +86,7 @@ dataCode (sym@SymT{ product = true }) = do
     let jtype = rhoJT g sym.typ.rho
         kindeds = map (asKinded jtype) [1..kArity sym.kind]
         gvars = targs sym.typ
-        coerces = map (coerceDecl gvars) kindeds
+        coerces = simsalabim g sym jtype gvars : map (coerceDecl gvars) kindeds
     let result = JClass{attr = attrTop, 
                         name = (javaName g sym.name).base, 
                         gvars, 
@@ -140,7 +140,8 @@ dataCode (sym@SymT{ nativ = Nothing, product = false, newt = false }) = do
     let jtype = rhoJT g sym.typ.rho
         kindeds = map (asKinded jtype) [1..kArity sym.kind]
         gvars = targs sym.typ
-        coerces = map (coerceDecl gvars) kindeds
+        coerces = simsalabim g sym jtype gvars : map (coerceDecl gvars) kindeds
+
         -- make 
         -- public isXXX() { return null; }
         isMethod what con = JMethod{attr=attrs [JPublic], 
@@ -198,6 +199,39 @@ dataCode sym = do
             <+> text (nice sym g) 
         )
 
+{--
+    With higher kinded types, there are situations where we need a forced cast.
+    
+    For example, class method
+    
+    > uncons :: c e -> Maybe (e, c e)
+    
+    when instantiated at [], becomes
+    
+    > uncons :: [e] -> Maybe (e, [e])
+    
+    Here we must cast the result
+    
+    > TMaybe<TTuple<E, TList<E>>> 
+    
+    to
+    
+    > TMaybe<TTuple<E, Kind.U<TList<?>, E>>>
+    
+    Of course, Java forbids this cast. It works by first casting to @Object@,
+    yet it raises the "unchecked" warning. Hence we do it with magic.
+-}
+simsalabim ∷ Global → Symbol → JType → [JTVar] → JDecl
+simsalabim g sym jt gvars = JMethod{attr = attrs [JUnchecked, JPublic, JFinal], 
+                        gvars = map (flip JTVar UNBOUNDED) unusedvars, 
+                        jtype = newtyp, 
+                        name = "simsalabim", 
+                        args = [], body = JBlock{stmts=[
+                                JReturn (JCast newtyp (JAtom "this"))
+                            ]}}
+    where 
+        newtyp = jt.{gargs=map TArg unusedvars}
+        unusedvars = zipWith const (filter (`notElem` sym.typ.vars) (allBinders g)) gvars
 {--
     Generate the method that coerces from a 'Kinded' representation
     upwards to the original, for example for kind 1:
