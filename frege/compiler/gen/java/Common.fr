@@ -13,7 +13,7 @@ import Compiler.classes.Nice(nice, nicer)
 
 import Compiler.common.AnnotateG(annoG)
 import Compiler.common.Errors as E()
-import Compiler.common.Mangle(mangleJtv)
+-- import Compiler.common.Mangle(mangleJtv)
 import Compiler.common.Types as CT(substSigma, substTau, )
 
 import Compiler.enums.Flags(TRACEZ)
@@ -283,6 +283,11 @@ wildFunc k = Func{gargs = take k (map lazy wilds) ++ [unboundedWild]}
 -}
 asKinded ∷ JType → Int → JType
 asKinded !jt 0 = jt
+asKinded (jt@Box{yields, phantom})  1
+                    = Kinded{arity=1, gargs=[
+                                    jt.{phantom = unboundedWild},
+                                    phantom
+                                ]}
 asKinded jt n
     | Kinded{arity} <- jt, n == arity = jt
 asKinded jt n
@@ -300,14 +305,22 @@ asKinded jt n
                 rargs = drop (nargs - n) jt.gargs  
 
 canBeKinded Kinded{} !k  = false
+canBeKinded Box{}     1  = true
 canBeKinded jt       !k  = k > 0 && jt.{gargs?} && length jt.gargs >= k 
 
 --- The opposite of 'asKInded', such that for any sufficiently generic 'JType'
 --- > fromKinded (asKinded jt n) == jt
+fromKinded (Kinded 1 [box@Box{}, arg]) = box.{phantom = arg}
 fromKinded (Kinded n (jt:args))
     | jt.{gargs?} = jt.{gargs <- (++args) . take (length jt.gargs-n)}
     | otherwise   = error ("fromKinded: type is variable  " ++ show jt) 
 fromKinded jt = error ("fromKinded: not a kinded type " ++ show jt)
+
+
+--- Make a 'Box' from a 'Nativ'
+nativeBox t
+    | Nativ{typ, gargs=[x], generic} ← t = Box Nativ{typ, gargs=[x], generic} x
+    | otherwise = t
 
 --- make a formal java type variable from a name and a kind 
 targ ∷ String -> Kind -> JTVar
@@ -362,6 +375,9 @@ unifyJT ta tb subst = case ta  of
         Constr{jname, gargs}    → case tb of
             Constr{} = unifyArgs gargs tb.gargs subst
             _ → Left (ta, tb)
+        Box{yields,phantom} → case tb of
+            Box{} = unifyJT yields tb.yields subst >>= unifyJT phantom tb.phantom
+            _     = Left (ta, tb)
         Something →  if tb == Something then Right subst else Left (ta, tb)
     where
         unifyArgs [] [] subst = Right subst
@@ -408,6 +424,7 @@ lazy jt = case jt of
     Ref{jname}          → Lazy jt
     Wild{bounds}        → Lazy jt
     Kinded{gargs}       → Lazy jt
+    Box{}               → Lazy jt
 
 -- make the lazy form of a type, except for functions
 --lazyNF ∷ JType → JType
@@ -452,16 +469,8 @@ implementsLazy ∷ JType → Bool
 implementsLazy Ref{}    = true
 implementsLazy Lazy{}   = true
 implementsLazy Func{}   = true
+implementsLazy Box{}    = true
 implementsLazy _        = false
-
-{--
-    Tell if a java type is a mapped Frege type
-    -}
-wasFrege Ref{}          = true
-wasFrege Lazy{yields}   = wasFrege yields
-wasFrege Func{}         = true
-wasFrege Kinded{gargs}  = wasFrege (head gargs)
-wasFrege _              = false
 
 
 {--
@@ -715,13 +724,18 @@ substJT subst jt = case jt  of
                             EXTENDS xs  →  jt.{bounds = EXTENDS (many xs)}
                             SUPER sup   →  jt.{bounds = SUPER (substJT subst sup)}
         Nativ{}         →  jt.{gargs  ← many}
-        Kinded{}        →  jt.{gargs  ← many}
+        Kinded{}        →  correct jt.{gargs  ← many}
         Lazy{}          →  jt.{yields ← substJT subst}
         Func{}          →  jt.{gargs  ← many} 
         Constr{}        →  jt.{gargs  ← many}
+        Box{}           →  jt.{yields ← substJT subst, phantom ← substJT subst}
         Something       →  Something
     where 
         many = map (substJT subst)
+        -- supply a Box when we substitute a native type for X in a Kind.U<X,A>
+        correct Kinded{arity=1, gargs=[Nativ{typ, gargs=[_], generic}, a]}
+            = Kinded{arity=1, gargs=[Box Nativ{typ, gargs=[a], generic} unboundedWild, a]}
+        correct other = other
  
 returnJT :: JType → JType
 returnJT Func{gargs} = last gargs
