@@ -4,7 +4,7 @@ module frege.compiler.gen.java.VarCode where
 
 import frege.Prelude hiding (<+>)
 
-import Data.TreeMap(TreeMap, insert, lookup, each)
+import Data.TreeMap(TreeMap, insert, lookup, lookupDefault, each)
 import Lib.PP(text, <>, <+>, <+/>, </>)
 import Data.Bits(BitSet, BitSet.member)
 import Data.List(partitioned, zip4)
@@ -984,7 +984,7 @@ genExpr rflg rm ex binds = do
         Con{pos, name}
             | Just (sym@SymD{cid, flds}) ← g.findit name = 
                 if (length flds > 0) 
-                then etaWrap (snd (U.returnType ft.rho)) rm
+                then etaWrap (snd (U.returnType ft.rho))  rm
                 else if maybe false _.enum (g.findit name.tynm)
                 then do
                     let item        =  U.symJavaName g sym
@@ -1022,7 +1022,7 @@ genExpr rflg rm ex binds = do
             | Just (sym@SymV{}) ← g.findit name = do
                 let subst       =  U.unifySigma g sym.typ ft
                 if (sym.depth > 0) 
-                then etaWrap (snd (U.returnType ft.rho)) rm
+                then etaWrap (snd (U.returnType ft.rho))  rm
                 else if isJust sym.nativ
                 then result (nativeCall g sym subst []) 
                 else do 
@@ -1156,39 +1156,53 @@ genExpr rflg rm ex binds = do
 
                     -- substitution
                     let ari         =  if lambdaBound 
-                                        then length sigs -- (length . snd . U.returnType . _.rho . rhoTauInSigma) vsigma 
+                                        then length sigs 
                                         else symv.depth
                         nargs       = length args
                         lambdaBound 
                             | Local{} ← name, Nothing ← symv.expr = true
                             | otherwise                           = false
                         subst       =  U.unifySigma g symtyp vsigma
+                        jsubst      =  fmap (boxed . tauJT g) subst
+                        origjt      =  rhoJT g symtyp.rho
+                        instjt      =  substJT jsubst origjt
+                        fargs       =  case instjt of
+                                        Func{gargs} → take nargs (dropConstr gargs)
+                                        _           → []  -- ???
+                        fret        =  case instjt of
+                                        Func{gargs} → case drop nargs (dropConstr gargs) of
+                                            []  → Something --??
+                                            [x] → x
+                                            xs  → Func xs
+                                        _           → Something  -- ??  
                         rhoctx      =  substIdRho subst symtyp.rho
                         (res, sigs)    =  U.returnType rhoctx
                         -- sigs        =  map (unJust . _.typ) args
-                        argjts      =  zipWith3 (\s t k → s (t `asKinded` k))
+                        argjts      =  zipWith ($) 
                                             (strictFuns symv.strsig)
-                                            (map (lambdaType . sigmaJT g) sigs)
-                                            kargs
-                        targs       =  map (boxed . tauJT g . substTau subst) (symv.typ.tvars pos)
+                                            fargs
+                        targs       =  map (\(v,k) →  (kvar v k)) (symv.typ.bound)
+                                        where
+                                            kvar v k = case kArity k of
+                                                    0 → t
+                                                    n → nativeBox t
+                                                where t = substJT jsubst (TArg v)
                         ret         =  ft
-                        retjt       =  (returnJType symv.rkind 
-                                            . (`asKinded` kret) 
-                                            . lambdaType 
-                                            . sigmaJT g) ret  
+                        retjt       =  returnJType symv.rkind fret  
                         contexts    =  map  (reducedCtx g)  rhoctx.context
 
                     -- explain the substitution
                     forM (each subst) $ \(v,tau) →
                         E.logmsg TRACEG pos (text "genApp: "
                             <+> text v 
-                            <+> text " = " 
-                            <+> text (nicer tau g))
+                            <+> text " :: " 
+                            <+> text (nicer tau g)
+                            <+> text " @@ "
+                            <+> (text . show . lookupDefault Something v) jsubst)
 
-                    if nargs < ari        then etaWrap (drop nargs sigs) rm
+                    if nargs < ari        then etaWrap (drop nargs sigs) fret
                     else if nargs > ari   then etaShrink (nargs-ari)
                     else do
-
 
                       E.logmsg TRACEG pos (
                                 text "genApp: ari=" <> text (show ari) 
