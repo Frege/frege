@@ -133,24 +133,6 @@ forceTo bind to
 delay :: Binding -> Binding
 delay bind = bind.{jex ← lazyIt bind.jtype, jtype ← lazy}
 
-{--
-    Put a native value in a frege.run.Box
--}
-putBox bind = case bind of
-    Bind{stype, ftype, jtype=Nativ{typ, gargs=[t], generic}, jex}
-        = Bind{stype, ftype, 
-                jtype = box,
-                jex = JNew box [jex]} 
-        where box = Box{yields=bind.jtype, phantom=t}
-    other → error ("putBox: can't make Box from " ++ show bind)
-
-{--
-    Get a native value out of a Box.
--}
-getBox bind = case bind of
-    Bind{stype, ftype, jtype=Box{yields, phantom}, jex}
-        = bind.{jtype=yields, jex ← JX.invoke [] . JX.xmem "call"}
-    other → error ("getBox: not a box: " ++ show bind) 
 
 {-- 
     coerce Kinded<T<A,B,C,?,...>,D,...> to T<A,B,C,D,...>
@@ -169,11 +151,7 @@ coerceKinded g Bind{stype, ftype, jtype, jex} = case jtype of
                 gmem   = smem.{targs = target.gargs}
                 coex   = JInvoke gmem [jex] 
                 farity = length gargs
-        Box{yields, phantom} = Bind{stype, ftype, jtype = target, jex = coex}
-            where
-                target = fromKinded jtype
-                gmem   = JStMem (nativ "Box" []) "coerce" [target.yields, target.phantom]
-                coex   = JInvoke gmem [jex] 
+        Nativ{} → Bind{stype, ftype, jtype, jex} 
         other | other.{gargs?} = Bind{stype, ftype, jtype = target, jex = coex}
             where 
                 tarity = length other.gargs
@@ -183,32 +161,6 @@ coerceKinded g Bind{stype, ftype, jtype, jex} = case jtype of
         _ -> error ("coerceKinded no suitable target type: " ++ show jtype)
     _ -> error ("coerceKinded argument not kinded: " ++ show jtype)
 
---- Implement some special hacks. The code for them is generated verbatim into the PreludeBase.
-specialHack ∷ Global → JType → JType → Maybe JExpr
-{--
-    We have:
-    > PreludeBase.TMaybe<PreludeBase.TTuple2<𝓔, String/*<𝓔>*/>>
-    We want:
-    > PreludeBase.TMaybe<PreludeBase.TTuple2<𝓔, Kind.U<Box<String/*<𝓔>*/,?>, 𝓔>>>
--}
-specialHack g from to = go specials
-    where
-        go ((t1,t2,x):xs) = case unifyJT from t1 empty of
-            Right _ → case unifyJT to t2 empty of
-                Right _ → Just x
-                other   → go xs
-            other       → go xs
-        go [] = Nothing             -- No Way, Sorry.
-
-private specials = [(unconsFrom, unconsTo, unconsHack)]
-private unconsFrom = tMaybe (tTuple a (tString a))
-private unconsTo   = tMaybe (tTuple a (asKinded Box{yields=tString a, phantom=a} 1))
-private a          = TArg "a"
-private tString a  = Nativ "java.lang.String" [a] false
-private tTuple a b = ref "TTuple2" [a,b]
-private ref s xs   = Ref{jname=JName "PreludeBase" s, gargs=xs}
-private tMaybe a   = ref "TMaybe" [a] 
-private unconsHack = JStMem{jt=nativ "PreludeBase" [], name="unconsHack", targs=[]}
 
 
 infixl 5 adapt  
@@ -234,9 +186,7 @@ adapt g bind toType = case adaptQ g bind toType of
                                             )}
                             -- this will probably work too, but triggers "Unchecked" warning
                             other → bind.{jtype = toType, jex ← JCast toType . JCast Something} 
-                        else case specialHack g bind.jtype toType of 
-                            Just callit → bind.{jtype = toType, jex ← JInvoke callit . pure} 
-                            _ →  error ("Can't adapt\n" 
+                        else  error ("Can't adapt\n" 
                                 ++ show bind 
                                 ++ "\nto  " 
                                 ++ show toType
@@ -275,17 +225,11 @@ adaptQ g bind toType
                 Lazy to     = ensureLazy <$> adaptQ g bind to
                 Kinded{}    = cannot f1 f2
                 _           = adaptQ g unkinded toType
-            Box{} | Nativ{} ← toType
-                            = adaptQ g fromBox toType
             Nativ{}
                 | Just _ ←  isPrimitive bind.jtype, Nothing ← isPrimitive toType
                             = adaptQ g boxit toType
                 | Nothing ← isPrimitive bind.jtype, Just _ ←  isPrimitive toType
                             = adaptQ g unboxed toType
-                | Box{} <- toType
-                            = adaptQ g asBox toType
-                | Kinded{} <- toType
-                            = adaptQ g asBox toType
             nonlazy     = case toType of
                 Lazy to     = ensureLazy <$> adaptQ g bind to
                 Kinded{arity} 
@@ -305,8 +249,6 @@ adaptQ g bind toType
         boxit    = bind.{jtype ← boxed}
         accept   = Right bind.{jtype = toType}
         casted   = Right bind.{jtype = toType, jex ← JCast toType}
-        asBox    = putBox bind
-        fromBox  = getBox bind
         forced   = force bind
         unkinded = coerceKinded g bind
 
