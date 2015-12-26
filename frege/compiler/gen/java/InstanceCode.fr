@@ -4,7 +4,7 @@ module frege.compiler.gen.java.InstanceCode where
 import frege.Prelude hiding (<+>)
 
 import Lib.PP (text, <+>, </>)
-import Data.TreeMap as Map(values, lookup, insert, TreeMap)
+import Data.TreeMap as Map(values, lookup, delete, insert, TreeMap)
 import Data.List(zip4)
 
 import Compiler.Utilities(symJavaName, javaName, findC, findV, forceTau, returnType)
@@ -15,15 +15,18 @@ import Compiler.enums.TokenID(VARID)
 import Compiler.types.AbstractJava
 import Compiler.types.Symbols
 import Compiler.types.Global
-import Compiler.types.Types(Ctx, TVar, Tau, SigmaT, pSigma)
+import Compiler.types.Types(Ctx, TVar, Tau, SigmaT, TauT, RhoT, pSigma)
 import Compiler.types.Expression
 import Compiler.types.Kinds(Kind)
 import Compiler.types.QNames(QName)
+import Compiler.types.Packs(pPreludeList)
 
 import Compiler.common.Errors as E()
 import Compiler.common.Types  as CT(substIdSigma, substSigma, substRho, substTau, tauRho, 
                                     sigmaKind, tauKind)
 import Compiler.common.Binders(allBinders)
+import Compiler.common.SymbolTable(changeSym)
+
 import Compiler.classes.Nice (nice, nicer)
 
 import Compiler.tc.Util(sameCtx)
@@ -32,12 +35,11 @@ import Compiler.gen.java.Common
 import Compiler.gen.java.Bindings(newBind)
 import Compiler.gen.java.VarCode(varCode, compiling, genExpression, genExpr)
 
-
 {--
     Code for type classes
 
     - interface @CName@<_a_> where _a_ is the class variable.
-    - For each class method, an abstract method is generaed.
+    - For each class method, an abstract method is generated.
 
     When the class variable is higher kinded and it appears in the
     result, but the result isn't just an application of the class variable,
@@ -51,50 +53,56 @@ import Compiler.gen.java.VarCode(varCode, compiling, genExpression, genExpr)
     > Maybe (a, f a)
 
     When the class operation is called, the return type must be given after all
-    other types.
+    other types. Functions that have this property of the extra @type@ variable 
+    will be marked with @RGeneric@.
 
-    Special handling occurs for type applications @f a@ 
-    where @f@ is of kind @(\* -> \*)@ and
-    constrained by one of the following type classes:
+    Special handling occurs for the class operations of the following type classes:
 
     > ListEmpty, ListMonoid, ListSemigroup, ListView, ListSource
 
-    The corresponding java type is then not @Kind.U<F,A>@
-    but @Object@, and the constrained type variable does nopt appear.
-    If the type variable appears in the result,
-    even if it is a direct application, the result type variable @type@
-    is introduced and symbolizes the return type. This is so that with the 
-    following program:
+    This is in order to handle 'String', which is not really higher kinded.
 
-    > splitAt ∷ ListView β ⇒ Int → β α → (β α, β α)
-    > bar = fst (splitAt 3 "Frege")
+    In corresponding java type, all applications of the type variable are just replaced by the
+    type veriable itself.
 
-    the code will look like
+    We know that all those functions have the property that the class variable is applied
+    to exactly one and the same type variable (i.e. the element type, which is never
+    changed by the functions). Hence we have no conflicts here.
 
-    > final public static<α, type> type spliAt(CListView ctx, int arg1, Object/*Kind.U<β,α>*/ arg2) {
-    >    return (type) ListView.<α, type>splitAt(ctx, 3, arg);
-    > }
-    > String bar = PreludeBase.<String,String>fst(
-    >               PreludeList.<Character, TTuple2<String,String>>splitAt(
-    >                   IListView_String.it,
-    >                   3,
-    >                   "Frege"));
+    Those functions never have the 'RGeneric' property (as the "original" type variable 
+    is replaced). Hence, the function 'uncons' looks like:
 
-    Functions that have this property of the extra @type@ variable will be marked with
-    @RGeneric@.
+    > class ListView c where
+    > uncons :: c e -> Maybe (e, c e)
+    > fake_uncons :: c -> Maybe (e, c)
+    > 
+    >
+    > interface CListView<C> where
+    > public<E> TMaybe<TTuple2<E,C>> uncons(final C arg$1);
+
+    Note that this way, the element type becomes a phantom type, which it is 
+    in the case of 'String', and doesn't matter for the other types.
+
+    *IMPLMENTATION RESTRICTION* Polymorphic functions using one of the special classes
+    can still not be instantiated at type 'String'. We use this mechanism only to overload
+    the class operations, like (++) and 'length'. 
 -}
 
-
 classCode ∷ Symbol → StG [JDecl]
+
+
 
 classCode  (sym@SymC{tau = TVar{var,kind}}) = do           -- type class
      g <- getST
      let vals = values sym.env
-     abstrFuns <- mapSt (abstractFun sym) vals
+         special = isSpecialClass sym
+     abstrFuns <- if special 
+                    then mapSt (abstractFunSpecial sym) vals
+                    else mapSt (abstractFun sym) vals
      let name  = (symJavaName g sym).base
-         gvars = [targ var kind]
-         garg  = TArg var
-         superclasses = [ Ref (javaName g nm) [garg] | nm <- sym.supers ]
+         gvars = if special then [targ var KType] else [targ var kind]
+         gargs = [TArg var]
+         superclasses = [ Ref (javaName g nm) gargs | nm <- sym.supers ]
          result = JInterface{attr = attrs [JPublic], 
                             name, gvars, 
                             implement = superclasses, 
@@ -109,6 +117,28 @@ classCode sym = do
             <+> text (nice sym g) 
         ) 
 
+abstractFunSpecial ∷ Symbol → Symbol → StG [JDecl]
+abstractFunSpecial symc sym = do
+        let classvar = symc.tau.var
+            newsym   = sym.{typ <- lowerKind classvar}
+        changeSym newsym
+        g ← getST
+        -- force syminfo to regenerate information, if already present
+        changeST Global.{gen ← _.{symi8 ← delete sym}}
+        abstractFun symc newsym
+    where
+        lowerKind cv sigma = sigma.{rho <- lowerRhoKind cv}
+        lowerRhoKind cv (rho@RhoFun{}) = rho.{sigma ← lowerKind cv, rho ← lowerRhoKind cv}
+        lowerRhoKind cv (rho@RhoTau{}) = rho.{tau ← lowerTauKind cv}
+        lowerTauKind cv (TSig s)                =  TSig . lowerKind cv $ s
+        lowerTauKind cv (app@TApp a b) = case app.flat of
+            TVar{pos, kind, var}:_ | var == cv  =  TVar{pos, kind=KType, var} 
+            other                               =  TApp (lowerTauKind cv a) (lowerTauKind cv b)
+        lowerTauKind cv t                       =  t
+ 
+
+
+
 --- declare abstract class Member function
 abstractFun ∷ Symbol → Symbol → StG [JDecl]
 abstractFun symc (sym@SymV{}) = do
@@ -118,14 +148,21 @@ abstractFun symc (sym@SymV{}) = do
                         cname = Symbol.name symc, 
                         tau = Symbol.tau symc }
         !ctxs = filter (not . sameCtx classCtx) sym.typ.rho.context
+        special = isSpecialClass symc
+        gvars   = targs sym.typ.{bound ← filter ((!= symc.tau.var) . fst)}
 
  
     let formalctxs = zipWith (constraintArg g)  ctxs  (getCtxs g)
-        lazysi = si.{argJTs <- map lazy} 
+        lazysi = si.{argJTs <- map (if false && special then lazyUnlessCVar else lazy)}
+        lazyUnlessCVar (Lazy TArg{var}) 
+            | var == symc.tau.var   = TArg{var}
+        lazyUnlessCVar TArg{var} 
+            | var == symc.tau.var   = TArg{var}
+        lazyUnlessCVar other        = lazy other 
         formalargs  = argDefs attrFinal lazysi (getArgs g)
         !cafMeth = null si.argJTs
     let !result = JMethod {attr = attrs [JPublic],
-                             gvars = targs sym.typ.{bound ← filter ((!= symc.tau.var) . fst)},
+                             gvars,
                              jtype = (tauJT g . fst . returnType . _.{context=ctxs} . _.rho) sym.typ,    
                              name = latinF ++ (symJavaName g sym).base,
                              args = formalctxs ++ formalargs,
@@ -141,6 +178,12 @@ abstractFun symc symx = do
             <+> text (nice symc g) 
         ) 
 
+
+--- Create a raw type (doesn't work for functions)
+rawType ∷ JType → JType
+rawType jt
+    | jt.{gargs?} = jt.{gargs=[]}
+    | otherwise   = jt
 
 {--
      Code for instances
@@ -171,6 +214,7 @@ instanceCode (sym@SymI {sid}) = do             -- instance definition
      csym <- findC sym.clas
  
      let classes = sym.clas:csym.supers
+         special = isSpecialClass csym
          -- the functions we must provide in the instance
          superMethods = [ m.name.base | c <- classes,
                                    SymC{env} <- g.findit c,
@@ -208,8 +252,12 @@ instanceCode (sym@SymI {sid}) = do             -- instance definition
  
      let instName = symJavaName g sym
          instjt   = boxed (rhoJT g sym.typ.rho.{context=[]})
+         rawinst  = rawType instjt
          jtype = Ref instName []
-         etype = Ref (symJavaName g csym)  [instjt]
+         etype = Ref (symJavaName g csym)  (if special then [rawinst] else [instjt])
+         attr  = attrs (if special 
+                            then [JRawTypes, JPublic, JFinal, JStatic] 
+                            else [JPublic, JFinal, JStatic])
          constructor = JConstr {attr = attrs [JPublic],
                                  jtype = jtype,  
                                  args = constrargs,
@@ -222,7 +270,7 @@ instanceCode (sym@SymI {sid}) = do             -- instance definition
             | null constrargs = [JMember{attr = attrTop, jtype, name="it", 
                 init = Just (JNew jtype [])}]
             | otherwise = [] 
-         result = JClass {attr = attrs [JPublic, JFinal, JStatic], 
+         result = JClass {attr, 
                           name = instName.base,
                           gvars = targs sym.typ,
                           extend = Nothing,
@@ -246,6 +294,7 @@ instFun symc symi mname = do
         g       ←  getST
         sym     ←  findV mname
         let classnames = symc.name:symc.supers
+            special = isSpecialClass symc
             cmems = [ m | cln ← classnames, SymC{env} ← g.findit cln, 
                             m ← env.lookupS mname.base ]
         case cmems of
@@ -288,26 +337,32 @@ instFun symc symi mname = do
                     )
 
                 let cvar = substTau subst1 symc.tau
+                    withoutCVar  = filter ((!=) cvar.var . fst)
                 E.logmsg TRACEG symi.pos (
                         text "(2) class var is now " <+> text (nicer cvar g)
                     )
-                
                 let classCtx = Ctx {pos=symc.pos, 
                                     cname = symc.name, 
                                     tau = cvar }
                     ctxs = filter (not . sameCtx classCtx) typ1.rho.context
                     rho3 = typ1.rho.{context = ctxs}
-                    typ3  = ForAll (filter ((!=cvar.var) . fst) typ1.bound) rho3
+                    bound3 = withoutCVar typ1.bound
+                    typ3  = ForAll bound3 rho3
                 E.logmsg TRACEG symi.pos (
                         text "(3) remove class var and class context from (1) :: "
                         <+> text (nicer typ3 g)
                     )
 
-                let instTau = (tauRho symi.typ.rho.{context=[]}).tau
+                let othertv = head (filter ((!=cvar.var) . _.var) (typ3.tvars cmem.pos))
+                    instTau0 = (tauRho symi.typ.rho.{context=[]}).tau
+                    instTau  = if special then TApp instTau0 othertv else instTau0
                     subst4 = Map.singleton cvar.var instTau
-                    methty = substIdSigma subst4 typ3
+                    methty = ForAll typ3.bound (substRho subst4 typ3.rho)
+                    raw    = if special then rawType else id
                     jsubst = fmap (boxed . lambdaType . tauJT g) subst4
-                    jty4   = substJT jsubst (lambdaType (rhoJT g typ3.rho))
+                    jsubstr = fmap (raw . boxed . lambdaType . tauJT g) subst4
+                    jty4   = substJT jsubstr (lambdaType (rhoJT g typ3.rho))
+                    jty4a  = substJT jsubst  (lambdaType (rhoJT g typ3.rho))
                 E.logmsg TRACEG symi.pos (
                         text "(4) substitute instantiated type "
                         <+> text (nicer instTau g)
@@ -335,6 +390,12 @@ instFun symc symi mname = do
                         where
                             t = returnJT jty4
                             o = (tauJT g . fst . returnType) typ3.rho
+                    retJTa
+                        | Just _  ← isPrimitive o  = strict t
+                        | otherwise = t 
+                        where
+                            t = returnJT jty4a
+                            o = (tauJT g . fst . returnType) typ3.rho
 
                 -- build & compile expression
                 uids ← replicateM ari uniqid
@@ -347,18 +408,30 @@ instFun symc symi mname = do
                     ex = fold app fun vbls
                         where app a b = App{fun=a, arg=b, typ=fmap (reducedSigma g) a.typ}
                     -- manipulate function arg types and make args Kinded if so in original type 
-                    gargs0 = case jty4 of
+                    gargs0 = case jty4 of               -- declared type of the arguments
+                                Func{gargs} → gargs
+                                other       → []
+                    gargs1 = case jty4a of              -- the real type of the arguments
                                 Func{gargs} → gargs
                                 other       → []
                     nctxs  = length methty.rho.context
                     cgargs = take nctxs gargs0
                     vgargs = drop nctxs gargs0
+                    rgargs = drop nctxs gargs1
                     binds = Map.fromList [(uid, (newBind g sig atom).{jtype=lazy jt})
-                                | (uid, sig, atom, jt) ← zip4 uids sigs atoms vgargs ]
-                result ← compiling sym.{typ=fakety} (genExpr true retJT ex binds)
+                                | (uid, sig, atom, jt) ← zip4 uids sigs atoms rgargs ]
+                    rawbinds
+                        | special = fmap (\x → x.{jex ← JCast x.jtype . JCast Something}) binds
+                        | otherwise = binds
+                result ← compiling sym.{typ=fakety} (genExpr true retJTa ex rawbinds)
+                let rex
+                        | special, retJTa != retJT = JCast retJT (JCast Something result.jex)
+                        | otherwise                = result.jex
 
                 -- finally make the function
-                pure JMethod{attr =attrs [JPublic, JFinal, JOverride], 
+                pure JMethod{attr = if special 
+                                        then attrs [JUnchecked, JPublic, JFinal, JOverride]
+                                        else attrs [JPublic, JFinal, JOverride], 
                             gvars = targs methty, 
                             jtype = retJT, 
                             name = latinF ++ (symJavaName g sym).base, 
@@ -368,4 +441,4 @@ instFun symc symi mname = do
                                                                 (getCtxs g)) ]
                                     ++ [(attrFinal, pSigma, lazy jt, name)
                                         | (jt,name) ← zip vgargs args], 
-                            body = JBlock{stmts=[JReturn result.jex]}}
+                            body = JBlock{stmts=[JReturn rex]}}
