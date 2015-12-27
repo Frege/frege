@@ -409,17 +409,17 @@ package:
     packageclause ';' definitions               { \(a,d,p)\w\b     -> do {
                                                         changeST Global.{sub <- SubSt.{
                                                             thisPos = p}};
-                                                        YYM.return $ Program.Module (a,b,d) }}
+                                                        YYM.pure $ Program.Module (a,b,d) }}
     | packageclause WHERE '{' definitions '}'   { \(a,d,p)\w\_\b\_ -> do {
                                                         changeST Global.{sub <- SubSt.{
                                                             thisPos = p}};
-                                                        YYM.return $ Program.Module (a,b,d) }}
+                                                        YYM.pure $ Program.Module (a,b,d) }}
     | INTERPRET script {\_\d -> d}
     ;
 
 script:
     expr {\e -> do {
-                                YYM.return $ Program.Expression e}}
+                                YYM.pure $ Program.Expression e}}
     ;
 
 nativename:
@@ -434,7 +434,7 @@ packagename1:
     CONID                       { \t     -> do {
                                                 changeST Global.{sub <- SubSt.{
                                                     idKind <- insert (KeyTk t) (Left())}};
-                                                YYM.return (Token.value t, yyline t) }}
+                                                YYM.pure (Token.value t, yyline t) }}
     | varidkw '.' packagename1  { \a\_\(c,p) -> (repljavakws (Token.value a) ++ "." ++ c,
                                                  (yyline a).merge p) }
     | QUALIFIER packagename1    { \a\(c,p)   -> (Token.value a ++ "." ++ c,
@@ -458,12 +458,12 @@ packageclause:
                                                     g <- getST;
                                                     changeST Global.{options = g.options.{
                                                         flags = setFlag g.options.flags INPRELUDE}};
-                                                    YYM.return (fst b, Just docu, snd b) }}
+                                                    YYM.pure (fst b, Just docu, snd b) }}
     | PROTECTED PACKAGE packagename         { \p\_\b   -> do {
                                                     g <- getST;
                                                     changeST Global.{options = g.options.{
                                                         flags = setFlag g.options.flags INPRELUDE}};
-                                                    YYM.return (fst b, Nothing, snd b) }}
+                                                    YYM.pure (fst b, Nothing, snd b) }}
     | packageclause words '(' qvarids ')'   { \p\vs\v\qs\_ -> do {
                                                      g <- getST;
                                                      let {clause = unwords vs};
@@ -473,7 +473,7 @@ packageclause:
                                                      };
                                                      changeST Global.{sub <- SubSt.{
                                                             toExport = qs}};
-                                                     YYM.return p;}
+                                                     YYM.pure p;}
                                                  }
     ;
 
@@ -620,11 +620,11 @@ import:
             when (Token.value a != "as") do
                 yyerror (yyline a) (show "as" ++ " expected instead of " ++ show (Token.value a))
             changeST Global.{sub <- SubSt.{idKind <- insert (KeyTk c) (Left()) }}
-            YYM.return ImpDcl {pos = snd p, pack = fst p, imports = l, as = Just (Token.value c)}
+            YYM.pure ImpDcl {pos = snd p, pack = fst p, imports = l, as = Just (Token.value c)}
         }
     | IMPORT packagename CONID importliste { \i\p\c\l -> do
             changeST Global.{sub <- SubSt.{idKind <- insert (KeyTk c) (Left()) }}
-            YYM.return ImpDcl {pos = snd p, pack = fst p, imports = l, as = Just (Token.value c)}
+            YYM.pure ImpDcl {pos = snd p, pack = fst p, imports = l, as = Just (Token.value c)}
         }
     ;
 
@@ -633,7 +633,7 @@ importliste:
     | varid '(' importspecs ')' { \v\_\is\_ -> do
             when ( v.value `notElem` [ "except", "excluding", "without", "außer", "ohne", "hiding" ]) do
                 yyerror (yyline v) (show "hiding" ++ " expected instead of " ++ show v.value)
-            YYM.return linkAll.{items=is}
+            YYM.pure linkAll.{items=is}
         }
     | '(' ')'               { \_\_    -> linkNone }
     | '(' importspecs ')'   { \_\is\_ -> linkNone.{items = is}  }
@@ -678,7 +678,7 @@ memspecs:
 alias:
     VARID
     | CONID
-    | operator              { \v -> do { op <- unqualified v; return op }} 
+    | operator              { \v -> do { op <- unqualified v; pure op }} 
     ;
 
 varid:   VARID
@@ -727,13 +727,13 @@ unop: '!' | '?' ;
 fixity:
       INFIX  INTCONST   { \f\i -> do
                                     t <- infixop (yyline i) NOP1 (Token.value i)
-                                    YYM.return (FixDcl {pos=Pos f i, opid=t, ops=[]}) }
+                                    YYM.pure (FixDcl {pos=Pos f i, opid=t, ops=[]}) }
     | INFIXL INTCONST   { \f\i -> do
                                     t <- infixop (yyline i) LOP1 (Token.value i)
-                                    YYM.return (FixDcl {pos=Pos f i, opid=t, ops=[]}) }
+                                    YYM.pure (FixDcl {pos=Pos f i, opid=t, ops=[]}) }
     | INFIXR INTCONST   { \f\i -> do
                                     t <- infixop (yyline i) ROP1 (Token.value i)
-                                    YYM.return (FixDcl {pos=Pos f i, opid=t, ops=[]}) }
+                                    YYM.pure (FixDcl {pos=Pos f i, opid=t, ops=[]}) }
     ;
 
 
@@ -783,7 +783,7 @@ fitem:
     
 jitem: 
     nativename
-    | operator              { \o -> do unqualified o >>= return . _.value }
+    | operator              { \o -> do unqualified o >>= pure . _.value }
     | unop                  { Token.value }
     ;
     
@@ -838,14 +838,14 @@ mbdot:
                                         when (Token.value dot != "•") do
                                             yyerror (yyline dot)
                                                 ("'.' expected instead of " ++ show dot.value)
-                                        YYM.return dot
+                                        YYM.pure dot
                                     }
     ;
 
 rho:
     tapp EARROW rhofun               { \tau\t\rho -> do
                                         context <- tauToCtx tau
-                                        YYM.return (Rho.{context} rho)
+                                        YYM.pure (Rho.{context} rho)
                                      }
     | rhofun              
     ;
@@ -931,15 +931,15 @@ simplekind:
                                 when  (w != "*") do
                                     yyerror (yyline star) 
                                             ("expected `*`, found `" ++ w ++ "`") 
-                                return KType
+                                pure KType
                             }
     | VARID                 { \v -> do
                                 let w = Token.value v
-                                if w == "generic" then return KGen
+                                if w == "generic" then pure KGen
                                 else do
                                     yyerror (yyline v) 
                                             ("expected `generic` instead of `" ++ w ++ "`")
-                                    return KType
+                                    pure KType
                             }
     | '(' kind ')'          { \_\b\_ -> b }
     ;
@@ -965,7 +965,7 @@ classdef:
     CLASS ccontext EARROW CONID tyvar wheredef {
         \_\ctxs\_\c\v\defs -> do
             sups <- classContext (Token.value c) ctxs (v::TauS).var
-            return ClaDcl{
+            pure ClaDcl{
                     pos = yyline c, 
                     vis = Public,
                     name = Token.value c,
@@ -981,7 +981,7 @@ classdef:
                     (yyerror (yyline kw) "classname missing after contexts")
                 when (SName.{ty?} cname)
                     (yyerror (yyline cname.id) "classname must not be qualified") 
-                return ClaDcl {pos, vis = Public, name=cname.id.value,
+                pure ClaDcl {pos, vis = Public, name=cname.id.value,
                                clvar = tau, supers = [],
                                defs, doc = Nothing}
             _ -> Prelude.error "fatal: empty ccontext (cannot happen)" 
@@ -1018,7 +1018,7 @@ insthead:
             Ctx{pos, cname, tau}:rest -> do
                 unless (null rest) 
                         (yyerror pos "classname missing after instance contexts")
-                return InsDcl {
+                pure InsDcl {
                     pos, vis = Public, clas = cname,
                     typ = ForAll [] (RhoTau [] tau),
                     defs = [],
@@ -1133,7 +1133,7 @@ contypes:
                                                     • toSig
                                         toSig (TSig s) = s
                                         toSig tau      = (ForAll [] . RhoTau []) tau
-                                    return (map field taus)
+                                    pure (map field taus)
                                 }
     ;
 
@@ -1181,7 +1181,7 @@ strictfldid:
 plainfldid:
     varid                       { \v -> do
                                     g <- getST
-                                    return (yyline v, v.value, Public, false)
+                                    pure (yyline v, v.value, Public, false)
                                 }
     ;
 
@@ -1217,11 +1217,11 @@ fundef:
     | funhead guards        { \(ex,pats)\gds -> fungds ex pats gds }
     | fundef wherelet       { \fdefs\defs ->
         case fdefs of
-            [fd@FunDcl {expr=x}] -> YYM.return [fd.{expr = nx}] where
+            [fd@FunDcl {expr=x}] -> YYM.pure [fd.{expr = nx}] where
                                 nx = Let defs x
             _ -> do
                 yyerror (head fdefs).pos ("illegal function definition, where { ... } after annotation?")
-                YYM.return fdefs
+                YYM.pure fdefs
     }
     ;
 
@@ -1229,7 +1229,7 @@ fundef:
 funhead:
     binex                           { \x -> do
                                             x <- funhead x
-                                            YYM.return x
+                                            YYM.pure x
                                     }
     ;
 
@@ -1256,7 +1256,7 @@ aeq: ARROW | '=';
 
 lcqual:
     gqual
-    | expr '=' expr                { \e\t\x -> do { (ex,pat) <- funhead e; YYM.return (Right (fundef ex pat x)) }}
+    | expr '=' expr                { \e\t\x -> do { (ex,pat) <- funhead e; YYM.pure (Right (fundef ex pat x)) }}
     | LET '{' letdefs '}'           { \_\_\ds\_ -> Right ds }
     ;
 
@@ -1381,7 +1381,7 @@ primary:
     | DO  '{' dodefs  '}'             { \d\_\defs\_   -> do mkMonad (yyline d) defs }
     | primary   '.' VARID             { \p\_\(v::Token) -> umem p v id}
     | primary   '.' operator          { \p\_\v -> do {v <- unqualified v;
-                                                    YYM.return (umem p v id)}}
+                                                    YYM.pure (umem p v id)}}
     | primary   '.' unop              { \p\_\v -> umem p v id}
     | qualifiers    '{' VARID '?' '}' { \q\_\(v::Token)\_\_ ->
                                             Vbl  (q v.{value <- ("has$" ++)}) }
@@ -1471,9 +1471,9 @@ fields:
                                         if elemBy (using fst) a ls then do {
                                                 E.warn (yyline c) (msgdoc ("field `" ++ fst a
                                                     ++ "` should appear only once."));
-                                                YYM.return ls
+                                                YYM.pure ls
                                             } else
-                                                YYM.return (a:ls)
+                                                YYM.pure (a:ls)
                                     }
     | field ','                     { (const . single) }
     ;
