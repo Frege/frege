@@ -877,7 +877,12 @@ genExpr rflg rm ex binds = do
             unEta n args noapp = E.fatal (getpos ex) (
                 text "unEta" <+> anno n <+> (text . show) (map (const '.') args) <+> text (nicer ex g))
             -- now unwind the stack, applying the arguments as needed
-            unwind []   bind = result bind
+            unwind []   bind
+                | rflg, 
+                    isStrictJT bind.jtype,
+                    not (isStrictJT rm),
+                    JInvoke{} ← bind.jex  = result (delayBind bind)
+                | otherwise               = result bind
             unwind args bind = do
                 E.logmsg TRACEG (getpos ex) (text "unwind: "
                         </> text (show bind)
@@ -889,7 +894,9 @@ genExpr rflg rm ex binds = do
                             cargs   = take n args
                             rargs   = drop n args
                             ftype   = fold (const . reduceSigma) bind.ftype cargs
-                        eargs ← zipWithM (\t x → genExpr false (lazy t) x binds) (take n gargs) cargs  
+                        eargs ← zipWithM (\t x → genExpr 
+                                                    false  -- (if null rargs then rflg else false)
+                                                    (lazy t) x binds) (take n gargs) cargs  
                         unwind rargs . strictBind g $  
                                     bind.{stype = nicer ftype g, ftype, jtype = last gargs, 
                                     jex ← JX.invoke (map _.jex eargs) . JX.xmem "apply"}
@@ -1023,7 +1030,7 @@ genExpr rflg rm ex binds = do
                 let subst       =  U.unifySigma g sym.typ ft
                     rhoctx      =  substRho subst sym.typ.rho
                 if (sym.depth > 0) 
-                then etaWrap (snd (U.returnType ft.rho))  rm
+                then etaWrap (snd (U.returnType (rhoTauInSigma ft).rho))  rm
                 else if isJust sym.nativ
                 then result (nativeCall g sym subst []) 
                 else do 
@@ -1090,17 +1097,29 @@ genExpr rflg rm ex binds = do
                             <+> text (nice csigma g)
                         )
                     let ari         =  length sym.flds
+                        nargs       =  length args
                         subst       =  U.unifySigma g sym.typ csigma
-                        strho       =  substRho subst sym.typ.rho
-                        -- (ret, _)    =  U.returnType strho
-                        sigs        =  map (unJust . _.typ) args
-                        argjts      =  zipWith ($)
+                        jsubst      =  fmap (boxed . tauJT g) subst
+                        origjt      =  rhoJT g sym.typ.rho
+                        instjt      =  substJT jsubst origjt
+                        fargs       =  take nargs (dropConstr (flatFunc instjt))
+                        fret        =  case instjt of
+                                        Func{gargs} → case drop nargs (dropConstr (flatFunc instjt)) of
+                                            []  → Something --??
+                                            xs  → foldr (\a\f → Func [a,f]) (last xs) (init xs)
+                                            --[x] → x
+                                            --xs  → Func xs
+                                        _           → Something  -- ??  
+                        rhoctx      =  substRho subst sym.typ.rho
+                        (res, sigs)    =  U.returnType rhoctx
+                        -- sigs        =  map (unJust . _.typ) args
+                        argjts      =  zipWith ($) 
                                             (strictFuns sym.strsig)
-                                            (map (lambdaType . sigmaJT g) sigs)
-                        targs       =  map (boxed . tauJT g . substTau subst) (symt.typ.tvars pos)
-                        -- ret         =  U.substTau subst res
-                        retjt       =  (lambdaType . sigmaJT g) ft
-                        contexts    =  map  (reducedCtx g)  strho.context
+                                            fargs
+                        targs       =  map (substJT jsubst . TArg) (sym.typ.vars)
+                        ret         =  ft
+                        retjt       =  fret  
+                        contexts    =  map  (reducedCtx g)  (rhoctx.context)
 
                                         -- explain the substitution
                     forM (each subst) $ \(v,tau) →
@@ -1111,7 +1130,7 @@ genExpr rflg rm ex binds = do
 
                     E.logmsg TRACEG pos (
                                 text "genApp: ari=" <> text (show ari) 
-                            <+> text "strho = " <+> text (nice strho g)
+                            <+> text "strho = " <+> text (nice rhoctx g)
                             <+> text "retjt = " <+> text (show retjt))
 
                     case symt of
@@ -1157,7 +1176,7 @@ genExpr rflg rm ex binds = do
 
                     -- substitution
                     let ari         =  if lambdaBound 
-                                        then length sigs 
+                                        then 1 
                                         else symv.depth
                         nargs       = length args
                         lambdaBound 
@@ -1167,14 +1186,13 @@ genExpr rflg rm ex binds = do
                         jsubst      =  fmap (boxed . tauJT g) subst
                         origjt      =  rhoJT g symtyp.rho
                         instjt      =  substJT jsubst origjt
-                        fargs       =  case instjt of
-                                        Func{gargs} → take nargs (dropConstr gargs)
-                                        _           → []  -- ???
+                        fargs       =  take nargs (dropConstr (flatFunc instjt))
                         fret        =  case instjt of
-                                        Func{gargs} → case drop nargs (dropConstr gargs) of
+                                        Func{gargs} → case drop nargs (dropConstr (flatFunc instjt)) of
                                             []  → Something --??
-                                            [x] → x
-                                            xs  → Func xs
+                                            xs  → foldr (\a\f → Func [a,f]) (last xs) (init xs)
+                                            --[x] → x
+                                            --xs  → Func xs
                                         _           → Something  -- ??  
                         rhoctx      =  substRho subst symtyp.rho
                         (res, sigs)    =  U.returnType rhoctx
@@ -1185,8 +1203,7 @@ genExpr rflg rm ex binds = do
                         targs       =  map (substJT jsubst . TArg) (symtyp.vars)
                         ret         =  ft
                         retjt       =  returnJType symv.rkind fret  
-                        contexts    =  map  (reducedCtx g)  (
-                                        rhoctx.context)
+                        contexts    =  map  (reducedCtx g)  (rhoctx.context)
                                         -- avoid difficulties with lowered type vars
                                         --if length rhoctx.context > length vsigma.rho.context
                                         --then rhoctx.context
@@ -1261,9 +1278,8 @@ genExpr rflg rm ex binds = do
                                     call    =  call0.{jtype = retjt}
                                     result  =  if isStrictJT rm 
                                                 then call
-                                                else if rflg || isStrictJT retjt 
-                                                    then delayBind call
-                                                    else call   -- lazy -> lazy and no return
+                                                else delayBind (strictBind g call)
+                                                    
                                 pure result
                             | otherwise = E.fatal pos (text "FATAL COMPILER ERROR "
                                     <+> text (nicer vbl g)
@@ -1298,7 +1314,8 @@ genExpr rflg rm ex binds = do
                                                     (filter (!= tau.var) (symtyp.vars)))
                                     get    = JX.jexmem  (head ctxs) (latinF ++ mangled base)
                                     bind   = (newBind g ret inst).{jtype = retjt}
-                                pure bind
+                                    result  =  if isStrictJT rm then bind else delayBind bind
+                                pure result
 
                         -- ordinary functions
                         SymV{} → do
@@ -1309,9 +1326,7 @@ genExpr rflg rm ex binds = do
                                 call    =  call0.{jtype = retjt}
                                 result  =  if isStrictJT rm 
                                             then call
-                                            else if rflg || isStrictJT retjt 
-                                                then delayBind call
-                                                else call   -- lazy -> lazy and no return
+                                            else delayBind (strictBind g call)
                             pure result
                         _ → noGenApp "unknown SymV" vbl args
                 genApp bad args = noGenApp "no Con or Vbl" bad args

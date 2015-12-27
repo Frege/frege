@@ -262,6 +262,7 @@ instanceCode (sym@SymI {sid}) = do             -- instance definition
          rawinst  = rawType instjt
          jtype = Ref instName []
          etype = Ref (symJavaName g csym)  (if special then [rawinst] else [instjt])
+         gvars = targs sym.typ
          attr  = attrs (if special 
                             then [JRawTypes, JPublic, JFinal, JStatic] 
                             else [JPublic, JFinal, JStatic])
@@ -273,17 +274,34 @@ instanceCode (sym@SymI {sid}) = do             -- instance definition
                                                      (map JAtom (getCtxs g))
                                                      (map JAtom (getArgs g))))}
 
+         make
+            | null constrargs, not (null gvars) =
+                    [JMethod{attr = attrs [JUnchecked, JPublic, JFinal, JStatic],
+                             gvars,
+                             name = "mk",
+                             args = [], 
+                             jtype = jtype.{gargs},
+                             body = JBlock{stmts}}]
+            | otherwise = []
+            where
+                gargs = map (TArg . _.var) gvars 
+                stmts = [JReturn (JCast jtype.{gargs} (JAtom "it"))]
+
          singleton
-            | null constrargs = [JMember{attr = attrTop, jtype, name="it", 
+            | null constrargs = [JMember{attr = attrTop, jtype = jtype.{gargs}, name="it", 
                 init = Just (JNew jtype [])}]
-            | otherwise = [] 
+            | otherwise = []
+            where
+                gargs = take (length gvars) wilds
+
          result = JClass {attr, 
                           name = instName.base,
-                          gvars = targs sym.typ,
+                          gvars,
                           extend = Nothing,
                           implement = [etype],
                           defs = (constructor : constraints)
                              ++ singleton
+                             ++ make
                              ++ instFuns
                              ++ concat instImpls}
      pure [JComment (nice sym g ++ " :: " ++ nice sym.typ g), result]
@@ -389,19 +407,22 @@ instFun symc symi mname = do
                         <+> text (nicer fakety g)
                     )
 
+                fjty4  = flatFunc jty4
+                fjty4a = flatFunc jty4a
+
                 let (_, sigs)    = returnType methty.rho
                     ari          = length sigs
                     retJT
                         | Just _  ← isPrimitive o  = strict t
                         | otherwise = t 
                         where
-                            t = returnJT jty4
+                            t = last fjty4
                             o = (tauJT g . fst . returnType) typ3.rho
                     retJTa
                         | Just _  ← isPrimitive o  = strict t
                         | otherwise = t 
                         where
-                            t = returnJT jty4a
+                            t = last fjty4a
                             o = (tauJT g . fst . returnType) typ3.rho
 
                 -- build & compile expression
@@ -416,10 +437,10 @@ instFun symc symi mname = do
                         where app a b = App{fun=a, arg=b, typ=fmap (reducedSigma g) a.typ}
                     -- manipulate function arg types and make args Kinded if so in original type 
                     gargs0 = case jty4 of               -- declared type of the arguments
-                                Func{gargs} → gargs
+                                Func{gargs} → fjty4
                                 other       → []
                     gargs1 = case jty4a of              -- the real type of the arguments
-                                Func{gargs} → gargs
+                                Func{gargs} → fjty4a
                                 other       → []
                     nctxs  = length methty.rho.context
                     cgargs = take nctxs gargs0
@@ -435,8 +456,25 @@ instFun symc symi mname = do
                         | special, retJTa != retJT = JCast retJT (JCast Something result.jex)
                         | otherwise                = result.jex
 
+                    unchecked :: JExpr -> Bool
+                    unchecked ex = case ex of
+                        JAtom{name} →  false
+                        JNew{jt, args} →  any unchecked args
+                        JNewClass{jt, args, decls} →  false
+                        JLambda{fargs, code} →  false
+                        JNewArray{jt, jex} →  unchecked jex
+                        JInvoke{jex, args} →  unchecked jex || any unchecked args 
+                        JStMem{jt, name, targs} →  false
+                        JExMem{jex, name, targs} →  unchecked jex
+                        JCast Something _   → true
+                        JCast{jt, jex} →  unchecked jex
+                        JUnop{op, jex} →  unchecked jex
+                        JBin{j1, op, j2} →  unchecked j1 || unchecked j2
+                        JQC{j1, j2, j3} →  unchecked j1 || unchecked j2 || unchecked j3
+                        JArrayGet{j1, j2} →  false
+
                 -- finally make the function
-                pure JMethod{attr = if special 
+                pure JMethod{attr = if special || unchecked rex
                                         then attrs [JUnchecked, JPublic, JFinal, JOverride]
                                         else attrs [JPublic, JFinal, JOverride], 
                             gvars = targs methty, 
