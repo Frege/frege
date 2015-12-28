@@ -41,6 +41,8 @@
 
 package frege.run;
 
+import frege.runtime.Value;
+
 /**
  * @author ingo
  *
@@ -59,5 +61,20 @@ public class RunTM {
 	@SuppressWarnings("unchecked")
 	public static<G> G higherRank(Object it) {
 		return (G) it;
+	}
+
+	/**
+	 * Implementation for 
+	 * <code>pure native constructor frege.run.RunTM.constructor :: a -> Int</code>
+	 */
+	final public static int constructor(Value v) {		// if it is statically known that v is a Value 
+		return v.constructor(); 
+	}
+	// final public static int constructor(Integer v) { return v; }
+	final public static int constructor(Object v) { 	// if v is completely unknown, it could still be a Value
+		if (v instanceof Value) return ((Value)v).constructor();
+		if (v instanceof Short) return ((Short)v).intValue();
+		if (v instanceof Integer) return ((Integer)v).intValue();
+		return 0;
 	}
 }
