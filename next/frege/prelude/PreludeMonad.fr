@@ -1,0 +1,516 @@
+{-
+    Copyright © 2011 - 2015, Ingo Wechsung
+ 
+    All rights reserved.
+ 
+    Redistribution and use in source and binary forms, with or
+    without modification, are permitted provided that the following
+    conditions are met:
+
+    -   Redistributions of source code must retain the above copyright
+        notice, this list of conditions and the following disclaimer.
+
+    -   Redistributions in binary form must reproduce the above
+        copyright notice, this list of conditions and the following
+        disclaimer in the documentation and/or other materials provided
+        with the distribution. Neither the name of the copyright holder
+        nor the names of its contributors may be used to endorse or
+        promote products derived from this software without specific
+        prior written permission.
+ 
+    *THIS SOFTWARE IS PROVIDED BY THE
+    COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR
+    IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+    WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+    PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER
+    OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+    SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+    LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
+    USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED
+    AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+    LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
+    IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
+    THE POSSIBILITY OF SUCH DAMAGE.*
+-}
+
+{--
+    This package provides the 'Monad' class and related classes and functions.
+    
+    The class hierarchy is derived from the (Haskell) proposal *The Other Prelude*
+    but the traditional method names have been kept.
+    
+    The functions in this library use the following naming conventions:
+    - A postfix "M"" always stands for a function in the Kleisli category: The monad type constructor _m_ is
+      added to function results (modulo currying) and nowhere else. So, for example,
+    > filter ::               (a -> Bool)   -> [a] -> [a]
+    > filterM :: (Monad m) => (a -> m Bool) -> [a] -> m [a]
+    - A postfix "_" changes the result type from (_m a_) to (_m ()_). Thus, for example:
+    > sequence  :: Monad m => [m a] -> m [a]
+    > sequence_ :: Monad m => [m a] -> m ()
+    - A prefix "m" generalizes an existing function to a monadic form. Thus, for example:
+    > sum :: Num a => [a] -> a
+    > msum :: MonadPlus m => [m a] -> m a    
+    
+    This package is _implementation specific_ insofar as the compiler may
+    assume that certain items are defined here in a certain way.
+    Changes may thus lead to compiler crashes or java code that 
+    will be rejected by the java compiler.
+    
+    In particular, desugared *@do@* expressions will reference 'Monad', '>>=' and '>>'.
+    
+    This package is implicitly imported and besides the additional stuff covers most of what
+    one would get by importing _Control.Monad_ and _Control.Applicative_ in Haskell.
+ -}
+
+
+protected package frege.prelude.PreludeMonad 
+    inline (ST.>>, ST.fmap,
+        Reader.fmap, Reader.pure, Reader.<*>, Reader.>>=, Reader.>>,
+        when, unless) 
+    where
+
+import frege.prelude.PreludeBase 
+import frege.prelude.PreludeList(ListSource, ++, 
+                                reverse, map, concat, unzip, zipWith, 
+                                chunked, fold, foldr, replicate)
+import frege.control.Semigroupoid
+import frege.control.Category
+
+infixr 2 `=<<`
+infixr 3 `<=<` `>=>`
+infixl 3 `>>` `>>=` `<|>`  
+infixl 4 `<$>` `<*>` `<*` `*>` fmap
+infixr 13 mplus `<+>`
+
+
+{--
+    The 'Functor' class is used for types that can be mapped over. 
+    Instances of 'Functor' should satisfy the following laws:
+    > fmap id == id
+    > fmap (f . g) == fmap f . fmap g
+    -}
+class Functor f where
+
+    --- Map a function over a 'Functor'
+    fmap :: (a -> b) -> f a -> f b
+
+class (Functor f) => Apply f where
+    (<*>) :: f (a -> b) -> f a -> f b
+
+--- An infix synonym for 'fmap'. Left associative with precedence 4.
+(<$>) :: Functor f => (a -> b) -> f a -> f b
+(<$>) = fmap
+
+
+
+{--
+    A functor with application, providing operations to
+
+    - embed pure expressions ('pure'), and
+    - sequence computations and combine their results ('<*>').
+
+    A minimal complete definition must include implementations of these
+    functions satisfying the following laws:
+
+    [_identity_]
+        @pure id <*> v = v@
+
+    [_composition_]
+        @pure (•) <*> u <*> v <*> w = u <*> (v <*> w)@
+
+    [_homomorphism_]
+        @pure f <*> pure x = pure (f x)@
+
+    [_interchange_]
+        @u <*> pure y = pure ($ y) <*> u@
+  
+    The other methods have the following default definitions, which may
+    be overridden with equivalent specialized implementations:
+
+    >  u *> v = pure (const id)  <*> u <*> v
+    >  u <* v = pure const <*> u <*> v
+
+    As a consequence of these laws, the 'Functor' instance for @f@ will satisfy
+    > fmap f x = pure f <*> x
+
+
+    If @f@ is also a 'Monad', it should satisfy 
+    > (<*>) = ap 
+    (which implies that 'pure' and '<*>' satisfy the
+    applicative functor laws).
+    
+    Minimal complete definition: 'pure' and '<*>'.
+    -}
+class (Apply p) =>  Applicative p where
+    
+    --- Lift a value
+    pure   :: a -> p a    
+    
+    --- Sequence actions, discarding the value of the first argument.
+    (*>)     :: p a -> p b -> p b
+    
+    --- Sequence actions, discarding the value of the second argument.
+    (<*)     :: p a -> p b -> p a
+    
+    -- default implementations
+    
+    pa *> pb = pure (const id) <*> pa <*> pb
+    pa <* pb = pure const <*> pa <*> pb        
+ 
+apply :: (Apply p) => p (a -> b) -> p a -> p b
+apply = (<*>)
+
+{-
+    Issue 39 (http://code.google.com/p/frege/issues/detail?id=39)
+    Requested by Daniel
+    -}
+liftA :: Applicative f => (a -> b) -> f a -> f b
+liftA f a = pure f <*> a
+
+liftA2 :: Applicative f => (a -> b -> c) -> f a -> f b -> f c
+liftA2 f a b = f <$> a <*> b
+
+liftA3 :: Applicative f => (a -> b -> c -> d) -> f a -> f b -> f c -> f d
+liftA3 f a b c = f <$> a <*> b <*> c
+
+liftA4 :: Applicative f => (a -> b -> c -> d -> e) -> f a -> f b -> f c -> f d -> f e
+liftA4 f a b c d = f <$> a <*> b <*> c <*> d
+
+liftA5 :: Applicative f => (a -> b -> c -> d -> e -> g) -> f a -> f b -> f c -> f d -> f e -> f g
+liftA5 f a b c d e = f <$> a <*> b <*> c <*> d <*> e
+
+class (Apply f) => Bind f where
+    --- Sequentially compose two actions, passing any value produced by the first as an argument to the second.
+    (>>=) :: f a -> (a -> f b) -> f b
+
+class (Functor f) => Alt f where
+    (<|>) :: f a -> f a -> f a
+
+class (Alt f) => Plus f where
+    pzero :: f a
+
+class (Plus f, Monad f) => MonadAlt f where
+    (<+>) :: f a -> f a -> f a
+
+{--
+    The 'Monad' class defines the basic operations over a _monad_, 
+    a concept from a branch of mathematics known as _category theory_. 
+    From the perspective of a Frege programmer, however, it is best to think
+    of a monad as an _abstract datatype_ of actions. 
+
+    Frege’s *@do@* expressions provide a convenient syntax for writing monadic expressions.
+
+    Instances of Monad should satisfy the following laws:
+
+    > return a >>= k == k a
+    > m >>= return == m
+    > m >>= (\x -> k x >>= h) == (m >>= k) >>= h
+
+    Since instances of 'Monad' are also instances of 'Functor', 
+    they additionally shall satisfy the law:
+
+    > fmap f xs == xs >>= return • f
+    
+    which is also the default implementation of 'fmap'.
+    
+    The instances of 'Monad' for lists, 'Maybe' and 'ST' defined in the Prelude
+    satisfy these laws.
+    
+    Minimal complete definition: '>>=' and ('pure' or 'return')
+    
+    -}
+class (Applicative m, Bind m) => Monad m where
+    {--
+        Sequentially compose two actions, discarding any value produced by the first, 
+        this works like sequencing operators (such as the semicolon) in imperative languages.
+        -}
+    (>>)  :: m a -> m b -> m b
+    
+    {--
+        The 'join' function is the conventional monad *join* operator. 
+        It is used to remove one level of monadic structure, projecting its bound argument into the outer level.
+        -}
+    join  :: m (m a) -> m a
+
+
+    (ma >> mb) = ma >>= const mb
+    (<*>)      = ap 
+    fmap f mx  = mx >>= pure • f 
+    join mma   = mma >>= id
+
+-- according to AMP
+return ∷ Monad m ⇒ a → m a
+return = pure
+
+{--
+    The 'MonadFail' class augments 'Monad' by adding the 'fail' operation.
+    This operation is not part of the mathematical definition of a monad.
+    -}   
+class (Monad m) => MonadFail m where  
+
+    --- Fail with a message. 
+    fail   :: String -> m a
+    fail s = error s
+
+
+{--
+    A 'Monad' with a left identity.
+    -}
+class (Monad mz) => MonadZero mz where
+    --- This value should satisfy _left zero_: 
+    --- > mzero >>= f = mzero
+    mzero :: mz a
+
+{--
+    A 'Monad' that also supports choice and failure
+    and observes the following laws:
+    > mzero `mplus`  v = v
+    > v `mplus` mzero  = v
+    > (a `mplus` b) `mplus` c = a `mplus` (b `mplus` c)
+    > (a `mplus` b) >>= f = (a >>= f) `mplus` (b >>= f)
+    -} 
+class (MonadZero mp) => MonadPlus mp where
+    --- an associative operation
+    mplus :: mp a -> mp a -> mp a
+ 
+class (MonadZero mo) => MonadOr mo where
+    -- Should satisfy 'monoid':
+    --   zero `orElse` b = b;  b `orElse` zero = b
+    --   (a `orElse` b) `orElse` c = a `orElse` (b `orElse` c)
+    -- and 'left catch':
+    --   (return a) `orElse` b = a
+    orElse :: mo a -> mo a -> mo a   
+    
+--- '=<<' is the same as '>>=' with the arguments flipped    
+f =<< mv  =  mv >>= f
+
+--- left to right Kleisli composition of monads
+f >=> g     = \x -> f x >>= g
+
+--- Right-to-left Kleisli composition of monads. ('>=>'), with the arguments flipped
+f <=< g    = g >=> f
+
+--- nowarn: deep recursion possible
+--- repeat action forever
+forever a = node where node = a >> node
+
+--- discard or ignore result of evaluation, such as the return value of an 'IO' action.
+void = fmap (const ())
+
+--- 'msum' generalizes the list-based 'concat' function.
+-- msum     :: MonadPlus m => [m a] -> m a
+msum        =  foldr mplus mzero
+
+--- 'filterM' generalizes the list-based 'filter' function.
+filterM mp = fold (liftM2 (++)) (pure []) . map (shortFilterM mp) . chunked 512
+
+--- Version of 'filterM' that works on small lists with length < 1000 only.
+--- Beware of stack overflow, and use 'filterM', when in doubt.
+shortFilterM !p  []     =  pure []
+shortFilterM !p  (x:xs) =  do
+       flg <- p x
+       ys  <- shortFilterM p xs
+       pure (if flg then x:ys else ys) 
+
+--- @replicateM n act@ performs the action @n@ times, gathering the results.
+replicateM        :: (Monad m) => Int -> m a -> m [a]
+replicateM n x    = sequence (replicate n x)
+
+--- Like 'replicateM', but discards the result.
+replicateM_       :: (Monad m) => Int -> m a -> m ()
+replicateM_ n x   = sequence_ (replicate n x)           
+
+
+{--
+    In many situations, the 'liftM' operations can be replaced by uses of
+    'ap', which promotes function application. 
+
+    >       return f `ap` x1 `ap` ... `ap` xn
+
+    is equivalent to 
+
+    >       liftMn f x1 x2 ... xn
+-}
+ap :: Monad α => α (γ->β) -> α γ -> α β
+ap mf ma = mf >>= (\f -> ma >>= (\a -> pure (f a)))
+
+--- Promote a function to a monad.
+liftM :: Monad m => (a -> b) -> m a -> m b
+liftM  f ma          = ma >>= (\a -> pure (f a))
+
+--- Promote a function to a monad, scanning the monadic arguments from left to right.  For example,
+--- >    liftM2 (+) [0,1] [0,2] = [0,2,1,3]
+--- >    liftM2 (+) (Just 1) Nothing = Nothing
+liftM2 f ma mb       = ma >>= (\a -> mb >>= (\b -> pure (f a b)))
+
+--- Promote a function to a monad, scanning the monadic arguments from left to right (cf. 'liftM2').
+liftM3 f ma mb mc    = ma >>= (\a -> mb >>= (\b -> mc >>= (\c -> pure (f a b c))))
+
+--- Promote a function to a monad, scanning the monadic arguments from left to right (cf. 'liftM2').
+liftM4 f ma mb mc md = ma >>= (\a -> mb >>= (\b -> mc >>= (\c -> md >>= (\d -> pure (f a b c d)))))
+
+--- Promote a function to a monad, scanning the monadic arguments from left to right (cf. 'liftM2').
+liftM5 f ma mb mc md me = ma >>= (\a -> mb >>= (\b -> mc >>= (\c -> md >>= (\d -> me >>= (\e -> pure (f a b c d e))))))
+
+
+
+-- ---------------------------------------------------------------------
+-- -------------------- monadic list(source) functions -----------------
+-- ---------------------------------------------------------------------
+
+{-- 
+    The 'mapAndUnzipM' function maps its first argument over a list, returning
+    the result as a pair of lists. This function is mainly used with complicated
+    data structures or a state-transforming monad.
+    -}
+--mapAndUnzipM      :: (Monad m) => (a -> m (b,c)) -> [a] -> m ([b], [c])
+mapAndUnzipM f xs =  sequence (map f xs) >>= pure • unzip
+
+--- The 'zipWithM' function generalizes 'zipWith' to arbitrary monads.
+-- zipWithM          :: (Monad m) => (a -> b -> m c) -> [a] -> [b] -> m [c]
+zipWithM f xs ys  =  sequence (zipWith f xs ys)
+
+--- 'zipWithM_' is the extension of 'zipWithM' which ignores the final result.
+-- zipWithM_         :: (Monad m) => (a -> b -> m c) -> [a] -> [b] -> m ()
+zipWithM_ f xs ys =  sequence_ (zipWith f xs ys)
+
+{--
+    Turn a list of monadic values @[m a]@ into a monadic value with a list @m [a]@
+    > sequence [Just 1, Just 3, Just 2] = Just [1,2,3]
+    This version of 'sequence' runs in constant stack space,
+    but needs heap space proportional to the size of the input list.
+    -}
+sequence = fold (liftM2 (++)) (pure []) . map shortSequence . chunked 512
+
+{-- 
+    A version of 'sequence' that uses the stack and may overflow
+    with longer lists. 
+    
+    A length of about 500 should be ok in most cases.
+    -}
+shortSequence = foldr (liftM2 (:)) (pure [])
+
+
+{-- fold ('>>') over a list of monadic values for side effects -}
+sequence_ [] = pure ()
+sequence_ (x:xs) = x >> sequence_ xs
+
+--- @mapM f@ is equivalent to @sequence • map f@
+-- mapM  :: (ListSource list, Monad m) => (a -> m b) -> list a -> m [b]
+mapM  f = sequence  • map f -- • toList
+
+--- @mapM_ f@ is equivalent to @sequence_ • map f@
+-- mapM_ :: (ListSource list, Monad m) => (a -> m b) -> list a -> m ()
+mapM_ f = sequence_ • map f -- • toList
+
+--- @forM xs f@ = @mapM_ f xs@ 
+forM  xs f = (sequence  • map f)  xs
+forM_ xs f = (sequence_ • map f)  xs
+
+--- @for listSource f@ is a Java-friendly alias for @forM_@ that works on any list source
+for :: (Monad m, ListSource listSource) => listSource e  ->  (e -> m a) -> m ()
+for listSource = forM_ (toList listSource)
+
+--- @foldM f a xs@ folds a monadic function _f_ over the list _xs_.
+foldM p z = fold (\acc\as -> acc >>= flip (shortFoldM p) as) (pure z)  . chunked 512
+
+--- 'shortFoldM' is suitable only for lists with a length way below 1000.
+--- Beware of stack overflow and use 'foldM' instead.
+shortFoldM f a bs = fm f bs a
+    where
+        fm f (b:bs) a = a `f` b >>= fm f bs
+        fm f []     a = pure a
+
+--- @foldM_@ is the same as 'foldM', but discards the result
+foldM_ f a bs = foldM f a bs >> pure ()
+
+---  @guard b@ is @return ()@ if @b@ is *@true@*, and 'mzero' otherwise.
+guard b = if b then pure () else mzero
+
+{--
+    @when condition monadic@ returns /action/ of type @Monad m => m ()@
+    if /condition/ is true, otherwise 'return' '()'.
+-}
+when c ioa   = if c then ioa else pure ()
+
+{-- opposite of 'when' -}
+unless c ios = when (not c) ios
+
+
+
+{-
+instance Monad (Either a) where
+    return a = Right a
+    Left x >>= _ = Left x
+    Right x >>= k = k x
+    fmap f (Left e)   = Left e
+    fmap f (Right v)  = Right (f v)
+-}
+
+private type L = []
+protected type Reader = (->)
+
+instance Functor [] where
+    fmap = map
+
+instance Monad [] where
+    pure x = [x]
+    xs >>= f = concat ( map f xs )
+
+instance MonadPlus [] where    
+    mzero = []
+    mplus = (L.++)
+
+instance MonadFail [] where
+    fail  = const []
+
+instance Monad (Either a) where
+    fmap f (Left x)  = Left x
+    fmap f (Right x) = Right (f x)
+    pure = Right
+    Right x >>= f  = f x
+    Left s  >>= _  = Left s
+
+instance MonadFail (Either String) where
+    fail x = Left x   
+    
+-- instance Monad (State s)
+
+instance Monad (ST s) where
+    a >> b = a >>= (const b)
+    fmap f st = st >>= pure . f
+    pure = ST.return
+
+
+instance MonadFail (ST s) where
+    fail = error
+
+-- Tuples    
+-- for higher arities and Monad instances see frege.data.Tuples  
+  
+instance Functor ((,) a) where
+  fmap fn (a, x) = (a, fn x)
+  
+instance Functor ((,,) a b) where
+  fmap fn (a, b, x) = (a, b, fn x)
+
+instance Applicative ((->) a) where
+    fmap = (.)
+    pure = const
+    (<*>) f g x = f x (g x)
+
+instance Monad ((->) a) where
+    pure = const
+    f >>= k = \r -> k (f r) r
+    f >>  k = f >>= const k
+
+runReader :: Reader r a -> r -> a
+runReader = ($)
+
+mapReader :: (a -> b) -> Reader r a -> Reader r b
+mapReader f r = f . runReader r
+
+withReader :: (e -> r) -> Reader r a -> Reader e a
+withReader f m = m . f
+
+
