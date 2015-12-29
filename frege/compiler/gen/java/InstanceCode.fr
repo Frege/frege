@@ -98,9 +98,16 @@ classCode  (sym@SymC{tau = TVar{var,kind}}) = do           -- type class
          special = isSpecialClass sym
      abstrFuns ← mapSt (abstractFun sym) vals
      let name  = (symJavaName g sym).base
-         gvars = if special then [targ var KType] else [targ var kind]
+         gvars = if special 
+                    then [targ var KType] 
+                    else if isArrayClass sym
+                        then [JTVar{var="data", bounds=UNBOUNDED}, targ var kind]
+                        else [targ var kind]
          gargs = [TArg var]
-         superclasses = [ Ref (javaName g nm) gargs | nm <- sym.supers ]
+         superclasses = [ Ref (javaName g nm) gx | nm <- sym.supers,
+                            let { gx = if isArrayClassName nm 
+                                        then TArg "data":gargs 
+                                        else gargs }]
          result = JInterface{attr = attrs [JPublic], 
                             name, gvars, 
                             implement = superclasses, 
@@ -160,17 +167,15 @@ abstractFun symc (sym@SymV{}) = do
 
  
     let formalctxs = zipWith (constraintArg g)  ctxs  (getCtxs g)
-        lazysi = si.{argJTs <- map (if false && special then lazyUnlessCVar else lazy)}
-        lazyUnlessCVar (Lazy TArg{var}) 
-            | var == symc.tau.var   = TArg{var}
-        lazyUnlessCVar TArg{var} 
-            | var == symc.tau.var   = TArg{var}
-        lazyUnlessCVar other        = lazy other 
+        lazysi = si.{argJTs <- map adapt}
+        adapt (Lazy t) = adapt t
+        adapt Nativ{typ="[]"} | isArrayClass symc = Lazy (TArg "data")
+        adapt Func{gargs=[a,Nativ{typ="[]"}]} = Func [a, TArg "data"]
+        adapt t = lazy t
         formalargs  = argDefs attrFinal lazysi (getArgs g)
-        !cafMeth = null si.argJTs
     let !result = JMethod {attr = attrs [JPublic],
                              gvars,
-                             jtype = (tauJT g . fst . returnType . _.{context=ctxs} . _.rho) sym.typ,    
+                             jtype = (strict . adapt . tauJT g . fst . returnType . _.{context=ctxs} . _.rho) sym.typ,    
                              name = latinF ++ (symJavaName g sym).base,
                              args = formalctxs ++ formalargs,
                              body = JEmpty}
@@ -186,11 +191,7 @@ abstractFun symc symx = do
         ) 
 
 
---- Create a raw type (doesn't work for functions)
-rawType ∷ JType → JType
-rawType jt
-    | jt.{gargs?} = jt.{gargs=[]}
-    | otherwise   = jt
+
 
 {--
      Code for instances
@@ -259,9 +260,14 @@ instanceCode (sym@SymI {sid}) = do             -- instance definition
  
      let instName = symJavaName g sym
          instjt   = boxed (rhoJT g sym.typ.rho.{context=[]})
+         array    = Nativ{typ="[]", gargs=[strict instjt], generic=false}
          rawinst  = rawType instjt
          jtype = Ref instName []
-         etype = Ref (symJavaName g csym)  (if special then [rawinst] else [instjt])
+         etype = Ref (symJavaName g csym)  (if special 
+                                                then [rawinst] 
+                                                else if isArrayClass csym 
+                                                    then [array, instjt]
+                                                    else [instjt])
          gvars = targs sym.typ
          attr  = attrs (if special 
                             then [JRawTypes, JPublic, JFinal, JStatic] 
@@ -486,7 +492,8 @@ instFun symc symi mname = do
                         JArrayGet{j1, j2} →  false
 
                 -- finally make the function
-                pure JMethod{attr = if special || unchecked rex
+                pure JMethod{attr = if special || unchecked rex 
+                                    || needsUnchecked fst cmem.name (Map.lookupDefault Something cvar.var jsubstr) 
                                         then attrs [JUnchecked, JPublic, JFinal, JOverride]
                                         else attrs [JPublic, JFinal, JOverride], 
                             gvars = targs methty, 
