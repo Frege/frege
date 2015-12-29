@@ -111,7 +111,7 @@ isMutable _ = Nothing
 
 
 {--
-    Check if a type is a 'JArray' where @t@ is not a type variable.
+    Check if a type is an 'JArray'.
     If so, return a 'JType' that encodes the true java array type.
     
     All array types are marked as non-generic.
@@ -128,8 +128,8 @@ arrayTau g tau
       pack == pPreludeArrays = case arrayTau g b of
         Just (sub@Nativ{typ, gargs}) -> Just Nativ{typ="[]", gargs=[sub], generic = false}
         _ -> case tauJT g b of
-            Something -> Just Something     -- will cause casting to correct type if needed
-            jt -> Just Nativ{typ="[]", gargs=[jt], generic = false}
+            -- TArg{}  = Just Something     -- will cause casting to correct type if needed
+            jt      = Just Nativ{typ="[]", gargs=[jt], generic = false}
     | otherwise = Nothing
 
 {--
@@ -180,7 +180,9 @@ rhoJT   g (RhoTau {context, tau})
         jtau = tauJT g tau
 
 --- Compute the 'JType' for a given 'Context'
-ctxJT g (Ctx{pos, cname, tau}) = Constr (javaName g cname) [boxed (tauJT g tau)]
+ctxJT g (Ctx{pos, cname, tau}) 
+    | isArrayClassName cname =  Constr (javaName g cname) [unboundedWild, boxed (tauJT g tau)]
+    | otherwise = Constr (javaName g cname) [boxed (tauJT g tau)]
 
 --- Compute the 'JType' for a given 'Tau' type
 tauJT   g (app@TApp a b)
@@ -209,7 +211,7 @@ tauJT   g (Meta meta)
      | Flexi{kind} ← meta       =  case kArity kind of
                                     0   → nativ "java.lang.Void" [] -- TArg ("Flexi" ++ show meta.uid)
                                     k   → wildFunc k
-     | otherwise                =  TArg ("Rigid" ++ show meta.uid)
+     | otherwise                =  TArg ("Ŧ" ++ show meta.uid)
      -- otherwise               = Something
 tauJT   g (TSig sig)            = sigmaJT g sig
 
@@ -747,3 +749,41 @@ isSpecialClassName other             = false
 --- checks if a 'Symbol' is a special class
 isSpecialClass SymC{name} = isSpecialClassName name
 isSpecialClass other      = false
+
+--- names of the type classes for arrays
+arrayClassNames = ["ArrayElem", "ArrayElement", "PrimitiveArrayElement"]
+
+isArrayClassName TName{pack, base} = pack == pPreludeArrays && base `elem` arrayClassNames
+isArrayClassName _                 = false
+
+isArrayClass SymC{name} = isArrayClassName name
+isArrayClass _          = false
+
+{-- 
+    The (abstract) instance functions for some class members need a  
+
+    > @SuppressWarnings("unchecked")
+
+    This is due to idiosyncracies of the Java language.
+
+    For example, we can say @String.class@ and get @Class<String>@, but
+    we can't say @TList<A>.class@, because it's a syntax error.
+    Hence, we suppress the generics for class literal expressions.
+    But then we get only @Class<TList>@, thus we are forced to use unsafe casts.  
+
+    The value is a @(JType -> Bool, Bool)@, 
+    that tells if it is relevant for abstract or concrete instance members and the instance type.
+    The corresponding methods just get a \@SuppressWarnings("unchecked"),
+    the casting itself is handled in MethodCalls.fr
+-} 
+haveDoubleCast :: Map QName (JType → Bool, JType → Bool)
+haveDoubleCast = fromList [
+        (MName{tynm=TName{pack=pPreludeIO, base="JavaType"}, base="javaClass"}, 
+            (\x → x.{gargs?} && not (null x.gargs), const false)),
+        (MName{tynm=TName{pack=pPreludeArrays, base="ArrayElement"}, base="newArray"},
+            (const false, const true))
+    ]
+
+needsUnchecked which cmem jty = case cmem `lookup` haveDoubleCast of
+    Just x = which x jty
+    Nothing = false
