@@ -267,23 +267,19 @@ innerFun sym binds = do
     - constructors
     - other easy cafs
   -}
-cafCode (sym@SymV {depth = 0, expr = Just dx}) binds = do
+cafCode (sym@SymV {name, depth = 0, expr = Just dx}) binds = do
     x   <- dx
     g   <- getST
     let bnds = sym.typ.bound
         ctxNames = getCtxs g
  
     let 
-        --rlazy = not sym.strsig.isStrict 
-        --         || not (RValue `member` sym.rkind)
-        --         || (RAlways `member` sym.rkind)
         rsimple = RSimple `member` sym.rkind
-        -- recursive = not (RSafeTC `member` sym.rkind)        
         ctxs  = if null bnds then [] else sym.typ.rho.context
         cargs = zipWith (constraintArg g) ctxs ctxNames
         jtype = rhoJT g sym.typ.rho.{context=[]}
         rtype = returnType sym.rkind jtype
-        stype = if inmethod then rtype else jtype
+        stype = if inmethod || rsimple then rtype else jtype
         inmethod = not (null sym.typ.bound) || not (null sym.typ.rho.context)
 
     let comments = [
@@ -291,63 +287,64 @@ cafCode (sym@SymV {depth = 0, expr = Just dx}) binds = do
             JComment (nicer sym.typ g), 
             JComment (nicer x g)]
         name  = U.javaName g sym.name           -- P.foo
-    
-            
-    ecode ← compiling sym (genExpr false rtype x binds)
-    scode ← do
-             let badguard = openCaseWhen g x
-                 jthrow = [JThrow (JNew (Ref (JName "frege.runtime" "GuardFailed") []) [
-                                                     JAtom (show (nicer sym g)),
-                                                     JAtom (show sym.pos)])]
-             code <- compiling sym (genReturn stype x binds)
-             case badguard of
-                 Just (Left x) -> do
-                     E.warn (getpos x) (text "guard (" <> text (nicer x g) <> text ") may evaluate to false.")
-                     pure (code ++ jthrow)
-                 Just (Right p) -> do
-                     E.warn (getpos p) (text "pattern guard (" <> text (nicer p g) <> text ") may fail to match.")
-                     pure (code ++ jthrow)
-                 Nothing -> pure code
- 
-    if inmethod                                         -- Lazy<T> foo() { ... }
-    then pure (comments ++ [
-            JMethod { attr = attrTop, jtype = rtype,
-                           gvars = targs sym.typ, name = name.base,
-                           args = cargs, body = JBlock scode }
-        ])
-    else if rsimple
-    then pure (comments ++ [                            -- T foo = ....
+
+    if not inmethod && rsimple
+    then do
+        ecode ← compiling sym (genExpr false rtype x binds)
+        pure (comments ++ [                            -- T foo = ....
             JMember { attr = attrTop, jtype = rtype,
                              name = name.base,
                              init = Just ecode.jex}
-        ])
-    else if isStrictJT rtype
-    then pure (comments ++ [                            -- T foo = ((Lazy<T>)() -> { return ... }).call();
-            JMember { attr = attrTop, jtype = rtype,
-                           name = name.base,
-                           init = (Just 
-                                    . JX.invoke [] 
-                                    . JX.xmem "call" 
-                                    . lambda7
-                                    . JCast (lazy (autoboxed stype))
-                                    . JLambda []
-                                    . Right
-                                    . JBlock) scode
-                    }
-        ])
-    else pure (comments ++ [                            -- Lazy<T> foo = new Thunk<T>((Lazy<T>) ...)
-            JMember { attr = attrTop, jtype = rtype,
-                           name = name.base,
-                           init = (Just 
-                                    . JExpr.{args ← map lambda7}
-                                    . thunkIt (autoboxed stype)
-                                    . Right
-                                    . JBlock) scode 
-                    }
+            ])
+    else do
+        code ← do
+                 let badguard = openCaseWhen g x
+                     jthrow = [JThrow (JNew (Ref (JName "frege.runtime" "GuardFailed") []) [
+                                                         JAtom (show (nicer sym g)),
+                                                         JAtom (show sym.pos)])]
+                 code <- compiling sym (genReturn stype x binds)
+                 case badguard of
+                     Just (Left x) -> do
+                         E.warn (getpos x) (text "guard (" <> text (nicer x g) <> text ") may evaluate to false.")
+                         pure (code ++ jthrow)
+                     Just (Right p) -> do
+                         E.warn (getpos p) (text "pattern guard (" <> text (nicer p g) <> text ") may fail to match.")
+                         pure (code ++ jthrow)
+                     Nothing -> pure code
 
-        ])
+        if inmethod                                         -- Lazy<T> foo() { ... }
+        then pure (comments ++ [
+                JMethod { attr = attrTop, jtype = rtype,
+                               gvars = targs sym.typ, name = name.base,
+                               args = cargs, body = JBlock code }
+            ])
+        else if isStrictJT rtype
+        then pure (comments ++ [                            -- T foo = ((Lazy<T>)() -> { return ... }).call();
+                JMember { attr = attrTop, jtype = rtype,
+                               name = name.base,
+                               init = (Just 
+                                        . JX.invoke [] 
+                                        . JX.xmem "call" 
+                                        . lambda7
+                                        . JCast (lazy (autoboxed stype))
+                                        . JLambda []
+                                        . Right
+                                        . JBlock) code
+                        }
+            ])
+        else pure (comments ++ [                            -- Lazy<T> foo = new Thunk<T>((Lazy<T>) ...)
+                JMember { attr = attrTop, jtype = rtype,
+                               name = name.base,
+                               init = (Just 
+                                        . JExpr.{args ← map lambda7}
+                                        . thunkIt (autoboxed stype)
+                                        . Right
+                                        . JBlock) code 
+                        }
 
- 
+            ])
+
+
 cafCode _ binds = error "cafCode: no caf"
 
 innerCaf ∷ Symbol → TreeMap Int Binding → Bool → StG [JDecl]
