@@ -111,7 +111,9 @@ import Compiler.Utilities as U()
 import Compiler.types.Global
 import Compiler.types.JNames
 import Compiler.types.Symbols
+import Compiler.types.QNames(QName)
 import Compiler.types.Packs(pPreludeBase, pPreludeList)
+import Compiler.types.Strictness(Strictness(isStrict))
 
 import Compiler.common.AnnotateG (annoG, annoListG, notNil)
 
@@ -217,9 +219,13 @@ pass = do
             ]
     when (g.thisPack == pPreludeList) (forM_ listExtras U.println)
 
+    -- check if we have a main function, and print it
+
     -- restore unchanged symtabs
     changeSTT Global.{packages = oldg.packages}
 
+    -- print main
+    mapM_ U.println (maybe [] (mainCode g) (haveMain g))
 
     U.println "}"       -- supply the } that was removed from the headline
     return ("Gen78", 1)
@@ -230,3 +236,53 @@ ppDecls :: Global -> [JDecl] → IO ()
 ppDecls g decls = do
     PP.prettyIO g.printer 128 . PP.stack . filter notNil . map (annoG g) $ decls
     g.printer.println
+
+--- the java code to run the main function
+{--
+    > public static void main(final java.lang.String[] argv) {
+    >    $type ret =
+    >        PreludeBase.TST.performUnsafe($name
+    >               ( $list ).call()
+    >        );
+    >    if ret then System.exit(0) else System.exit(1);   or System.exit(ret&255);  or empty
+    > }
+-}
+mainCode ∷ Global → Symbol → [String]
+mainCode g sym = [
+        "  public static void main(final java.lang.String[] argv) {",
+        "    " ++ if isInt then "int ret =" else if isBool then "boolean ret =" else "", 
+        "        PreludeBase.TST.<" ++ targ ++ ">performUnsafe(" ++ name,
+        if sym.depth > 0 then
+        "               (" ++ list ++ ")"
+        else
+        "",
+        "          .call()).call();",
+        if isInt then
+        "        System.exit(ret&255);"
+        else if isBool then
+        "        System.exit(ret ? 0 : 1);"
+        else "",
+        "  }"
+        ]
+    where
+        name = (U.symJavaName g sym).base
+        jtype = tauJT g (fst (U.returnType sym.typ.rho))
+        isInt 
+            | Func[a,b] ← jtype = show b == "Integer"
+            | otherwise = false
+        isBool
+            | Func[a,b] ← jtype = show b == "Boolean"
+            | otherwise = false
+        targ = if isInt then "Integer" else if isBool then "Boolean" else "Short"
+        strict = case sym.strsig of
+            Strictness.S (s:_) = isStrict s
+            _               = false;
+        stol = "PreludeArrays.IListSource_JArray.<String/*<Character>*/>toList(argv)"
+        lazy x = "Thunk.lazy(" ++ x ++ ")"
+        list = if strict then stol else lazy stol
+
+--- tell if there is a main function in this module
+-- haveMain :: Global -> Bool
+haveMain g = case Global.findit g (VName g.thisPack "main") of
+        Just sym | sym.name.pack == g.thisPack = Just sym
+        other = Nothing
