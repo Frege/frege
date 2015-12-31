@@ -53,7 +53,7 @@ TOOLSF  = $(DIR)/tools
 COMPS   = frege/compiler
 
 
-FREGE    = $(JAVA) -Xss4m -Xmx2g -cp build
+FREGE    = $(JAVA) -Xss4m -Xmx3g -cp build
 
 #	compile using the fregec.jar in the working directory
 FREGECJ  = $(FREGE)  -jar fregec.jar  -d build -hints

@@ -100,6 +100,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type thenx           Token
 //%type elsex           Token
 //%type mbdot           Token
+//%type datakw          Bool
 //%type commata         Int
 //%type semicoli        Int
 //%type packagename     (String, Position)
@@ -238,6 +239,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type wheretokens     [Token]
 //%type typeclause      (Maybe TauS)
 //%type interfaces      [TauS]
+//%explain datakw       data or newtype
 //%explain typeclause   the type this module derives from
 //%explain interfaces   the interfaces this module implements
 //%explain mbdot        '.' or '•'
@@ -386,7 +388,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 %}
 
 %token VARID CONID QVARID QCONID QUALIFIER DOCUMENTATION
-%token PACKAGE IMPORT INFIX INFIXR INFIXL NATIVE DATA WHERE CLASS
+%token PACKAGE IMPORT INFIX INFIXR INFIXL NATIVE NEWTYPE DATA WHERE CLASS
 %token INSTANCE ABSTRACT TYPE TRUE FALSE IF THEN ELSE CASE OF DERIVE
 %token LET IN DO FORALL PRIVATE PROTECTED PUBLIC PURE THROWS MUTABLE
 %token INTCONST STRCONST LONGCONST FLTCONST DBLCONST CHRCONST REGEXP BIGCONST
@@ -1061,6 +1063,7 @@ gargs:
     | '{' '}'                   { \_\_      -> [] }
     ;
 
+
 datainit:
     DATA CONID '=' nativepur nativespec {
         \dat\d\docu\pur\(jt,gargs) -> JavDcl {pos=yyline d, vis=Public, name=Token.value d,
@@ -1078,11 +1081,23 @@ datainit:
     }
     | DATA CONID dvars '=' dalts {
         \dat\d\ds\docu\alts -> DatDcl {pos=yyline d, vis=Public, name=Token.value d,
-                                       vars=ds, ctrs=alts, defs=[], doc=Nothing}
+                                        newt = false,
+                                        vars=ds, ctrs=alts, defs=[], doc=Nothing}
     }
     | DATA CONID '=' dalts {
         \dat\d\docu\alts -> DatDcl {pos=yyline d, vis=Public, name=Token.value d,
-                                    vars=[], ctrs=alts, defs=[], doc=Nothing}
+                                        newt = false,
+                                        vars=[], ctrs=alts, defs=[], doc=Nothing}
+    }
+    | NEWTYPE CONID dvars '=' dalt {
+        \dat\d\ds\docu\alt -> DatDcl {pos=yyline d, vis=Public, name=Token.value d,
+                                        newt = true,
+                                        vars=ds, ctrs=[alt], defs=[], doc=Nothing}
+    }
+    | NEWTYPE CONID '=' dalt {
+        \dat\d\docu\alt -> DatDcl {pos=yyline d, vis=Public, name=Token.value d,
+                                        newt = true,
+                                        vars=[], ctrs=[alt], defs=[], doc=Nothing}
     }
     ;
 
