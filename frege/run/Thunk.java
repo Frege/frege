@@ -317,4 +317,15 @@ public class Thunk<R> implements Lazy<R> {
 	 * 
 	 */
 	public final static<X> X once(X obj, X nul) { return obj; }
+	
+	/**
+	 * <p> Some often used lazy values. </p>
+	 */
+	public final static Lazy<Boolean> lazyTrue  = lazy(true);
+	public final static Lazy<Boolean> lazyFalse = lazy(false);
+	public final static Lazy<String>  lazyemptyString = lazy("");
+	public final static Lazy<Integer> lazyZero = lazy(0);
+	public final static Lazy<Integer> lazyOne = lazy(1);
+	public final static Lazy<Integer> lazyTwo = lazy(2);
+	public final static Lazy<frege.runtime.Phantom.RealWorld> lazyWorld = lazy(frege.runtime.Phantom.theRealWorld);
 }
