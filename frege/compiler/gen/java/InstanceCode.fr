@@ -33,7 +33,7 @@ import Compiler.classes.Nice (nice, nicer)
 import Compiler.tc.Util(sameCtx)
 
 import Compiler.gen.java.Common
-import Compiler.gen.java.Bindings(newBind)
+import Compiler.gen.java.Bindings(newBind, Binding)
 import Compiler.gen.java.VarCode(varCode, compiling, genExpression, genExpr)
 import Compiler.gen.java.DataCode(callMethod)
 
@@ -395,17 +395,21 @@ instFun symc symi mname = do
                         text "(3) remove class var and class context from (1) :: "
                         <+> text (nicer typ3 g)
                     )
-
+                let jty3 = rhoJT g typ3.rho
+                E.logmsg TRACEG symi.pos (
+                        text "(3j) java type of (3) :: " <+> text (show jty3))
+                
                 let othertv = head (filter ((!=cvar.var) . _.var) (typ3.tvars cmem.pos))
                     instTau0 = (tauRho symi.typ.rho.{context=[]}).tau
                     instTau  = if special then TApp instTau0 othertv else instTau0
                     subst4 = Map.singleton cvar.var instTau
                     methty = ForAll typ3.bound (substRho subst4 typ3.rho)
                     raw    = if special then rawType else id
-                    jsubst = fmap (boxed . lambdaType . tauJT g) subst4
-                    jsubstr = fmap (raw . boxed . lambdaType . tauJT g) subst4
-                    jty4   = substJT jsubstr (lambdaType (rhoJT g typ3.rho))
-                    jty4a  = substJT jsubst  (lambdaType (rhoJT g typ3.rho))
+                    instjt = (boxed . lambdaType . tauJT g) instTau
+                    jsubst = Map.singleton cvar.var instjt
+                    jsubstr = Map.singleton cvar.var (raw instjt)
+                    jty4m   = boxed (rhoJT g methty.rho) -- substJT jsubstr (lambdaType jty3)
+                    jty4r   = substJT jsubstr  (lambdaType jty3)
                 E.logmsg TRACEG symi.pos (
                         text "(4) substitute instantiated type "
                         <+> text (nicer instTau g)
@@ -413,9 +417,20 @@ instFun symc symi mname = do
                         <+> text (nicer methty g)
                     )
                 E.logmsg TRACEG symi.pos (
-                        text "(4a) substitute instantiated type into java type of (3) :: "
-                        <+> text (show jty4)
+                        text "(4j) java type for (4) :: "
+                        <+> text (show jty4m)
                     )
+                E.logmsg TRACEG symi.pos (
+                        text "(4r) substitute instantiated raw type "
+                        <+> text (show (raw instjt)) 
+                        <+> text " into (3j) :: "
+                        <+> text (show jty4r)
+                    )
+
+                let jty4 = mergeKinded jty3 jty4m
+                E.logmsg TRACEG symi.pos (
+                        text "(4m) merge of (3j) and (4j) :: "
+                        <+> text (show jty4))
 
                 let fakety = methty.{
                                 bound ← (symi.typ.bound ++),  -- make sure ctx will be recognized
@@ -426,7 +441,7 @@ instFun symc symi mname = do
                     )
 
                 fjty4  = flatFunc jty4
-                fjty4a = flatFunc jty4a
+                fjty4r = if special then flatFunc jty4r else fjty4
 
                 let (_, sigs)    = returnType methty.rho
                     ari          = length sigs
@@ -436,13 +451,13 @@ instFun symc symi mname = do
                         where
                             t = case drop ari (dropConstr fjty4) of
                                     []  → Something --??
-                                    xs  → foldr (\a\f → Func [a,f]) (last xs) (init xs)
+                                    xs  → foldr (\a\f → Func  [a,f]) (last xs) (init xs)
                             o = (tauJT g . fst . returnType) typ3.rho
-                    retJTa
+                    retJTr
                         | Just _  ← isPrimitive o  = strict t
                         | otherwise = t 
                         where
-                            t = case drop ari (dropConstr fjty4a) of
+                            t = case drop ari (dropConstr fjty4r) of
                                     []  → Something --??
                                     xs  → foldr (\a\f → Func [a,f]) (last xs) (init xs)
                             o = (tauJT g . fst . returnType) typ3.rho
@@ -458,24 +473,26 @@ instFun symc symi mname = do
                     ex = fold app fun vbls
                         where app a b = App{fun=a, arg=b, typ=fmap (reducedSigma g) a.typ}
                     -- manipulate function arg types and make args Kinded if so in original type 
-                    gargs0 = case jty4 of               -- declared type of the arguments
-                                Func{gargs} → fjty4
+                    gargs0 = case jty4r of               -- declared type of the arguments
+                                Func{gargs} → fjty4r
                                 other       → []
-                    gargs1 = case jty4a of              -- the real type of the arguments
-                                Func{gargs} → fjty4a
+                    gargs1 = case jty4 of                -- the real type of the arguments
+                                Func{gargs} → fjty4
                                 other       → []
                     nctxs  = length methty.rho.context
                     cgargs = take nctxs gargs0
                     vgargs = drop nctxs gargs0
                     rgargs = drop nctxs gargs1
                     binds = Map.fromList [(uid, (newBind g sig atom).{jtype=lazy jt})
-                                | (uid, sig, atom, jt) ← zip4 uids sigs atoms rgargs ]
+                                | (uid, sig, atom, jt) ← zip4 uids sigs atoms vgargs ]
                     rawbinds
-                        | special = fmap (\x → x.{jex ← JCast x.jtype . JCast Something}) binds
+                        | special = Map.fromList [(uid, (newBind g sig ex).{jtype=lazy jt})
+                                | (uid, sig, atom, jt) ← zip4 uids sigs atoms rgargs,
+                                                        ex = JCast (lazy jt) (JCast Something atom) ]
                         | otherwise = binds
-                result ← compiling sym.{typ=fakety} (genExpr true retJTa ex rawbinds)
+                result ← compiling sym.{typ=fakety} (genExpr true retJT ex rawbinds)
                 let rex
-                        | special, retJTa != retJT = JCast retJT (JCast Something result.jex)
+                        | special, retJTr != retJT = JCast retJTr (JCast Something result.jex)
                         | otherwise                = result.jex
 
                     unchecked :: JExpr -> Bool
@@ -501,7 +518,7 @@ instFun symc symi mname = do
                                         then attrs [JUnchecked, JPublic, JFinal, JOverride]
                                         else attrs [JPublic, JFinal, JOverride], 
                             gvars = targs methty, 
-                            jtype = retJT, 
+                            jtype = retJTr, 
                             name = latinF ++ (symJavaName g sym).base, 
                             args = [(attrFinal, pSigma, ctx, name) 
                                        | (ctx,name) ← zip cgargs 

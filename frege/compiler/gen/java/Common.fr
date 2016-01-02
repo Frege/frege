@@ -16,7 +16,7 @@ import Compiler.common.Errors as E()
 -- import Compiler.common.Mangle(mangleJtv)
 import Compiler.common.Types as CT(substSigma, substTau, )
 
-import Compiler.enums.Flags(TRACEZ)
+import Compiler.enums.Flags(TRACEZ, TRACEG)
 import Compiler.enums.RFlag(RValue)
 import Compiler.types.Global(StIO, StG, Symbol, SymInfo8, Global(), GenSt(),
             getST, changeST, uniqid,
@@ -82,11 +82,11 @@ jtWrapped   = Nativ {typ = "frege.runtime.WrappedCheckedException", gargs=[], ge
 --- 'JType' of the NoMatch exception 
 jtNoMatch   = Nativ {typ = "frege.runtime.NoMatch", gargs=[], generic = true}
 
--- Java name of @Thunk@
--- jnThunk   = JName "frege.run" "Thunk"
+--- Java FQN of @Thunk@
+thunkFQN = "frege.run.Thunk"
 
 --- Java type of a @Thunk@ that evaluates to t
-private jtThunk t = nativ "frege.run.Thunk" [boxed t] 
+private jtThunk t = nativ thunkFQN [boxed t] 
 
 -- Java name of @Lazy@
 -- jnLazy   = JName "frege.run" "Lazy"
@@ -101,7 +101,7 @@ jstHigher = JX.static "higherRank" jtRuntime
 convertHigher jx jt = JInvoke jstHigher.{targs=[jt]} [jx]
 
 ---  given T, creates 'JType' Thunk<T>
-inThunk t = nativ "frege.run.Thunk" [t]
+inThunk t = nativ thunkFQN [boxed t]
 
 --  given T, creates 'JType' Lazy<T>
 -- inLazy t = Ref jnLazy [t]
@@ -181,7 +181,7 @@ sigmaJT g (ForAll bnd rho)
     a corresponding 'Kinded'.
 -}
 instKinded  KType = Something
-instKinded  kind  = Func (Something:take k wilds)
+instKinded  kind  = Func  (Something:take k wilds)
             where
                 k = kArity kind
 
@@ -244,7 +244,8 @@ taujtApp g qname rest app
              let sigmas = [ ConField.typ f | sym@SymD {flds} <- values sym.env, f <- flds ]
              in case sigmas of
                  []     -> Prelude.error (nice sym g ++ " has no fields")
-                 (s:_)  -> (substJT subst . lambdaType . sigmaJT g) s
+                 (s:_)  -> case (substJT subst . lambdaType . sigmaJT g) s of
+                            other → other
                     where
                         subst = fromList (zip sym.typ.vars  (map (boxed . tauJT g) rest ++ wilds))
                         -- rsig = ForAll [] (RhoTau [] app) 
@@ -257,7 +258,7 @@ taujtApp g qname rest app
                                         else Nativ {typ=s, gargs,    generic=true}
               | enum            = jtEnum
               | qname.base == "->" 
-                                = Func args
+                                = Func  args
               | otherwise       = Ref {jname = symJavaName g sym, gargs = args}
               where 
                 args = map fst (zip (map (boxed . tauJT g) rest ++ wilds) sym.typ.bound)
@@ -550,7 +551,7 @@ symInfo sym = do
     g <- getST
     case g.gen.symi8.lookup sym of
         Just si -> do
-                E.logmsg TRACEZ sym.pos (
+                E.logmsg TRACEG sym.pos (
                     text "got symInfo:" <+> text (nice sym g) <+> text (show sym.sid)
                     </> text "si.returnJT" <+> annoG g si.returnJT
                     </> text "si.retSig  " <+> text (nice si.retSig g)
@@ -565,12 +566,15 @@ symInfo sym = do
                     fjts = map lambdaType sjts
                     si = SI8{returnJT = returnJType sym.rkind rjt, retSig = ForAll [] r, argJTs = fjts, argSigs = as}
                 changeST Global.{gen <- GenSt.{symi8 <- insert sym si}}
-                E.logmsg TRACEZ sym.pos (
+                E.logmsg TRACEG sym.pos (
                     text "put symInfo:" <+> text (nice sym g) <+> text (show sym.sid)
                     </> text "si.returnJT" <+> annoG g si.returnJT
                     </> text "si.retSig  " <+> text (nice si.retSig g)
                     -- </> text "
                     )
+                zipWithM_ (\s j → E.logmsg TRACEG sym.pos (
+                    text "arg :: " <+> text (nicer s g) <+> text " @@ " <+> text (show j)
+                    )) si.argSigs si.argJTs
                 return si
             SymD{} -> do
                 let (r, as) = U.returnType sym.typ.rho
@@ -754,10 +758,11 @@ substJT subst jt = case jt  of
     where 
         many = map (substJT subst)
 
- 
---returnJT :: JType → JType
---returnJT Func{gargs} = last gargs
---returnJT other       = other
+
+funcResult :: JType → JType
+funcResult Func{gargs} = last gargs
+funcResult other       = other
+
 flatFunc Func{gargs=[a,b]} = a : flatFunc b
 flatFunc Func{gargs=gs}    = init gs ++ flatFunc (last gs)
 flatFunc t                 = [t] 
@@ -822,3 +827,32 @@ unsafeCast g sym = case sym.name of
                                             needsUnchecked snd cmem.name Something]
                 =  not (null mems)
             _   =  false
+
+--- make the second type kinded according to the pattern in the first one
+--- the types must be identical up to substitutions
+mergeKinded :: JType → JType → JType
+mergeKinded pt ot = case pt of
+        Ref{jname, gargs} →  case ot of
+            Ref{} | jname == ot.jname = ot.{gargs ← many}
+                  | otherwise = fail pt ot
+        TArg{var} →  ot
+        Wild{bounds} →  ot
+        Nativ{typ, gargs, generic} →  case ot of
+            Nativ{} | typ == ot.typ = ot.{gargs ← many}
+                  | otherwise = fail pt ot
+        Kinded{arity, gargs} →  case ot of
+            Kinded{} | arity == ot.arity = ot.{gargs ← many}
+                     | otherwise = fail pt ot
+            _ = mergeKinded pt (asKinded ot arity)      -- do it deeply
+        Lazy{yields} →  case ot of
+            Lazy{} = ot.{yields ← mergeKinded yields}
+            _ = fail pt ot
+        Func{gargs} →  case ot of
+            Func{} = ot.{gargs ← many}
+            _ = fail pt ot
+        Constr{jname, gargs} →  if pt == ot then ot else fail pt ot
+        Something →  if ot == Something then Something else fail pt ot
+    where
+        many = zipWith mergeKinded pt.gargs
+        fail a b = error ("mergeKinded failed at: (" ++ show pt ++ ") vs (" ++ show ot ++ ")")
+ 

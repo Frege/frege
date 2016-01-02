@@ -516,7 +516,7 @@ genStmts jret rm ex binds
                                     (take (length sym.typ.rho.context) (getCtxs g.{genEnv ← tail}) ) ++
                                     (getArgs g.{genEnv ← tail}) 
                         call <- genExpr true rm ex binds
-                        case call.jex of
+                        case lambda7 (unthunked call.jex) of
                             JInvoke{args} -> do
                             -- si <- symInfo sym
                             -- abinds   <- sequence (zipWith genEx si.argJTs args)
@@ -525,18 +525,21 @@ genStmts jret rm ex binds
                             JNewClass{
                                 args=[], 
                                 decls=[JMethod{
-                                    name="eval", 
+                                    name="call", 
                                     args=[], 
                                     body=JBlock [JReturn JInvoke{args}]}]} -> do
                                 let assigns = zipWith JAssign (map JAtom argNames) args --(map Binding.jex abinds)
                                 pure (comment:assigns ++ [JEx (JAtom "continue tailrecursion")])
-                            _ -> do
+                            it -> do
                                 E.error (getpos ex) (text "can't make tail recursion for"
                                     </> PP.nest 4 (text (nicer ex g))
                                     </> text "from"
-                                    </> PP.nest 4 (PP.group (annoG g call.jex)))
+                                    </> PP.nest 4 (PP.group (annoG g it)))
                                 return [JEx (JAtom "continue tailrecursion")]
                  where
+                    unthunked JNew{jt=Nativ{typ}, args=[x]}
+                        | typ == thunkFQN = x
+                    unthunked other = other
                     comment = sComment ("tailcall  " ++ nicer ex g)
                     -- genEx tt aex = genExpr false tt aex binds
              _ = do
@@ -1212,7 +1215,7 @@ genExpr rflg rm ex binds = do
                         fret        =  case instjt of
                                         Func{gargs} → case drop nargs (dropConstr (flatFunc instjt)) of
                                             []  → Something --??
-                                            xs  → foldr (\a\f → Func [a,f]) (last xs) (init xs)
+                                            xs  → foldr (\a\f → Func  [a,f]) (last xs) (init xs)
                                             --[x] → x
                                             --xs  → Func xs
                                         _           → Something  -- ??  
@@ -1272,23 +1275,30 @@ genExpr rflg rm ex binds = do
 
                       case symv of
 
-                        -- lambda bound functions
-                        SymV{name = Local{uid}, expr = Nothing} → do
-                            fun ← genExpr false (sigmaJT g vsigma) vbl binds
-                            let call0   = newBind g ret
-                                            (JInvoke 
-                                                JExMem{jex = fun.jex, name = "apply", targs = []}
-                                                (thctxs ++ abxs))
-                                thctxs  =  map (\c -> JInvoke 
-                                                        (JX.static "lazy" (inThunk Something)).{targs=[]}
-                                                        [c]) ctxs
-                                call    =  call0.{jtype = strict retjt}
-                                result  =  if isStrictJT rm 
-                                            then call
-                                            else delayBind call
-                            pure result
+                        -- lambda bound functions or let bound lambdas
+                        SymV{name = Local{uid}} | innerFun || lambdaBound,
+                            Just b ← lookup uid binds → do
+                                let subrm
+                                        | null b.ftype.bound = boxed b.jtype
+                                        | otherwise = rhoJT g vsigma.rho
+                                fun ← genExpr false subrm vbl binds
+                                let call0   = newBind g ret
+                                                (JInvoke 
+                                                    JExMem{jex = fun.jex, name = "apply", targs = []}
+                                                    (thctxs ++ abxs))
+                                    thctxs  =  map (\c -> JInvoke 
+                                                            (JX.static "lazy" (inThunk Something)).{targs=[]}
+                                                            [c]) ctxs
+                                    retjtf  =  strict retjt
+                                    call    =  call0.{jtype = retjtf}
+                                    result  =  if isStrictJT rm == isStrictJT retjtf
+                                                then call
+                                                else if isStrictJT retjtf 
+                                                    then delayBind call
+                                                    else call           -- will be forced by result
+                                pure result
 
-                        -- local/inner functions
+                        -- local functions
                         SymV{name = Local{uid, base}, rkind, expr = Just _}
                             | Just b <- lookup uid binds → do
                                 let funb    =  strictBind g b
@@ -1302,10 +1312,11 @@ genExpr rflg rm ex binds = do
                                     call0   =  newBind g ret
                                                     (JInvoke jex arguments)
                                     call    =  call0.{jtype = retjt}
-                                    result  =  if isStrictJT rm 
-                                                then call
-                                                else delayBind (strictBind g call)
-                                                    
+                                    result  =  if isStrictJT rm == isStrictJT retjt
+                                            then call
+                                            else if isStrictJT retjt 
+                                                then delayBind call
+                                                else call           -- will be forced by result
                                 pure result
                             | otherwise = E.fatal pos (text "FATAL COMPILER ERROR "
                                     <+> text (nicer vbl g)
@@ -1358,7 +1369,9 @@ genExpr rflg rm ex binds = do
                                 call    =  call0.{jtype = retjt}
                                 result  =  if isStrictJT rm 
                                             then call
-                                            else delayBind (strictBind g call)
+                                            else if not (isStrictJT call.jtype) && RSafeTC `member` symv.rkind
+                                                then call
+                                                else delayBind (strictBind g call)
                             pure result
                         _ → noGenApp "unknown SymV" vbl args
                 genApp bad args = noGenApp "no Con or Vbl" bad args
