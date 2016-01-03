@@ -951,29 +951,45 @@ genExpr rflg rm ex binds = do
                 E.logmsg TRACEG (getpos ex) (
                         text "etaWrap: (a=" <> anno a <> text ", n=" <> anno n <> text ") "
                         <+> text (nicer ex g)
-                        <+> text " @@ " <+> text (nicer ft g)
+                        <+> text " @@ " <+> text (nice ft g)
                         <+> text " as " <+> text (show rm)
                     )
                 uids ← replicateM n uniqid
                 let syms    = [ (U.patLocal (pos.change VARID ("η" ++ show u)) u "η").{typ=s} 
                                     | (u,s) <- zip uids sigs]
-                    atoms   = map (JAtom . ("η$" ++) . show) uids
-                    ajts    = take n gargs
+                    atoms   = map (JAtom . ("η$" ++)    . show) uids
+                    ctoms   = map (JAtom . ("ctx$" ++)  . show) uids
+                    cjts    = takeWhile isConstr gargs
+                    cbnds   = [ (newBind g pSigma atom).{jtype = Lazy c} |
+                                    (atom, c) ← zip ctoms cjts ]
+                    ajts    = take a (dropConstr gargs)
                     ebnds   = [ (newBind g s x).{jtype = lazy t} | 
                                     (s,x,t) <- zip3 sigs atoms ajts]
                     newbinds = fold (\t (s,b) → insert s.sid b t) binds (zip syms ebnds)
+                    cargs    = [(attrFinal;pSigma;Lazy jt;nm) | (jt,JAtom nm) ← zip cjts ctoms]
                     fargs    = [(attrFinal;pSigma;lazy jt;nm) | (jt,JAtom nm) ← zip ajts atoms]
                     eexs     = [ Vbl{pos=sym.pos, name=sym.name, typ=Just sym.typ} | sym <- syms ]
                     nex      = fold (\x y -> App x y (reduceSigma <$> x.typ)) ex eexs
-                    subrm    = case drop (min a n) gargs of
+                    subrm    = case drop n gargs of
                         [x] -> x
                         gs  -> Func gs
+                    fake        = (U.patLocal (getpos ex) 0 "\\lambda").{depth=a,typ=ft}
                 mapM_ SymTab.enter syms 
-                call ← genExpr false  subrm nex newbinds
-                let lambda = JCast (boxed rm) JLambda{fargs, code = Left apply}
+                call ← compiling fake (genExpr false  subrm nex newbinds)
+                let lambda = JCast (boxed rm) JLambda{fargs = cargs ++ fargs, code}
                     apply
-                        | n > a  = JInvoke (JX.xmem "apply" call.jex) (drop (n-a) atoms)
+                        | n > a+length cargs = JInvoke (JX.xmem "apply" call.jex) (drop (n-a-length cargs) atoms)
                         | otherwise = call.jex
+                    code
+                        | null cargs = Left apply
+                        | otherwise  = Right (JBlock (assigns ++ [JReturn apply])) 
+                        where 
+                            assigns = zipWith3 localctx (getCtxs g) cjts ctxscalled
+                            ctxscalled = zipWith (\atom _ → JX.invoke [] (JX.xmem "call" atom))
+                                            ctoms cjts
+                            localctx s t x = JLocal{decl=JMember{
+                                                    attr=attrFinal, 
+                                                    jtype=t, name=s, init = Just x}}
                 result (newBind g ft lambda).{jtype=rm}
             --| Func{gargs} ← boxed rm = E.fatal pos (text "etaWrap: don't know how to wrap "
             --                <+> text (nicer ft g)
