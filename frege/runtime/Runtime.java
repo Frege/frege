@@ -82,7 +82,7 @@ public class Runtime {
 	}
 	
 	/**
-	 * Implementation for frege.prelude.PreludeBase.Class.ForName
+	 * Implementation for frege.prelude.PreludeBase.Class.forName
 	 * @throws ClassNotFoundException 
 	 */
 	@SuppressWarnings("unchecked") 
