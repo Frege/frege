@@ -50,16 +50,37 @@ import frege.runtime.Value;
 public class RunTM {
 
 	/**
-	 * <p> This is used to coerce higher ranked functions.
-	 * They are passed around as {@link Object} 
+	 * <p> This is used to correct the compile time type for higher ranked functions 
+	 * or types instantiated with higher kinded arguments.</p>
+	 * Higher ranked functions are passed around with {@link Object} in place of type variables, 
 	 * and are instantiated at the needed type when they're used. </p>
+	 * <p> The operations of type classes with higher kinded type variables (i.e. Functor, Monad, etc.)
+	 * give rise to higher kinded types. The higher kinded  type applications are modeled in Java
+	 * with one of the classes from {@link Kind}. For example, a value with type</p>
+	 * <pre> [Maybe Char]</pre>
+	 * is normally encoded as
+	 * <pre> TList&lt;TMaybe &lt;Character&gt;&gt; </pre>
+	 * <p>but when it is passed to some polymorphic function that expects at this place</p>
+	 * <pre>[f e]</pre>
+	 * <p>its Java type needs to be /p>
+	 * <pre> TList&ltKind.U&lt;TMaybe&lt;?&gt;, Character&gt;&gt;</pre>
+	 * <p>to comply. Likewise, such kinded types need to be converted back to normal ones.
+	 * But the Java compiler can only understand type conversions at the outermost level 
+	 * from normal to kinded (all suitable Frege types extend the possible Kind classes depending on the 
+	 * kind of their type constructor). There is simply no way to tell Java that the normal
+	 * notation and the kinded notation describe the very same type. For example, it cannot
+	 * understand that</p>
+	 * <pre>Func.U&lt;Kind.U&lt;TMaybe&lt;?&gt;, Character&gt;, Boolean&gt;</pre>
+	 * <p>is the same function type as</p>
+	 * <pre>Func.U&lt;TMaybe&lt;Character&gt;, Boolean&gt;</pre>
 	 * <p> Note that Frege type checking ensures that the given type is an
-	 * instance of the original polymorphic type of the function.</p>
+	 * instance of the original polymorphic type of the function,
+	 * so the conversion is not really "unsafe".</p>
 	 * @param it 
-	 * @return A function with the correct type.
+	 * @return The value with the required compile time type. Hopefully, the JIT takes notice and eliminates this stuff.
 	 */
 	@SuppressWarnings("unchecked")
-	public static<G> G higherRank(Object it) {
+	public static<G> G cast(Object it) {
 		return (G) it;
 	}
 
