@@ -26,7 +26,7 @@ public class Javac {
 		if (compiler != null) {
 			// use the internal compiler
 			final StandardJavaFileManager fileManager = 
-		    		compiler == null ? null : compiler.getStandardFileManager(null, null, null);
+		    			compiler.getStandardFileManager(null, null, null);
 			int lastopt = cmd.length - 1;
 			while (cmd[lastopt].endsWith(".java")) lastopt--;
 			File[] files = new File[cmd.length-1-lastopt];
