@@ -225,7 +225,9 @@ tauJT   g (app@TApp a b)
          Meta Flexi{kind}:ts    →  Kinded{arity = k, 
                                           gargs = wildFunc k : take k (map (boxed . tauJT g) ts ++ wilds)}
                                 where k = kArity kind
-         other                  →  Something     -- we know nothing about it
+         Meta Rigid{kind}:ts    → Kinded{arity=k,
+                                          gargs = instKinded kind : take k (map (boxed . tauJT g) ts ++ wilds)}
+                                where k = kArity kind
  
 tauJT   g (ty@TCon {pos, name}) =  taujtApp g name [] ty
  
@@ -242,13 +244,14 @@ tauJT   g (TSig sig)            = sigmaJT g sig
 
 taujtApp g qname rest app
     | Just (sym@SymT{}) <- g.findit qname = case sym of
-        SymT {product=true, newt=true} ->
+        SymT {product=true, kind, newt=true} ->
              let sigmas = [ ConField.typ f | sym@SymD {flds} <- values sym.env, f <- flds ]
              in case sigmas of
                  []     -> Prelude.error (nice sym g ++ " has no fields")
                  (s:_)  -> case (substJT subst . lambdaType . sigmaJT g) s of
                             other → other
                     where
+                        k = kArity kind
                         subst = fromList (zip sym.typ.vars  (map (boxed . tauJT g) rest ++ wilds))
                         -- rsig = ForAll [] (RhoTau [] app) 
         SymT {product,nativ,enum,pur}
@@ -333,10 +336,10 @@ canBeKinded jt       !k  = k > 0 && jt.{gargs?} && length jt.gargs >= k
 fromKinded (orig@Kinded n (jt:args))
     | jt.{gargs?} = jt.{gargs <- (++args) . take (length jt.gargs-n)}
     | otherwise   = orig -- error ("fromKinded: type is variable  " ++ show jt) 
-fromKinded jt = error ("fromKinded: not a kinded type " ++ show jt)
+fromKinded jt = jt  -- error ("fromKinded: not a kinded type " ++ show jt)
 
 isBadKinded Kinded{gargs=Nativ{}:_} = true
-isBadKinded Kinded{gargs}            = any isBadKinded gargs
+isBadKinded Kinded{gargs}           = any isBadKinded gargs
 isBadKinded Lazy{yields}            = isBadKinded yields
 isBadKinded Ref{gargs}              = any isBadKinded gargs
 isBadKinded Nativ{gargs}            = any isBadKinded gargs
@@ -525,6 +528,9 @@ withoutConstr it            = it
 
 --- drop the constraints from a list of java types
 dropConstr = dropWhile isConstr
+
+--- take the constraints from a list of java types
+takeConstr = takeWhile isConstr
 
 --- show a java expression for debugging purposes
 showJex ∷ JExpr → String
@@ -844,17 +850,22 @@ mergeKinded pt ot = case pt of
                   | otherwise = fail pt ot
         Kinded{arity, gargs} →  case ot of
             Kinded{} | arity == ot.arity = ot.{gargs ← many}
+                     | arity < ot.arity  = mergeKinded pt (asKinded (fromKinded ot) arity)
                      | otherwise = fail pt ot
             _ = mergeKinded pt (asKinded ot arity)      -- do it deeply
         Lazy{yields} →  case ot of
             Lazy{} = ot.{yields ← mergeKinded yields}
             _ = fail pt ot
         Func{gargs} →  case ot of
-            Func{} = ot.{gargs ← many}
+            Func{} = ot.{gargs ← (takeConstr ot.gargs++) . manyf . dropConstr}
+            Ref{}  = ot
             _ = fail pt ot
-        Constr{jname, gargs} →  if pt == ot then ot else fail pt ot
+        Constr{jname, gargs} 
+            | Constr{} ← ot = ot
+            | otherwise     = fail pt ot
         Something →  if ot == Something then Something else fail pt ot
     where
-        many = zipWith mergeKinded pt.gargs
+        many = zipWith mergeKinded (pt.gargs)
+        manyf = zipWith mergeKinded (withoutConstr pt).gargs
         fail a b = error ("mergeKinded failed at: (" ++ show pt ++ ") vs (" ++ show ot ++ ")")
  
