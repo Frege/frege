@@ -209,13 +209,6 @@ data JArray a = native "java.lang.Object" where
         mapM_ (\(i,a) -> ArrayElement.setElemAt arr i a)  xs
         pure arr
 
-    {--
-        Create a mutable array from a finite list of 'Maybe' values.
-    -}
-    fromMaybeList ∷ ArrayElement α ⇒ [Maybe α] -> STMutable β (JArray α)
-    fromMaybeList xs = fromIndexList ys
-        where
-            ys = [ (n;y) | (Just y, n) <- zip xs [0..]]
 
     {--
         Create a mutable generic array from a finite index/value list.
@@ -230,23 +223,6 @@ data JArray a = native "java.lang.Object" where
         mapM_ (uncurry (JArray.setElemAt arr))  xs
         return arr
 
-    {--
-        Apply a function to an array element and 
-        write the result to another array at the same index.
-    -}
-    mapElem :: (ArrayElement γ, ArrayElement α) => (γ->α) -> JArray γ -> ArrayOf β α -> Int -> ST β ()
-    mapElem f src dest index = ArrayElement.setAt dest index value 
-        where value = fmap f (ArrayElement.itemAt src index) 
-
-    --- Map a function over the elements of an immutable array.
-    --- The results will be collected in a new mutable array of the same length.
-    --- If the target element type is a primitive one, no *null* elements are allowed in the source array.
-    map :: (ArrayElement α, ArrayElement β) => (α->β) -> JArray α -> STMutable γ (JArray β)
-    map f src = do
-            let !max = length src
-            dest  <- newArray max
-            mapM_ (JArray.mapElem f src dest) [0..max-1]
-            return dest
 
     --- Modify a mutable array by applying a function to all its elements.
     modify :: ArrayElement α => (α->α) -> ArrayOf β α -> ST β ()
@@ -285,6 +261,7 @@ data JArray a = native "java.lang.Object" where
 instance ListSource JArray where
     --- Unload an immutable array to a list
     --- The resulting list consists of all the non null elements of the array argument.
+    --- This will work for arrays of reference type only!
     toList :: JArray a -> [a]
     toList !ra = mapMaybe ra.itemAt [0..ra.length-1] 
 
@@ -302,25 +279,9 @@ instance (Eq a) ⇒ Eq (JArray a) where
 toMaybeList :: JArray α -> [Maybe α]
 toMaybeList ja = map ja.itemAt [0..ja.length-1]
 
---- Create an immutable array from a finite list whose elements are 'Maybe' values.
---- Uses 'JArray.fromMaybeList' and freezes the resulting array.
---- Note that 
---- > arrayFromList . toList
---- does not guarantee reconstruction of the original array, because @null@s get lost, whereas
---- > arrayFromMaybeList . toMaybeList
---- does.
-arrayFromMaybeList ∷ ArrayElement a ⇒ [Maybe a] → JArray a
-arrayFromMaybeList !xs = (JArray.fromMaybeList xs >>= readonly id).run
 
---- Create an immutable array from a finite list whose elements are 'ArrayElement`
---- Uses 'JArray.fromList' and freezes the resulting array.
-arrayFromList :: ArrayElement α => [α] -> JArray α
-arrayFromList !xs = (JArray.fromList xs >>= readonly id).run
 
---- Create an immutable array from a finite index/value list.
---- Uses 'JArray.fromIndexList' and freezes the resulting array.    
-arrayFromIndexList :: ArrayElement α => [(Int, α)] -> JArray α
-arrayFromIndexList !xs = (JArray.fromIndexList xs >>= readonly id).run    
+  
 
 --- Create an immutable generic array from a finite index/value list.
 --- Uses 'JArray.genericFromIndexList' and freezes the resulting array.
@@ -330,14 +291,6 @@ genericArrayFromIndexList !xs = (JArray.genericFromIndexList xs >>= readonly id)
 
 
 
---{-- 
---    Map a function over the elements of an immutable array,
---    and collect the results in another immutable array.
---
---    Uses 'JArray.map' and makes result read-only. 
----}
---arrayMap :: (ArrayElement α, ArrayElement β) => (α->β) -> JArray α -> JArray β
---arrayMap f arr = ST.run (JArray.map f arr >>= readonly id)
 
 {--
     Left fold an immutable array
@@ -396,10 +349,87 @@ class JavaType a => ArrayElement a where
     modifyAt f arr i = getAt arr i >>= setAt arr i . fmap f 
     --- Modify non null item at index in mutable array with result of function application.
     modifyElemAt    :: (a -> a) -> Mutable s (JArray a) -> Int -> ST s ()
-    modifyElemAt f arr i = getElemAt arr i >>= setElemAt arr i . f 
-    
-    -- newArray n = JArray.new javaClass n
-    
+    modifyElemAt f arr i = getElemAt arr i >>= setElemAt arr i . f
+    --- The size of an 'JArray'
+    pure native arrayLength ".length" :: JArray a → Int 
+    --- Unload 'JArray' to a list, lazily
+    listFromArray :: JArray a → [a]
+    listFromArray !ra = mapMaybe (itemAt ra) [0..arrayLength ra - 1]
+    --- Unload 'JArray' to a maybe list, lazily
+    maybeListFromArray :: JArray a → [Maybe a]
+    maybeListFromArray !ra = map (itemAt ra) [0..arrayLength ra - 1]
+    {--
+        Create a mutable array from a finite list.            
+    -}
+    arrayFromListST :: [a] -> STMutable β (JArray a)
+    arrayFromListST xs = do
+        let !len = xs.length 
+        arr <- newArray len
+        let !acts = zipWith (setElemAt arr) [0..len-1] xs
+        sequence_ acts
+        pure arr
+    --- Create an immutable array from a finite list whose elements are 'ArrayElement`
+    --- Uses 'JArray.fromList' and freezes the resulting array.
+    arrayFromList :: [a] -> JArray a
+    arrayFromList !xs = (arrayFromListST xs >>= readonly id).run
+
+    {--
+        Create a mutable array from a finite list of 'Maybe' values.
+    -}
+    arrayFromMaybeListST ∷ [Maybe a] -> STMutable β (JArray a)
+    arrayFromMaybeListST xs = arrayFromIndexListST ys
+        where
+            ys = [ (n;y) | (Just y, n) <- zip xs [0..]]
+
+    --- Create an immutable 'JArray' from a finite list of 'Maybe' values.
+    -- The array slots corresponding to 'Nothing' values in the input remain @null@
+    arrayFromMaybeList ∷ [Maybe a] -> JArray a
+    arrayFromMaybeList xs = ST.run(arrayFromMaybeListST xs >>= readonly id)
+    {--
+        Create a mutable array from a finite index/value list.
+
+        Indexes not mentioned in the list remain @null@ for 
+        non primitive array elements and 0 otherwise.            
+    -}
+    arrayFromIndexListST :: [(Int,a)] -> STMutable β (JArray a)
+    arrayFromIndexListST xs = do
+        let !len = L.fold max 0 (L.map fst xs) 
+        arr <- newArray (if null xs then 0 else len+1)
+        mapM_ (\(i,a) -> setElemAt arr i a)  xs
+        pure arr
+
+    --- Create an immutable 'JArray' from a finite index/value list. See 'arrayFromIndexListST'
+    arrayFromIndexList :: [(Int,a)] -> JArray a
+    arrayFromIndexList xs = ST.run(arrayFromIndexListST xs >>= readonly id)
+--    {--
+--        Apply a function to an array element and 
+--        write the result to another array at the same index.
+--    -}
+--    mapElem :: (ArrayElement α) => (a->α) -> JArray a -> ArrayOf β α -> Int -> ST β ()
+--    mapElem f src dest index = setAt dest index value 
+--        where value = fmap f (itemAt src index) 
+--
+--    --- Map a function over the elements of an immutable array.
+--    --- The results will be collected in a new mutable array of the same length.
+--    --- If the target element type is a primitive one, no *null* elements are allowed in the source array.
+--    mapArrayST :: (ArrayElement β) => (a->β) -> JArray a -> STMutable γ (JArray β)
+--    mapArrayST f src = do
+--            dest  <- newArray (arrayLength src)
+--            loop dest 0
+--        where
+--            loop dest n 
+--                | n < (arrayLength src) = mapElem f src dest n >> loop dest (n+1) 
+--                | otherwise = pure dest
+
+{-- 
+    Map a function over the elements of an immutable array,
+    and collect the results in another immutable array.
+
+    Uses 'ArrayElement.mapArrayST' and makes result read-only. 
+-}
+arrayMap :: (ArrayElement a, ArrayElement β) => (a->β) -> JArray a -> JArray β
+arrayMap f = arrayFromMaybeList . map (fmap f) . maybeListFromArray
+
 
 {--
     Type class for array elements of primitive type.
