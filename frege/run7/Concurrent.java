@@ -1,7 +1,7 @@
 /**
  * 
  */
-package frege.run8;
+package frege.run7;
 
 
 /**
@@ -128,7 +128,12 @@ public class Concurrent {
     			new Lazy<A>() {
     	            public  A call() {
     	                return f.apply(Thunk.lazyTrue);
-    	            }}
+    	            }
+
+					@Override
+					public Thunk<A> asThunk() {
+						return null;
+					}}
     		);
 
         if (java.util.concurrent.ForkJoinTask.inForkJoinPool())
