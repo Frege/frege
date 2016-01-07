@@ -91,6 +91,8 @@ public class RunTM {
 	final public static int constructor(Value v) {		// if it is statically known that v is a Value 
 		return v.constructor(); 
 	}
+	final public static int constructor(short it) { return it; }
+	final public static int constructor(int it) { return it; }
 	// final public static int constructor(Integer v) { return v; }
 	final public static int constructor(Object v) { 	// if v is completely unknown, it could still be a Value
 		if (v instanceof Value) return ((Value)v).constructor();
