@@ -106,6 +106,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type packagename     (String, Position)
 //%type packagename1    (String, Position)
 //%type nativename      String
+//%type rawnativename   String
 //%type nativespec      (String, Maybe [TauS])
 //%type gargs           [TauS]
 //%type nativepur       (Bool, Bool)
@@ -330,6 +331,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%explain nativedef    a declaration of a native item
 //%explain impurenativedef    a declaration of a native item
 //%explain nativename   a valid java identifier
+//%explain rawnativename   a valid java identifier
 //%explain nativespec   a native generic type
 //%explain gargs        native generic type arguments
 //%explain nativepur    a native data type
@@ -425,10 +427,16 @@ script:
     ;
 
 nativename:
+    rawnativename               { \r -> do { g <- getST; pure (substRuntime g r) }}
+    ;
+
+rawnativename:
       VARID                     { \t -> Token.value t }
     | CONID                     { \t -> Token.value t }
-    | VARID  '.' nativename     { \a\_\c -> Token.value a ++ "." ++ c }
-    | QUALIFIER  nativename     { \a\c   -> Token.value a ++ "." ++ c }
+    | PACKAGE                   { \t -> Token.value t }
+    | VARID    '.' rawnativename     { \a\_\c -> Token.value a ++ "." ++ c }
+    | PACKAGE  '.' rawnativename     { \a\_\c -> Token.value a ++ "." ++ c }
+    | QUALIFIER    rawnativename     { \a\c   -> Token.value a ++ "." ++ c }
     | STRCONST                  { \x -> let s = Token.value x; i = length s - 1 in substr s 1 i }
     ;
 
