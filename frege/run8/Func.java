@@ -1,6 +1,6 @@
 package frege.run8;
 import frege.run.Kind;
-import frege.run.Lazy;
+import frege.run8.Lazy;
 
 public class Func  {
   @FunctionalInterface public interface U<𝓐, 𝓑> 

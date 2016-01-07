@@ -1,4 +1,4 @@
-package frege.run;
+package frege.run8;
 
 import java.util.concurrent.Callable;
 
@@ -17,4 +17,10 @@ public interface Lazy<R> extends Callable<R> {
 	 * @see java.util.concurrent.Callable#call()
 	 */
 	public abstract R call();
+
+	/**
+	 * <p> Tell if this is really a {@link Thunk} </p> 
+	 * @return
+	 */
+	public default Thunk<R> asThunk() { return null; }
 }

@@ -1127,17 +1127,22 @@ genExpr rflg rm ex binds = do
         -- Function application 
         App{} =  do
                     g ← getST
-                    bind ← genApp fun args
-                    case fun of 
-                        Con{name} | not (T.newtypeCon name g) = result bind
-                        other | isStrictJT rm = result bind
-                              | otherwise     = result (delayBind (strictBind g bind))
-                         
+                    genApp fun args
+
             where
                 flat  = map fst (flatx ex)
                 fun   = head flat
                 args  = tail flat
 
+                -- determine whether result so far needs nesting, and which one
+                appResult safetc bind = do
+                    case fun of 
+                        Con{name} | not (T.newtypeCon name g) = result bind
+                        other | isStrictJT rm         = result bind
+                              | isStrictJT bind.jtype = result (delayBind bind)
+                              -- lazy/lazy situation
+                              | rflg, safetc          = result bind
+                              | otherwise             = result (delayBind bind)      -- possibly nested!
                 -- constructors
                 genApp (con@Con {pos, name, typ = Just csigma}) args = do
                     sym     ← U.findD name
@@ -1220,11 +1225,7 @@ genExpr rflg rm ex binds = do
                                     make = JX.static "mk" jref
                                     call = JInvoke make arguments
                                     bind = (newBind g ft call).{jtype = retjt}
-                                pure (if not rflg 
-                                            && not (isStrictJT rm)
-                                            && any isStrictJT argjts 
-                                        then delayBind bind
-                                        else bind)
+                                appResult true bind
                         _   = noGenApp "not yet" con args
 
                 genApp (vbl@Vbl {pos, name, typ = Just vsigma}) args = do
@@ -1233,7 +1234,7 @@ genExpr rflg rm ex binds = do
                     --ft      ←  (_.{bound=[]} . fst) <$> kiSigma [] [] ft
                     let symtyp = rhoTauInSigma symv.typ
                         (orty, atys) = U.returnType symtyp.rho
-                        nargs       = length args
+                        nargs        = length args
                     E.logmsg TRACEG pos (
                             text "genApp: function "
                             <+> text name.base 
@@ -1250,6 +1251,7 @@ genExpr rflg rm ex binds = do
                                         else symv.depth
                         lambdaBound = name.isLocal && isNothing symv.expr 
                         innerFun    = name.isLocal && not (RMethod `member` symv.rkind)
+                        safetc      =  RSafeTC `member` symv.rkind
                         subst       =  U.unifySigma g symtyp vsigma
                         jsubst      =  fmap (boxed . tauJT g) subst
                         origjt      =  rhoJT g symtyp.rho
@@ -1335,7 +1337,7 @@ genExpr rflg rm ex binds = do
                                                             [c]) ctxs
                                     retjtf  =  strict retjt
                                     call    =  call0.{jtype = retjtf}
-                                pure call
+                                appResult safetc call
 
                         -- local functions
                         SymV{name = Local{uid, base}, rkind, expr = Just _}
@@ -1351,7 +1353,7 @@ genExpr rflg rm ex binds = do
                                     call0   =  newBind g ret
                                                     (JInvoke jex arguments)
                                     call    =  call0.{jtype = retjt}
-                                pure call
+                                appResult safetc  call
                             | otherwise = E.fatal pos (text "FATAL COMPILER ERROR "
                                     <+> text (nicer vbl g)
                                     <+> text " not bound, but it should") 
@@ -1366,7 +1368,7 @@ genExpr rflg rm ex binds = do
                                                     (filter (!= tau.var) (symtyp.vars)))
                                     get    = JX.jexmem  (head ctxs) (latinF ++ mangled base)
                                     bind   = (newBind g ret inst).{jtype = retjt}
-                                pure bind
+                                appResult safetc  bind
                             --| Nothing  ←  g.findit tynm = noGenApp (nicer tynm g ++ " not found") fun args
                             --| Just other ← g.findit tynm,
                             --    traceLn (tynm.base ++ " is a " ++ (nicer other g)) = undefined
@@ -1381,7 +1383,7 @@ genExpr rflg rm ex binds = do
                                     call0   =  newBind g ret
                                                     (JInvoke stref arguments)
                                     call    =  call0.{jtype = retjt}
-                                pure call 
+                                appResult true call 
                             else do
                                 let call0 
                                         | wrapped g symv = case wrapCode g JEx res symv subst arguments of
@@ -1389,7 +1391,7 @@ genExpr rflg rm ex binds = do
                                                 _ -> error "unexpected wrapCode result"
                                         | otherwise = nativeCall g symv subst arguments
                                     call    =  call0.{jtype = retjt}
-                                pure call
+                                appResult true call
 
                         -- ordinary functions
                         SymV{} → do
@@ -1398,7 +1400,7 @@ genExpr rflg rm ex binds = do
                                 call0   =  newBind g ret
                                                 (JInvoke stref arguments)
                                 call    =  call0.{jtype = retjt}
-                            pure call
+                            appResult safetc  call
                         _ → noGenApp "unknown SymV" vbl args
                 genApp bad args = noGenApp "no Con or Vbl" bad args
                 noGenApp why bad args = do

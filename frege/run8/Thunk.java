@@ -36,7 +36,7 @@
  */
 
 
-package frege.run;
+package frege.run8;
 
 import frege.runtime.BlackHole;
 
@@ -175,27 +175,13 @@ public class Thunk<R> implements Lazy<R> {
 	 * the result of evaluating the value. </p>
 	 * @param it a lazy value. <b>This must never be null!</b>
 	 */
-	public Thunk(Lazy<R> it) { eval = it; }
+	private Thunk(Lazy<R> it) { eval = it; }
 	// only used internally
 	private Thunk()   { eval = null; }
-//	/**
-//	 * <p>Create a Thunk from some Object.</p>
-//	 * <p>It is checked wether the argument is, in fact, a {@link Lazy}, and if so, the
-//	 * behaviour is just as with the other constructor. If, however, the argument is an
-//	 * ordinary value, this Thunk will only wrap it and return it when called. </p> 
-//	 * @param it a possibly lazy value. <b>This must never be null!</b>
-//	 */
-//	@SuppressWarnings("unchecked")
-//	Thunk(R it) {
-//		if (it instanceof Lazy) {
-//			eval = (Lazy<R>)it;
-//		}
-//		else {
-//			item = it;
-//			eval = null;
-//		}
-//	}
-	
+
+	@Override
+	public Thunk<R> asThunk() { return this; }
+
 	/** 
 	 * <p> evaluate the {@link Lazy}, and update this Thunk, unless it is already evaluated. </p>
 	 * @return the evaluated value 
@@ -212,18 +198,52 @@ public class Thunk<R> implements Lazy<R> {
 		// give a Class Cast Exception later.
 		// Different threads will have to wait anyway due to the "synchronized".
 		item = BlackHole.it;
-		Object o = eval;
+		
+		Thunk<R> that;
+		R rx;
+		Lazy<R> rl;
 		// algebraic datatypes are instances of Lazy, but their call() is the identity
 		// hence we know when to finish if either 
-		// * the result o is not Lazy 
+		// * the result is not Lazy 
 		// * or if it is the same reference as eval.
-		do {
-			eval = (Lazy<R>) o;
-			o = eval.call();
-		} while (o instanceof Lazy && o!=eval);
-		item = o;
-		eval = null;	// make sure all the closed over things are not referenced anymore
-		return (R)item;
+		while (true) {
+			that = eval.asThunk();
+			if (that != null) {
+				// We detected nested thunks. It would be foolish to evaluate them with
+				// call(), because chances are that in the process of doing this another
+				// nested Thunk arises, so that the call depth increases, in the worst
+				// case until stack overflow.
+				// Note that if someone manages to construct a loop of Thunks,
+				// the current one counts as evaluated because of the BlackHole in item!
+				if (that.isEvaluated()) {
+					item = that.item;		// if this is the same Thunk, this will be the black hole
+											// otherwise a valid result.
+					eval = null;
+					return (R)item;
+				}
+				// at this point, that != this and that is not evaluated yet
+				// We simply short cut, instead of calling!
+				eval = that.eval;
+				continue;					// check again for nested thunk
+			}
+			// At this point we have a Lazy that is not a Thunk at all
+			// So here is where Frege code actually may execute.
+			rx = eval.call();
+			if (rx instanceof Lazy) {
+				rl = (Lazy<R>)(Object) rx;
+				if (rl != eval) {
+					eval = rl;
+					continue;						// it returned a different Lazy
+				}
+			}
+			// at this point, we have a value in rx that is either
+			// - not a Lazy, so it is a value
+			// - or the same as eval, hence an algebraic value or a function
+			// so we mark the Thunk as evaluated, remember and return the value
+			eval = null;
+			item = rx;
+			return rx;
+		}
 	}
 
 	/**
@@ -232,39 +252,6 @@ public class Thunk<R> implements Lazy<R> {
 	 */
 	boolean isEvaluated() {
 		return item != null;
-	}
-	
-	/**
-	 * <p>Evaluate an object if it is a lazy value.</p>
-	 * <p>
-	 * This method is intended for use in generated code, as the compiler
-	 * hopefully never errs about the expected type.</p>
-	 * 
-	 * <p>It handles multiple levels of laziness, that is, if a {@link Lazy} returns another
-	 * <i>different</i> {@link Lazy}, this one will be evaluated in turn, and so forth.
-	 * This helps in cases when we need the result of a function that does tail calls.
-	 * The tail call is returned as unshared {@link Lazy}, and {@link Lazy#call()}-ing this might just
-	 * return the next tail call. 
-	 * </p>
-	 * @throws ClassCastException if the argument is not an instance of {@link Lazy} 
-	 *         and cannot be casted to <code>R</code>
-	 * @throws ClassCastException if the argument is an instance of {@link Lazy} and the
-	 *         delivered value cannot be casted to <code>R</code>         
-	 * @param o the object in question
-	 * @return the evaluated value if the argument is a {@link Lazy} instance, 
-	 *         otherwise the argument itself.  
-	 *         The result is conveniently casted to the expected return type <code>R</code>.
-	 * @author ingo
-	 */
-	@SuppressWarnings("unchecked")
-	public final static<R> R forced(Object o) {
-		Object r = null;
-		while (o instanceof Lazy) { 
-			r = ((Lazy<R>)o).call();
-			if (r==o) break;
-			o = r;
-		}
-		return (R) o;
 	}
 	
 	
@@ -277,12 +264,12 @@ public class Thunk<R> implements Lazy<R> {
 	 * to be a {@link Lazy}. 
 	 * </p>
 	 * 
-	 * <p>Because all {@link Algebraic} types implement {@link Lazy}, 
+	 * <p>Because all algebraic types implement {@link Lazy}, 
 	 * this should create an extra wrapper for native values only.</p>
 	 * 
 	 *   @param  val some value
 	 *   @return If the argument is already {@link Lazy}, it is returned properly casted.
-	 *           Otherwise it is wrapped in a {@link Thunk.Value} and returned.
+	 *           Otherwise it is wrapped in a {@link Thunk} and returned.
 	 *   @author ingo 
 	 */
 	public final static<X>  Lazy<X>  lazy(Lazy<X> val) { return val; }
@@ -296,14 +283,66 @@ public class Thunk<R> implements Lazy<R> {
 	/**
 	 * <p>Static form of the constructor</p>
 	 
-	 * <p>For statically known {@link Thunk}s, this is the identity.</p>
+	 * <p>For   {@link Thunk}s, this is the identity.</p>
 	 * <p>Other {@link Lazy} instances are wrapped in a {@link Thunk}, this makes them shared.</p>
 	 * 
 	 * @return a {@link Thunk}, no matter what.
 	 */
-	public final static<R> Thunk<R> shared(Thunk<R> v)  { return v; }
-	public final static<R> Thunk<R> shared(Lazy<R> v)   { return new Thunk<R>(v); }
-	// public final static<R> Thunk<R> shared(R v) 		{ return new Thunk<R>(v); }
+	public final static<R> Thunk<R> shared(Lazy<R> v)   {
+		Thunk<R> that = v.asThunk();
+		return that == null ? new Thunk<R>(v) : that; 
+	}
+	
+	/**
+	 * <p> The following creates a Thunk«B» and hence a Lazy«B»
+	 * from something that is known to be Lazy«Lazy«B»». </p>
+	 * 
+	 * <p>Now, the cast is justified for the reason that a Thunk«B» arranges for evaluation
+	 * in such a way that a B will actually be returned. Hence, while Thunk«B» and Thunk«Lazy«B»»
+	 * are indeed different types, it is the case that call() must never return a Lazy«B» 
+	 * that is not also a B (like with algebraic values).</p>
+	 * 
+	 * <p>We need this when two or more functions are mutually recursive, like in the 
+	 * following scenario:</p>
+	 * <pre>
+	 * 	even 0 = true
+	 *  even 1 = false
+	 *  even n = odd (n-1)
+	 *  odd n = even (n-1)
+	 * </pre>
+	 * 
+	 * <p>In such cases, direct method calls would cause a StackOverflow on larger numbers.
+	 * Hence, it is mandatory, that the result must be Lazy for all functions. 
+	 * Now consider the case where odd() is about to call even(): it must return the same 
+	 * value as even(n-1) without actually calling even(). Hence it should return something like:<p>
+	 *  
+	 * <pre>return (Lazy«Boolean») (() -> even(n-1));</pre> 
+	 * 
+	 * <p>but since the right hand side is already Lazy«Boolean» this doesn't type check. 
+	 * Likewise</p>
+	 * 
+	 * <pre>return (Lazy«Lazy«Boolean»») (() -> even(n-1));</pre>
+	 * 
+	 * <p>is incommensurable with the return type, which is just Lazy«Boolean». Hence the
+	 * solution is to embed the lambda in a Thunk:</p>
+	 * 
+	 * <pre>return Thunk.«B»nested( (Lazy«Lazy«Boolean»») (() -> even(n-1)) );</pre>
+	 * 
+	 * <p>thereby lowering the compile type lazyness of the result by one level.</p>
+	 * <p>Furthermore, odd() can now be seen as a tail-call safe function, since it doesn't
+	 * actually do a tail call, but just constructs the thunk.
+	 * 
+	 * This, in turn, makes it now possible for even to call  odd(n-1) method directly, yet
+	 * without evaluating the result. For, this will just give the nested thunk after a
+	 * limited number of method calls (1, in this case), which is
+	 * a lazy boolean and can be returned right away.</p>
+	 * <p>An alternative to this method would be to have 3 categories of functions: strict ones, lazy ones and 
+	 * double lazy ones. But this would dramatically complicate the code generator.</p> 
+	 */
+	@SuppressWarnings("unchecked")
+	public final static<R> Thunk<R> nested(Lazy<Lazy<R>> v) { 
+		return (Thunk<R>) new Thunk<Lazy<R>>(v); 
+	}
 	
 	/***
 	 * <p>Utility function to get some value and clearing it at the same time.</p>
