@@ -25,11 +25,12 @@ import Compiler.types.Symbols(SymV, SymL, SymD, SymT, SymC, SymI)
 import Compiler.types.Expression(Expr, ExprT, CAlt, CAltT, flatx)
 import Compiler.types.Patterns(Pattern, PatternT)
 import Compiler.types.Positions(Positioned)
-import Compiler.types.Types(RhoT, SigmaT, TauT, Rho, Sigma, Tau, Ctx, pSigma)
+import Compiler.types.Types(RhoT, SigmaT, TauT, Rho, Sigma, Tau, Context, Ctx, pSigma)
 import Compiler.types.Strictness(allLazy, Strictness)
 import Compiler.types.QNames(QName)
 import Compiler.types.JNames(JName, memberOf)
 import Compiler.types.Positions
+import Compiler.types.Kinds(KType)
 
 import Compiler.common.Errors as E(logmsg)
 import Compiler.common.Annotate(anno)
@@ -53,7 +54,7 @@ import Compiler.gen.java.Bindings
 import Compiler.gen.java.Match
 import Compiler.gen.java.MethodCall(methCode, wrappedOnly, wrapped, wrapCode, nativeCall)
 import Compiler.gen.java.Constants(findConst, staticConst)
-import Compiler.gen.java.Instantiation(instPatternBound, resolveConstraint)
+import Compiler.gen.java.Instantiation(instPatternBound, resolveConstraint, envCtxs, resolvableCtxs)
 import Compiler.gen.java.PrettyJava(lambda7, thunkMarker)
 
 varCode ∷ TreeMap Int Binding → Symbol → StG [JDecl]
@@ -871,6 +872,12 @@ genExpr rflg rm ex binds = do
             <+> text (show rm))
     let genArgBind arm aex = genExpr false arm aex binds
 
+        rigidContext :: Context -> Bool
+        rigidContext = (any (not . _.isFlexi) . TU.ctxTvs g)
+        
+        novbl Vbl{pos, name, typ} = false
+        novbl x                   = true 
+
         result bind = do
             E.logmsg TRACEG (getpos ex) (text "genExpr result got: " 
                 <+> (text . show) bind
@@ -1012,6 +1019,64 @@ genExpr rflg rm ex binds = do
                             <+> text (show rm))
 
     case ex of
+        {-
+            Before we proceed to generatmore complex expressions,
+            we have to check if there appears an unknown constraint with rigid meta type variables
+            in the type, like for example: 
+
+            > map (Num.* (Num.fromInt 2))  ::  Num t3244#e => [t3244#e] -> [t3244#e]
+
+            This signals that the application @map (2*)@ gets passed to a higher ranked
+            function who expects a function of type
+
+            > forall e.Num e => [e] -> [e]
+
+            The code that must be generated for this should look like:
+
+            > (Func.U<CNum<Object>, Func.U<TList<Object>, TList<Object>>) (
+            >       (Lazy<CNum<Object>> lctx$n) -> {
+            >           CNum<Object> ctx$n = lctx$n.call();
+            >           return «genExpr false (Func.U<TList<Object>, TList<Object>>) expr» 
+            >       }
+            >   )
+            > }
+
+            Note that we will hit the same expression inside the @work@ method, but since we pretend
+            that we are compiling a symbol with constraint @Num t3244#@, it will find it and 
+            pass it on to the symbol that is instantiated.
+
+        -}
+        exx 
+            |  novbl exx,
+               tctxs@(_:_) ← filter rigidContext ft.rho.context,    -- there are rigid constraints
+               null (resolvableCtxs g tctxs)                        -- none are resolvable
+            = wrapHigher tctxs ft where
+                -- wrapHigher tctxs sigma | Vbl{pos, name=Local{}, typ} ← exx = result exx
+                wrapHigher tctxs sigma = do
+                    g <- getST
+                    let depth    = length tctxs
+                        ctxNames = take depth (getCtxs g)
+                        ctxLnams = map ("l" ++) ctxNames
+                        ctxTypes = map (ctxJT g) tctxs
+                        ctxLtyps = map Lazy ctxTypes 
+                        ctxexs   = zipWith JCast ctxTypes (map JAtom ctxNames)
+                        fargs    = zipWith (\jty name → (attrFinal, pSigma, jty, name))
+                                    ctxLtyps ctxLnams
+                        proto    = JMember{attr=attrFinal, jtype=Something, name="foo", init=Nothing}
+                        assigns  = zipWith3 (\t n i → proto.{jtype=t, name=n, init=Just i})
+                                        ctxTypes ctxNames 
+                                        (map (JX.invoke [] . JX.xmem "call" . JAtom) ctxLnams)
+                        jfunc    = sigmaJT g sigma
+                        innerjt  = funcResult jfunc     -- rhoJT g sigma.rho.{context = []}
+                        fakesym  = (U.patLocal (getpos ex) 0 "\\rankN").{depth = 0, typ = sigma}
+                    E.logmsg TRACEG (getpos ex) (text"genExpr: wrapping " 
+                        <+> text (nicer ex g)
+                        <+/> text " :: " <+> text (nice sigma g)
+                        <+/> text " @@ " <+> text (show jfunc))
+                    body <- compiling fakesym (genExpr rflg innerjt ex binds)
+                    let eval     = JLambda{fargs, code = Right JBlock{stmts=map JLocal assigns ++ [JReturn body.jex]}}
+                    result (newBind g sigma (JCast jfunc eval)).{jtype = jfunc}  
+
         -- Local Variables are being looked up in the bindings
         Vbl{name=Local{uid, base}, pos, typ}
             | Just b    ← lookup uid binds = case b.ftype of
@@ -1319,6 +1384,11 @@ genExpr rflg rm ex binds = do
                       abinds  ←  sequence (zipWith genArgBind argjts args)
                       let   abxs        =  map _.jex abinds
                             arguments   =  ctxs ++ abxs
+                            apply x [] args  = JX.invoke args . JX.xmem "apply" $ x
+                            apply x ctxs args = JX.invoke args 
+                                                . JX.xmem "apply" 
+                                                . JX.invoke ctxs 
+                                                . JX.xmem "apply" $ x 
 
                       case symv of
 
@@ -1330,9 +1400,7 @@ genExpr rflg rm ex binds = do
                                         | otherwise = rhoJT g vsigma.rho
                                 fun ← genExpr false subrm vbl binds
                                 let call0   = newBind g ret
-                                                (JInvoke 
-                                                    JExMem{jex = fun.jex, name = "apply", targs = []}
-                                                    (thctxs ++ abxs))
+                                                (apply fun.jex thctxs abxs)
                                     thctxs  =  map (\c -> JInvoke 
                                                             (JX.static "lazy" (inThunk Something)).{targs=[]}
                                                             [c]) ctxs
