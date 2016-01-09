@@ -1464,10 +1464,22 @@ term:
                                                                    (fromBase x.{tokid=CONID, value=tuple (1+length es)})
                                                                    )
                                                               (e:es)}
-    | '(' expr ';' exprSS ')'       { \a\e\(x::Token)\es\_ -> fold nApp (Vbl 
+    | '(' expr ';' exprSS ')'       { \a\e\(x::Token)\es\_ -> do
+                                            g <- getST
+                                            if isOff g.options.flags EXPERIMENTAL
+                                                then pure (
+                                                    fold nApp (Vbl 
                                                                    (fromBase x.{tokid=VARID, value="strictTuple" ++ show (1+length es)})
                                                                     )
-                                                              (e:es)}
+                                                              (e:es)
+                                                     )
+                                                else pure (
+                                                    fold nApp (Con 
+                                                                   (fromBase x.{tokid=CONID, value=tuple (1+length es)})
+                                                                   )
+                                                              (e:es)
+                                                    )
+                                        }
     | '(' expr ')'                  { \_\x\_ -> Term x }
     | '[' ']'                       { \a\z ->  Con (fromBase z.{tokid=CONID, value="[]"})}
     | '[' exprSC ']'                { \b\es\z -> 
