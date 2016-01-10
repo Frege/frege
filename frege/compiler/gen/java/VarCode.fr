@@ -842,7 +842,158 @@ genExpression ret stri x binds = do
 --- > forall a b .ctx => (a->b)  ==> forall a b. ctx => a -> b 
 rhoTauInSigma (ForAll bs (RhoTau ctx fun)) = ForAll bs (U.rhoTau fun).{context=ctx}
 rhoTauInSigma sig = sig
- 
+
+--- Adapt result from 'genExpr' and do some logging
+exprResult ∷ JType → Expr → Binding → StG Binding
+exprResult rm ex bind = do
+    g ← getST
+    E.logmsg TRACEG (getpos ex) (text "genExpr result got: " 
+        <+> (text . show) bind
+        <+> text " needed:" 
+        <+> (text . show) rm)
+    let abind = adapt g bind rm
+    E.logmsg TRACEG (getpos ex) (text "genExpr result: " <+> (text . show) abind)
+    pure abind
+
+--- go down an App spine n steps, do the call and apply leftover arguments afterwards 
+etaShrink ∷ Bool → JType → ExprT → Int → TreeMap Int Binding → StG Binding
+etaShrink rflg rm ex n binds = do
+        g ← getST
+        E.logmsg TRACEG (getpos ex) (
+                text "etaShrink:" <+> anno n <+> text (nicer ex g))
+        unEta n [] ex 
+  where 
+    unEta 0 args app = getST >>= \g →
+                        genExpr false (subrm g) app binds >>= unwind args . strictBind g
+        where 
+            subrm g
+              | App{} ← app = (rhoJT g . _.{context = []} . _.rho . unJust . _.typ) app
+              | otherwise   = (rhoJT g .                    _.rho . unJust . _.typ) app
+    unEta n args (App{fun,arg}) = unEta (n-1) (arg:args) fun
+    unEta n args noapp = do
+        g ← getST
+        E.fatal (getpos ex) (text "unEta" <+> anno n 
+            <+> (text . show) (map (const '.') args) <+> text (nicer ex g))
+    -- now unwind the stack, applying the arguments as needed
+    unwind []   bind
+        | rflg, 
+            isStrictJT bind.jtype,
+            not (isStrictJT rm),
+            JInvoke{} ← bind.jex  = exprResult rm ex (delayBind bind)
+        | otherwise               = exprResult rm ex bind
+    unwind args bind = do
+        g ← getST
+        E.logmsg TRACEG (getpos ex) (text "unwind: "
+                </> text (show bind)
+                </> PP.stack (map (text . flip nicer g) args)
+            )
+        case bind.jtype of 
+            Func{gargs} = do
+                let n       =  min (length args) (length gargs - 1)
+                    cargs   = take n args
+                    rargs   = drop n args
+                    ftype   = fold (const . reducedSigma g) bind.ftype cargs
+                eargs ← zipWithM (\t x → genExpr 
+                                            false  -- (if null rargs then rflg else false)
+                                            (lazy t) x binds) (take n gargs) cargs  
+                unwind rargs . strictBind g $  
+                            bind.{stype = nicer ftype g, ftype, jtype = last gargs, 
+                            jex ← JX.invoke (map _.jex eargs) . JX.xmem "apply"}
+            t = E.fatal (getpos ex) (text "unwind, no function:" <+> text (show t))
+
+--- supply missing arguments to a partially applied function
+etaWrap ∷ ExprT → [Sigma] → TreeMap Int Binding → JType → StG Binding
+etaWrap ex sigs binds Lazy{yields}       =  etaWrap ex sigs binds yields
+etaWrap ex sigs binds (rm@Kinded{})      =  etaWrap ex sigs binds (fromKinded rm)
+etaWrap ex sigs binds (rm@Func{gargs})   = do
+        let n = length gargs - 1
+            a = length sigs
+        g <- getST
+        E.logmsg TRACEG (getpos ex) (
+                text "etaWrap: (a=" <> anno a <> text ", n=" <> anno n <> text ") "
+                <+> text (nicer ex g)
+                <+> text " @@ " <+> text (nice ft g)
+                <+> text " as " <+> text (show rm)
+            )
+        uids ← replicateM n uniqid
+        let syms    = [ (U.patLocal (pos.change VARID ("η" ++ show u)) u "η").{typ=s} 
+                            | (u,s) <- zip uids sigs]
+            atoms   = map (JAtom . ("η$" ++)    . show) uids
+            ctoms   = map (JAtom . ("ctx$" ++)  . show) uids
+            cjts    = takeWhile isConstr gargs
+            cbnds   = [ (newBind g pSigma atom).{jtype = Lazy c} |
+                            (atom, c) ← zip ctoms cjts ]
+            ajts    = take a (dropConstr gargs)
+            ebnds   = [ (newBind g s x).{jtype = lazy t} | 
+                            (s,x,t) <- zip3 sigs atoms ajts]
+            newbinds = fold (\t (s,b) → insert s.sid b t) binds (zip syms ebnds)
+            cargs    = [(attrFinal;pSigma;Lazy jt;nm) | (jt,JAtom nm) ← zip cjts ctoms]
+            fargs    = [(attrFinal;pSigma;lazy jt;nm) | (jt,JAtom nm) ← zip ajts atoms]
+            eexs     = [ Vbl{pos=sym.pos, name=sym.name, typ=Just sym.typ} | sym <- syms ]
+            nex      = fold (\x y -> App x y (reducedSigma g <$> x.typ)) ex eexs
+            subrm    = case drop n gargs of
+                [x] -> x
+                gs  -> Func gs
+            fake        = (U.patLocal (getpos ex) 0 "\\lambda").{depth=a,typ=ft}
+        mapM_ SymTab.enter syms 
+        call ← compiling fake (genExpr false  subrm nex newbinds)
+        let lambda = JCast (boxed rm) JLambda{fargs = cargs ++ fargs, code}
+            apply
+                | n > a+length cargs = JInvoke (JX.xmem "apply" call.jex) (drop (n-a-length cargs) atoms)
+                | otherwise = call.jex
+            code
+                | null cargs = Left apply
+                | otherwise  = Right (JBlock (assigns ++ [JReturn apply])) 
+                where 
+                    assigns = zipWith3 localctx (getCtxs g) cjts ctxscalled
+                    ctxscalled = zipWith (\atom _ → JX.invoke [] (JX.xmem "call" atom))
+                                    ctoms cjts
+                    localctx s t x = JLocal{decl=JMember{
+                                            attr=attrFinal, 
+                                            jtype=t, name=s, init = Just x}}
+        exprResult rm ex (newBind g ft lambda).{jtype=rm}
+    --| Func{gargs} ← boxed rm = E.fatal pos (text "etaWrap: don't know how to wrap "
+    --                <+> text (nicer ft g)
+    --                <+/> text " into "
+    --                <+> text (show rm)
+    --                <+> text " with arity " <+> anno (length sigs))
+    where
+        -- (_, sigs) = U.returnType (ft.rho)
+        pos = getpos ex
+        ft  = unJust ex.typ
+etaWrap ex _ binds rm = E.fatal (getpos ex) (text "etaWrap: "
+                    <+> text "expected function type, got "
+                    <+> text (show rm))
+
+--- code for higher rank expressions
+wrapHigher ∷ Bool → ExprT → TreeMap Int Binding → [Context] → Sigma → StG Binding
+wrapHigher rflg ex binds tctxs sigma  = do
+    g <- getST
+    let depth    = length tctxs
+        ctxNames = take depth (getCtxs g)
+        ctxLnams = map ("l" ++) ctxNames
+        ctxTypes = map (ctxJT g) tctxs
+        ctxLtyps = map Lazy ctxTypes 
+        ctxexs   = zipWith JCast ctxTypes (map JAtom ctxNames)
+        fargs    = zipWith (\jty name → (attrFinal, pSigma, jty, name))
+                    ctxLtyps ctxLnams
+        proto    = JMember{attr=attrFinal, jtype=Something, name="foo", init=Nothing}
+        assigns  = zipWith3 (\t n i → proto.{jtype=t, name=n, init=Just i})
+                        ctxTypes ctxNames 
+                        (map (JX.invoke [] . JX.xmem "call" . JAtom) ctxLnams)
+        jfunc    = sigmaJT g sigma
+        innerjt  = funcResult jfunc     -- rhoJT g sigma.rho.{context = []}
+        fakesym  = (U.patLocal (getpos ex) 0 "\\rankN").{depth = 0, typ = sigma}
+    E.logmsg TRACEG (getpos ex) (text"genExpr: wrapping " 
+        <+> text (nicer ex g)
+        <+/> text " :: " <+> text (nice sigma g)
+        <+/> text " @@ " <+> text (show jfunc))
+    body <- compiling fakesym (genExpr rflg innerjt ex binds)
+    let eval     = JLambda{fargs, code = Right JBlock{stmts=map JLocal assigns ++ [JReturn body.jex]}}
+    pure (newBind g sigma (JCast jfunc eval)).{jtype = jfunc}  
+
+
+
 {-- 
     Generate code for simple Frege expressions
     
@@ -871,65 +1022,22 @@ genExpr rflg rm ex binds = do
             <+> text (nicer ft g)
             <+> text " @@ "
             <+> text (show rm))
-    let genArgBind arm aex = genExpr false arm aex binds
+    let 
+        genArgBind ∷ JType → ExprT → StG Binding
+        genArgBind arm aex = genExpr false arm aex binds
 
         rigidContext :: Context -> Bool
         rigidContext = (any (not . _.isFlexi) . TU.ctxTvs g)
-        
+
+        novbl ∷ ExprT → Bool
         novbl Vbl{pos, name, typ} = false
         novbl x                   = true 
 
-        result bind = do
-            E.logmsg TRACEG (getpos ex) (text "genExpr result got: " 
-                <+> (text . show) bind
-                <+> text " needed:" 
-                <+> (text . show) rm)
-            let abind = adapt g bind rm
-            E.logmsg TRACEG (getpos ex) (text "genExpr result: " <+> (text . show) abind)
-            pure abind
-        -- the type that results when we apply an argument
-        reduceSigma  = reducedSigma g 
+        result ∷ Binding → StG Binding
+        result = exprResult rm ex
 
         -- go down an App spine n steps, do the call and apply leftover arguments afterwards 
-        etaShrink n = do
-                E.logmsg TRACEG (getpos ex) (
-                        text "etaShrink:" <+> anno n <+> text (nicer ex g))
-                unEta n [] ex 
-          where 
-            unEta 0 args app = genExpr false subrm app binds >>= unwind args . strictBind g
-                where 
-                    subrm
-                      | App{} ← app = (rhoJT g . _.{context = []} . _.rho . unJust . _.typ) app
-                      | otherwise   = (rhoJT g .                    _.rho . unJust . _.typ) app
-            unEta n args (App{fun,arg}) = unEta (n-1) (arg:args) fun
-            unEta n args noapp = E.fatal (getpos ex) (
-                text "unEta" <+> anno n <+> (text . show) (map (const '.') args) <+> text (nicer ex g))
-            -- now unwind the stack, applying the arguments as needed
-            unwind []   bind
-                | rflg, 
-                    isStrictJT bind.jtype,
-                    not (isStrictJT rm),
-                    JInvoke{} ← bind.jex  = result (delayBind bind)
-                | otherwise               = result bind
-            unwind args bind = do
-                E.logmsg TRACEG (getpos ex) (text "unwind: "
-                        </> text (show bind)
-                        </> PP.stack (map (text . flip nicer g) args)
-                    )
-                case bind.jtype of 
-                    Func{gargs} = do
-                        let n       =  min (length args) (length gargs - 1)
-                            cargs   = take n args
-                            rargs   = drop n args
-                            ftype   = fold (const . reduceSigma) bind.ftype cargs
-                        eargs ← zipWithM (\t x → genExpr 
-                                                    false  -- (if null rargs then rflg else false)
-                                                    (lazy t) x binds) (take n gargs) cargs  
-                        unwind rargs . strictBind g $  
-                                    bind.{stype = nicer ftype g, ftype, jtype = last gargs, 
-                                    jex ← JX.invoke (map _.jex eargs) . JX.xmem "apply"}
-                    t = E.fatal (getpos ex) (text "unwind, no function:" <+> text (show t))
-                     
+        etaShrink n = VarCode.etaShrink rflg rm ex n binds
         -- provide missing arguments for partial calls
         -- Let a be the number of missing arguments as indicated by the sigma type of the expression
         -- Let n be the arity of the java function type that is expected.
@@ -958,70 +1066,11 @@ genExpr rflg rm ex binds = do
         --     It must be that in every step some Func is returned and we apply then so
         --     many of our leftover arguments as this Func takes.
         --     (It remains to be seen if we can beta reduce the inner lambda.)
-        etaWrap sigs Lazy{yields}       =  etaWrap sigs yields
-        etaWrap sigs (rm@Kinded{})      =  etaWrap sigs (fromKinded rm)
-        etaWrap sigs (rm@Func{gargs})   = do
-                let n = length gargs - 1
-                    a = length sigs
-                g <- getST
-                E.logmsg TRACEG (getpos ex) (
-                        text "etaWrap: (a=" <> anno a <> text ", n=" <> anno n <> text ") "
-                        <+> text (nicer ex g)
-                        <+> text " @@ " <+> text (nice ft g)
-                        <+> text " as " <+> text (show rm)
-                    )
-                uids ← replicateM n uniqid
-                let syms    = [ (U.patLocal (pos.change VARID ("η" ++ show u)) u "η").{typ=s} 
-                                    | (u,s) <- zip uids sigs]
-                    atoms   = map (JAtom . ("η$" ++)    . show) uids
-                    ctoms   = map (JAtom . ("ctx$" ++)  . show) uids
-                    cjts    = takeWhile isConstr gargs
-                    cbnds   = [ (newBind g pSigma atom).{jtype = Lazy c} |
-                                    (atom, c) ← zip ctoms cjts ]
-                    ajts    = take a (dropConstr gargs)
-                    ebnds   = [ (newBind g s x).{jtype = lazy t} | 
-                                    (s,x,t) <- zip3 sigs atoms ajts]
-                    newbinds = fold (\t (s,b) → insert s.sid b t) binds (zip syms ebnds)
-                    cargs    = [(attrFinal;pSigma;Lazy jt;nm) | (jt,JAtom nm) ← zip cjts ctoms]
-                    fargs    = [(attrFinal;pSigma;lazy jt;nm) | (jt,JAtom nm) ← zip ajts atoms]
-                    eexs     = [ Vbl{pos=sym.pos, name=sym.name, typ=Just sym.typ} | sym <- syms ]
-                    nex      = fold (\x y -> App x y (reduceSigma <$> x.typ)) ex eexs
-                    subrm    = case drop n gargs of
-                        [x] -> x
-                        gs  -> Func gs
-                    fake        = (U.patLocal (getpos ex) 0 "\\lambda").{depth=a,typ=ft}
-                mapM_ SymTab.enter syms 
-                call ← compiling fake (genExpr false  subrm nex newbinds)
-                let lambda = JCast (boxed rm) JLambda{fargs = cargs ++ fargs, code}
-                    apply
-                        | n > a+length cargs = JInvoke (JX.xmem "apply" call.jex) (drop (n-a-length cargs) atoms)
-                        | otherwise = call.jex
-                    code
-                        | null cargs = Left apply
-                        | otherwise  = Right (JBlock (assigns ++ [JReturn apply])) 
-                        where 
-                            assigns = zipWith3 localctx (getCtxs g) cjts ctxscalled
-                            ctxscalled = zipWith (\atom _ → JX.invoke [] (JX.xmem "call" atom))
-                                            ctoms cjts
-                            localctx s t x = JLocal{decl=JMember{
-                                                    attr=attrFinal, 
-                                                    jtype=t, name=s, init = Just x}}
-                result (newBind g ft lambda).{jtype=rm}
-            --| Func{gargs} ← boxed rm = E.fatal pos (text "etaWrap: don't know how to wrap "
-            --                <+> text (nicer ft g)
-            --                <+/> text " into "
-            --                <+> text (show rm)
-            --                <+> text " with arity " <+> anno (length sigs))
-            where
-                -- (_, sigs) = U.returnType (ft.rho)
-                pos = getpos ex
-        etaWrap _ rm = E.fatal (getpos ex) (text "etaWrap: "
-                            <+> text "expected function type, got "
-                            <+> text (show rm))
+        etaWrap sigs = VarCode.etaWrap ex sigs binds rm
 
     case ex of
         {-
-            Before we proceed to generatmore complex expressions,
+            Before we proceed to generate more complex expressions,
             we have to check if there appears an unknown constraint with rigid meta type variables
             in the type, like for example: 
 
@@ -1051,33 +1100,7 @@ genExpr rflg rm ex binds = do
             |  novbl exx,
                tctxs@(_:_) ← filter rigidContext ft.rho.context,    -- there are rigid constraints
                null (resolvableCtxs g tctxs)                        -- none are resolvable
-            = wrapHigher tctxs ft where
-                -- wrapHigher tctxs sigma | Vbl{pos, name=Local{}, typ} ← exx = result exx
-                wrapHigher tctxs sigma = do
-                    g <- getST
-                    let depth    = length tctxs
-                        ctxNames = take depth (getCtxs g)
-                        ctxLnams = map ("l" ++) ctxNames
-                        ctxTypes = map (ctxJT g) tctxs
-                        ctxLtyps = map Lazy ctxTypes 
-                        ctxexs   = zipWith JCast ctxTypes (map JAtom ctxNames)
-                        fargs    = zipWith (\jty name → (attrFinal, pSigma, jty, name))
-                                    ctxLtyps ctxLnams
-                        proto    = JMember{attr=attrFinal, jtype=Something, name="foo", init=Nothing}
-                        assigns  = zipWith3 (\t n i → proto.{jtype=t, name=n, init=Just i})
-                                        ctxTypes ctxNames 
-                                        (map (JX.invoke [] . JX.xmem "call" . JAtom) ctxLnams)
-                        jfunc    = sigmaJT g sigma
-                        innerjt  = funcResult jfunc     -- rhoJT g sigma.rho.{context = []}
-                        fakesym  = (U.patLocal (getpos ex) 0 "\\rankN").{depth = 0, typ = sigma}
-                    E.logmsg TRACEG (getpos ex) (text"genExpr: wrapping " 
-                        <+> text (nicer ex g)
-                        <+/> text " :: " <+> text (nice sigma g)
-                        <+/> text " @@ " <+> text (show jfunc))
-                    body <- compiling fakesym (genExpr rflg innerjt ex binds)
-                    let eval     = JLambda{fargs, code = Right JBlock{stmts=map JLocal assigns ++ [JReturn body.jex]}}
-                    result (newBind g sigma (JCast jfunc eval)).{jtype = jfunc}  
-
+            = wrapHigher rflg ex binds tctxs ft >>= result 
         -- Local Variables are being looked up in the bindings
         Vbl{name=Local{uid, base}, pos, typ}
             | Just b    ← lookup uid binds = case b.ftype of
@@ -1087,7 +1110,7 @@ genExpr rflg rm ex binds = do
                         | Func{} ← b.jtype,
                           Just sym  ← g.findit ex.name,
                           RMethod `member` sym.rkind,
-                        = etaWrap (snd (U.returnType ft.rho)) rm
+                        = etaWrap (snd (U.returnType ft.rho)) 
                     _                      = result b
             | otherwise = do
                 E.error pos (text "FATAL COMPILER ERROR "
@@ -1098,7 +1121,7 @@ genExpr rflg rm ex binds = do
         Con{pos, name}
             | Just (sym@SymD{cid, flds}) ← g.findit name = 
                 if (length flds > 0) 
-                then etaWrap (snd (U.returnType ft.rho))  rm
+                then etaWrap (snd (U.returnType ft.rho))  
                 else if maybe false _.enum (g.findit name.tynm)
                 then do
                     let item        =  U.symJavaName g sym
@@ -1136,7 +1159,7 @@ genExpr rflg rm ex binds = do
                     targs       =  map (boxed . tauJT g . substTau subst) (sym.typ.tvars pos)
                     ret         =  ft.{rho ← Rho.{context = []}}
                 if (sym.depth > 0) 
-                then etaWrap (snd (U.returnType (rhoTauInSigma ft).rho))  rm
+                then etaWrap (snd (U.returnType (rhoTauInSigma ft).rho))
                 else if isJust sym.nativ
                 then if wrappedOnly g sym
                     then do
@@ -1214,7 +1237,7 @@ genExpr rflg rm ex binds = do
                 genApp (con@Con {pos, name, typ = Just csigma}) args = do
                     sym     ← U.findD name
                     symt    ← U.findT sym.name.tynm
-                    E.logmsg TRACEG pos (
+                    () ← E.logmsg TRACEG pos (
                             text "genApp: constructor " <+> text name.base <+> text " :: "
                             <+> text (nice sym.typ g)
                             <+> text " @@ " 
@@ -1246,19 +1269,19 @@ genExpr rflg rm ex binds = do
                         contexts    =  map  (reducedCtx g)  (rhoctx.context)
 
                                         -- explain the substitution
-                    forM (each subst) $ \(v,tau) →
+                    () ← forM_ (each subst) $ \(v,tau) →
                         E.logmsg TRACEG pos (text "genApp: "
                             <+> text v 
                             <+> text " = " 
                             <+> text (nicer tau g))
 
-                    E.logmsg TRACEG pos (
+                    () ← E.logmsg TRACEG pos (
                                 text "genApp: ari=" <> text (show ari) 
                             <+> text "strho = " <+> text (nice rhoctx g)
                             <+> text "retjt = " <+> text (show retjt))
 
 
-                    when (any isBadKinded argjts) do
+                    () ← when (any isBadKinded argjts) do
                         case filter (\(a,b,c,d) → isBadKinded b) (zip4 [1..] argjts sigs args) of
                             (nr, _, sig, exp):_ → E.error pos (
                                     text "Implementation restriction: cannot instantiate a higher kinded type with a native type."
@@ -1275,7 +1298,7 @@ genExpr rflg rm ex binds = do
 
                     case symt of
                         any | nargs > ari = etaShrink (nargs - ari)
-                            | nargs < ari = etaWrap sigs rm
+                            | nargs < ari = etaWrap sigs 
                             where nargs = length args
                         SymT{newt = true, product = true}
                             = genExpr rflg rm (head args) binds
@@ -1356,7 +1379,7 @@ genExpr rflg rm ex binds = do
                             <+> text " @@ "
                             <+> (text . show . lookupDefault Something v) jsubst)
 
-                    if nargs < ari        then etaWrap (drop nargs sigs) rm
+                    if nargs < ari        then etaWrap (drop nargs sigs) 
                     else if nargs > ari   then etaShrink (nargs-ari)
                     else do
 
