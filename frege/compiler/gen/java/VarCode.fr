@@ -280,7 +280,7 @@ cafCode (sym@SymV {name, depth = 0, expr = Just dx}) binds = do
         self    = RSelfRec `member` sym.rkind
         -- javac8 compiler errors can apparently be avoided by not having lambdas on the
         -- outermost level.
-        outer = not sym.name.isLocal
+        outer = false && not sym.name.isLocal
         use7  = outer || self
         ctxs  = if null bnds then [] else sym.typ.rho.context
         cargs = zipWith (constraintArg g) ctxs ctxNames
@@ -762,42 +762,99 @@ genCaseStmt jret rm (x@Case {ckind,ex=cex,alts=calts}) binds = do
              | otherwise = true
 genCaseStmt jret rm nocase binds = error "genCaseStmt: no case"
 
+{--
+    Identify let bindings that need to be in an inner class.
+
+    These are:
+
+    - All bindings that are mutually recursive with some others. We know this the case for
+      those bindings that are grouped with others in a 'Let' environment.
+    - Self-referential things, as indicated by the 'RSelfRec' flag.
+    - Functions, i.e. things that have 'Symbol.depth' gretaer than 0 or a type with
+      constraints or bound type variables.
+-}
+needClassForLet ∷ [Symbol] → Bool
+needClassForLet [SymV{typ, depth, rkind}] = RSelfRec `member` rkind 
+                                                || depth > 0
+                                                || not (null typ.bound)
+                                                || not (null typ.rho.context)
+needClassForLet many = true
+
+{--
+    In previous passes, let expressions have been splitted up and ordered into dependency groups:
+    > let {a1=...;c2=..;b2=...;let c1=..; let b1=...;let a1=...; let c3=} in expr
+    so that they now look now like this:
+    > let a1=... in let a2=... in let b1=...;b2=... in let c1=... in let c2=... in let c3=... in expr
+    Here, the bindings b1 and b2 need to be generated in an enclosing class, since they are
+    mutually recursive. Other elements may also need a surrounding class.
+
+    The following code ensures that for such a construct only at most one class is generated,
+    and in the best case no class at all, since unneeded classes are to be avoided (because
+    of extra class files, which increase code size).
+
+    For this, the leading elements that do not need to be in a class are collected, 
+    see 'needClassForLet'. Likewise, the trailing elements that don't need a class.
+    The remaining ones are generated in a class.
+
+    A simpler solution would be to check if any binding needs to be in a class, and just
+    generate a class with all bindings. However, all accesses to the items would then have
+    an extra indirection. Hence, we collect those bindings that don't need a class from
+    the left and from the right. In the example, suppose that c2 needs to be in a class.
+    Because also b1 and b2 need to be in a class due to mutual recursion, we generate
+    > final a1 = ...
+    > final a2 = ...
+    > class Let1 {
+    >   final b1 =
+    >   final b2 =
+    >   final c1 =
+    >   final c2 =
+    > }
+    > final let1 = new Let();
+    > final c3 = ...
+-}
 genLet :: (JX -> [JStmt]) -> JType -> Expr -> TreeMap Int Binding -> StG [JStmt]
--- genLet jret rm (x@Let {env,ex=Let{}}) binds = genLet jret rm x.ex.{env ← (env++)} binds
-genLet jret rm (x@Let {env,ex}) binds = do
-         g <- getST
-         syms <- mapM U.findV env
-         case syms of
-            [sym] = do
-                c <- selfReferential sym
-                if c || sym.depth > 0 || not (null sym.typ.bound) || not (null sym.typ.rho.context) 
-                    then genLetClass syms 
-                    else genLetSingle sym
-            many  = genLetClass syms
+genLet jret rm x binds = do
+        envss ← mapM toSym (reverse envqq)
+        let before = concat (takeWhile (not . needClassForLet) envss)   -- symbols that can be generated right away
+            envxx  = dropWhile (not . needClassForLet) envss            -- symbols that need to be in a class, 
+                                                                        -- possibly followed by some that need not
+            -- find trailing elements that do not need to be in a class
+            after = concat . reverse . takeWhile (not . needClassForLet) . reverse $ envxx
+            -- the remaining elements must be in a class
+            incls = concat (take (length envxx - length after) envxx)
+        genLetEnvs jret rm before incls after letex binds
+    where
+        toSym = mapM U.findV 
+        (letex, envqq) = collect x []
+        -- collect the environments of nested lets in reverse order
+        collect ∷ ExprT → [[QName]] → (ExprT,[[QName]])
+        collect (x@Let {env,ex}) acc = collect ex (env:acc)
+        collect x                acc = (x, acc)
+
+genLetEnvs ∷ (JExpr→[JStmt]) → JType → [Symbol] → [Symbol] → [Symbol] → ExprT → TreeMap Int Binding → StG [JStmt]
+genLetEnvs jret rm before inclass after ex binds = do
+         g ← getST
+         let bbinds = fold (mkbind g JAtom) binds before
+         bdecls ← map (map JLocal) <$> mapM (gen false bbinds) before 
+         (ibinds, idecls) ← genLetClass bbinds inclass
+         let abinds = fold (mkbind g JAtom) ibinds after
+         adecls ← map (map JLocal) <$> mapM (gen false abinds) after
+         stmts <- genStmts jret rm ex abinds
+         pure (concat bdecls ++ idecls ++ concat adecls ++ stmts)
 
      where
-         selfReferential (sym@SymV {expr = Just x}) = do
-            refs <- x >>= T.references [sym.sid]
-            return (refs > 0)
-         selfReferential _ = return false
-
-         -- generate a single inner function or a non self recursive caf
-         genLetSingle sym = do
-            g <- getST
-            let letbinds = mkbind g JAtom binds sym
-            decls <- gen false letbinds sym
-            stmts <- genStmts jret rm ex letbinds
-            return (comment g : (map JLocal decls ++ stmts))
-
          -- generate declaration of inner function or caf
+         gen ∷ Bool → TreeMap Int Binding → Symbol → StG [JDecl]
          gen mutual binds sym
             | sym.depth == 0 = innerCaf sym binds mutual
-            | mutual         = localFun sym binds 
-            | otherwise      = innerFun sym binds
+            | otherwise      = localFun sym binds 
+            --otherwise      = innerFun sym binds
 
          -- set up simple bindings, generate the mutually dependent items in a class
          -- instantiate that class and make bindings that access the bindings from outside
-         genLetClass syms = do
+         genLetClass ∷ TreeMap Int Binding → [Symbol] → StG (TreeMap Int Binding,[JStmt])
+         genLetClass binds []   = pure (binds, [])
+         genLetClass binds syms = do
             g <- getST
             forM syms (changeSym . _.{rkind ← (BitSet.`unionE` RMethod)})
             -- refresh the symbols
@@ -815,9 +872,9 @@ genLet jret rm (x@Let {env,ex}) binds = do
                         init = Just (JNew jtype [])}
                 member n = JExMem{jex = JAtom name, name=n, targs=[]}
                 letbinds = fold (mkbind g member) binds syms
-            stmts <- genStmts jret rm ex letbinds
-            return (comment g : JLocal letcl : JLocal var : stmts) 
-         comment g = sComment (nicer x g)
+            -- stmts <- genStmts jret rm ex letbinds
+            pure (letbinds, [JLocal letcl, JLocal var])
+
          mkbind :: Global -> (String -> JX)  -> TreeMap Int Binding -> Symbol -> TreeMap Int Binding
          mkbind g prefix binds sym = insert sym.sid bind binds 
             where
@@ -830,9 +887,6 @@ genLet jret rm (x@Let {env,ex}) binds = do
                         else if RValue `member` sym.rkind
                             then strict else lazy
                 name = (symJavaName g sym).base
-genLet jret _ ex binds = do
-     g <- getST
-     E.fatal (getpos ex) (text("genLet: not a let  " ++ nice ex g))
 
 
 --- genExpression returnexpression f expr binds
