@@ -192,7 +192,23 @@ varcon D.Vbl{name} | !name.isLocal = Just name
 varcon _ = Nothing
 
 
-transdef env fname (d@FunDcl {positions}) = do 
+transdef ∷ [QName] → (String→QName) → DefinitionS → StG ()
+transdef env fname def = case def  of
+    ImpDcl{} →  pure ()     -- nothing to do here
+    FixDcl{} →  pure ()     -- nothing to do here
+    DocDcl{} →  pure ()     -- nothing to do here
+    TypDcl{} →  pure ()     -- already done in TypeAlias pass
+    ClaDcl{} →  transClaDcl env fname def
+    InsDcl{} →  transInsDcl env fname def
+    DrvDcl{} →  pure ()     -- already done in Instances pass
+    AnnDcl{} →  transAnnDcl env fname def
+    NatDcl{} →  transNatDcl env fname def
+    FunDcl{} →  transFunDcl env fname def
+    DatDcl{} →  transDatDcl env fname def
+    JavDcl{} →  transJavDcl env fname def
+    ModDcl{} →  transModDcl env fname def
+
+transFunDcl env fname (d@FunDcl {positions}) = do 
         let dname = defname d
             aname = if null env then fname dname else findLocal env dname
         case funbinding d of
@@ -209,7 +225,9 @@ transdef env fname (d@FunDcl {positions}) = do
     common aname d = do
         g <- getST
         E.logmsg TRACE5 pos (text("transdef: env=" ++ show env ++ ", aname=" ++ show aname))
-        case g.findit aname of
+        rest g
+      where
+        rest g = case g.findit aname of
             Just sym
                 | SymV {pos} <- sym = do
                     let funex = foldr (\p\e → Lam p e false) d.expr d.pats
@@ -243,7 +261,7 @@ transdef env fname (d@FunDcl {positions}) = do
                         othr -> changeSym sym.{expr = Just (return x)}
                 | otherwise = E.fatal pos (text ("expected function, found " ++ sym.nice g))
             nothing -> do E.fatal pos (text ("Cannot happen, function " ++ aname.nice g ++ " missing"))
-
+transFunDcl _ _ d = E.fatal d.pos (text "not a fun dcl") 
 
 {-
     AnnDcl    {pos::Line, vis::Visibility, name::String, typ::SigmaT t, doc::Maybe String}
@@ -251,7 +269,7 @@ transdef env fname (d@FunDcl {positions}) = do
                  typ::Sigma, expr::Maybe Expr, nativ::Maybe String,
                  pur::Bool, anno::Bool} /// variable
 -}
-transdef env fname (d@AnnDcl {pos}) = do
+transAnnDcl env fname (d@AnnDcl {pos}) = do
         g <- getST
         let aname = if null env then fname d.name else findLocal env d.name
         case g.findit aname of
@@ -267,7 +285,9 @@ transdef env fname (d@AnnDcl {pos}) = do
                         ++ ". Place this annotation before line " ++ show dpos.line
                         ++ " to prevent this error.")) 
                 | otherwise = E.fatal pos (text ("expected function, found " ++ sym.nice g))
-transdef env fname (d@NatDcl {pos}) = do
+transAnnDcl _ _ d = E.fatal d.pos (text "not a ann dcl")
+
+transNatDcl env fname (d@NatDcl {pos}) = do
         g <- getST
         let aname = fname d.name
         case g.findit aname of
@@ -277,23 +297,25 @@ transdef env fname (d@NatDcl {pos}) = do
                     [(sig, thrs)] = do
                         t <- transSigma sig
                         thrs <- mapM transTau thrs >>= mapM U.forceTau
-                        gargs ← mkGargs t
+                        gargs ← mkGargs sym d t
                         changeSym sym.{typ = t, throwing = thrs, gargs}
                     overloaded = do
-                        over <- mapM (uncurry overload) overloaded
+                        over <- mapM (uncurry (overload d sym)) overloaded
                         changeSym sym.{typ = ovlsigma, over}
                 | otherwise = E.fatal pos (text ("expected function, found " ++ sym.nice g))
                 where
-                    overload sig exs = do
+                    overload ∷ DefinitionS → Symbol → SigmaS → [TauS] → StG QName
+                    overload def sym sig exs = do
                         g <- getST
                         let name = U.unusedName sym.name g
                         t <- transSigma sig
                         thrs <- mapM transTau exs >>= mapM U.forceTau
-                        gargs ← mkGargs t
+                        gargs ← mkGargs sym def t
                         enter sym.{sid=0, name, typ = t, throwing = thrs, vis = Protected, gargs}
                         return name
                     -- extract and translate generic type arguments
-                    mkGargs sig = do
+                    mkGargs ∷ Symbol → DefinitionS → Sigma → StG [Tau]
+                    mkGargs sym d sig = do
                         g   ← getST
                         let nik = if sig.isFun then niKind d.meth else NIOp  -- fake
                             (rt, sigs) = U.returnType sig.rho
@@ -311,7 +333,7 @@ transdef env fname (d@NatDcl {pos}) = do
                                     _ → []  -- this is obviously wrong, 
                                             -- but will be flagged later in type checking 
                                 others      → []
- 
+
                             -- get the phantom type, if any
                             phantom = case unST rt of
                                 Just (TVar{var}, _) → Just var
@@ -322,10 +344,10 @@ transdef env fname (d@NatDcl {pos}) = do
                             sigvars = filter 
                                     ((`notElem` avoid) . _.var) 
                                     (sig.tvars sym.pos)
+                            bound = map _.var sigvars
                             inferred = if nik == NIMethod || nik == NIStatic then sigvars else []
                             sgargs = fromMaybe inferred d.gargs
                         gargs ← mapM transTau sgargs >>= mapM forceTau
-                        let bound = map _.var sigvars
                         when (length gargs > 1 && isNothing d.gargs) do
                             E.error d.pos (
                                 text "Cannot infer the order of the generic type arguments."
@@ -355,7 +377,9 @@ transdef env fname (d@NatDcl {pos}) = do
                                 phantomError  = filter (`elem` maybeToList phantom) free
                                 instanceError = filter (`elem` objectvars) free
                                 unboundError  = filter (`notElem` sig.vars) free
+                                nicevars ∷ [String] → String
                                 nicevars xs   = joined ", " (map (\x → "`" ++ x ++ "´") xs)
+                                variables ∷ [String] → String
                                 variables [x] = "type variable " ++ nicevars [x]
                                 variables xs  = "type variables " ++ nicevars xs
                             unless (null free) do
@@ -384,8 +408,9 @@ transdef env fname (d@NatDcl {pos}) = do
                                 <> text "} for" <+> text (nicer sym.name g))   
                         return gargs
 
+transNatDcl _ _ d = E.fatal d.pos (text "not a nat dcl")
 
-transdef env fname (d@InsDcl {pos}) = do
+transInsDcl env fname (d@InsDcl {pos}) = do
         g <- getST
         let iname = TName g.thisPack (Enter.insName d)
         case g.findit iname of
@@ -397,8 +422,9 @@ transdef env fname (d@InsDcl {pos}) = do
                     changeSym sym.{clas,typ}
                     foreach d.defs (transdef [] (MName iname))
             nothing -> do E.fatal pos (text ("Cannot happen, instance " ++ iname.nice g ++ " missing"))
+transInsDcl _ _ d = E.fatal d.pos (text "not a ins dcl")
 
-transdef env fname (d@DatDcl {pos}) = do
+transDatDcl env fname (d@DatDcl {pos}) = do
         g <- getST
         let tname = TName g.thisPack d.name
         case g.findit tname of
@@ -547,9 +573,9 @@ transdef env fname (d@DatDcl {pos}) = do
                     -- when (con.strsig.isStrict) (foreach nfs (strictFieldsCheck cname))
                     changeSym con.{typ=sig}.{flds=nfs . snd . U.returnType $ sig.rho}
                 _ -> E.fatal pos (text ("constructor `" ++ cname.nice g ++ "` vanished."))
-        
+transDatDcl _ _ d = E.fatal d.pos (text "not a data dcl")
 
-transdef env fname (d@JavDcl {pos}) = do
+transJavDcl env fname (d@JavDcl {pos}) = do
         g <- getST
         let tname = TName g.thisPack d.name
         case g.findit tname of
@@ -587,13 +613,9 @@ transdef env fname (d@JavDcl {pos}) = do
                         E.warn pos (text (nativ ++ ": this way of declaring array types is strongly discouraged."))
                 | otherwise = E.fatal pos (text ("Cannot happen, native type " ++ tname.nice g ++ " is not native?"))
             nothing -> do E.fatal pos (text ("Cannot happen, data " ++ tname.nice g ++ " missing"))
+transJavDcl _ _ d = E.fatal d.pos (text "not a java dcl")
 
--- already done in TypeAlias
--- transdef env fname (d@TypDcl {pos}) = do
-
-transdef env fname (ImpDcl {pos}) = stio () -- Nothing
-transdef env fname (FixDcl {pos}) = stio () -- Nothing
-transdef env fname (d@ClaDcl {pos}) = do
+transClaDcl env fname (d@ClaDcl {pos}) = do
         g <- getST
         let tname = TName g.thisPack d.name
         case g.findit tname of
@@ -604,9 +626,10 @@ transdef env fname (d@ClaDcl {pos}) = do
                 | SymC {pos} <- sym = do transclass d sym -- ; stio (Just d)
                 | otherwise = do
                     E.fatal pos (text ("expected class, found " ++ sym.nice g))
+transClaDcl _ _ d = E.fatal d.pos (text "not a class dcl")
 
 -- record the super type and super interfaces of the module in Options.
-transdef env fname ModDcl{pos, extends, implements, code} = do
+transModDcl env fname ModDcl{pos, extends, implements, code} = do
     g ← getST 
     case length (filter _.{code?} g.sub.sourcedefs) of
         1 = do
@@ -619,10 +642,7 @@ transdef env fname ModDcl{pos, extends, implements, code} = do
             starSigma sig = fst <$> kiSigmaX sig KType
         _ = E.error pos (msgdoc ("There may be at most one native module definition."))
 
-transdef env fname d = do
-        E.fatal d.pos (text ("can't transdef definition with constructor "
-            ++ show (constructor d)))
-        -- stio Nothing
+transModDcl _ _ d = E.fatal d.pos (text "not a mod dcl")
 
 --- Type for overloaded functions
 ovlsigma :: Sigma
