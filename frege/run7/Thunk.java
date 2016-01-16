@@ -260,7 +260,7 @@ public class Thunk<R> implements Lazy<R> {
 	 * 
 	 * <p>This is, in a sense, the exact opposite of {@link Thunk#call}. 
 	 * Whereas the latter evaluates a {@link Thunk}, unless already evaluated,
-	 * this method constructs a {@link Thunk} value unless it is statically known
+	 * this method constructs a {@link Lazy} value unless it is statically known
 	 * to be a {@link Lazy}. 
 	 * </p>
 	 * 
@@ -269,16 +269,19 @@ public class Thunk<R> implements Lazy<R> {
 	 * 
 	 *   @param  val some value
 	 *   @return If the argument is already {@link Lazy}, it is returned properly casted.
-	 *           Otherwise it is wrapped in a {@link Thunk} and returned.
+	 *           Otherwise it is wrapped in a {@link Box} and returned.
 	 *   @author ingo 
 	 */
-	public final static<X>  Lazy<X>  lazy(Lazy<X> val) { return val; }
-	
-	public final static<X>  Lazy<X>  lazy(X val) {
-		final Thunk<X> thunk = new Thunk<X>();
-		thunk.item = val;
-		return thunk;
-	}
+	public final static Lazy<Boolean> 	lazy(boolean val) 	{ return new Box.B(val); }
+	public final static Lazy<Byte>    	lazy(byte val) 		{ return new Box.O(val); }
+	public final static Lazy<Short>   	lazy(short val) 	{ return new Box.S(val); }
+	public final static Lazy<Character> lazy(char val) 		{ return new Box.C(val); }
+	public final static Lazy<Integer> 	lazy(int val) 		{ return new Box.I(val); }
+	public final static Lazy<Long>    	lazy(long val) 		{ return new Box.L(val); }
+	public final static Lazy<Double>  	lazy(double val) 	{ return new Box.D(val); }
+	public final static Lazy<Float>   	lazy(float val) 	{ return new Box.F(val); }
+	public final static<X>  Lazy<X>   	lazy(Lazy<X> val) 	{ return val; }
+	public final static<X>  Lazy<X>   	lazy(X val) 		{ return new Box<X>(val); }
 	
 	/**
 	 * <p>Static form of the constructor</p>
@@ -367,4 +370,5 @@ public class Thunk<R> implements Lazy<R> {
 	public final static Lazy<Integer> lazyOne = lazy(1);
 	public final static Lazy<Integer> lazyTwo = lazy(2);
 	public final static Lazy<frege.runtime.Phantom.RealWorld> lazyWorld = lazy(frege.runtime.Phantom.theRealWorld);
+	public final static Lazy<Short> lazyUnit = lazy((short)0);
 }
