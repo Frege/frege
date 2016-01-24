@@ -194,7 +194,7 @@ The awesome QuickCheck library for advanced unit testing comes bundled with the 
 Related Projects
 ----------------
 
-* [Froogle](http://froogle.mmhelloworld.com), an _experimental_ [hoogle](https://www.haskell.org/hoogle/) for the Frege standard library, by Marimuthu Madasamy
+* [Hoogle for Frege](http://hoogle.haskell.org:8081/), a Frege API search engine, by Neil Mitchell and Marimuthu Madasamy
 * The REPL projects, consisting of [core JSR 223 scripting support](https://github.com/Frege/frege-interpreter), [interface for the command-line](https://github.com/Frege/frege-repl) and [online REPL](https://github.com/Frege/try-frege), all written and maintained by Marimuthu Madasamy, and the [FregeFX REPL](https://github.com/Dierk/frepl-gui/blob/master/README.adoc) with a JavaFX view by Dierk König
 * Support for [web applications and web services](https://github.com/Frege/frege/wiki/Frege-for-Web-Applications) 
 * [Maven Compiler Plugin for the Frege language](https://github.com/Frege/frege-maven-plugin), by Mark Derricut 
