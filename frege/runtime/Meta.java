@@ -62,6 +62,10 @@ public class Meta {
         String      source()    default "";
         /** <p>Compile time.</p> */
         long        time()      default 0;
+        /** <p>Major target version.</p> */
+        int			jmajor()	default 1;
+        /** <p>Minor target version.</p> */
+        int			jminor()	default 7;
         /** <p>The documentation of the package.</p> */
         String      doc()       default "";
         /** <p>Name of imported packages.</p> */
