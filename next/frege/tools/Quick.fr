@@ -53,9 +53,11 @@ import  Compiler.types.Packs
 import  Compiler.types.QNames
 import  Compiler.types.Types
 import  Compiler.types.Symbols
+import  Compiler.types.Targets
 import  Compiler.types.Global as G hiding (Options)
 
 import  Compiler.common.CompilerOptions as CO(standardGlobal, theClassLoader)
+import  Compiler.common.Errors
 
 
 import frege.compiler.passes.Imp (importClass)
@@ -71,11 +73,11 @@ import Java.util.Zip
 -- import frege.control.Concurrent
 
 
-data Options = Opt {    list, verbose, excluded :: Bool, 
+data Options = Opt {    list, verbose, excluded, detailed :: Bool, 
                         ntimes :: Int, props :: [String],
                         global :: Global }
 
-defaultOptions = Opt { verbose = false, list = false, excluded = false, 
+defaultOptions = Opt { verbose = false, list = false, excluded = false, detailed = false,
                         props = [], ntimes = 100, global = undefined }
 
 data Counter = !Counter { passed, failed :: Int, aborted :: Bool }
@@ -104,6 +106,7 @@ main [] = do
         "",
         "    Options:",
         "       -v      verbose checks",
+        "       -vv     most detailed output, use for a single check",
         "       -n num  each check will be running num times, default 100",
         "       -p pred1,pred2,...      only check the named predicates",
         "       -x pred1,pred2,...      do not check the predicates listed",
@@ -117,12 +120,12 @@ main [] = do
         ""
         ]
     return false
-    
 
-    
+
+
 main args = do
     (options, modules) <- getOpt defaultOptions args
-    g <- standardGlobal
+    g <- standardGlobal >>= execStateT myTarget
     results <- mapM (checkThing options.{global=g}) modules
     let result = mconcat results
     println ("Properties passed: " ++ show result.passed
@@ -131,11 +134,21 @@ main args = do
         then return false
         else return true
 
-
+--- find the target this module was compiled for
+myTarget = do
+    g  ← getSTT
+    fp ← Imp.getFP (g.unpack pPreludeBase)
+    case fp of
+        Right (Just fp) → do
+            changeSTT _.{options ← _.{target = Target fp.jmajor fp.jminor}}
+        _ = do
+            liftIO (stderr.println "can't find target for PreludeBase???")
+            liftIO (System.exit 1) 
 
 getOpt :: Options -> [String] -> IO (Options, [String])
 getOpt options [] = return (options, [])   
 getOpt options ("-v":xs) = getOpt options.{verbose=true} xs
+getOpt options ("-vv":xs) = getOpt options.{detailed=true} xs
 getOpt options ("-l":xs) = getOpt options.{list=true}    xs
 getOpt options ("-n":num:xs) = 
     case num.int of
@@ -193,7 +206,9 @@ getProps pack = do
     importClass Position.null (NSX "Quick") p
     g <- getSTT
     case g.packages.lookup p of
-        Nothing -> return []
+        Nothing -> do
+            when (g.errors > 0) printAndClearErrors
+            return []
         Just env -> return [ sym.name.base |
                 sym@SymV{} <- values env,
                 ForAll _ RhoTau{context=[], tau} <- Just sym.typ,
@@ -202,7 +217,7 @@ getProps pack = do
                 prop == propName 
             ]
 
-            
+
 checkProps :: Options -> String -> [String] -> IO Counter
 checkProps opts modul props = do
         ec <- forName modul true opts.global.sub.loader
@@ -228,10 +243,10 @@ checkProps opts modul props = do
         return testAborted
 {-- 
     This does the magic.
-     
+
     We know that the type of the item is 'Gen' 'Prop' on the Frege level.
     This will be compiled to something that is a TGen in Java terms.
-    
+
     Hence the cast is a no-op, and the native interface will believe 
     our claim that the Lambda is a Property and will allow us to
     use it just like any other 'Property'.
@@ -264,12 +279,14 @@ checkField opts modul clas prop = do
         obj <- fld.get Nothing
         p   <- toGen obj
         when (opts.verbose) do print (modul ++ "." ++ prop ++ ": ")
-        result <- QC.quickCheckWithResult QC.stdArgs.{maxSuccess=opts.ntimes, chatty=opts.verbose} p
+        result <- if opts.detailed
+            then QC.verboseCheckWithResult QC.stdArgs.{maxSuccess=opts.ntimes, chatty=opts.verbose} p
+            else QC.quickCheckWithResult QC.stdArgs.{maxSuccess=opts.ntimes, chatty=opts.verbose} p
         when (not (QC.isSuccess result) && not opts.verbose) do
             println (modul ++ "." ++ prop  ++ " FAILED")
         return (if QC.isSuccess result then testPassed else testFailed)
     `catch` exceptions
-    `catch` errors
+    -- `catch` errors
     -- ExceptionInInitializerError is passed to caller, so as to avoid getting it multiple times
   where
     exceptions :: Exception -> IO Counter
