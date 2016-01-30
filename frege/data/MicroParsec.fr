@@ -28,27 +28,34 @@ import Data.Iterators(StringIterator SI)
     and 'frege.data.Iterators#ArrayIterator' are such types. The parser
     combinators use only the 'uncons' and 'null' operations.
 -}
-abstract data Parser s t r = P { run :: (s t) -> ((String | r), s t) }
+abstract data Parser (s :: * -> *) t r  = Parse ((s t) -> (Parser s t r, s t)) 
+                            | Result r 
+                            | Fail String
+    where
+        run (Parse f) st = case (f st)  of
+            (p, ?st') → run p st'
+        run (Fail s) st   = (Left s, st)
+        run (Result r) st = (Right r, st) 
 
 --- Remember the current state of the input stream.
 --- 'getPos' always succeeds.
-getPos      = Parser.P getPos
+getPos      = Parser.Parse getPos
     where
-        getPos str = (Right str, str)
+        getPos str = (Parser.Result str, str)
 
 --- Resume parsing with the given input stream.
 --- 'putPos' always succeeds. 
-putPos pos   = Parser.P putPos
+putPos pos   = Parser.Parse putPos
     where
-        putPos _ = (Right (), pos)
+        putPos _ = (Parser.Result (), pos)
 
-modifyPos f  = Parser.P modPos
+modifyPos f  = Parser.Parse modPos
     where
-        modPos pos = (Right (), f pos)
+        modPos pos = (Parser.Result (), f pos)
 
 
 --- fail with given error message
-failure s = Parser.P (\pos -> (Left s, pos))
+failure s = Parser.Fail s
 
 --- run a  parser
 runid p = Parser.run p
@@ -57,9 +64,9 @@ parse p  =  fst . Parser.run p
 
 instance MonadAlt  (Parser s t) where
     --- generic failure
-    pzero    = Parser.P (\pos -> (Left "parse failed", pos)) 
+    pzero    = failure "parse failed" 
     --- generic success
-    pure a = Parser.P (\pos -> (Right a, pos))
+    pure a   = Parser.Result a
     {--
         > p >>= (r -> q)
         > p >> q
@@ -68,12 +75,11 @@ instance MonadAlt  (Parser s t) where
         
         Could be read as _p followed by q_.
     -}
-    Parser.P p >>= f = Parser.P bind
+    p >>= f = Parser.Parse bind
         where
-            bind pos = case p pos of
-                    (Right r, pos') = case f r of
-                        Parser.P q = q pos'
-                    (Left err, pos') = (Left err, pos')
+            bind pos = case p.run pos of
+                    (Right r, pos')  = (f r, pos')
+                    (Left err, pos') = (Parser.Fail err, pos')
     {-- 
         > p <|> q
         
@@ -85,11 +91,11 @@ instance MonadAlt  (Parser s t) where
         
         would succeed if the input starts with \'c\' or \'d\'. 
     -}                
-    Parser.P p <|> q = Parser.P alternate
+    p <|> q = Parser.Parse alternate
         where
-            alternate pos = case p pos of
-                    (Left err, pos') = Parser.run q pos
-                    right            = right
+            alternate pos = case p.run pos of
+                    (Left err, pos') = (q, pos)
+                    (Right r,  pos') = (Parser.Result r, pos')
             
     
     {--
@@ -99,11 +105,11 @@ instance MonadAlt  (Parser s t) where
         otherwise that of the second one, which is applied to the
         input left over by _p_
     -}
-    Parser.P p <+> q = Parser.P altplus
+    p <+> q = Parser.Parse altplus
         where
-            altplus pos = case p pos of
-                    (Left err, pos') = Parser.run q pos'
-                    right            = right
+            altplus pos = case p.run pos of
+                    (Left err, pos') = (q, pos')
+                    (Right r,  pos') = (Parser.Result r, pos')
 
     p <* q = do
         r <- p
@@ -160,39 +166,39 @@ p <?> msg = p <+> failure msg
     This parser succeeds if the input is not empty and the head
     of the input equals _t_. 
 -}
-expect c = Parser.P expect
+expect c = Parser.Parse expect
     where
         expect pos = case uncons pos of
             Just (h, t) 
-                | h == c    = (Right h, t)
-            nothing         = (Left (show c ++ " expected"), pos)
+                | h == c    = (Parser.Result h, t)
+            nothing         = (Parser.Fail (show c ++ " expected"), pos)
 
 --- The 'eos' parser succeeds if the input is empty.
-eos = Parser.P eos
+eos = Parser.Parse eos
     where
         eos pos = case uncons pos of
-            Just _ = (Left "end of input expected", pos)
-            sonst  = (Right (), pos)
+            Just _ = (Parser.Fail "end of input expected", pos)
+            sonst  = (Parser.Result (), pos)
 
 --- > satisfy property
 --- Succeeds if there is a next token _t_ and  _property_ _t_ is true.
 satisfy :: ListView s => (t -> Bool) -> Parser s t t
-satisfy p = Parser.P satisfy
+satisfy p = Parser.Parse satisfy
     where 
         satisfy pos = case uncons pos of
-            Just (h, t) | p h   = (Right h, t)
-            nothing             = (Left "unexpected token", pos)
+            Just (h, t) | p h   = (Parser.Result h, t)
+            nothing             = (Parser.Fail "unexpected token", pos)
 
 --- > exceptWhen prop
 --- Fails if and only if there is a next token _t_ and _prop t_ is true.
 --- Succeeds on end of stream or when the token does not satisfy the property.
 --- In other words, @exceptWhen p@ succeeds if and only if @satisfy p@ fails.
-exceptWhen pred = Parser.P except
+exceptWhen pred = Parser.Parse except
     where
         except pos = case uncons pos of
-            Just  (h, t) | pred h    = (Left "expected token", pos)
-                         | otherwise = (Right (), t)
-            _ = (Right (), pos)
+            Just  (h, t) | pred h    = (Parser.Fail "expected token", pos)
+                         | otherwise = (Parser.Result (), t)
+            _ = (Parser.Result (), pos)
  
 
 --- > pany
@@ -211,28 +217,28 @@ spaces      = skip space
 
 -- ---------------------------------------- special parsers for strings
 string :: String -> Parser SI Char String
-string s = Parser.P string
+string s = Parser.Parse string
     where
         string si = if (SI.to si).startsWith s 
-            then (Right s, SI.drop (length s) si)
-            else (Left ("expected '" ++ display s ++ "'"), si)
+            then (Parser.Result s, SI.drop (length s) si)
+            else (Parser.Fail ("expected '" ++ display s ++ "'"), si)
 
 --- This parser succeeds if the pattern matches the beginning of the string.
 --- For efficiency reasons, the pattern should start with @^@
 match ∷ Regex → Parser SI Char MatchResult
-match r = Parser.P match
+match r = Parser.Parse match
     where
         match xs = case xs.to =~ r of
                 Just y | xs.to.startsWith y.match 
-                        -> (Right y, SI.drop (y.match.length) xs)
-                nothing -> (Left ("expected to match ´" ++ display r ++ "´"), xs)
+                        -> (Parser.Result y, SI.drop (y.match.length) xs)
+                nothing -> (Parser.Fail ("expected to match ´" ++ display r ++ "´"), xs)
 
 -- -------------------------------------------------- parser repetition 
 
 --- The optional parser always succeeds and returns its result wrapped in 'Maybe'
 
 optional :: Parser s t r -> Parser s t (Maybe r)
-optional p = (Just <$> p) <|> return Nothing
+optional p = (Just <$> p) <|> pure Nothing
 
 --- > many p
 --- Collects as many _p_ as possible and returns the results in a list.
@@ -243,7 +249,7 @@ many !p = reverse <$> many' []
         many' acc = do
             a   <- optional p
             case a  of
-                Nothing -> return acc
+                Nothing -> pure acc
                 Just a  -> many' (a:acc) 
 
 --- > some p
@@ -291,11 +297,11 @@ skipUntil p = skip (exceptWhen p)
 --- if _pcond_ succeeds, then _pthen_ is run, else _pelse_
 --- To both _pthen_ and _pelse_ it will appear as if _pcond_ didn't consume any tokens.
 
-cond pcond pthen pelse = Parser.P look
+cond pcond pthen pelse = Parser.Parse look
     where
         look pos = case fst (Parser.run pcond pos) of
-                Right _ ->  Parser.run pthen pos
-                Left  _ ->  Parser.run pelse pos 
+                Right _ ->  (pthen, pos)
+                Left  _ ->  (pelse, pos) 
 
 --- > select [(if1, t1), (if2, t2), ..., (ifn, tn)] e
 --- unfolds as
