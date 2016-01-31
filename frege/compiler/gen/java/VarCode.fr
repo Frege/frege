@@ -523,21 +523,14 @@ genStmts jret rm ex binds
                                     (take (length sym.typ.rho.context) (getCtxs g.{genEnv ← tail}) ) ++
                                     (getArgs g.{genEnv ← tail}) 
                         call <- genExpr true rm ex binds
-                        let comment2 = sComment (show call)
                         case lambda7 (unthunked call.jex) of
-                            JInvoke{args} -> do
-                            -- si <- symInfo sym
-                            -- abinds   <- sequence (zipWith genEx si.argJTs args)
-                                let assigns = zipWith JAssign (map JAtom argNames) args --(map Binding.jex abinds)
-                                pure (comment:comment2:assigns ++ [JEx (JAtom "continue tailrecursion")])
+                            JInvoke{args} -> pure (code call argNames args)
                             JNewClass{args=[], decls}
                                 | [invoke] ← [ invoke | JMethod{
                                                             name="call", args=[], 
                                                             body=JBlock [JReturn invoke]} ←  decls],
                                   args ← pickargs invoke,
-                                  not (null args) -> do
-                                let assigns = zipWith JAssign (map JAtom argNames) args 
-                                pure (comment:comment2:assigns ++ [JEx (JAtom "continue tailrecursion")])
+                                  not (null args) -> pure (code call argNames args)
                             it -> do
                                 E.error (getpos ex) (text "can't make tail recursion for"
                                     </> PP.nest 4 (text (nicer ex g))
@@ -545,6 +538,22 @@ genStmts jret rm ex binds
                                     </> PP.nest 4 (PP.group (annoG g it)))
                                 return [JEx (JAtom "continue tailrecursion")]
                  where
+                    code call argNames args = if any ctxAssign assigns
+                            then (comment:comment2:jret call.jex)
+                            else (comment:comment2:assigns ++ [JEx (JAtom "continue tailrecursion")])
+                        where
+                            comment2 = sComment (show call) 
+                            assigns = filter neededAssign $
+                                        zipWith JAssign (map JAtom argNames) args
+                    -- check if any ctx get assigned
+                    -- Since we removed trivial assignments like ctx$1f = ctx$1 before,
+                    -- this means we have polymorphic recursion. (We can't do this in a while loop.)
+                    ctxAssign (JAssign (JAtom ´^ctx\$´) _) = true
+                    ctxAssign _ = false
+                    -- avoid   arg$1 = arg$1f  and  ctx$1f = ctx$1
+                    neededAssign (JAssign (JAtom a) (JAtom b))
+                        = a != b++"f" && a++"f" != b
+                    neededAssign _ = true
                     unthunked (JCast _ x) = unthunked x
                     unthunked JNew{jt=Nativ{typ}, args=[x]}
                         | typ == thunkMarker = x
@@ -1103,34 +1112,8 @@ genExpr rflg rm ex binds = do
 
         -- go down an App spine n steps, do the call and apply leftover arguments afterwards 
         etaShrink n = VarCode.etaShrink rflg rm ex n binds
-        -- provide missing arguments for partial calls
-        -- Let a be the number of missing arguments as indicated by the sigma type of the expression
-        -- Let n be the arity of the java function type that is expected.
-        --   * In any case, we can provide at most a additional arguments to the expression.
-        --   * If n < a, then we have a situation like with
-        --       map const ....
-        --       a = 2, n = 1 because map expects an unary function
-        --       code: etaWrap const (a -> b -> a) Func<a, Func<b,a>>
-        --             => \a1 -> etaWrap (const a1) (b->a) Func<b,a>
-        --             => \a1 -> (\a2 -> const a1 a2)
-        --   * If n == a, we just extend with n args
-        --       code: etaWrap const (a -> b -> a) a
-        --             => \a1 a2 -> const a1 a2
-        --  *  If n > a, we have a situation like in
-        --        (const . const) 42 true "cool"
-        --     where the left const has type (String→Int) → (Bool→String→Int)
-        --     and is asked to produce Func.T<Func.U<String,Int>, Bool, String, Int>
-        --     with a=1, n=3
-        --     In any case, we must gobble up all the n arguments, thus
-        --     \fsi b s -> const fsi
-        --     This should etaWrap the inner expression
-        --     \fsi b s -> (\eta -> const fsi eta)
-        --     And we can apply b:
-        --     \fsi b s -> ((\eta -> const fsi eta) b)
-        --     But this returns fsi, which was (String->Int), so we can finaly apply s.
-        --     It must be that in every step some Func is returned and we apply then so
-        --     many of our leftover arguments as this Func takes.
-        --     (It remains to be seen if we can beta reduce the inner lambda.)
+
+        -- provide 1 missing argument to partially applied function
         etaWrap sigs = VarCode.etaWrap ex sigs binds rm >>= result
 
     case ex of
