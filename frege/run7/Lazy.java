@@ -23,4 +23,11 @@ public interface Lazy<R> extends Callable<R> {
 	 * @return
 	 */
 	public Thunk<R> asThunk();
+	
+	/**
+	 * <p> Implementation of {@link Lazy} which defines asThunk() properly </p>
+	 */
+	public static abstract class D<X> implements Lazy<X> {
+		public Thunk<X> asThunk() { return null; } 
+	}
 }
