@@ -317,7 +317,10 @@ checkgroup7 nms = do
                             changeSym sym.{expr = Just (return ex)} 
               where
                     scrapCtx it = do
-                        let sig = (Symbol.typ it).{rho <- Rho.{context=[]}}
+                        let sig = (Symbol.typ it).{rho <- clear}
+                            clear ∷ Rho → Rho
+                            clear RhoFun{context, sigma, rho} = RhoFun{context=[], sigma, rho = clear rho}
+                            clear RhoTau{context, tau} = RhoTau{context=[], tau}
                         nex <- case it.expr of
                             Just x  -> x >>= U.mapEx false removeCtx >>= (return . Just . return)
                             Nothing -> return Nothing
@@ -444,7 +447,7 @@ substInstMethod qname = do
                 x <- mapEx true substInst x
                 changeSym sym.{expr = Just (return x)}
 
---- replace class member with instance member
+--- replace class member with instance member, if possible
 substInst (vbl@Vbl {pos, name = MName tn bs, typ = Just (ForAll [] rho)})
         -- check if vbl is instaniated to tn
     | [ctx@Ctx {cname, tau=ctau}] <- filter ((==tn) • Context.cname) rho.context
@@ -499,6 +502,10 @@ substInst (vbl@Vbl {pos, name = MName tn bs, typ = Just (ForAll [] rho)})
         g <- getST
         E.logmsg TRACEO pos (text ("no suitable constraint: " ++ vbl.nice g ++ " :: " ++ rho.nicer g))
         stio (Left vbl)
+--- Also, make sure no DWIM literal has a constraint in its type.
+substInst (lit@Lit{pos, kind, value, typ=Just (ForAll [] rho)})
+    | kind == LInt || kind == LDouble,
+      not (null rho.context) = pure (Right lit.{typ=Just (ForAll [] rho.{context=[]})})
 substInst x = stio (Left x)
 
 
@@ -1171,20 +1178,22 @@ private real = TName{pack=pPreludeBase, base="Real"}
 private num  = TName{pack=pPreludeBase, base="Num"}
 
 --- Type the literals
+--- Make sure all constraints are removed when a type is found
 literalType ctxs (lit@Lit{pos, kind, value, typ=Just sigma})
     | kind != LInt, kind != LDouble = return (Left lit)
     | kind == LInt, isDWIM LInt value, RhoTau _ taut <- sigma.rho = do
             
             g <- getST
             let tau = reduced taut g
+                
             
             case tau of
                 TCon{pos, name}
-                    | name == rhoInt.tau.name     = return (Right lit)
-                    | name == rhoLong.tau.name    = return (Right lit.{kind=LLong, value <- (++"L")})
-                    | name == rhoInteger.tau.name = return (Right lit.{kind=LBig})
-                    | name == rhoFloat.tau.name   = return (Right lit.{kind=LFloat, value <- (++"F")})
-                    | name == rhoDouble.tau.name  = return (Right lit.{kind=LDouble, value <- (++"D")})
+                    | name == rhoInt.tau.name     = strip lit
+                    | name == rhoLong.tau.name    = strip lit.{kind=LLong, value <- (++"L")}
+                    | name == rhoInteger.tau.name = strip lit.{kind=LBig}
+                    | name == rhoFloat.tau.name   = strip lit.{kind=LFloat, value <- (++"F")}
+                    | name == rhoDouble.tau.name  = strip lit.{kind=LDouble, value <- (++"D")}
                     | otherwise = fromInt
                 Meta Flexi{uid, hint, kind}  = do  -- unbound, because already reduced
                         
@@ -1193,42 +1202,44 @@ literalType ctxs (lit@Lit{pos, kind, value, typ=Just sigma})
                                     Ctx{pos, cname, tau = Meta Flexi{uid=id}} <- rctxs, 
                                     uid == id ] 
                         if (real `elem` qns
-                            ||  TName{pack=pPreludeMath, base="PrimitiveFloating"} `elem` qns
+                            ||  TName{pack=pPreludeMath, base="Floating"} `elem` qns
                             ||  any (U.isSuper real g) qns)
                         then instRho lit.{kind=LDouble, value <- (++"D")} sigma.rho (Check rhoDouble)
-                                >>= return . Right       -- infer Double
+                                >>= strip       -- infer Double
                         else checkRho lit rhoInt
-                                >>= return . Right       -- infer Int
+                                >>= strip       -- infer Int
                 Meta Rigid{} -> fromInt
                 TApp _ _     -> fromInt             -- force type error unless Num             
                 _            -> do
                     x <- checkRho lit rhoInt        -- fix unresolved to Int
-                    return (Right x)                -- or force type error
+                    strip x                         -- or force type error
     | kind == LDouble, isDWIM LDouble value, RhoTau _ taut <- sigma.rho = do
             g <- getST
             let tau = reduced taut g
             
             case tau of
                 TCon{pos, name}
-                    | name == rhoFloat.tau.name   = return (Right lit.{kind=LFloat, value <- (++"F")})
-                    | name == rhoDouble.tau.name  = return (Right lit.{kind=LDouble, value <- (++"D")})
+                    | name == rhoFloat.tau.name   = strip lit.{kind=LFloat, value <- (++"F")}
+                    | name == rhoDouble.tau.name  = strip lit.{kind=LDouble, value <- (++"D")}
                     | otherwise = fromDouble
                 Meta Rigid{} -> fromDouble
                 TApp _ _     -> fromDouble          -- force type error unless Real             
                 _            -> do
                     x <- checkRho lit rhoDouble     -- fix unresolved to Double
-                    return (Right x)                -- or force type error
-    | kind == LDouble = checkRho lit rhoDouble >>= return . Right   -- no DWIM
-    | otherwise       = checkRho lit rhoInt    >>= return . Right   -- no DWIM
+                    strip x                         -- or force type error
+    | kind == LDouble = checkRho lit rhoDouble >>= strip   -- no DWIM
+    | otherwise       = checkRho lit rhoInt    >>= strip   -- no DWIM
     where
+        strip ∷ ExprT → StG (ExprT | ExprT)
+        strip x = pure . Right $ x.{typ ← fmap _.{rho ← _.{context = []}}}
         frmIntlit = nApp frmInt lit.{typ=Just sigInt}
         frmDbllit = nApp frmDbl lit.{typ=Just sigDouble}
         frmInt = Vbl{pos = pos.change VARID "fromInt", 
                      name = MName{tynm=num, base="fromInt"}, typ=Nothing}
         frmDbl = Vbl{pos= pos.change VARID "fromDouble",
                      name = MName{tynm=real, base="fromDouble"}, typ=Nothing}
-        fromInt    = checkRho frmIntlit sigma.rho.{context=[]} >>= return . Right
-        fromDouble = checkRho frmDbllit sigma.rho.{context=[]} >>= return . Right
+        fromInt    = checkRho frmIntlit sigma.rho.{context=[]} >>= strip
+        fromDouble = checkRho frmDbllit sigma.rho.{context=[]} >>= strip
 literalType _ x = return (Left x)
 
 
