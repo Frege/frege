@@ -232,8 +232,9 @@ innerFun (sym@SymV {expr = Just dx}) binds = do
                             | (sig,jt,nm) <- zip3 sigs (take arity funcjt.gargs) argNames ]
         methName    =  (symJavaName g sym).base
         funcjt      =  lambdaType (rhoJT g sym.typ.rho)
-        symx        =  sym.{rkind ← _.differenceE RAlways . _.unionE RValue}
+        symx        =  sym.{rkind ← _.unionE RAlways . _.differenceE RValue}
 
+    changeSym symx  -- remember this
     when (arity != length funcjt.gargs - 1) do
         E.error sym.pos (
             text "lambda depth" <+> anno arity <+> text "does not match function type "
@@ -243,7 +244,7 @@ innerFun (sym@SymV {expr = Just dx}) binds = do
             </> text "This is probably a compiler error you should report."
             )
     ex      ←   dx
-    stmts   ←   compiling symx (genLambda (last funcjt.gargs) ex methArgs binds)
+    stmts   ←   compiling symx (genLambda (lazy . last . _.gargs $ funcjt) ex methArgs binds)
 
     let !lambda     = JLambda{fargs=methArgs, code=Right JBlock{stmts}}
         !member     = JMember{attr = attrFinal, 
@@ -955,12 +956,13 @@ etaShrink rflg rm ex n binds = do
             not (isStrictJT rm),
             JInvoke{} ← bind.jex  = exprResult rm ex (delayBind bind)
         | otherwise               = exprResult rm ex bind
-    unwind args bind = do
+    unwind args sbind = do
         g ← getST
         E.logmsg TRACEG (getpos ex) (text "unwind: "
-                </> text (show bind)
+                </> text (show sbind)
                 </> PP.stack (map (text . flip nicer g) args)
             )
+        let bind = strictBind g sbind
         case bind.jtype of 
             Func{gargs} = do
                 let n       =  min (length args) (length gargs - 1)
@@ -970,8 +972,8 @@ etaShrink rflg rm ex n binds = do
                 eargs ← zipWithM (\t x → genExpr 
                                             false  -- (if null rargs then rflg else false)
                                             (lazy t) x binds) (take n gargs) cargs  
-                unwind rargs . strictBind g $  
-                            bind.{stype = nicer ftype g, ftype, jtype = last gargs, 
+                unwind rargs  $  
+                            bind.{stype = nicer ftype g, ftype, jtype = lazy (last gargs), 
                             jex ← JX.invoke (map _.jex eargs) . JX.xmem "apply"}
             t = E.fatal (getpos ex) (text "unwind, no function:" <+> text (show t))
 
@@ -1006,7 +1008,7 @@ etaWrap ex sigs binds (rm@Func{gargs})   = do
             eexs     = [ Vbl{pos=sym.pos, name=sym.name, typ=Just sym.typ} | sym <- syms ]
             nex      = fold (\x y -> App x y (reducedSigma g <$> x.typ)) ex eexs
             subrm    = case drop n gargs of
-                [x] -> x
+                [x] -> lazy x
                 gs  -> Func gs
             fake        = (U.patLocal (getpos ex) 0 "\\lambda").{depth=a,typ=ft}
         mapM_ SymTab.enter syms 
@@ -1056,7 +1058,7 @@ wrapHigher rflg ex binds tctxs sigma  = do
                         ctxTypes ctxNames 
                         (map (JX.invoke [] . JX.xmem "call" . JAtom) ctxLnams)
         jfunc    = sigmaJT g sigma
-        innerjt  = funcResult jfunc     -- rhoJT g sigma.rho.{context = []}
+        innerjt  = lazy (funcResult jfunc)     -- rhoJT g sigma.rho.{context = []}
         fakesym  = (U.patLocal (getpos ex) 0 "\\rankN").{depth = 0, typ = sigma}
     E.logmsg TRACEG (getpos ex) (text"genExpr: wrapping " 
         <+> text (nicer ex g)
@@ -1452,7 +1454,7 @@ genExpr rflg rm ex binds = do
                                         arg ← genArgBind (lazy ajty) (head args)
                                         let call0   = newBind g ret
                                                (JX.invoke [arg.jex] . JX.xmem "apply" $ fun.jex)
-                                            call    =  call0.{jtype = boxed rjty}
+                                            call    =  call0.{jtype = lazy rjty}
                                         appResult safetc call
                                     _ -> noGenApp "lambda bound has no Func.U type" vbl args
                             | otherwise = noGenApp "illegal lambda bound?" vbl args
@@ -1595,13 +1597,13 @@ genExpr rflg rm ex binds = do
                     (_, sigs)   =  U.returnTypeN n ft.rho
                     args        =  zip4 (repeat attrFinal) sigs (map lazy (take n gargs)) (getArgs g)
                     fake        = (U.patLocal (getpos ex) 0 "\\lambda").{depth=n}
-                    grm         = case drop n gargs of
+                    grm         = lazy $ case drop n gargs of
                                     [x] →   x
                                     ys  →   Func ys
                 stmts <- compiling fake (genLambda grm ex args binds)
 
                 let jlam        =  JLambda{fargs=args, code = Right JBlock{stmts}}
-                result (newBind g ft (JCast (boxed rm) jlam)).{jtype = rm}
+                result (newBind g ft (JCast (boxed rm) jlam)).{jtype = boxed rm}
             | otherwise = do
                     E.error (getpos ex) (text "Cannot make lambda that has no function type "
                         <+/> text (nicer ex g)

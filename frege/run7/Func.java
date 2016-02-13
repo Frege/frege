@@ -6,7 +6,7 @@ public class Func  {
   public interface U<𝓐, 𝓑> 
     extends Lazy<Func.U<𝓐, 𝓑>>, Kind.U<Func.U<𝓐, ?>, 𝓑>, Kind.B<Func.U<?, ?>, 𝓐, 𝓑>
    {
-    public 𝓑 apply(final Lazy<𝓐> a) ;
+    public Lazy<𝓑> apply(final Lazy<𝓐> a) ;
     public Func.U<𝓐, 𝓑> call() ;
     public static abstract class D<𝓐, 𝓑> implements Func.U<𝓐, 𝓑> {
       public Func.U<𝓐, 𝓑> call() {
@@ -15,14 +15,14 @@ public class Func  {
       public Thunk<Func.U<𝓐, 𝓑>> asThunk() {
         return null;
       }
-      public abstract 𝓑 apply(final Lazy<𝓐> a) ;
+      public abstract Lazy<𝓑> apply(final Lazy<𝓐> a) ;
     }
   }
   public interface B<𝓐, 𝓑, 𝓒> 
     extends Lazy<Func.B<𝓐, 𝓑, 𝓒>>, Kind.U<Func.B<𝓐, 𝓑, ?>, 𝓒>,
       Kind.B<Func.B<𝓐, ?, ?>, 𝓑, 𝓒>, Kind.T<Func.B<?, ?, ?>, 𝓐, 𝓑, 𝓒>
    {
-    public 𝓒 apply(final Lazy<𝓐> a, final Lazy<𝓑> b) ;
+    public Lazy<𝓒> apply(final Lazy<𝓐> a, final Lazy<𝓑> b) ;
     public Func.B<𝓐, 𝓑, 𝓒> call() ;
     public static abstract class D<𝓐, 𝓑, 𝓒> implements Func.B<𝓐, 𝓑, 𝓒> {
       public Func.B<𝓐, 𝓑, 𝓒> call() {
@@ -31,7 +31,7 @@ public class Func  {
       public Thunk<Func.B<𝓐, 𝓑, 𝓒>> asThunk() {
         return null;
       }
-      public abstract 𝓒 apply(final Lazy<𝓐> a, final Lazy<𝓑> b) ;
+      public abstract Lazy<𝓒> apply(final Lazy<𝓐> a, final Lazy<𝓑> b) ;
     }
   }
   public interface T<𝓐, 𝓑, 𝓒, 𝓓> 
@@ -39,7 +39,7 @@ public class Func  {
       Kind.B<Func.T<𝓐, 𝓑, ?, ?>, 𝓒, 𝓓>, Kind.T<Func.T<𝓐, ?, ?, ?>, 𝓑, 𝓒, 𝓓>,
       Kind.Q<Func.T<?, ?, ?, ?>, 𝓐, 𝓑, 𝓒, 𝓓>
    {
-    public 𝓓 apply(final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c) ;
+    public Lazy<𝓓> apply(final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c) ;
     public Func.T<𝓐, 𝓑, 𝓒, 𝓓> call() ;
     public static abstract class D<𝓐, 𝓑, 𝓒, 𝓓> implements Func.T<𝓐, 𝓑, 𝓒, 𝓓> {
       public Func.T<𝓐, 𝓑, 𝓒, 𝓓> call() {
@@ -48,7 +48,7 @@ public class Func  {
       public Thunk<Func.T<𝓐, 𝓑, 𝓒, 𝓓>> asThunk() {
         return null;
       }
-      public abstract 𝓓 apply(final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c) ;
+      public abstract Lazy<𝓓> apply(final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c) ;
     }
   }
   public interface Q<𝓐, 𝓑, 𝓒, 𝓓, 𝓔> 
@@ -57,7 +57,9 @@ public class Func  {
       Kind.Q<Func.Q<𝓐, ?, ?, ?, ?>, 𝓑, 𝓒, 𝓓, 𝓔>,
       Kind.V<Func.Q<?, ?, ?, ?, ?>, 𝓐, 𝓑, 𝓒, 𝓓, 𝓔>
    {
-    public 𝓔 apply(final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d) ;
+    public Lazy<𝓔> apply(
+      final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d
+    ) ;
     public Func.Q<𝓐, 𝓑, 𝓒, 𝓓, 𝓔> call() ;
     public static abstract class D<𝓐, 𝓑, 𝓒, 𝓓, 𝓔> implements Func.Q<𝓐, 𝓑, 𝓒, 𝓓, 𝓔> {
       public Func.Q<𝓐, 𝓑, 𝓒, 𝓓, 𝓔> call() {
@@ -66,7 +68,7 @@ public class Func  {
       public Thunk<Func.Q<𝓐, 𝓑, 𝓒, 𝓓, 𝓔>> asThunk() {
         return null;
       }
-      public abstract 𝓔 apply(
+      public abstract Lazy<𝓔> apply(
         final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d
       ) ;
     }
@@ -79,7 +81,7 @@ public class Func  {
       Kind.V<Func.V<𝓐, ?, ?, ?, ?, ?>, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕>,
       Kind.VI<Func.V<?, ?, ?, ?, ?, ?>, 𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕>
    {
-    public 𝓕 apply(
+    public Lazy<𝓕> apply(
       final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d, final Lazy<𝓔> e
     ) ;
     public Func.V<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕> call() ;
@@ -92,7 +94,7 @@ public class Func  {
       public Thunk<Func.V<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕>> asThunk() {
         return null;
       }
-      public abstract 𝓕 apply(
+      public abstract Lazy<𝓕> apply(
         final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d, final Lazy<𝓔> e
       ) ;
     }
@@ -107,7 +109,7 @@ public class Func  {
       Kind.VI<Func.VI<𝓐, ?, ?, ?, ?, ?, ?>, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖>,
       Kind.VII<Func.VI<?, ?, ?, ?, ?, ?, ?>, 𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖>
    {
-    public 𝓖 apply(
+    public Lazy<𝓖> apply(
       final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d, final Lazy<𝓔> e,
       final Lazy<𝓕> f
     ) ;
@@ -121,7 +123,7 @@ public class Func  {
       public Thunk<Func.VI<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖>> asThunk() {
         return null;
       }
-      public abstract 𝓖 apply(
+      public abstract Lazy<𝓖> apply(
         final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d,
         final Lazy<𝓔> e, final Lazy<𝓕> f
       ) ;
@@ -138,7 +140,7 @@ public class Func  {
       Kind.VII<Func.VII<𝓐, ?, ?, ?, ?, ?, ?, ?>, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗>,
       Kind.VIII<Func.VII<?, ?, ?, ?, ?, ?, ?, ?>, 𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗>
    {
-    public 𝓗 apply(
+    public Lazy<𝓗> apply(
       final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d, final Lazy<𝓔> e,
       final Lazy<𝓕> f, final Lazy<𝓖> g
     ) ;
@@ -152,7 +154,7 @@ public class Func  {
       public Thunk<Func.VII<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗>> asThunk() {
         return null;
       }
-      public abstract 𝓗 apply(
+      public abstract Lazy<𝓗> apply(
         final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d,
         final Lazy<𝓔> e, final Lazy<𝓕> f, final Lazy<𝓖> g
       ) ;
@@ -170,7 +172,7 @@ public class Func  {
       Kind.VIII<Func.VIII<𝓐, ?, ?, ?, ?, ?, ?, ?, ?>, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘>,
       Kind.IX<Func.VIII<?, ?, ?, ?, ?, ?, ?, ?, ?>, 𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘>
    {
-    public 𝓘 apply(
+    public Lazy<𝓘> apply(
       final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d, final Lazy<𝓔> e,
       final Lazy<𝓕> f, final Lazy<𝓖> g, final Lazy<𝓗> h
     ) ;
@@ -184,7 +186,7 @@ public class Func  {
       public Thunk<Func.VIII<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘>> asThunk() {
         return null;
       }
-      public abstract 𝓘 apply(
+      public abstract Lazy<𝓘> apply(
         final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d,
         final Lazy<𝓔> e, final Lazy<𝓕> f, final Lazy<𝓖> g, final Lazy<𝓗> h
       ) ;
@@ -203,7 +205,7 @@ public class Func  {
       Kind.IX<Func.IX<𝓐, ?, ?, ?, ?, ?, ?, ?, ?, ?>, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙>,
       Kind.X<Func.IX<?, ?, ?, ?, ?, ?, ?, ?, ?, ?>, 𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙>
    {
-    public 𝓙 apply(
+    public Lazy<𝓙> apply(
       final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d, final Lazy<𝓔> e,
       final Lazy<𝓕> f, final Lazy<𝓖> g, final Lazy<𝓗> h, final Lazy<𝓘> i
     ) ;
@@ -217,7 +219,7 @@ public class Func  {
       public Thunk<Func.IX<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙>> asThunk() {
         return null;
       }
-      public abstract 𝓙 apply(
+      public abstract Lazy<𝓙> apply(
         final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d,
         final Lazy<𝓔> e, final Lazy<𝓕> f, final Lazy<𝓖> g, final Lazy<𝓗> h, final Lazy<𝓘> i
       ) ;
@@ -240,7 +242,7 @@ public class Func  {
         𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚
       >
    {
-    public 𝓚 apply(
+    public Lazy<𝓚> apply(
       final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d, final Lazy<𝓔> e,
       final Lazy<𝓕> f, final Lazy<𝓖> g, final Lazy<𝓗> h, final Lazy<𝓘> i, final Lazy<𝓙> j
     ) ;
@@ -254,7 +256,7 @@ public class Func  {
       public Thunk<Func.X<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚>> asThunk() {
         return null;
       }
-      public abstract 𝓚 apply(
+      public abstract Lazy<𝓚> apply(
         final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d,
         final Lazy<𝓔> e, final Lazy<𝓕> f, final Lazy<𝓖> g, final Lazy<𝓗> h,
         final Lazy<𝓘> i, final Lazy<𝓙> j
@@ -291,7 +293,7 @@ public class Func  {
         𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛
       >
    {
-    public 𝓛 apply(
+    public Lazy<𝓛> apply(
       final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d, final Lazy<𝓔> e,
       final Lazy<𝓕> f, final Lazy<𝓖> g, final Lazy<𝓗> h, final Lazy<𝓘> i, final Lazy<𝓙> j,
       final Lazy<𝓚> k
@@ -306,7 +308,7 @@ public class Func  {
       public Thunk<Func.XI<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛>> asThunk() {
         return null;
       }
-      public abstract 𝓛 apply(
+      public abstract Lazy<𝓛> apply(
         final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d,
         final Lazy<𝓔> e, final Lazy<𝓕> f, final Lazy<𝓖> g, final Lazy<𝓗> h,
         final Lazy<𝓘> i, final Lazy<𝓙> j, final Lazy<𝓚> k
@@ -350,7 +352,7 @@ public class Func  {
         𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜
       >
    {
-    public 𝓜 apply(
+    public Lazy<𝓜> apply(
       final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d, final Lazy<𝓔> e,
       final Lazy<𝓕> f, final Lazy<𝓖> g, final Lazy<𝓗> h, final Lazy<𝓘> i, final Lazy<𝓙> j,
       final Lazy<𝓚> k, final Lazy<𝓛> l
@@ -365,7 +367,7 @@ public class Func  {
       public Thunk<Func.XII<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜>> asThunk() {
         return null;
       }
-      public abstract 𝓜 apply(
+      public abstract Lazy<𝓜> apply(
         final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d,
         final Lazy<𝓔> e, final Lazy<𝓕> f, final Lazy<𝓖> g, final Lazy<𝓗> h,
         final Lazy<𝓘> i, final Lazy<𝓙> j, final Lazy<𝓚> k, final Lazy<𝓛> l
@@ -416,7 +418,7 @@ public class Func  {
         𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝
       >
    {
-    public 𝓝 apply(
+    public Lazy<𝓝> apply(
       final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d, final Lazy<𝓔> e,
       final Lazy<𝓕> f, final Lazy<𝓖> g, final Lazy<𝓗> h, final Lazy<𝓘> i, final Lazy<𝓙> j,
       final Lazy<𝓚> k, final Lazy<𝓛> l, final Lazy<𝓜> m
@@ -433,7 +435,7 @@ public class Func  {
       > asThunk() {
         return null;
       }
-      public abstract 𝓝 apply(
+      public abstract Lazy<𝓝> apply(
         final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d,
         final Lazy<𝓔> e, final Lazy<𝓕> f, final Lazy<𝓖> g, final Lazy<𝓗> h,
         final Lazy<𝓘> i, final Lazy<𝓙> j, final Lazy<𝓚> k, final Lazy<𝓛> l, final Lazy<𝓜> m
@@ -491,7 +493,7 @@ public class Func  {
         𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝, 𝓞
       >
    {
-    public 𝓞 apply(
+    public Lazy<𝓞> apply(
       final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d, final Lazy<𝓔> e,
       final Lazy<𝓕> f, final Lazy<𝓖> g, final Lazy<𝓗> h, final Lazy<𝓘> i, final Lazy<𝓙> j,
       final Lazy<𝓚> k, final Lazy<𝓛> l, final Lazy<𝓜> m, final Lazy<𝓝> n
@@ -508,7 +510,7 @@ public class Func  {
       > asThunk() {
         return null;
       }
-      public abstract 𝓞 apply(
+      public abstract Lazy<𝓞> apply(
         final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d,
         final Lazy<𝓔> e, final Lazy<𝓕> f, final Lazy<𝓖> g, final Lazy<𝓗> h,
         final Lazy<𝓘> i, final Lazy<𝓙> j, final Lazy<𝓚> k, final Lazy<𝓛> l,
@@ -574,7 +576,7 @@ public class Func  {
         𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝, 𝓞, 𝓟
       >
    {
-    public 𝓟 apply(
+    public Lazy<𝓟> apply(
       final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d, final Lazy<𝓔> e,
       final Lazy<𝓕> f, final Lazy<𝓖> g, final Lazy<𝓗> h, final Lazy<𝓘> i, final Lazy<𝓙> j,
       final Lazy<𝓚> k, final Lazy<𝓛> l, final Lazy<𝓜> m, final Lazy<𝓝> n, final Lazy<𝓞> o
@@ -591,7 +593,7 @@ public class Func  {
       > asThunk() {
         return null;
       }
-      public abstract 𝓟 apply(
+      public abstract Lazy<𝓟> apply(
         final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d,
         final Lazy<𝓔> e, final Lazy<𝓕> f, final Lazy<𝓖> g, final Lazy<𝓗> h,
         final Lazy<𝓘> i, final Lazy<𝓙> j, final Lazy<𝓚> k, final Lazy<𝓛> l,
@@ -668,7 +670,7 @@ public class Func  {
         𝓠
       >
    {
-    public 𝓠 apply(
+    public Lazy<𝓠> apply(
       final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d, final Lazy<𝓔> e,
       final Lazy<𝓕> f, final Lazy<𝓖> g, final Lazy<𝓗> h, final Lazy<𝓘> i, final Lazy<𝓙> j,
       final Lazy<𝓚> k, final Lazy<𝓛> l, final Lazy<𝓜> m, final Lazy<𝓝> n, final Lazy<𝓞> o,
@@ -690,7 +692,7 @@ public class Func  {
       > asThunk() {
         return null;
       }
-      public abstract 𝓠 apply(
+      public abstract Lazy<𝓠> apply(
         final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d,
         final Lazy<𝓔> e, final Lazy<𝓕> f, final Lazy<𝓖> g, final Lazy<𝓗> h,
         final Lazy<𝓘> i, final Lazy<𝓙> j, final Lazy<𝓚> k, final Lazy<𝓛> l,
@@ -777,7 +779,7 @@ public class Func  {
         𝓠, 𝓡
       >
    {
-    public 𝓡 apply(
+    public Lazy<𝓡> apply(
       final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d, final Lazy<𝓔> e,
       final Lazy<𝓕> f, final Lazy<𝓖> g, final Lazy<𝓗> h, final Lazy<𝓘> i, final Lazy<𝓙> j,
       final Lazy<𝓚> k, final Lazy<𝓛> l, final Lazy<𝓜> m, final Lazy<𝓝> n, final Lazy<𝓞> o,
@@ -807,7 +809,7 @@ public class Func  {
       > asThunk() {
         return null;
       }
-      public abstract 𝓡 apply(
+      public abstract Lazy<𝓡> apply(
         final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d,
         final Lazy<𝓔> e, final Lazy<𝓕> f, final Lazy<𝓖> g, final Lazy<𝓗> h,
         final Lazy<𝓘> i, final Lazy<𝓙> j, final Lazy<𝓚> k, final Lazy<𝓛> l,
@@ -903,7 +905,7 @@ public class Func  {
         𝓠, 𝓡, 𝓢
       >
    {
-    public 𝓢 apply(
+    public Lazy<𝓢> apply(
       final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d, final Lazy<𝓔> e,
       final Lazy<𝓕> f, final Lazy<𝓖> g, final Lazy<𝓗> h, final Lazy<𝓘> i, final Lazy<𝓙> j,
       final Lazy<𝓚> k, final Lazy<𝓛> l, final Lazy<𝓜> m, final Lazy<𝓝> n, final Lazy<𝓞> o,
@@ -933,7 +935,7 @@ public class Func  {
       > asThunk() {
         return null;
       }
-      public abstract 𝓢 apply(
+      public abstract Lazy<𝓢> apply(
         final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d,
         final Lazy<𝓔> e, final Lazy<𝓕> f, final Lazy<𝓖> g, final Lazy<𝓗> h,
         final Lazy<𝓘> i, final Lazy<𝓙> j, final Lazy<𝓚> k, final Lazy<𝓛> l,
@@ -1035,7 +1037,7 @@ public class Func  {
         𝓠, 𝓡, 𝓢, 𝓣
       >
    {
-    public 𝓣 apply(
+    public Lazy<𝓣> apply(
       final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d, final Lazy<𝓔> e,
       final Lazy<𝓕> f, final Lazy<𝓖> g, final Lazy<𝓗> h, final Lazy<𝓘> i, final Lazy<𝓙> j,
       final Lazy<𝓚> k, final Lazy<𝓛> l, final Lazy<𝓜> m, final Lazy<𝓝> n, final Lazy<𝓞> o,
@@ -1065,7 +1067,7 @@ public class Func  {
       > asThunk() {
         return null;
       }
-      public abstract 𝓣 apply(
+      public abstract Lazy<𝓣> apply(
         final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d,
         final Lazy<𝓔> e, final Lazy<𝓕> f, final Lazy<𝓖> g, final Lazy<𝓗> h,
         final Lazy<𝓘> i, final Lazy<𝓙> j, final Lazy<𝓚> k, final Lazy<𝓛> l,
@@ -1181,7 +1183,7 @@ public class Func  {
         𝓠, 𝓡, 𝓢, 𝓣, 𝓤
       >
    {
-    public 𝓤 apply(
+    public Lazy<𝓤> apply(
       final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d, final Lazy<𝓔> e,
       final Lazy<𝓕> f, final Lazy<𝓖> g, final Lazy<𝓗> h, final Lazy<𝓘> i, final Lazy<𝓙> j,
       final Lazy<𝓚> k, final Lazy<𝓛> l, final Lazy<𝓜> m, final Lazy<𝓝> n, final Lazy<𝓞> o,
@@ -1214,7 +1216,7 @@ public class Func  {
       > asThunk() {
         return null;
       }
-      public abstract 𝓤 apply(
+      public abstract Lazy<𝓤> apply(
         final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d,
         final Lazy<𝓔> e, final Lazy<𝓕> f, final Lazy<𝓖> g, final Lazy<𝓗> h,
         final Lazy<𝓘> i, final Lazy<𝓙> j, final Lazy<𝓚> k, final Lazy<𝓛> l,
@@ -1350,7 +1352,7 @@ public class Func  {
         𝓠, 𝓡, 𝓢, 𝓣, 𝓤, 𝓥
       >
    {
-    public 𝓥 apply(
+    public Lazy<𝓥> apply(
       final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d, final Lazy<𝓔> e,
       final Lazy<𝓕> f, final Lazy<𝓖> g, final Lazy<𝓗> h, final Lazy<𝓘> i, final Lazy<𝓙> j,
       final Lazy<𝓚> k, final Lazy<𝓛> l, final Lazy<𝓜> m, final Lazy<𝓝> n, final Lazy<𝓞> o,
@@ -1384,7 +1386,7 @@ public class Func  {
       > asThunk() {
         return null;
       }
-      public abstract 𝓥 apply(
+      public abstract Lazy<𝓥> apply(
         final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d,
         final Lazy<𝓔> e, final Lazy<𝓕> f, final Lazy<𝓖> g, final Lazy<𝓗> h,
         final Lazy<𝓘> i, final Lazy<𝓙> j, final Lazy<𝓚> k, final Lazy<𝓛> l,
@@ -1541,7 +1543,7 @@ public class Func  {
         𝓠, 𝓡, 𝓢, 𝓣, 𝓤, 𝓥, 𝓦
       >
    {
-    public 𝓦 apply(
+    public Lazy<𝓦> apply(
       final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d, final Lazy<𝓔> e,
       final Lazy<𝓕> f, final Lazy<𝓖> g, final Lazy<𝓗> h, final Lazy<𝓘> i, final Lazy<𝓙> j,
       final Lazy<𝓚> k, final Lazy<𝓛> l, final Lazy<𝓜> m, final Lazy<𝓝> n, final Lazy<𝓞> o,
@@ -1575,7 +1577,7 @@ public class Func  {
       > asThunk() {
         return null;
       }
-      public abstract 𝓦 apply(
+      public abstract Lazy<𝓦> apply(
         final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d,
         final Lazy<𝓔> e, final Lazy<𝓕> f, final Lazy<𝓖> g, final Lazy<𝓗> h,
         final Lazy<𝓘> i, final Lazy<𝓙> j, final Lazy<𝓚> k, final Lazy<𝓛> l,
@@ -1753,7 +1755,7 @@ public class Func  {
         𝓠, 𝓡, 𝓢, 𝓣, 𝓤, 𝓥, 𝓦, 𝓧
       >
    {
-    public 𝓧 apply(
+    public Lazy<𝓧> apply(
       final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d, final Lazy<𝓔> e,
       final Lazy<𝓕> f, final Lazy<𝓖> g, final Lazy<𝓗> h, final Lazy<𝓘> i, final Lazy<𝓙> j,
       final Lazy<𝓚> k, final Lazy<𝓛> l, final Lazy<𝓜> m, final Lazy<𝓝> n, final Lazy<𝓞> o,
@@ -1787,7 +1789,7 @@ public class Func  {
       > asThunk() {
         return null;
       }
-      public abstract 𝓧 apply(
+      public abstract Lazy<𝓧> apply(
         final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d,
         final Lazy<𝓔> e, final Lazy<𝓕> f, final Lazy<𝓖> g, final Lazy<𝓗> h,
         final Lazy<𝓘> i, final Lazy<𝓙> j, final Lazy<𝓚> k, final Lazy<𝓛> l,
@@ -1979,7 +1981,7 @@ public class Func  {
         𝓟, 𝓠, 𝓡, 𝓢, 𝓣, 𝓤, 𝓥, 𝓦, 𝓧, 𝓨
       >
    {
-    public 𝓨 apply(
+    public Lazy<𝓨> apply(
       final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d, final Lazy<𝓔> e,
       final Lazy<𝓕> f, final Lazy<𝓖> g, final Lazy<𝓗> h, final Lazy<𝓘> i, final Lazy<𝓙> j,
       final Lazy<𝓚> k, final Lazy<𝓛> l, final Lazy<𝓜> m, final Lazy<𝓝> n, final Lazy<𝓞> o,
@@ -2013,7 +2015,7 @@ public class Func  {
       > asThunk() {
         return null;
       }
-      public abstract 𝓨 apply(
+      public abstract Lazy<𝓨> apply(
         final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d,
         final Lazy<𝓔> e, final Lazy<𝓕> f, final Lazy<𝓖> g, final Lazy<𝓗> h,
         final Lazy<𝓘> i, final Lazy<𝓙> j, final Lazy<𝓚> k, final Lazy<𝓛> l,
@@ -2219,7 +2221,7 @@ public class Func  {
         𝓟, 𝓠, 𝓡, 𝓢, 𝓣, 𝓤, 𝓥, 𝓦, 𝓧, 𝓨, 𝓩
       >
    {
-    public 𝓩 apply(
+    public Lazy<𝓩> apply(
       final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d, final Lazy<𝓔> e,
       final Lazy<𝓕> f, final Lazy<𝓖> g, final Lazy<𝓗> h, final Lazy<𝓘> i, final Lazy<𝓙> j,
       final Lazy<𝓚> k, final Lazy<𝓛> l, final Lazy<𝓜> m, final Lazy<𝓝> n, final Lazy<𝓞> o,
@@ -2253,7 +2255,7 @@ public class Func  {
       > asThunk() {
         return null;
       }
-      public abstract 𝓩 apply(
+      public abstract Lazy<𝓩> apply(
         final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d,
         final Lazy<𝓔> e, final Lazy<𝓕> f, final Lazy<𝓖> g, final Lazy<𝓗> h,
         final Lazy<𝓘> i, final Lazy<𝓙> j, final Lazy<𝓚> k, final Lazy<𝓛> l,
@@ -2473,7 +2475,7 @@ public class Func  {
         𝓟, 𝓠, 𝓡, 𝓢, 𝓣, 𝓤, 𝓥, 𝓦, 𝓧, 𝓨, 𝓩, Ω
       >
    {
-    public Ω apply(
+    public Lazy<Ω> apply(
       final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d, final Lazy<𝓔> e,
       final Lazy<𝓕> f, final Lazy<𝓖> g, final Lazy<𝓗> h, final Lazy<𝓘> i, final Lazy<𝓙> j,
       final Lazy<𝓚> k, final Lazy<𝓛> l, final Lazy<𝓜> m, final Lazy<𝓝> n, final Lazy<𝓞> o,
@@ -2508,7 +2510,7 @@ public class Func  {
       > asThunk() {
         return null;
       }
-      public abstract Ω apply(
+      public abstract Lazy<Ω> apply(
         final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d,
         final Lazy<𝓔> e, final Lazy<𝓕> f, final Lazy<𝓖> g, final Lazy<𝓗> h,
         final Lazy<𝓘> i, final Lazy<𝓙> j, final Lazy<𝓚> k, final Lazy<𝓛> l,

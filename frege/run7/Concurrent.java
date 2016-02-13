@@ -127,7 +127,7 @@ public class Concurrent {
     	final Thunk<A> it = Thunk.<A>shared(
     			new Lazy<A>() {
     	            public  A call() {
-    	                return f.apply(Thunk.lazyTrue);
+    	                return f.apply(Thunk.lazyTrue).call();
     	            }
 
 					@Override
