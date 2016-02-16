@@ -340,7 +340,7 @@ public class Meta {
         int        lkind()         default 0;     // Lit: ord LiteralKind
                                                   // Ann: sigma index
                                                   // Case: ord CKind
-        String     varval()        default "";    // local Vbl name or Literal value
+        String     varval()        default "";    // Literal value
         int[]      alts()          default {};    // case alternatives or lambda
                                                   // first half are expression indexes for patterns
                                                   // second half are expression indexes for expressions
@@ -350,6 +350,7 @@ public class Meta {
                                                   //       s is a sigma index or -1 if v was not annotated
                                                   //       x is the index of an Expr for the expression defining v
         int        subx1()         default 0;     // index of 1st subexpression, set for Ann, App, If, Case and Let
+        										  // or uid of local Vbl
         int        subx2()         default 0;     // index of 2nd subexpression, set for App, If
         int        subx3()         default 0;     // index of 3rd subexpression, set fot If
     }
