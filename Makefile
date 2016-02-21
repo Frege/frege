@@ -65,10 +65,12 @@ FREGEC0  = $(FREGECJ) -prefix a -sp shadow:.
 FREGEC1  = $(FREGE) afrege.compiler.Main -d build -hints -target 1.7 -inline -prefix b
 
 #	compile final compiler with compiler2
-FREGEC2  = $(FREGE) bfrege.compiler.Main -d build -hints -target 1.7 -O -sp next/:. -experimental -comments
+FREGEC2  = $(FREGE) bfrege.compiler.Main -d build -hints -target 1.7 -O
+# -sp next/:. -experimental -comments
 
 #	final compiler
-FREGECC  = $(FREGE) frege.compiler.Main  -d build -hints -target 1.7 -O -sp next/:. -experimental
+FREGECC  = $(FREGE) frege.compiler.Main  -d build -hints -target 1.7 -O
+#-sp next/:. -experimental
 
 #	shadow Prelude files in the order they must be compiled
 SPRELUDE  =  shadow/frege/prelude/PreludeBase.fr \
