@@ -53,23 +53,23 @@ TOOLSF  = $(DIR)/tools
 COMPS   = frege/compiler
 
 
-FREGE    = $(JAVA) -Xss4m -Xmx3g -cp build
+FREGE    = $(JAVA) -Xss8m -Xmx3g -cp build
 
 #	compile using the fregec.jar in the working directory
 FREGECJ  = $(FREGE)  -jar fregec.jar  -d build -hints
 
 #	compile compiler1 with fregec.jar, uses prelude sources from shadow/
-FREGEC0  = $(FREGECJ) -prefix a -sp shadow:.
+FREGEC0  = $(FREGECJ) -prefix a -sp shadow:. -experimental
 
 #	compile compiler2 with compiler1
-FREGEC1  = $(FREGE) afrege.compiler.Main -d build -hints -target 1.7 -inline -prefix b
+FREGEC1  = $(FREGE) afrege.compiler.Main -d build -hints -target 1.7 -inline -prefix b -experimental
 
 #	compile final compiler with compiler2
-FREGEC2  = $(FREGE) bfrege.compiler.Main -d build -hints -target 1.7 -O
+FREGEC2  = $(FREGE) bfrege.compiler.Main -d build -hints -target 1.7 -O -experimental
 # -sp next/:. -experimental -comments
 
 #	final compiler
-FREGECC  = $(FREGE) frege.compiler.Main  -d build -hints -target 1.7 -O
+FREGECC  = $(FREGE) frege.compiler.Main  -d build -hints -target 1.7 -O -experimental
 #-sp next/:. -experimental
 
 #	shadow Prelude files in the order they must be compiled
