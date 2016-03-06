@@ -248,10 +248,10 @@ if you don't want to install IRC software.
 
 **Staying up to date**
 
-[YouTube playlist](https://www.youtube.com/watch?v=S-4sYwGY3Sk&list=PL14crhrjkk-lbdn4Yg85_QRk9r_uiX1yh),
-[Twitter: @fregelang](https://twitter.com/fregelang), 
-[Facebook: fregelang](https://www.facebook.com/fregelang), 
-[Reddit: r/frege](https://www.reddit.com/r/frege)
+* [YouTube playlist](https://www.youtube.com/watch?v=S-4sYwGY3Sk&list=PL14crhrjkk-lbdn4Yg85_QRk9r_uiX1yh)
+* Twitter: [@fregelang](https://twitter.com/fregelang)
+* Facebook: [fregelang](https://www.facebook.com/fregelang)
+* Reddit: [/r/frege](https://www.reddit.com/r/frege)
 
 **For issues only**
 
