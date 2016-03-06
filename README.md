@@ -31,17 +31,18 @@ main args = do
     println (greeting "World")
 ```
 
-This code will compile to `Hello.class` and `Hello.java` with a regular Java main method that one can start the usual Java way.
+This code will compile to `Hello.class` and `Hello.java` with a regular Java `main` method that one can start the usual Java way.
 
 Moreover, the `Hello.class` will have a method
 
     public static String greeting(String ...) {...}
+
 that one can call from Java or any other JVM language.
 
 The `greeting` function is **pure**, meaning it is _stateless_ and _free of side effects_.
 Therefore, it is _threadsafe_ and its results may be _automatically cached_ since given the same argument, the result will always be the same.
 
-The `main` function is **impure**. It takes a list of Strings and does not return just "void" as in most other JVM languages but the
+The `main` function is **impure**. It takes a list of `String`s and does not return just "void" as in most other JVM languages but the
 type `IO ()`, telling that it may produce side effects like printing to the console. The Frege **type system** guarantees
 that any caller of `main` must also be of some `IO` type and is thus also marked as impure. That way, the lack of purity percolates up the whole call chain.
 
@@ -62,7 +63,7 @@ Much can be achieved in Frege in one line of code and here is an example that yo
     
 After execution you should see a list of triples containing the solutions `(3, 4, 5)` and `(6, 8, 10)`. 
     
-Such a comprehension reads almost like a SQL statement: 
+Such a comprehension reads almost like an SQL statement: 
 * _select_ the triple `(x,y,z)`
 * with `x` drawn _from_ the list of `1` to `10`, `y` from `x` to `10`, and `z` from `x` to `10`
 * _where_ `x*x + y*y == z*z`
@@ -99,13 +100,14 @@ clear and obvious.
 * The `cosines` are an _infinite_ list of cosine values that starts with `cos 1.0` and then `iterate`s to `cos(cos(1.0))`, `cos(cos(cos(1.0)))`, and so forth.
 * Please note that the `=` signs do _not_ denote assignment but a definition. There are no assignment in Frege!
 * The `pairsOf` function works on any list of values to create pairs of any adjacent values.
-It uses `zip`, which is an often-used construction for this task but the details are not relevant here.
+It uses `zip`, which is an often-used construction for this task, but the details are not relevant here.
 
 This code is **pure**. The inferred type is `Double`.
 The code does not rely on any mutable state (not even internally). Therefore it is _threadsafe_ and the result can be _automatically cached_.
 
 What's in it for me?
------------------
+--------------------
+
 **For the Java programmer**
 
 Frege offers you the opportunity to **learn and use a new programming paradigm**
@@ -155,6 +157,7 @@ by ironing out insubstantial differences.
 
 The Name
 --------
+
 The Frege programming language is named after and in honor of Gottlob Frege
 who published the ideas of higher-order functions, partial function application, and many more concepts of formal logic
 that we now take for granted back in the 19th century.
@@ -245,7 +248,7 @@ if you don't want to install IRC software.
 
 **Staying up to date**
 
-[Youtube playlist](https://www.youtube.com/watch?v=S-4sYwGY3Sk&list=PL14crhrjkk-lbdn4Yg85_QRk9r_uiX1yh),
+[YouTube playlist](https://www.youtube.com/watch?v=S-4sYwGY3Sk&list=PL14crhrjkk-lbdn4Yg85_QRk9r_uiX1yh),
 [Twitter: @fregelang](https://twitter.com/fregelang), 
 [Facebook: fregelang](https://www.facebook.com/fregelang), 
 [Reddit: r/frege](https://www.reddit.com/r/frege)
@@ -259,7 +262,8 @@ _Please keep discussions to the [forum](http://groups.google.com/group/frege-pro
 and questions to [Stack Overflow](http://stackoverflow.com/questions/tagged/frege)._
 
 Links
-----
+-----
+
 * [Frege Wiki](https://github.com/Frege/frege/wiki/_pages)
 * [Language reference](http://www.frege-lang.org/doc/Language.pdf)
 * [InfoQ Article on Frege's history, current state, and future plans](http://www.infoq.com/news/2015/08/frege-haskell-for-jvm)
@@ -270,6 +274,7 @@ Links
 * The [Frege Goodness](http://dierk.gitbooks.io/fregegoodness) free ebook 
 
 Recommended reading
+
 * [John Hughes: Why functional programming matters](http://www.cs.kent.ac.uk/people/staff/dat/miranda/whyfp90.pdf)
 * [Book: Real-World Haskell](http://book.realworldhaskell.org/read/) (free online)
 * [Book: Learn you a Haskell](http://learnyouahaskell.com/chapters) (free online)
@@ -277,11 +282,13 @@ Recommended reading
 
 API Docs
 --------
+
 * [Online Docs (Frege Standard Library)](http://www.frege-lang.org/doc/fregedoc.html)
 * [Online Docs (Runtime Javadoc)](http://www.frege-lang.org/doc/index.html)
 
 Copyright and License
----------
+---------------------
+
 Copyright (c) Ingo Wechsung, 2011-2016. All rights reserved.
 The use and distribution terms for this software are covered by the
 [BSD 3-clause license](http://opensource.org/licenses/BSD-3-Clause)
