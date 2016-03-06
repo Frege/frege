@@ -59,18 +59,16 @@ FREGE    = $(JAVA) -Xss8m -Xmx3g -cp build
 FREGECJ  = $(FREGE)  -jar fregec.jar  -d build -hints
 
 #	compile compiler1 with fregec.jar, uses prelude sources from shadow/
-FREGEC0  = $(FREGECJ) -prefix a -sp shadow:. -experimental
+FREGEC0  = $(FREGECJ) -prefix a -sp shadow:. 
 
 #	compile compiler2 with compiler1
-FREGEC1  = $(FREGE) afrege.compiler.Main -d build -hints -target 1.7 -inline -prefix b -experimental
+FREGEC1  = $(FREGE) afrege.compiler.Main -d build -hints -target 1.7 -inline -prefix b
 
 #	compile final compiler with compiler2
-FREGEC2  = $(FREGE) bfrege.compiler.Main -d build -hints -target 1.7 -O -experimental
-# -sp next/:. -experimental -comments
+FREGEC2  = $(FREGE) bfrege.compiler.Main -d build -hints -target 1.7 -O
 
 #	final compiler
-FREGECC  = $(FREGE) frege.compiler.Main  -d build -hints -target 1.7 -O -experimental
-#-sp next/:. -experimental
+FREGECC  = $(FREGE) frege.compiler.Main  -d build -hints -target 1.7 -O
 
 #	shadow Prelude files in the order they must be compiled
 SPRELUDE  =  shadow/frege/prelude/PreludeBase.fr \
