@@ -279,25 +279,25 @@ public class Runtime {
     */
 	public static java.lang.Integer runMain(final Object arg) {
 		java.lang.Integer xit = null;
-		try {
-			Object mainres = frege.runtime.Delayed.delayed(arg).call();
-			mainres = frege.runtime.Delayed.<Object>forced(mainres);
-			if (mainres instanceof java.lang.Integer) {
-				xit = (java.lang.Integer)mainres;
-			}
-			else if (mainres instanceof java.lang.Boolean) {
-				xit = (boolean)(java.lang.Boolean)mainres ? 0 : 1;
-			}
-		}
+//		try {
+//			Object mainres = frege.runtime.Delayed.delayed(arg).call();
+//			mainres = frege.runtime.Delayed.<Object>forced(mainres);
+//			if (mainres instanceof java.lang.Integer) {
+//				xit = (java.lang.Integer)mainres;
+//			}
+//			else if (mainres instanceof java.lang.Boolean) {
+//				xit = (boolean)(java.lang.Boolean)mainres ? 0 : 1;
+//			}
+//		}
 //		catch (Exception ex) {
 //			throw new Error(ex); // ex.printStackTrace();
 //		}
-		finally {
-			// The following is needed to terminate a program that did forkIO
-			frege.runtime.Concurrent.shutDownIfExists();
-			stderr.get().flush();
-			stdout.get().flush();
-		}
+//		finally {
+//			// The following is needed to terminate a program that did forkIO
+//			frege.runtime.Concurrent.shutDownIfExists();
+//			stderr.get().flush();
+//			stdout.get().flush();
+//		}
 		return xit;
 	}
 	
