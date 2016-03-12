@@ -1,0 +1,108 @@
+{-- 
+    # Handling of Constants
+    
+    Because regular expression and big integer literals need java code 
+    for initialization, we give code generation a 'JName' when it needs such
+    a value with 'findConst'. We remember the literal in a
+    
+    > TreeMap (LiteralKind, String) Int
+
+    and at the end of code generation,
+    we generate a static nested class @K@ (from "Konstante", the german word
+    for "constant") that contains the code to initialize the constants under
+    the very same names that have been out before.
+    
+    This will work for all kind of literals, however, we use it currently
+    only for 'LRegex' and 'LBig'  
+-} 
+module frege.compiler.gen.java.Constants where
+
+import Data.TreeMap(keys, insert)
+
+import Compiler.enums.Literals
+import Compiler.types.Expression(Expr, ExprT)
+import Compiler.types.Global(StG, GenSt, Global, getST, changeST, uniqid)
+import Compiler.types.JNames(JName)
+import Compiler.types.AbstractJava
+import Compiler.types.Positions(Position)
+
+import Compiler.Typecheck(litSigma)
+
+import Compiler.gen.java.Common
+
+{--
+     Find the 'JName' of a literal.
+     If this literal does not have a name yet, it will be entered in the 'GenSt.consts'
+     table.
+     This is guranteed to return a 'JName' of the form (@JName class member@)
+ -}
+
+findConst ∷ Expr → StG JName
+findConst (Lit {pos,kind,value})
+     | kind == LBool = case value of
+         "true" -> pure (JName "java.lang.Boolean" "TRUE")
+         _      -> pure (JName "java.lang.Boolean" "FALSE")
+     | otherwise  = do
+         g <- getST
+         let constName = pure . JName (g.gen.main ++ ".K")
+         case g.gen.consts.lookup (kind,value) of
+             Just u
+                 | kind `elem` [LInt, LLong, LBig]
+                             -> constName (kinda kind ++ value)
+                 | otherwise -> constName (kinda kind ++ show u)
+             Nothing
+                 | kind `elem` [LInt, LLong, LBig] = do
+                      changeST Global.{gen <- GenSt.{consts <- insert (kind, value) 0}}
+                      constName (kinda kind ++ value)
+                 | otherwise = do
+                      u <- uniqid
+                      changeST Global.{gen <- GenSt.{consts <- insert (kind, value) u}}
+                      constName (kinda kind ++ show u)
+ 
+     where
+         kinda LBool   = "bool"
+         kinda LInt    = "int"
+         kinda LRegex  = "rgx"
+         kinda LString = "str"
+         kinda LDouble = "dbl"
+         kinda LFloat  = "flt"
+         kinda LChar   = "chr"
+         kinda LBig    = "big"
+         kinda LLong   = "long"
+findConst _ = error "findConst: no Lit"
+
+staticConst x = JX.staticMember <$> findConst x
+
+makeConstants = do
+        g <- getST 
+        consts <- mapM genConst (keys g.gen.consts)
+        let constclass = JClass   { attr = attrs [JPublic, JStatic],
+                                     name  = "K",
+                                     gvars = [],
+                                     extend = Nothing,
+                                     implement = [],
+                                     defs = consts}
+        pure (if null consts then Nothing else Just constclass)
+     where
+         -- generate 1 constant
+         genConst (kind,value) = do
+             g <- getST
+             jname <- findConst Lit {pos=Position.null, typ = Nothing, kind, value}
+             let lsigma = litSigma kind
+                 numv = value.replaceAll ´_´ ""
+                 bjt  = sigmaJT g lsigma
+                 ex = case kind of
+                     LBig   -> JNew (Ref (JName "" "java.math.BigInteger") []) [JAtom (show numv)]
+                     LRegex -> JInvoke
+                                 (JStMem (Nativ "java.util.regex.Pattern" [] true) "compile" [])
+                                 [JAtom value, JAtom (show flags)] where
+                                    flags = Regex.unicode_character_class +
+                                            Regex.unicode_case +
+                                            Regex.canon_eq
+                     LInt      -> JAtom numv
+                     LLong     -> JAtom numv
+                     LDouble   -> JAtom numv
+                     LFloat    -> JAtom numv
+                     otherwise -> JAtom value
+             pure JMember { attr = attrs [JPublic, JFinal, JStatic],
+                                jtype = bjt, name = jname.base, init = Just ex }

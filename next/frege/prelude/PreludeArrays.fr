@@ -1,0 +1,520 @@
+{-- 
+
+    Support for Java reflective arrays.
+
+-}
+protected module frege.prelude.PreludeArrays where
+
+import frege.prelude.PreludeBase
+import frege.prelude.PreludeList() 
+import frege.prelude.PreludeList as L(ListSource, length, map, fold, zipWith, null, zip) 
+import frege.prelude.Maybe (mapMaybe)
+import frege.prelude.PreludeMonad
+import frege.prelude.PreludeIO
+import frege.control.Semigroupoid
+import frege.control.Category
+
+native module where {
+    @SuppressWarnings("unchecked") public static<A> 
+        A[] newInstance(Class<A> elem, int size) {
+        return (A[]) java.lang.reflect.Array.newInstance(elem, size);
+    }
+    @SuppressWarnings("unchecked") public static<E> E     aGet(Object array, int inx)     { 
+        return (E) java.lang.reflect.Array.get(array,inx); 
+    }
+    @SuppressWarnings("unchecked") public static<E> void  aPut(Object array, int inx, E val) { 
+        java.lang.reflect.Array.set(array, inx, val); 
+        return; 
+    }
+}
+
+
+--- short hand for 'Mutable' @s@ ('JArray' @a@)
+type ArrayOf s a = Mutable s (JArray a)
+
+{--
+    The type @JArray X@ corresponds to Java's @J[]@ for any type @X@
+    where @J@ is the corresponding java type of @X@,
+    but note that Java does not really have generic arrays.
+
+    We can use arrays of non-primitive types generically inside Frege, but native code 
+    that expects or returns arrays will not be generic.  
+
+    The native interface will take every occurrence of
+
+    > JArray X
+
+    or
+
+    > Mutable s (JArray X)
+
+    in native declarations to denote the corresponding Java array type.
+    But when the type argument is variable, it will be just @Object@.
+    This corresponds to the usage in 
+    'http://docs.oracle.com/javase/7/docs/api/index.html?java/lang/reflect/Array.html the array reflection API'.
+
+    Multi-dimensional arrays are not very well supported out of the box.
+    If one needs more than 1 dimensions, the type will get quite complex,
+    as of course arrays are mutable and so one will have multiple levels
+    of 'JArray' nested in 'Mutable' nested in 'JArray' and so forth.
+    Moreover, multi-dimensional arrays cannot be generic at all.
+
+    Note that there are really two different APIs: 
+
+    1. With the 'JArray.getElemAt', 'JArray.getAt', 'JArray.setAt', 'JArray.setElemAt',
+    'JArray.itemAt' and 'JArray.elemAt' it is possible to work on Java objects with
+    java compile time type  @X[]@ for some (non primitive!) java type @X@.
+
+    2. With the 'newArray', 'getElemAt', 'getAt', 'setAt', 
+    'setElemAt', 'itemAt' and 'elemAt' functions of the 'ArrayElement' class
+    for some type @F@ that is an instance of 'ArrayElement', 
+    we can work on Java objects with
+    Java compile time type @X[]@, 
+    where @X@ is the Java type corresponding to @F@,
+    but the run time type is always @X[]@.
+
+    The former ones are usable only in polymorphic functions where the type argument 
+    for 'JArray' is a variable and we don't (want to) have 'ArrayElement' constraints. 
+    They are not good for interfacing native methods that take or return arrays of a certain type.
+    Run time type errors are possible because native methods could put anything there.
+    However, when used in Frege only, the typing is safe.
+
+    The latter ones are truly type safe, because their Frege type corresponds to the
+    expected Java compile time type, which is also the actual run time type.  
+
+    Here is a cheat sheet for the different array get and set methods:
+
+    >             Array type            Argument/    Description
+    >                                   Result
+
+    > setAt       Mutable (JArray s X)  Maybe X     set null or data element
+    > setElemAt   Mutable (JArray s X)  X           set data element
+    > getAt       Mutable (JArray s X)  Maybe X     get null or data element
+    > getElemAt   Mutable (JArray s X)  X           get data element (unsafe)
+    > itemAt      JArray s X            Maybe X     get null or data element (pure)
+    > elemAt      JArray s X            X           get data element (pure, unsafe)
+
+    "unsafe" in this context applies only to non-primitive types
+    and means that the function will fail with a @NullPointerException@
+    if the value accessed is a Java @null@.
+
+-}
+data JArray a = native "java.lang.Object" where
+
+    ---  create a one dimensional Java array 
+    native new   PreludeArrays.newInstance {a} :: Class a -> Int -> STMutable s (JArray a)
+
+    {-- 
+        Tell the length of an immutable Java array.
+
+        Because the length of an array cannot change, 
+        it is safe to use this function with 'readonly'. 
+    -}  
+    pure native length  java.lang.reflect.Array.getLength {} :: JArray a -> Int
+
+    --- Return the length of a mutable array in the 'ST' monad.
+    getLength :: ArrayOf α β -> ST α Int
+    getLength = readonly length
+
+    {--
+        Get the array element at a given index. This will throw an
+        'IndexOutOfBoundsException' if the index is lower than 0 or
+        greater or equal to the length of the array.
+
+        Because in general, array elements may be @null@, the return
+        value is wrapped in 'Maybe', as usual.
+
+        Can not be used with arrays of primitive values.
+    -}
+    pure native genericItemAt  PreludeArrays.aGet {a} :: JArray a -> Int -> Maybe a
+    --- warning: use genericItemAt in 3.24
+    itemAt arr i = genericItemAt arr i
+
+    {--
+        Like 'JArray.genericItemAt' but the result is not wrapped in 'Maybe'.
+
+        The user is expected to prove that the
+        element cannot be @null@ or else risk a @NullPointerException@.
+
+        Can not be used with arrays of primitive values.
+    -}
+    pure native genericElemAt  PreludeArrays.aGet {a}  :: JArray a -> Int -> a
+    --- warning: use genericElemAt in 3.24
+    elemAt arr i = genericElemAt arr i
+
+    {--
+        Get the array element at a certain index of a mutable array and
+        return it in the 'ST' monad.
+
+        This will throw an
+        'IndexOutOfBoundsException' if the index is lower than 0 or
+        greater or equal to the length of the array.
+
+        Because in general, array elements may be @null@, the return
+        value is wrapped in 'Maybe', as usual.
+
+        Can not be used with arrays of primitive values.
+    -}
+    native       genericGetAt  PreludeArrays.aGet {a}   :: Mutable s (JArray a) -> Int -> ST s (Maybe a)
+
+    {--
+        Set the element at a certain index of a mutable array to a value
+        that is wrapped in 'Maybe'. This won't work for primitive element types.
+
+        This will throw an
+        'IndexOutOfBoundsException' if the index is lower than 0 or
+        greater or equal to the length of the array.
+
+        To set the corresponding array element to @null@, pass 'Nothing',
+        otherwise pass a 'Just' value.
+
+        Can not be used with arrays of primitive values.
+    -}
+    native       genericSetAt  java.lang.reflect.Array.set {} :: Mutable s (JArray a) -> Int -> Maybe a -> ST s ()
+
+    {-- 
+        Get the array element at a certain index of a mutable array and
+        return it in the 'ST' monad.
+
+        This will throw an
+        'IndexOutOfBoundsException' if the index is lower than 0 or
+        greater or equal to the length of the array.
+
+        Unlike with 'JArray.getAt' the element *must not be @null@*.
+
+        The user is expected to prove that the
+        element cannot be @null@ or else risk a @NullPointerException@.
+
+        Can not be used with arrays of primitive values.
+    -}
+    native   genericGetElemAt  PreludeArrays.aGet {a}   :: Mutable s (JArray a) -> Int -> ST s a
+
+    {--
+        Set the element at a certain index of a mutable array.
+
+        This will throw an
+        'IndexOutOfBoundsException' if the index is lower than 0 or
+        greater or equal to the length of the array.
+
+        Can not be used with arrays of primitive values.
+    -}
+    native   genericSetElemAt  java.lang.reflect.Array.set {} :: Mutable s (JArray a) -> Int -> a -> ST s ()
+
+    {--
+        Create a mutable array from a finite list.
+
+        Can not be used with arrays of primitive values.
+    -}
+    genericFromList :: ArrayElement α => [α] -> STMutable β (JArray α)
+    genericFromList xs = do
+        let !len = xs.length 
+        arr <- newArray len
+        zipWithM_ (ArrayElement.setElemAt arr) [0..len-1] xs
+        pure arr
+    --- warning: use genericFromList in 3.24
+    fromList xs = genericFromList xs
+    {--
+        Create a mutable array from a finite index/value list.
+
+        Indexes not mentioned in the list remain @null@ for 
+        non primitive array elements and 0 otherwise.
+
+        Can not be used with arrays of primitive values.
+    -}
+--    genericFromIndexList :: ArrayElement α => [(Int,α)] -> STMutable β (JArray α)
+--    genericFromIndexList xs = do
+--        let !len = L.fold max 0 (L.map fst xs) 
+--        arr <- newArray (if null xs then 0 else len+1)
+--        mapM_ (\(i,a) -> ArrayElement.setElemAt arr i a)  xs
+--        pure arr
+--
+--
+--    {--
+--        Create a mutable generic array from a finite index/value list.
+--
+--        Indexes not mentioned in the list remain @null@ for 
+--        non primitive array elements and 0 otherwise.
+--
+--    -}
+    genericFromIndexList :: JavaType α => [(Int,α)] -> STMutable β (JArray α)
+    genericFromIndexList xs = do
+        let !len = L.fold max 0 (L.map fst xs) 
+        arr <- JArray.new javaClass (if null xs then 0 else len+1)
+        mapM_ (uncurry (JArray.genericSetElemAt arr))  xs
+        return arr
+
+
+    --- Modify a mutable array by applying a function to all its elements.
+    --- Can not be used with arrays of primitive values.
+    genericModify :: ArrayElement α => (α->α) -> ArrayOf β α -> ST β ()
+    genericModify f dest = do
+            max <- dest.getLength
+            mapM_ (modifyAt f dest) [0..max-1]
+
+    --- Equivalent of 'fold' for mutable arrays.
+    --- Can not be used with arrays of primitive values.
+    genericFold :: ArrayElement α => (β->α->β) -> β -> ArrayOf γ α -> ST γ β
+    genericFold f acc arr = arr.getLength >>= foldM collect acc . enumFromTo 0 . pred
+        where
+            collect acc i = ArrayElement.getAt arr i >>= return . maybe acc (f acc)
+
+
+
+instance ListSource JArray where
+    --- Unload an immutable array to a list
+    --- The resulting list consists of all the non null elements of the array argument.
+    --- This will work for arrays of reference type only!
+    toList :: JArray a -> [a]
+    toList !ra = mapMaybe ra.genericItemAt [0..ra.length-1] 
+
+instance (Eq a) ⇒ Eq (JArray a) where
+    a == b
+        | a.length == b.length = go (a.length-1)
+        | otherwise = false
+        where
+            go n | n >= 0, JArray.genericItemAt a n == JArray.genericItemAt b n = go (n-1)
+                 | otherwise = n < 0
+    hashCode  = genericArrayFold (\a\b -> (31*a) + hashCode b) 1 
+
+--- Unload an immutable array to a list.
+--- The non-null elements become 'Just' values, the @null@s translate to 'Nothing'
+genericToMaybeList :: JArray α -> [Maybe α]
+genericToMaybeList ja = map ja.genericItemAt [0..ja.length-1]
+--- warning: use genericToMaybeList in 3.24
+toMaybeList ja = genericToMaybeList ja
+
+
+
+  
+
+--- Create an immutable generic array from a finite index/value list.
+--- Uses 'JArray.genericFromIndexList' and freezes the resulting array.
+---  (This is used in the parsers generated with YYGen) 
+genericArrayFromIndexList :: JavaType α => [(Int, α)] -> JArray α
+genericArrayFromIndexList !xs = (JArray.genericFromIndexList xs >>= readonly id).run    
+
+
+
+
+{--
+    Left fold an immutable array
+-}
+genericArrayFold :: (α->β->α) -> α -> JArray β -> α
+genericArrayFold !f !acc arr = go acc 0
+    where
+        go !acc n 
+            | n < arr.length = case JArray.genericItemAt arr n of
+                    Just b  → go (f acc b) (n+1)
+                    Nothing → go acc (n+1)
+            | otherwise = acc
+
+
+
+
+{--
+    Type class for basic 'JArray' operations. The *element type*
+    must be an instance of this class to support arrays of that type.
+
+    'ArrayElement' is derivable.
+
+    The operations are mostly overloaded on return type and provide the 
+    appropriate @java.lang.Class@ object when needed. 
+
+    This supports one dimensional arrays, though more dimensions would
+    be possible with some extra effort.
+
+    Note that 'JArray' cannot be an instance of 'ArrayElement' itself,
+    because it has no fixed @java.lang.Class@ instance.
+-}
+class JavaType a => ArrayElement a where
+    --- Create a one dimensional array with elements of the instantiated type.
+    native newArray "new[]"   :: Int -> ST s (ArrayOf s a)
+    --- Get item at index from immutable array, see 'JArray.itemAt'
+    pure native itemAt  "[i]"   :: JArray a -> Int -> Maybe a
+    --- Get non-null element at index from immutable array, see 'JArray.elemAt'
+    pure native elemAt  "[i]"   :: JArray a -> Int -> a
+    --- Get item at index from mutable array, see 'JArray.getAt'
+    native getAt        "[i]"   :: Mutable s (JArray a) -> Int -> ST s (Maybe a)
+    --- Set item or null at index in mutable array, see 'JArray.setAt'
+    native setAt        "[]="   :: Mutable s (JArray a) -> Int -> Maybe a -> ST s ()
+    --- Get non null item at index from mutable array, see 'JArray.getElemAt'
+    native getElemAt    "[i]"   :: Mutable s (JArray a) -> Int -> ST s a
+    --- Set item at index in mutable array. see 'JArray.setElemAt'
+    native setElemAt    "[]="   :: Mutable s (JArray a) -> Int -> a -> ST s ()
+    --- Modify item at index in mutable array with result of function application.
+    modifyAt    :: (a -> a) -> Mutable s (JArray a) -> Int -> ST s ()
+    modifyAt f arr i = getAt arr i >>= setAt arr i . fmap f 
+    --- Modify non null item at index in mutable array with result of function application.
+    modifyElemAt    :: (a -> a) -> Mutable s (JArray a) -> Int -> ST s ()
+    modifyElemAt f arr i = getElemAt arr i >>= setElemAt arr i . f
+    --- The size of an 'JArray'
+    pure native arrayLength ".length" :: JArray a → Int 
+    --- Unload 'JArray' to a list, lazily
+    listFromArray :: JArray a → [a]
+    listFromArray !ra = mapMaybe (itemAt ra) [0..arrayLength ra - 1]
+    --- Unload 'JArray' to a maybe list, lazily
+    maybeListFromArray :: JArray a → [Maybe a]
+    maybeListFromArray !ra = map (itemAt ra) [0..arrayLength ra - 1]
+    {--
+        Create a mutable array from a finite list.            
+    -}
+    arrayFromListST :: [a] -> STMutable β (JArray a)
+    arrayFromListST xs = do
+        let !len = xs.length 
+        arr <- newArray len
+        let !acts = zipWith (setElemAt arr) [0..len-1] xs
+        sequence_ acts
+        pure arr
+    --- Create an immutable array from a finite list whose elements are 'ArrayElement`
+    --- Uses 'JArray.fromList' and freezes the resulting array.
+    arrayFromList :: [a] -> JArray a
+    arrayFromList !xs = (arrayFromListST xs >>= readonly id).run
+
+    {--
+        Create a mutable array from a finite list of 'Maybe' values.
+    -}
+    arrayFromMaybeListST ∷ [Maybe a] -> STMutable β (JArray a)
+    arrayFromMaybeListST xs = arrayFromIndexListST ys
+        where
+            ys = [ (n;y) | (Just y, n) <- zip xs [0..]]
+
+    --- Create an immutable 'JArray' from a finite list of 'Maybe' values.
+    -- The array slots corresponding to 'Nothing' values in the input remain @null@
+    arrayFromMaybeList ∷ [Maybe a] -> JArray a
+    arrayFromMaybeList xs = ST.run(arrayFromMaybeListST xs >>= readonly id)
+    {--
+        Create a mutable array from a finite index/value list.
+
+        Indexes not mentioned in the list remain @null@ for 
+        non primitive array elements and 0 otherwise.            
+    -}
+    arrayFromIndexListST :: [(Int,a)] -> STMutable β (JArray a)
+    arrayFromIndexListST xs = do
+        let !len = L.fold max 0 (L.map fst xs) 
+        arr <- newArray (if null xs then 0 else len+1)
+        mapM_ (\(i,a) -> setElemAt arr i a)  xs
+        pure arr
+
+    --- Create an immutable 'JArray' from a finite index/value list. See 'arrayFromIndexListST'
+    arrayFromIndexList :: [(Int,a)] -> JArray a
+    arrayFromIndexList xs = ST.run(arrayFromIndexListST xs >>= readonly id)
+--    {--
+--        Apply a function to an array element and 
+--        write the result to another array at the same index.
+--    -}
+--    mapElem :: (ArrayElement α) => (a->α) -> JArray a -> ArrayOf β α -> Int -> ST β ()
+--    mapElem f src dest index = setAt dest index value 
+--        where value = fmap f (itemAt src index) 
+--
+--    --- Map a function over the elements of an immutable array.
+--    --- The results will be collected in a new mutable array of the same length.
+--    --- If the target element type is a primitive one, no *null* elements are allowed in the source array.
+--    mapArrayST :: (ArrayElement β) => (a->β) -> JArray a -> STMutable γ (JArray β)
+--    mapArrayST f src = do
+--            dest  <- newArray (arrayLength src)
+--            loop dest 0
+--        where
+--            loop dest n 
+--                | n < (arrayLength src) = mapElem f src dest n >> loop dest (n+1) 
+--                | otherwise = pure dest
+
+{--
+    Create a mutable array of a given size and compute the values of its elements
+    by some function. The function gets the current index and  
+    the already computed values in  the form of an immutable array,
+    where it can access elements with a *smaller* index than the current one. 
+
+    The restriction to smaller indexes is because array elements are
+    strict in Frege. For example, we can't store unevaluated values in
+    an @String[]@ array, because the Java type of unevaluated values is not @String@.
+
+    To create an array of 1000 fibonacci numbers, one could write:
+
+    > cache fib 1000 where
+    >   fib 0 _ = 1n
+    >   fib 1 _ = 1n
+    >   fib n a = a.[n-1] + a.[n-2]
+-}
+arrayCacheST :: ArrayElement a => (Int -> JArray a -> a) -> Int -> ST s (ArrayOf s a)  
+arrayCacheST f n = do
+            arr <- newArray n
+            mapM_ (\i -> readonly (f i) arr >>= setElemAt arr i) [0..n-1]
+            pure arr
+{--
+    Memoize a number of results from a function that maps
+    'Int' to the array element.
+
+    Uses 'ArrayElement.cache' and makes it immutable
+-}
+arrayCache ∷ ArrayElement a => (Int→JArray a→a) → Int → JArray a
+arrayCache f n = (arrayCacheST f n >>= readonly id).run
+
+
+{-- 
+    Map a function over the elements of an immutable array,
+    and collect the results in another immutable array.
+
+    Uses 'ArrayElement.mapArrayST' and makes result read-only. 
+-}
+genericArrayMap :: (ArrayElement a, ArrayElement β) => (a->β) -> JArray a -> JArray β
+genericArrayMap f = arrayFromMaybeList . map (fmap f) . maybeListFromArray
+
+--- warning: use genericArrayMap in 3.24
+arrayMap f = genericArrayMap f
+
+{--
+    Type class for array elements of primitive type.
+
+    Not thought for public use, as all instances are pre-defined.
+
+    The default implementation of 'PrimitiveArrayElement.setAt'
+    does not support passing 'Nothing', because there can be no
+    @null@ in primitive arrays.
+-}
+class ArrayElement a => PrimitiveArrayElement a where
+    --- Default implementation suitable for primitive types.
+    --- It is an error to put 'Nothing' in a primitive array.
+    setAt arr inx = setElemAt arr inx . maybe (error "cannot have null in primitive arrays") id
+                    
+    --- Default implementation suitable for primitive types, wraps result with 'Just'
+    getAt arr inx = Just <$> getElemAt arr inx
+    --- Default implementation suitable for primitive types, wraps result with 'Just'
+    itemAt arr inx = Just (elemAt arr inx)
+
+
+-- Instances for primitive array elements. 
+-- These use the specialised getXXX/setXXX function from java.lang.reflect.Array
+
+instance PrimitiveArrayElement Int where
+    native javaClass "int.class" :: Class Int
+
+instance PrimitiveArrayElement Long where
+    native javaClass "long.class" :: Class Long
+
+instance PrimitiveArrayElement Char where
+    native javaClass "char.class" :: Class Char
+
+instance PrimitiveArrayElement Bool where
+    native javaClass "boolean.class" :: Class Bool
+        
+instance PrimitiveArrayElement Float where
+    native javaClass "float.class" :: Class Float
+
+instance PrimitiveArrayElement Double where
+    native javaClass "double.class" :: Class Double
+
+instance ArrayElement (String) where
+    native javaClass "java.lang.String.class" :: Class String 
+
+instance JavaType (JArray Int) where
+    native javaClass "int[].class" :: Class (JArray Int)
+
+derive ArrayElement (a -> b) -- where
+    -- native javaClass "Func.U.class" :: Class (a -> b)
+
+derive ArrayElement [a] 
+derive ArrayElement Integer
+-- derive ArrayElement (Maybe a)
+-- derive ArrayElement (Either a b)
+derive ArrayElement (a,b)
+derive ArrayElement (a,b,c)

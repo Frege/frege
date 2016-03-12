@@ -1,0 +1,878 @@
+--- Code that is (hopefully) common among several java code generators
+
+module frege.compiler.gen.java.Common where
+
+import frege.Prelude hiding (<+>)
+
+import Data.TreeMap(values, insert, lookup, TreeMap Map, fromList)
+import Data.Bits(BitSet.member)
+import Lib.PP(pretty, text, <+>, </>)
+import Data.List (zip4)
+
+import Compiler.classes.Nice(nice, nicer)
+
+import Compiler.common.AnnotateG(annoG)
+import Compiler.common.Errors as E()
+import Compiler.common.Types as CT(substSigma, substTau, )
+import Compiler.common.JavaName
+
+import Compiler.enums.Flags(TRACEZ, TRACEG)
+import Compiler.enums.RFlag(RValue)
+import Compiler.types.Global(StIO, StG, Symbol, SymInfo8, Global(), GenSt(),
+            getST, changeST, uniqid,
+            javaLangNames, primitiveTypes,
+            isReserved)
+import Compiler.enums.TokenID(QUALIFIER)
+            
+import Compiler.types.Symbols(SymD, SymT, SymV, SymC, SymI)
+import Compiler.types.JNames(JName, memberOf)
+import Compiler.types.QNames(TName)
+import Compiler.types.Packs(pPreludeIO, pPreludeArrays, pPreludeList)
+import Compiler.types.ConstructorField(ConField)
+import Compiler.types.Tokens(Token)
+import Compiler.types.QNames(QName)
+import Compiler.types.Strictness(Strictness)
+import Compiler.types.Types(Sigma, Rho, Tau, Context, MetaTvT,
+                                ForAll, RhoFun, RhoTau, TApp, TCon, TVar,
+                                Meta, TSig, Ctx)
+import Compiler.types.Kinds(Kind)
+import Compiler.types.AbstractJava
+
+import Compiler.gen.java.PrettyJava(fakeGlobal, thunkMarker)
+
+import Compiler.Utilities as U(returnType)
+
+--- the 'JName' of the class generated for this package
+mainClass :: Global -> JName
+mainClass g = if isReserved jn.base then jn else jn.{qual=""}
+    where jn = g.packClass g.thisPack
+
+--- latin ƒ can be used to obscure plain function names in a predictable way 
+latinF    = "ƒ" 
+
+--- construct a 'BitSet' that holds the given attributes
+attrs ∷ [JAttr] → Attributes
+attrs = fold Attributes.unionE Attributes.empty
+
+--- just @final@
+!attrFinal = attrs [JFinal]
+
+--- @final public static@
+!attrTop   = attrs [JFinal, JPublic, JStatic]
+
+--- The type for enum constants.
+--- Using @short@ for this, java methods get a signature that is different.
+jtEnum    = nativ "short" []
+
+jtChar    = nativ "char" []
+
+--- 'JType' of 'String'
+jtString = Nativ { typ = "java.lang.String", gargs = [jtChar], generic = false}
+
+
+--- 'JType' of 'Value'
+jtValue     = Nativ {typ = "frege.runtime.Value", gargs = [], generic = true}
+
+--- 'JType' of 'Runtime'
+jtRuntime   = Nativ {typ = "frege.run.RunTM", gargs = [], generic = true}
+
+--- 'JType' of 'WrappedCheckedException'
+jtWrapped   = Nativ {typ = "PreludeBase.WrappedCheckedException", gargs=[], generic = true}
+
+--- 'JType' of the NoMatch exception 
+jtNoMatch   = Nativ {typ = "frege.runtime.NoMatch", gargs=[], generic = true}
+
+--- Java type of a @Thunk@ that evaluates to t
+private jtThunk t = nativ thunkMarker [boxed t] 
+
+-- Java name of @Lazy@
+-- jnLazy   = JName "frege.run" "Lazy"
+
+--- used to match @m~p@ patterns
+jstFind = JX.static "findResult" (nativ "frege.runtime.Regex9" [])
+
+--- conversion of higher kinded/higher ranked functions
+jstHigher = JX.static "cast" jtRuntime
+
+--- convert a higher kinded/higher ranked function to another type
+convertHigher jx jt = JInvoke jstHigher.{targs=[jt]} [jx]
+
+---  given T, creates 'JType' Thunk<T>
+inThunk t = nativ thunkMarker [boxed t]
+
+--  given T, creates 'JType' Lazy<T>
+-- inLazy t = Ref jnLazy [t]
+
+{--
+    Check if argument is 'Mutable' @a b@, and if so, return @b@
+-}
+isMutable (TApp (TApp con _) b) 
+    | TCon{name = TName pack "Mutable"} <- con,
+      pack == pPreludeIO = Just b
+    | otherwise          = Nothing
+isMutable _ = Nothing
+
+
+{--
+    Check if a type is an 'JArray'.
+    If so, return a 'JType' that encodes the true java array type.
+    
+    All array types are marked as non-generic.
+    
+    Example:
+    
+    > arrayTau (JArray s Int) = Just (Nativ "[]" [Nativ "int" [] true] false)
+-}
+arrayTau :: Global -> Tau -> Maybe JType
+arrayTau g tau
+    | Just t <- isMutable tau = arrayTau g t
+    | TApp con b <- tau,
+      TCon{name = TName pack "JArray"} <- con,
+      pack == pPreludeArrays = case arrayTau g b of
+        Just (sub@Nativ{typ, gargs}) -> Just Nativ{typ="[]", gargs=[sub], generic = false}
+        _ -> case tauJT g b of
+            -- TArg{}  = Just Something     -- will cause casting to correct type if needed
+            jt      = Just Nativ{typ="[]", gargs=[jt], generic = false}
+    | otherwise = Nothing
+
+{--
+    Compute the java type of a function/constructor argument.
+    - strict type: a concrete type like @int@, @java.lang.String@, @TList@ or @Func@
+    - lazy frege type: Lazy
+    - otherwise: Object
+    -}
+argType :: Global -> (JType -> JType) ->  Sigma -> JType
+argType g f = f . sigmaJT g
+
+argTypeB g b = argType g (if b then strict else lazy)
+
+{--
+    - If the 'RValue' flag is on, the return type will be @int@, @String@ or @TList@
+    - Otherwise, it will be lazy
+-}
+returnJType mode rjt = if RValue `member` mode 
+    then strict rjt
+    else lazy rjt
+
+--- a constraint is unsatisfied when its 'Tau' is an application of 'TVar's 
+unsatisfiedCtx_ Ctx{tau}
+    | TCon{} ← head tau.flat    =  false
+    | otherwise                 =  true
+
+--- Compute the 'JType' for a given 'Sigma' type
+--- If there are type variabes, we have a higher order value which is just 'Something'
+--- Instantiation of such a value will need a cast! 
+sigmaJT g (ForAll bnd rho)
+    | null bnd      = rhojt
+    | otherwise     = substJT subst rhojt
+    where
+        rhojt  =  rhoJT g rho
+        subst  =  fromList (map (fmap instKinded) bnd)
+
+{--
+    Instantiate a kinded type variable with a pseudo type reflecting the kind.
+
+    For 'KType' we simply use Object
+
+    For higher kinded vars we use Func.U<Object, ?, ?, ?> so that it can be substituted into
+    a corresponding 'Kinded'.
+-}
+-- instKinded  KType = Something
+instKinded  kind
+    | k > 0  = Func  (Something:take k wilds)
+    | otherwise = Something
+            where
+                k = kArity kind
+
+--- Compute the 'JType' for a given 'Rho' type
+rhoJT   g (fun@RhoFun ctxs a b)
+    | null ctxjts   = func
+    | otherwise     = lambdaType Func{gargs  = ctxjts ++ [func]}
+    where 
+        ctxjts  =  map (ctxJT g) ctxs -- (filter unsatisfiedCtx ctxs)
+        func    =  lambdaType Func{gargs = map autoboxed [sigmaJT g a, rhoJT g b]}
+
+rhoJT   g (RhoTau {context, tau})
+    | null ctxs     = jtau
+    --Func{} ← jtau = lambdaType Func{gargs = map (ctxJT g) ctxs ++ [jtau]}
+    | otherwise     = lambdaType Func{gargs = map (ctxJT g) ctxs ++ [jtau]}
+    where  
+        ctxs = {-filter unsatisfiedCtx-} context
+        jtau = tauJT g tau
+
+--- Compute the 'JType' for a given 'Context'
+ctxJT g (Ctx{pos, cname, tau}) 
+    | isArrayClassName cname =  Constr (javaName g cname) [Nativ "[]" [strict taujt] false, taujt]
+    | otherwise = Constr (javaName g cname) [taujt]
+    where taujt = boxed (tauJT g tau)
+
+--- Compute the 'JType' for a given 'Tau' type
+tauJT   g (app@TApp a b)
+     | Just (a,b) ← app.getFun     
+        =   Func{gargs = [boxed (tauJT g a), autoboxed (tauJT g b)]} 
+            --case (b.getFun, tauJT g b) of 
+            --    (Just _,func@Func{})        -- it is a real func not masked with I  
+            --                =  func.{gargs <- (boxed (tauJT g a):)}
+            --    (_, other)  =  Func {gargs =  [boxed (tauJT g a), autoboxed other]}
+     | Just array <- arrayTau g app = array 
+     | otherwise = case app.flat of
+         (TCon {pos,name}):rest →  taujtApp g name rest app
+         TVar{var,kind}:ts      →  Kinded{arity = k, 
+                                          gargs = TArg var : take k (map (boxed . tauJT g) ts ++ wilds)}
+                                        where k = kArity kind
+         Meta Flexi{kind}:ts    →  Kinded{arity = k, 
+                                          gargs = wildFunc k : take k (map (boxed . tauJT g) ts ++ wilds)}
+                                where k = kArity kind
+         Meta Rigid{kind}:ts    → Kinded{arity=k,
+                                          gargs = instKinded kind : take k (map (boxed . tauJT g) ts ++ wilds)}
+                                where k = kArity kind
+         _                      → error "empty app.flat"
+ 
+tauJT   g (ty@TCon {pos, name}) =  taujtApp g name [] ty
+ 
+tauJT   g (TVar {var,kind})     =  TArg (var)
+
+tauJT   g (Meta meta)           =  case meta of
+                                    Flexi{kind}  =  case kArity kind of
+                                        0   → nativ "java.lang.Void" [] -- TArg ("Flexi" ++ show meta.uid)
+                                        k   → wildFunc k
+                                    Rigid{kind}  =  instKinded kind
+
+tauJT   g (TSig sig)            = sigmaJT g sig
+
+
+taujtApp g qname rest app
+    | Just (sym@SymT{}) <- g.findit qname = case sym of
+        SymT {product=true, kind, newt=true} ->
+             let sigmas = [ ConField.typ f | sym@SymD {flds} <- values sym.env, f <- flds ]
+             in case sigmas of
+                 []     -> Prelude.error (nice sym g ++ " has no fields")
+                 (s:_)  -> case (substJT subst . lambdaType . sigmaJT g) s of
+                            other → other
+                    where
+                        -- k = kArity kind
+                        subst = fromList (zip sym.typ.vars  (map (boxed . tauJT g) rest ++ wilds))
+                        -- rsig = ForAll [] (RhoTau [] app) 
+        SymT {product,nativ,enum,pur}
+              -- U.pri
+              | Just s <- nativ = if s `elem` primitiveTypes
+                                    then Nativ {typ=s, gargs=[], generic=true}
+                                    else if null sym.gargs
+                                        then Nativ {typ=s, gargs=args, generic=false} 
+                                        else Nativ {typ=s, gargs,    generic=true}
+              | enum            = jtEnum
+              | qname.base == "->" 
+                                = Func  args
+              | otherwise       = Ref {jname = symJavaName g sym, gargs = args}
+              where 
+                args = map fst (zip (map (boxed . tauJT g) rest ++ wilds) sym.typ.bound)
+                subst = fromList (zip (map fst sym.typ.bound) rest)
+                gargs = map (boxed . tauJT g . substTau subst) sym.gargs     
+        other -> undefined   -- can not happen because catched in U.findT
+    | otherwise = Prelude.error (nice qname g ++ " not a type")
+
+
+
+--- an infinite list of unbounded 'Wild'cards
+wilds  = repeat unboundedWild
+
+--- a function type with all wildcards that can stand for a 'Kinded' with arity k
+wildFunc k = Func{gargs = take k (map lazy wilds) ++ [unboundedWild]}
+
+{--
+    > jtype `asKind` ĸ
+    Create higher kind representation of a java type for kinds with ĸ arrows.
+
+    A type with higher kinded type constructor, like 'Maybe', (->) or 
+    [] will be mapped to a Java generic type.
+    
+    > Maybe Int ⇒ TMaybe<java.lang.Integer>
+    
+    This is fine as long as we don't need to abstract over the type constructor.
+    In that case we use another representation:
+    
+    > Maybe a       ⇒ Kind.U<TMaybe<?>, A>
+    > Either a b    ⇒ Kind.B<TEither<?,?>, A, B>
+    >               ⇒ Kind.U<TEither<A,?>, B>
+    
+    It so happens that every type with a type constructor of kind ĸ (ĸ > 0),
+    where ĸ is the arity of the kind 
+    (i.e. how many type arguments to supply before we reach type of kind \*), 
+    implements the @Kind@ interfaces 1..ĸ and thus can be passed to functions
+    that expect a higher kinded type like:
+    
+    > fmap ∷ Functor f ⇒ (a → b) → f a → f b
+    
+    which reads in Java as:
+    
+    > public <F extends Kind.U<F,?>, A, B>
+    >    Kind.U<F, B> fmap(CFunctor<F>, Func.U<A,B>, Kind.U<F,A>)
+-}
+asKinded ∷ JType → Int → JType
+asKinded !jt 0 = jt
+asKinded jt n
+    | Kinded{arity} <- jt, n == arity = jt
+asKinded jt n
+    | jt.{gargs?},
+      length jt.gargs >= n
+                     = kind n jt.gargs
+    | otherwise      = error ("type does not have kind %d: %s".format n (show jt))
+    where
+        kind n args = Kinded n (ft:rargs)
+            where
+                nargs = length args
+                ws    = take n wilds        -- n wildcards "?"
+                -- replace trailing n type args with "?"
+                ft    = jt.{gargs <- (++ws) . take (nargs-n) }
+                rargs = drop (nargs - n) jt.gargs  
+
+canBeKinded Kinded{} !k  = false
+canBeKinded Constr{} !k  = false 
+canBeKinded jt       !k  = k > 0 && jt.{gargs?} && length jt.gargs >= k 
+
+--- The opposite of 'asKInded', such that for any sufficiently generic 'JType'
+--- > fromKinded (asKinded jt n) == jt
+fromKinded (orig@Kinded n (jt:args))
+    | jt.{gargs?} = jt.{gargs <- (++args) . take (length jt.gargs-n)}
+    | otherwise   = orig -- error ("fromKinded: type is variable  " ++ show jt) 
+fromKinded jt = jt  -- error ("fromKinded: not a kinded type " ++ show jt)
+
+isBadKinded Kinded{gargs=Nativ{}:_} = true
+isBadKinded Kinded{gargs}           = any isBadKinded gargs
+isBadKinded Lazy{yields}            = isBadKinded yields
+isBadKinded Ref{gargs}              = any isBadKinded gargs
+isBadKinded Nativ{gargs}            = any isBadKinded gargs
+isBadKinded Func{gargs}             = any isBadKinded gargs
+isBadKinded Constr{gargs}           = any isBadKinded gargs
+isBadKinded TArg{}                  = false
+isBadKinded Wild{bounds}            = false
+isBadKinded Something               = false
+-- isBadKinded _                       = false
+
+--- make a formal java type variable from a name and a kind 
+targ ∷ String -> Kind -> JTVar
+targ s k = JTVar{var = s, bounds}
+    where
+        -- var = mangleJtv s
+        bounds = case kArity k of
+            0 → UNBOUNDED
+            k → EXTENDS [ Kinded k (TArg s:replicate k unboundedWild) ]
+
+--- given a 'Kind', returns number of type arguments needed to get to a 'KType'
+kArity ∷ Kind → Int
+kArity (KApp _ r)  = 1 + kArity r
+kArity _           = 0
+
+--- equality of 2 Java types up to type var renaming
+unifyJT ∷ JType → JType → Map String JType → Either (JType, JType) (Map String JType)
+unifyJT ta tb subst = case ta  of
+        Ref{jname, gargs}   →  case tb of
+            Ref{}   | ta.jname == tb.jname
+                    = unifyArgs ta.gargs tb.gargs subst
+            _ → Left (ta, tb) 
+        TArg{var} → case tb of 
+            TArg{}  | var == tb.var = Right subst
+                    | otherwise 
+                    =  case lookup var subst of
+                        Just jt     → if jt == tb then Right subst else Left (jt, tb)
+                        Nothing     → Right (insert var tb subst)
+            _ → Left (ta, tb) 
+        Wild{}      = case ta.bounds of
+                UNBOUNDED 
+                    | Wild UNBOUNDED ← tb       = Right subst
+                    | otherwise = Left (ta, tb)
+                EXTENDS xs
+                    | Wild (EXTENDS ys) ← tb    = unifyArgs xs ys subst
+                SUPER tc
+                    | Wild (SUPER td) ← tb      = unifyJT tc td subst
+                _ → Left (ta, tb) 
+        Nativ{typ, gargs} →  case tb of
+            Nativ{} | ta.typ == tb.typ
+                    = unifyArgs ta.gargs tb.gargs subst
+            _ → Left (ta, tb)
+        Kinded{arity, gargs} →  case tb of
+            Kinded{} | ta.arity == tb.arity     = unifyArgs gargs tb.gargs subst
+            _ → Left (ta, tb) 
+        Lazy{yields} →  case tb of 
+            Lazy{}  = unifyJT yields tb.yields subst
+            _ → Left (ta, tb) 
+        Func{gargs} →  case tb of
+            Func{}  = unifyArgs gargs tb.gargs subst
+            _ → Left (ta, tb)
+        Constr{jname, gargs}    → case tb of
+            Constr{} = unifyArgs gargs tb.gargs subst
+            _ → Left (ta, tb)
+        Something →  if tb == Something then Right subst else Left (ta, tb)
+    where
+        unifyArgs [] [] subst = Right subst
+        unifyArgs (x:xs) (y:ys) subst = 
+            unifyJT x y subst >>= unifyArgs xs ys
+        unifyArgs _ _ _ = Left (ta, tb)
+
+
+
+--- type arguments for sigma type
+targs :: Sigma -> [JTVar]
+targs = map (uncurry targ) . Sigma.bound
+             
+--- reconstruct & print Java code tokens
+reconstruct ∷ [Token] → StIO ()
+reconstruct xs = work xs
+    where
+        work ∷ [Token] → StIO ()
+        work [] = return ()
+        work (x:xs)
+            | not (null x.qual) = work (x.qual ++ (x.{qual=[]} : xs))
+        work [x] = U.println (tval x) >> U.println ""
+        work (a:b:xs) = do
+            U.print (tval a)
+            unless (a.vor b) do
+                if (a.line != b.line) then U.println "" else U.print " "
+            work (b:xs)
+
+        tval ∷ Token → String
+        tval Token{tokid, value}  = case tokid  of
+            QUALIFIER → value ++ "."
+            _ → value
+
+
+--- make the lazy form of a java type
+lazy :: JType -> JType
+lazy jt = case jt of
+    Lazy{yields}        → jt
+    Constr{}            → jt
+    Nativ{typ}          → Lazy (boxed jt)
+    Something           → Lazy jt
+    TArg{var}           → Lazy jt
+    Func{}              → Lazy jt
+    Ref{jname}          → Lazy jt
+    Wild{bounds}        → Lazy jt
+    Kinded{gargs}       → Lazy jt
+
+
+-- make the lazy form of a type, except for functions
+--lazyNF ∷ JType → JType
+--lazyNF jt = case jt of
+--    Func{}      → lambdaType jt
+--    Lazy Func{} → Lazy (lambdaType jt)
+--    other       → lazy jt
+
+--- make sure a native type is not primitive
+autoboxed jt
+    | Nativ{} <- jt    = boxed jt
+    | otherwise        = jt
+
+
+--- create the boxed form of a java type (not lazy)
+boxed (Lazy x) = boxed x
+boxed Nativ{typ="boolean"} = nativ "java.lang.Boolean"      []
+boxed Nativ{typ="byte"}    = nativ "java.lang.Byte"         []
+boxed Nativ{typ="short"}   = nativ "java.lang.Short"        []
+boxed Nativ{typ="char"}    = nativ "java.lang.Character"    []
+boxed Nativ{typ="int"}     = nativ "java.lang.Integer"      []
+boxed Nativ{typ="long"}    = nativ "java.lang.Long"         []
+boxed Nativ{typ="double"}  = nativ "java.lang.Double"       []
+boxed Nativ{typ="float"}   = nativ "java.lang.Float"        []
+boxed x = x
+
+--- create the unboxed form of a boxed java type
+strict x = case boxed x of
+    Nativ {typ = "java.lang.Boolean",   gargs = []}   → nativ "boolean"  []
+    Nativ {typ = "java.lang.Byte",      gargs = []}   → nativ "byte"  []
+    Nativ {typ = "java.lang.Short",     gargs = []}   → nativ "short"  []
+    Nativ {typ = "java.lang.Character", gargs = []}   → nativ "char" []
+    Nativ {typ = "java.lang.Integer",   gargs = []}   → nativ "int" []
+    Nativ {typ = "java.lang.Long",      gargs = []}   → nativ "long" []
+    Nativ {typ = "java.lang.Double",    gargs = []}   → nativ "double" []
+    Nativ {typ = "java.lang.Float",     gargs = []}   → nativ "float" []
+    other -> other
+
+--- Tell if we can pass some value when a Lazy is required.
+--- This is based on the consideration whether javac will accept it.
+implementsLazy ∷ JType → Bool
+implementsLazy Ref{}    = true
+implementsLazy Lazy{}   = true
+implementsLazy Func{}   = true
+implementsLazy _        = false
+
+
+{--
+     Check if a given java type is a primitive one.
+     Return 'Nothing' if this is no primitive type
+     or 'Just' _s_, where _s_ is a string like "int" that describes the type.
+-}
+isPrimitive Nativ{typ} | typ `elem` primitiveTypes   = Just typ
+isPrimitive _ = Nothing
+
+{--
+    Make the type of a function pointer canonical,
+    that is, make sure that no 'Lazy' appears in the
+    type arguments as they are implicitly lazy.
+-}
+lambdaType (Func gargs) =
+        Func (map boxed gargs)
+lambdaType Lazy{yields=f@Func{}} = Lazy (lambdaType f)
+lambdaType t | t.{gargs?} = t.{gargs <- map lambdaType}
+lambdaType x = x
+
+--- is this a constraint
+isConstr Constr{} = true
+isConstr _        = false
+
+{--
+    drop the constraints from a function type 
+-}
+withoutConstr (Func gargs)  = Func (dropWhile isConstr gargs)
+withoutConstr it            = it
+
+--- drop the constraints from a list of java types
+dropConstr = dropWhile isConstr
+
+--- take the constraints from a list of java types
+takeConstr = takeWhile isConstr
+
+--- show a java expression for debugging purposes
+showJex ∷ JExpr → String
+showJex jex = (PP.pretty 1000 (annoG fakeGlobal jex)).replaceAll '[\r\n]' " "
+
+{--
+ * Check if a 'JExpr' is cheap enough so that we can save a local variable
+ *
+ * Cheap java expressions are:
+ * 1. a local variable
+ * 2. literal, this, null etc.
+ * 3. a static variable X.m
+ -}
+cheap (JAtom _) = true
+cheap JStMem{} = true
+cheap _ = false
+
+--- make a statement comment
+sComment = (JLocal • JComment)
+
+{--
+    Get 'SymInfo' for given symbol from cache or produce it and put it there
+    -}
+symInfo :: Symbol -> StG SymInfo8
+symInfo sym = do
+    g <- getST
+    case g.gen.symi8.lookup sym of
+        Just si -> do
+                E.logmsg TRACEG sym.pos (
+                    text "got symInfo:" <+> text (nice sym g) <+> text (show sym.sid)
+                    </> text "si.returnJT" <+> annoG g si.returnJT
+                    </> text "si.retSig  " <+> text (nice si.retSig g)
+                    -- </> text "
+                    )
+                return si
+        other -> case sym of
+            SymV{} -> do
+                let (r, as) = U.returnTypeN sym.depth sym.typ.rho
+                    rjt = lambdaType (rhoJT g r)
+                    sjts = zipWith (argType g) (strictFuns sym.strsig) as
+                    fjts = map lambdaType sjts
+                    si = SI8{returnJT = returnJType sym.rkind rjt, retSig = ForAll [] r, argJTs = fjts, argSigs = as}
+                changeST Global.{gen <- GenSt.{symi8 <- insert sym si}}
+                E.logmsg TRACEG sym.pos (
+                    text "put symInfo:" <+> text (nice sym g) <+> text (show sym.sid)
+                    </> text "si.returnJT" <+> annoG g si.returnJT
+                    </> text "si.retSig  " <+> text (nice si.retSig g)
+                    -- </> text "
+                    )
+                zipWithM_ (\s j → E.logmsg TRACEG sym.pos (
+                    text "arg :: " <+> text (nicer s g) <+> text " @@ " <+> text (show j)
+                    )) si.argSigs si.argJTs
+                return si
+            SymD{} -> do
+                let (r, as) = U.returnType sym.typ.rho
+                    rjt = lambdaType (tauJT g r)
+                    sjts = zipWith (argType g) (map (bool strict lazy . ConField.strict) sym.flds) as
+                    fjts = map lambdaType sjts
+                    si = SI8{returnJT = rjt, argJTs = fjts, argSigs = as,  retSig = ForAll [] (RhoTau [] r)}
+                changeST Global.{gen <- GenSt.{symi8 <- insert sym si}}     
+                return si
+            _ -> error ("symInfo for " ++ nicer sym g ++ ", allowed only for functions/variables")
+
+--- map a strictness signature to a (infinite) list of 'Bool'  
+boolS :: Strictness -> [Bool]  
+boolS U      = repeat false
+boolS (S ss) = map Strictness.isStrict ss ++ repeat false
+
+--- map a strictness signature to an infinte list of functions
+strictFuns :: Strictness → [JType -> JType]
+strictFuns U = repeat lazy
+strictFuns (S ss) = map (bool strict lazy . Strictness.isStrict) ss ++ repeat lazy
+
+
+--- generate an infinite supply of names with the given prefix
+xxxNames xxx = zipWith (++) (repeat xxx) (map show [1..])
+
+
+--- arg$1, arg$2, arg$3, ....
+private argNames = xxxNames "arg$"
+
+--- ctx$1, ctx$2, ctx$3, ...
+private ctxNames = xxxNames "ctx$"
+
+allCtxNames = id ctxNames
+
+--- mem1, mem2, mem3 ...
+memNames = xxxNames "mem"
+
+--- Compute a list of argument names we can use for a new function
+--- This drops the ones from 'argNames' that are currently used in outer scopes.
+getArgs ∷ Global → [String]
+getArgs g = drop used argNames
+    where 
+        used = sum (map _.depth g.genEnv)
+    
+
+--- Compute a list of context names we can use for a new function
+--- This drops the ones from 'ctxNames' that are currently used in outer scopes.
+getCtxs ∷ Global -> [String]
+getCtxs g = drop used ctxNames
+    where
+        used = sum . map (length . _.context . _.rho . _.typ) $ g.genEnv
+
+{--
+    @makeConstraintDef (Ctx cname tau) "ctx3"@ = final Ccname<tau> ctx3
+-}
+constraintDef ∷ Global → Context → String → JDecl
+constraintDef g ctx s =
+         JMember {
+             attr = attrFinal,
+             jtype = ctxJT g ctx,
+             name = s,
+             init = Nothing}
+
+
+{--
+    @constraintArg (Ctx cname tau) "arg3"@ = (final,  Ccname<tau>, "ctx3")
+  -}
+constraintArg ∷ Global → Context → String → FormalArg
+constraintArg g ctx s = (def.attr; 
+                            (ForAll [] (RhoTau [ctx] ctx.tau)); 
+                            def.jtype; 
+                            def.name)
+     where !def = constraintDef g ctx s
+
+
+{--
+    generate method signature from strictness info and argument types
+-}
+argDefs :: Attributes -> SymInfo8 -> [String] -> [FormalArg]
+argDefs attr sis argNms
+    = zip4  (repeat attr)  sis.argSigs  sis.argJTs  argNms 
+
+protected argdef g attr s sig nm = (attr, sig, argType g (bool strict lazy (Strictness.isStrict s)) sig, nm)
+
+{--
+    Compute formal argument list for a lambda method.
+    By definition, all arguments must be 'Lazy' (see @frege.run.Func@)
+    but this is implicit, the Java type must only list plain types.
+    -}
+lambdaArgDef :: Global -> Attributes -> [Sigma] -> [String] -> [FormalArg]
+lambdaArgDef g attr sigmas argNms = zipWith (argdef attr) sigmas argNms
+    where
+        argdef attr sigma name = (attr; sigma; lazy . sigmaJT g  $ sigma; name)
+
+{--
+    Substitue java member names in constructor fields.
+    The resulting list satisifes @all (isJust . Field.name)@
+    -}
+namedFields ∷ [ConField QName] → [ConField QName]
+namedFields flds = zipWith nf flds memNames
+    where
+        nf :: ConField QName -> String -> ConField QName
+        nf field member = field.{name <- Just . maybe member ("mem$" ++)}
+
+mkMember  Field{pos, name = Just mem, doc, vis, strict=s, typ} (_,_,jt,_) 
+            = JMember {attr = attrs [JFinal, JPublic],
+                    jtype = jt,
+                    name = mem, 
+                    init = Nothing}
+mkMember  f _ = error "mkMember: apply only named fields here"     -- see namedFields
+
+{--
+  * [usage] @atomMethod name type atom@
+  * [returns] a 'JMethod' of the form @final public type name() { return atom; }@
+  -}
+atomMethod s jt atom = JMethod {attr = attrs [JFinal, JPublic], 
+                                gvars=[], jtype = jt,
+                                name = s, args=[], 
+                                body = JBlock [ JReturn (JAtom atom) ]}
+
+
+--- wrap a 'JExpr' or 'JStmt' in a 'Lazy' and this in a 'Thunk'
+--- > return (3+4)
+--- > new Thunk(() -> { return (3+4); })
+thunkIt ∷ JType → (JExpr|JStmt) → JExpr
+thunkIt (jt@Lazy{}) code = JInvoke{
+                    jex  = JX.static "nested" (inThunk jt.yields), 
+                    args = [JCast (Lazy jt) JLambda{fargs = [], code}]}
+thunkIt jt code = JInvoke{
+                    jex  = JX.static "shared" (inThunk jt), 
+                    args = [JCast (lazy jt) JLambda{fargs = [], code}]}
+
+--- wrap a 'JExpr' in a 'Lazy'
+--- > (3+4)   ==>  ((Lazy<Integer>)(() -> 3+4))
+--- Note that computation will be repeated on each call!  
+lazyIt ∷ JType → JExpr → JExpr
+lazyIt jt jexpr = JCast (lazy jt) JLambda{fargs = [], code = Left jexpr} 
+
+--- make a 'JExpr' lazy by wrapping it in @Thunk.lazy()@ or @Thunk.shared()@
+lazyJX :: JType -> JExpr -> JExpr
+lazyJX (Lazy jt) jx = JInvoke{jex = JX.static "shared" (inThunk jt), args=[jx]}
+lazyJX Nativ{typ="short"} JStMem{jt=Nativ{typ="PreludeBase.TUnit"}, name="Unit"} =
+                            JStMem{jt=nativ thunkMarker [], name="lazyUnit", targs=[]}
+lazyJX Nativ{typ="frege.runtime.Phantom.RealWorld"} (JAtom "frege.runtime.Phantom.theRealWorld")
+                            = JStMem{jt=nativ thunkMarker [], name="lazyWorld", targs=[]}
+lazyJX jt        jx = JInvoke{jex = JX.static "lazy"   (inThunk jt), args=[jx]}
+
+--- make a 'JExpr' lazy at runtime, unless it is already (instanceof)
+lazyJXifNeeded :: JType -> JExpr -> JExpr
+lazyJXifNeeded jt jx = JCast{jt=lazy jt, 
+    jex = JQC{j1 = JBin{j1=jx, op=" instanceof ", j2=JAtom "Lazy"}, 
+                j2=jx, 
+                j3=lazyJX jt jx}}
+
+--- wrap in a Thunk if type demands it in order to become lazy, i.e.
+---  > thunkWhenNeeded int x  ⇒  Thunk.<Integer>lazy(x)
+---  > thunkWhenNeeded TMaybe<int> x  ⇒  x
+thunkWhenNeeded ∷ JType → JExpr → JExpr
+thunkWhenNeeded jt jx
+    | implementsLazy jt = jx
+    | otherwise         = lazyJX jt jx
+
+--- the type that remains when something is applied to a function of this type
+reducedSigma ∷ Global → Sigma → Sigma
+reducedSigma  g ForAll{bound, rho}
+    | RhoFun{rho=it} ← rho = ForAll [] it
+    | RhoTau{tau} ← rho, Just (a,b) ← tau.getFun = U.tauAsSigma b
+
+    | otherwise = error ("genExpr.reduceSigma: " ++ nicer rho g) 
+
+--- substitute 'Tau' types in 'JType'
+substJT ∷ Map String JType → JType → JType 
+substJT subst jt = case jt  of
+        Ref{}           →  jt.{gargs  ← many}
+        TArg{var}       →  case lookup var subst of
+                            Just ty     →  ty
+                            Nothing     →  jt
+        Wild{bounds}    →  case bounds  of
+                            UNBOUNDED   →  jt
+                            EXTENDS xs  →  jt.{bounds = EXTENDS (many xs)}
+                            SUPER sup   →  jt.{bounds = SUPER (substJT subst sup)}
+        Nativ{typ="[]"} →  jt.{gargs  ← map strict . many}
+        Nativ{}         →  jt.{gargs  ← many}
+        Kinded{}        →  jt.{gargs  ← many}
+        Lazy{}          →  jt.{yields ← substJT subst}
+        Func{}          →  jt.{gargs  ← many} 
+        Constr{}        →  jt.{gargs  ← many}
+        Something       →  Something
+    where 
+        many = map (substJT subst)
+
+
+funcResult :: JType → JType
+funcResult Func{gargs} = last gargs
+funcResult other       = other
+
+flatFunc Func{gargs=[a,b]} = a : flatFunc b
+flatFunc Func{gargs=gs}    = init gs ++ flatFunc (last gs)
+flatFunc t                 = [t] 
+
+--- names of the type classes with special support for unkinded native types
+specialClassNames = ["ListEmpty", "ListMonoid", "ListSemigroup", "ListView", "ListSource"]
+
+--- checks if a 'QName' denotes a special class
+isSpecialClassName TName{pack, base} = pack == pPreludeList && base `elem` specialClassNames
+isSpecialClassName other             = false
+
+--- checks if a 'Symbol' is a special class
+isSpecialClass SymC{name} = isSpecialClassName name
+isSpecialClass other      = false
+
+--- names of the type classes for arrays
+arrayClassNames = ["ArrayElement", "PrimitiveArrayElement"]
+
+isArrayClassName TName{pack, base} = pack == pPreludeArrays && base `elem` arrayClassNames
+isArrayClassName _                 = false
+
+isArrayClass SymC{name} = isArrayClassName name
+isArrayClass _          = false
+
+{-- 
+    The (abstract) instance functions for some class members need a  
+
+    > @SuppressWarnings("unchecked")
+
+    This is due to idiosyncracies of the Java language.
+
+    For example, we can say @String.class@ and get @Class<String>@, but
+    we can't say @TList<A>.class@, because it's a syntax error.
+    Hence, we suppress the generics for class literal expressions.
+    But then we get only @Class<TList>@, thus we are forced to use unsafe casts.  
+
+    The value is a @(JType -> Bool, Bool)@, 
+    that tells if it is relevant for abstract or concrete instance members and the instance type.
+    The corresponding methods just get a \@SuppressWarnings("unchecked"),
+    the casting itself is handled in MethodCalls.fr
+-} 
+haveDoubleCast :: Map QName (JType → Bool, JType → Bool)
+haveDoubleCast = fromList [
+        (MName{tynm=TName{pack=pPreludeIO, base="JavaType"}, base="javaClass"}, 
+            (\x → x.{gargs?} && not (null x.gargs), const false)),
+        (MName{tynm=TName{pack=pPreludeArrays, base="ArrayElement"}, base="newArray"},
+            (const false, const true))
+    ]
+
+needsUnchecked which cmem jty =  case cmem `lookup` haveDoubleCast of
+            Just x = which x jty
+            Nothing = false
+
+--- check if this is an implementation for a class method, and must suppress unsafe cast warnings
+unsafeCast :: Global -> Symbol -> Bool
+unsafeCast g sym = case sym.name of
+            MName{tynm, base}
+                | Just SymI{clas}   ←  g.findit tynm,
+                  Just SymC{supers} ←  g.findit clas,
+                  mems              ←  [ cmem | Just (symc@SymC{}) ← map g.findit (clas:supers),
+                                            cmem ← symc.env.lookupS base,
+                                            needsUnchecked snd cmem.name Something]
+                =  not (null mems)
+            _   =  false
+
+--- make the second type kinded according to the pattern in the first one
+--- the types must be identical up to substitutions
+mergeKinded :: JType → JType → JType
+mergeKinded pt ot = case pt of
+        Ref{jname, gargs} →  case ot of
+            Ref{} | jname == ot.jname = ot.{gargs ← many}
+            other  = fail pt ot
+        TArg{var} →  ot
+        Wild{bounds} →  ot
+        Nativ{typ, gargs, generic} →  case ot of
+            Nativ{} | typ == ot.typ = ot.{gargs ← many}
+            other = fail pt ot
+        Kinded{arity, gargs} →  case ot of
+            Kinded{} | arity == ot.arity = ot.{gargs ← many}
+                     | arity < ot.arity  = mergeKinded pt (asKinded (fromKinded ot) arity)
+                     | otherwise = fail pt ot
+            _ = mergeKinded pt (asKinded ot arity)      -- do it deeply
+        Lazy{yields} →  case ot of
+            Lazy{} = ot.{yields ← mergeKinded yields}
+            _ = fail pt ot
+        Func{gargs} →  case ot of
+            Func{} = ot.{gargs ← (takeConstr ot.gargs++) . manyf . dropConstr}
+            Ref{}  = ot
+            _ = fail pt ot
+        Constr{jname, gargs} 
+            | Constr{} ← ot = ot
+            | otherwise     = fail pt ot
+        Something →  if ot == Something then Something else fail pt ot
+    where
+        many = zipWith mergeKinded (pt.gargs)
+        manyf = zipWith mergeKinded (withoutConstr pt).gargs
+        fail a b = error ("mergeKinded failed at: (" ++ show pt ++ ") vs (" ++ show ot ++ ")")
+ 

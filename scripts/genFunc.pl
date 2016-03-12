@@ -64,11 +64,11 @@ LIZENZ
  */
 public interface Func$n<R> extends Function<R> {
     /**
-     * <p> Run the function. </p>
+     * <p> Apply the function uncurried. </p>
      *
      * \@return possibly lazy result
      */
-    public R call($cnargs);
+    public R apply($cnargs);
 }
 TEXT
     close J;

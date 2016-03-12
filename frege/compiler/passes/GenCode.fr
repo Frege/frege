@@ -1,40 +1,287 @@
 --- Code generation compatible with Java7 *or* Java8 syntax
 
 {--
-    Here is a short overview on the most important concepts.
+    ## Concepts
 
-    - Representation of data types doesn't change.
-    - Interface functions can now be called directly, instead of first
-      getting a function pointer.
-    - Arguments that have a function type are not lazy, ever.
-    - The code generator keeps track of the arity of functions.
-      For example, in @flip :: (a -> b -> c) -> b -> a -> c@
-      it will pass and expect a @Func2@. If you pass a function @f@ with
-      arity 1 to @flip@, it will be wrapped in an extra lambda
-      @\a\b -> (f a) $ b@. 
-      When you pass a function @g@ with a higher arity, say 4,
-      it will be wrapped in a lambda @(\a\b -> (\x3\x4 -> g a b x3 x4))@.
-      Fortunately, the compiler will have established type soundness
-      during type checking, so that in the first case we know that
-      the unary function actually returns another unary function and the
-      application @flip g a b@ yields a binary function.
-    - Partial applications like  @flip (-)@ are eta-expanded to
-      @\a\b -> flip (-) a b@. 
-    - A special case of partial application is when a function is not
-      applied at all - like in @fold (+) 0 xs@.
-    - Lazy values will be instances of @java.run.Lazy@, that is in 
-      Java8 notation @() -> some code@. Those are not shared.
-    - Shared lazy values (i.e. in @let@ or arguments for constructors) are
-      @new Thunk(() -> value)@.
+    ### Data types
+
+    Representation of data types doesn't change.
+
+
+    ### Instances
+
+    Instance functions can now be called directly via the instance
+    object, instead of first getting a function pointer.
+
+
+    ### Higher order functions
+
+    Arguments that have a function type are always strict.
+
+
+    ### Function arity
+    
+    The code generator keeps track of the arity of functions.
+    For example, in @flip :: (a -> b -> c) -> b -> a -> c@
+    it will pass and expect a @Func2@. If you pass a function @f@ with
+    arity 1 to @flip@, it will be wrapped in an extra lambda
+    @\a\b -> (f a) $ b@.
+
+    When you pass a function @g@ with a higher arity, say 4,
+    it will be wrapped in a lambda @(\a\b -> (\x3\x4 -> g a b x3 x4))@.
+    
+    Fortunately, the compiler will have established type soundness
+    during type checking, so that in the first case we know that
+    the unary function actually returns another unary function and the
+    application @flip g a b@ yields a binary function.
+
+
+    ### Partial applications
+    
+    Partial applications like  @flip (-)@ are eta-expanded to  
+    @\a\b -> flip (-) a b@. 
+    
+    A special case of partial application is when a function is not 
+    applied at all - like in @fold (+) 0 xs@.
+
+
+    ### Lazy values
+    
+    Lazy values will be instances of @java.run.Lazy@, that is in 
+    Java8 notation @() -> some code@. Those are not shared.
+    
+    Shared lazy values (i.e. in @let@ or arguments for constructors) are 
+    @new Thunk(() -> value)@.
+
+    Thunk and Lazy know their return type, i.e. they are generic types.
+
+
+    ## The Four Reasons for Stack Overflow
+
+    ### Tail Calls
+
+    Tail calls are dangerous, unless the tail called function is _tail call safe_.
+    A function is _tail call safe_ if one of the following applies:
+
+    - it is a constructor
+    - it is a native function
+    - it is not recursive and calls only tail call safe functions
+    
+    In particular, a function passed as argument is not tail call safe.
+    
+    If the result of a function that is not tail call safe is a (full)
+    application of another function, and this function is itself not 
+    tail call safe, or a full application of a non tail call safe function
+    appears in a strict position, then a Lazy closure must be returned 
+    instead of doing the call directly.
+    
+    Examples:
+    
+    > even 0 = true
+    > even n = odd (n-a)
+    > odd  0 = false
+    > odd  n = even (n-1)
+    
+    Both @even@ and @odd@ are clearly unsafe, hence the code for @even@ 
+    should be:
+    
+    > Lazy<java.lang.Boolean> even(int n) {
+    >    if (n==0) then return new Thunk(true);
+    >    return new Thunk(() -> even(n-1));
+    > }
+    
+    ### @foldr@ Recursion
+    
+    > foldr f d [] = d
+    > foldr f d (x:xs) = x `f` foldr f d xs
+    
+    If `f` is strict in its right argument, this leads to recursion as deep
+    as the length of the list.
+    This could be solved when the currently evaluating thread 
 -}
 
 module frege.compiler.passes.GenCode where
 
+import Lib.PP(pretty)
+import Data.TreeMap(TreeMap, values)
+import Data.Graph (stronglyConnectedComponents tsort)
+
+import Compiler.Utilities as U()
+
 import Compiler.types.Global
-import Compiler.gen.Common(mainClass)
+import Compiler.types.JNames
+import Compiler.types.Symbols
+import Compiler.types.QNames(QName)
+import Compiler.types.Packs(pPreludeBase, pPreludeList)
+import Compiler.types.Strictness(Strictness(isStrict))
+
+import Compiler.common.AnnotateG (annoG, annoListG, notNil)
+import Compiler.common.JavaName
+
+import Compiler.gen.java.Common
+import Compiler.types.AbstractJava
+import Compiler.gen.java.Constants(makeConstants)
+import Compiler.gen.java.VarCode(varCode)
+import Compiler.gen.java.DataCode(dataCode)
+import Compiler.gen.java.InstanceCode(classCode, instanceCode, lowerKindSpecialClasses)
+
 
 pass :: StIO (String, Int)
 pass = do
     g   ← getSTT
-    liftIO $ g.printer.println "Thank you!"
+
+    let modul = JClass{attr=attrs [JFinal, JPublic], 
+                    name = g.gen.main, gvars=[], 
+                    extend = fmap (sigmaJT g) g.options.extends, 
+                    implement = map (sigmaJT g) g.options.implements, 
+                    defs=[]}
+        headline = (pretty 2000 (annoG g modul)).replaceAll ´}´ ""
+
+    --  class my.modul.Name extends ... implements ... {
+
+    -- Note that we don't make a JClass that contains all compiled definitions,
+    -- although this would be the natural approach. Instead we compile and
+    -- pretty print the definitions individually. This allows us to 
+    -- do the pretty printing concurrently maybe later.
+    U.println headline
+
+    -- print the embedded Java code 
+    reconstruct (g.options.code)
+
+    -- prepare abstract functions of special classes
+    oldg ← liftStG lowerKindSpecialClasses
+    g ← getSTT
+    
+    -- classes 
+    let classes = [ s | s@SymC {} <- values g.thisTab ]
+    liftStG (concat <$> mapM classCode classes)
+        >>= liftIO . ppDecls g
+
+    -- instances
+    let instances = [ s | s@SymI {} <- values g.thisTab ]
+    liftStG (concat <$> mapM instanceCode instances)
+        >>= liftIO . ppDecls g
+
+    -- data definitions
+    let datas = [ s | s@SymT {} <- values g.thisTab ]
+    liftStG (concat <$> mapM dataCode datas)
+        >>= liftIO . ppDecls g 
+
+    -- do variables in dependency order, this is so that CAFs refer only to CAFs
+    -- whose java initialization occurs earlier
+    let vars = [ s | s@SymV {} <- values g.thisTab ]
+    liftStG (
+            mapSt U.fundep vars 
+            >>= mapSt U.findV . concat . tsort 
+            >>= mapSt (varCode TreeMap.empty))
+        >>= liftIO . ppDecls g . concat 
+
+    -- generate the class for constants
+    liftStG makeConstants >>= liftIO . ppDecls g . maybeToList 
+
+    let baseExtras = [
+            "final public static<T> TMaybe<T> _toMaybe(T it) {",
+            "   return it == null ? TMaybe.DNothing.<T>mk()",
+            "                     : TMaybe.DJust.<T>mk(Thunk.<T>lazy(it));",
+            "}", 
+            ]
+    when (g.thisPack == pPreludeBase) (forM_ baseExtras U.println)
+
+    let listExtras = [
+            "/*",
+            " * The following is used to instantiate kind-lowered contexts to the type",
+            " * they are actually used at.",
+            " *",
+            " * The context is declared at the raw type like ",
+            " *     static<A extends Kind.U<A,?>, B> ... method(CListView<A> ctx1, ...)",
+            " * ",
+            " * This shall work only for the type classes defined here!",
+            " */",
+            "@SuppressWarnings(\"unchecked\")",
+            "public static<A extends Kind.U<A,?>, B> CListEmpty<Kind.U<A, B>> kindedCtx(CListEmpty<A> ctx) {",
+            "    return (CListEmpty<Kind.U<A, B>>)(Object) ctx;",
+            "}",
+            "@SuppressWarnings(\"unchecked\")",
+            "public static<A extends Kind.U<A,?>, B> CListMonoid<Kind.U<A, B>> kindedCtx(CListMonoid<A> ctx) {",
+            "    return (CListMonoid<Kind.U<A, B>>)(Object) ctx;",
+            "}",
+            "@SuppressWarnings(\"unchecked\")",
+            "public static<A extends Kind.U<A,?>, B> CListSemigroup<Kind.U<A, B>> kindedCtx(CListSemigroup<A> ctx) {",
+            "    return (CListSemigroup<Kind.U<A, B>>)(Object) ctx;",
+            "}",
+            "@SuppressWarnings(\"unchecked\")",
+            "public static<A extends Kind.U<A,?>, B> CListView<Kind.U<A, B>> kindedCtx(CListView<A> ctx) {",
+            "    return (CListView<Kind.U<A, B>>)(Object) ctx;",
+            "}",
+            "@SuppressWarnings(\"unchecked\")",
+            "public static<A extends Kind.U<A,?>, B> CListSource<Kind.U<A, B>> kindedCtx(CListSource<A> ctx) {",
+            "    return (CListSource<Kind.U<A, B>>)(Object) ctx;",
+            "}"
+            ]
+    when (g.thisPack == pPreludeList) (forM_ listExtras U.println)
+
+    -- restore unchanged symtabs
+    changeSTT Global.{packages = oldg.packages}
+
+    -- check if we have a main function, and print it
+    mapM_ U.println (maybe [] (mainCode g) (haveMain g))
+
+    U.println "}"       -- supply the } that was removed from the headline
     return ("Gen78", 1)
+
+
+--- Print some declarations stacked
+ppDecls :: Global -> [JDecl] → IO ()
+ppDecls g decls = do
+    PP.prettyIO g.printer 128 . PP.stack . filter notNil . map (annoG g) $ decls
+    g.printer.println
+
+--- the java code to run the main function
+{--
+    > public static void main(final java.lang.String[] argv) {
+    >    $type ret =
+    >        PreludeBase.TST.performUnsafe($name
+    >               ( $list )
+    >        );
+    >    if ret then System.exit(0) else System.exit(1);   or System.exit(ret&255);  or empty
+    > }
+-}
+mainCode ∷ Global → Symbol → [String]
+mainCode g sym = [
+        "  public static void main(final java.lang.String[] argv) {",
+        "    " ++ if isInt then "int ret =" else if isBool then "boolean ret =" else "", 
+        "        PreludeBase.TST.<" ++ targ ++ ">performUnsafe(" ++ name,
+        if sym.depth > 0 then
+        "               (" ++ list ++ ")"
+        else
+        "               .call()",           -- evaluate a possibly lazy main
+        "          ).call();",              -- evaluate result of performUnsafe
+        if isInt then
+        "        System.exit(ret&255);"
+        else if isBool then
+        "        System.exit(ret ? 0 : 1);"
+        else "",
+        "  }"
+        ]
+    where
+        name = (symJavaName g sym).base
+        jtype = tauJT g (fst (U.returnType sym.typ.rho))
+        isInt 
+            | Func{gargs=[a,b]} ← jtype = show b == "Integer"
+            | otherwise = false
+        isBool
+            | Func{gargs=[a,b]} ← jtype = show b == "Boolean"
+            | otherwise = false
+        targ = if isInt then "Integer" else if isBool then "Boolean" else "Short"
+        strict = case sym.strsig of
+            Strictness.S (s:_) = isStrict s
+            _               = false;
+        stol = "PreludeArrays.IListSource_JArray.<String/*<Character>*/>toList(argv)"
+        lazy x = "Thunk.lazy(" ++ x ++ ")"
+        list = if strict then stol else lazy stol
+
+--- tell if there is a main function in this module
+-- haveMain :: Global -> Bool
+haveMain g = case Global.findit g (VName g.thisPack "main") of
+        Just sym | sym.name.pack == g.thisPack = Just sym
+        other = Nothing

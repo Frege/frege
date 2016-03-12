@@ -62,10 +62,12 @@ public class Meta {
         String      source()    default "";
         /** <p>Compile time.</p> */
         long        time()      default 0;
+        /** <p>Major target version.</p> */
+        int			jmajor()	default 1;
+        /** <p>Minor target version.</p> */
+        int			jminor()	default 7;
         /** <p>The documentation of the package.</p> */
         String      doc()       default "";
-        /** <p>Operator table.</p> */
-        Operator[]  ops()       default {};
         /** <p>Name of imported packages.</p> */
         String[]    imps()      default {};
         /** <p>Namespaces of imported packages.</p> */
@@ -93,21 +95,7 @@ public class Meta {
         /** <p>Table of kinds.</p> */
         Kind[]      kinds()     default {};
     }
-    
-        
 
-    /**
-     * <p>Information from the infix* definitions.</p>
-     */
-    @Retention(RetentionPolicy.RUNTIME)
-    public @interface Operator {        // infix 10 `==`
-        /** <p>Operator name.</p> */
-        public String   name();         // "=="
-        /** <p>How the operator associates (0=left, 1=right, 2=none).</p> */
-        public int      kind();         // 0=Left, 1=Right, 2=None
-        /** <p>Precedence 1 to 16.</p> */
-        public int      prec();         // 10
-    }
 
 
     /**
@@ -225,6 +213,7 @@ public class Meta {
         int[]	throwing()		default {};			// index of taus this function throws
         QName[] over()			default {};			// names of members this one overloads
         int		 op()			default 0;	   		// operator associativity and precedence (TokenID.ord)
+        int[]	 gargs()		default {};			// generic type argument tau indexes
     }
 
     /**
@@ -325,6 +314,7 @@ public class Meta {
         boolean  publik()       default true;   // will it be imported by default
         int      kind()			default 0;		// index of kind
         boolean  mutable()		default false;	// indicates IO mutability
+        int[]	 gargs()		default {};		// generic type argument tau indexes
     }
     
     @Retention(RetentionPolicy.RUNTIME)
@@ -350,7 +340,7 @@ public class Meta {
         int        lkind()         default 0;     // Lit: ord LiteralKind
                                                   // Ann: sigma index
                                                   // Case: ord CKind
-        String     varval()        default "";    // local Vbl name or Literal value
+        String     varval()        default "";    // Literal value
         int[]      alts()          default {};    // case alternatives or lambda
                                                   // first half are expression indexes for patterns
                                                   // second half are expression indexes for expressions
@@ -360,6 +350,7 @@ public class Meta {
                                                   //       s is a sigma index or -1 if v was not annotated
                                                   //       x is the index of an Expr for the expression defining v
         int        subx1()         default 0;     // index of 1st subexpression, set for Ann, App, If, Case and Let
+        										  // or uid of local Vbl
         int        subx2()         default 0;     // index of 2nd subexpression, set for App, If
         int        subx3()         default 0;     // index of 3rd subexpression, set fot If
     }

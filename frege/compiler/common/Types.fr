@@ -3,12 +3,14 @@ module frege.compiler.common.Types
         inline (isFun)
     where 
 
-import  Data.TreeMap as Map(member, keys, TreeSet, TreeMap)
+import  Data.TreeMap as Map(member, keys, insert, TreeSet, TreeMap)
 
 import  frege.compiler.types.Types as T
 import  Compiler.types.Global as G
 import  Compiler.types.QNames (QName)
-import  Compiler.types.Positions (getpos)
+import  Compiler.types.Kinds
+import  Compiler.types.Positions (Position, getpos)
+-- import  Compiler.types.Packs(pPreludeBase)
 import  frege.compiler.classes.Nice(Nice)
 
 --- tell if the 'SigmaT' represents a function type. 
@@ -49,7 +51,7 @@ unboundRhoTvs' g RhoTau{context, tau} acc =
 unboundCtxTvs' g acc Ctx{pos, cname, tau}  = unboundTauTvs' g tau acc
 
 --- accumulate unbound 'MetaTv's of a 'Tau'
-unboundTauTvs' ∷ Global → TauT a → TreeSet Int → TreeSet Int
+unboundTauTvs' ∷ Global → Tau → TreeSet Int → TreeSet Int
 unboundTauTvs' g (TApp a b) acc =
     unboundTauTvs' g a (unboundTauTvs' g b acc)
 unboundTauTvs' g (TSig s) acc = unboundSigmaTvs' g s acc
@@ -151,3 +153,137 @@ instanceHead clas rho = RhoTau{context=rho.context, tau=TApp tcon tau}
     where
         tau = (tauRho rho).tau
         tcon = TCon{pos=getpos tau, name=clas}
+        
+
+--- note: type must not contain bound Metas
+substSigma :: TreeMap String (TauT t) ->  SigmaT t  -> SigmaT t
+substSigma t (ForAll bndrs rho) = ForAll bndrs (substRho t' rho)
+    where t' = fold TreeMap.delete t (map fst bndrs)
+
+
+substRho t (RhoFun ctx sig rho) = let
+            ctx' = map (substCtx t) ctx
+            sig' = substSigma t sig 
+            rho' = substRho t rho 
+        in (RhoFun ctx' sig' rho')
+substRho t (RhoTau ctx tau)  = RhoTau (map (substCtx t) ctx) (substTau t tau)
+
+
+
+substTau t (tau@TCon{})      = tau
+substTau t (TApp a b)        = TApp (substTau t a) (substTau t b)
+substTau t (typ@Meta _)      = typ     -- Meta must be unbound
+substTau t (typ@TVar {var})  = case TreeMap.lookupS t var of
+        Just tau -> tau
+        Nothing  -> typ
+substTau t (typ@TSig s) = TSig (substSigma t s)
+
+
+
+substCtx :: TreeMap String (TauT a) -> ContextT a -> ContextT a        
+substCtx t x  = x.{tau <- substTau t}
+
+
+
+{-- 
+    Tell the kindedness of this 'Tau'
+  
+    Returns the kind of the type variable that is applied to arguments, 
+    or just 'KType' if the 'Tau' is not an application of a type variable.
+-}
+tauKind :: Tau -> Kind
+tauKind app = case app.flat of
+    TVar{pos, kind, var}:_          →  kind
+    Meta Flexi{uid, hint, kind}:_   →  kind
+    other                           →  KType
+
+--- kindedness of a 'Sigma', based on enclosed 'Tau', see 'tauKind'
+sigmaKind (ForAll _ rho) = rhoKind rho
+
+--- kindedness of a 'Rho', based on enclosed 'Tau', see 'tauKind'
+--- A 'RhoFun' will always be 'KType', as it is equivalent to application of @(->)@
+rhoKind RhoFun{} = KType
+rhoKind RhoTau{tau} = tauKind tau
+
+
+{--
+    > sigInst subst sigma
+    Return a list of 'Tau' from the substitution in the order of the bound variables of the 'Sigma'
+-}
+sigInst ∷ TreeMap String Tau → Sigma → [Tau]
+sigInst subst sigma = varInst subst sigma.vars
+
+
+{--
+    > varInst subst ["a", "b", "c"]
+    Return a list of 'Tau' from the substitution in the order of the variable names given
+-}
+varInst ∷ TreeMap String Tau → [String] → [Tau]
+varInst subst names = [ tau | nm ← names, tau ← TreeMap.lookupS subst nm ]
+
+
+{--
+    make @RhoTau (TFun a b)@ into @RhoFun (RhoTau a) (unTau (RhoTau b))@
+ -}
+unTau ∷ Rho → Rho
+unTau (RhoTau ctx fun)
+    | Just (a,b) <- fun.getFun = RhoFun ctx (ForAll [] (RhoTau [] a)) (unTau (RhoTau [] b))
+unTau (RhoFun ctx sig rho)     = RhoFun ctx sig                       (unTau rho)
+unTau rho = rho
+
+
+{--
+ * Unify 2 Sigmas
+ *
+ * The first one is a quantified type from some symbol table item.
+ * The second one is the actual type of some expression and must be an instance
+ * of the first one.
+ *
+ * > unifySigma (forall a b. Maybe a -> [b]) (Maybe Int -> [Float]) ==> [(a,Int), (b, Float)]
+ -}
+unifySigma ∷ Global → Sigma → Sigma → TreeMap String Tau
+unifySigma g (ForAll [] _) _ = empty
+unifySigma g s1 (ForAll _ rho) = unifyRho g empty s1.rho rho
+
+
+unifyRho :: Global -> TreeMap String Tau -> Rho -> Rho -> TreeMap String Tau
+unifyRho g t (rho1@RhoFun{}) rho2
+    | RhoFun{}      <- rho2       = result
+    | rfun@RhoFun{} <- unTau rho2 = unifyRho g t rho1 rfun
+    | otherwise                   = t           -- no match
+    where
+        result = unifyRho g t2 rho1.rho rho2.rho
+        t2     = unifyRho g t  rho1.sigma.rho rho2.sigma.rho
+-- rho1 must be a RhoTau as the first clause catches all cases where it is a RhoFun
+unifyRho g t rho1 rho2
+    | RhoTau{}      <- rho2        = unifyTau   t  rho1.tau   rho2.tau
+    | rtau@RhoTau{} <- tauRho rho2 = unifyRho g t  rho1       rtau
+unifyRho g t _ _ = t
+
+
+unifyTau ∷ TreeMap String Tau → Tau → Tau → TreeMap String (Tau)
+unifyTau t (TVar {var}) b = insert var b t
+unifyTau t (tau1@TApp a b) (tau2@TApp c d) = unifyApp a c
+    where
+        -- do not match unequals!
+        unifyApp TVar{} _ 
+            = unifyTau  (unifyTau  t a c) b d
+        unifyApp TCon{name=n1} TCon{name=n2}
+            | n1 == n2 = unifyTau  (unifyTau  t a c) b d
+            | otherwise = t
+        unifyApp (TApp x _) (TApp y _) = unifyApp x y
+        unifyApp _ _ = t
+unifyTau t _ _ = t
+
+
+{--
+ * [usage] @sigmaInst sigma1 sigma2@
+ * [returns] a list of 'Tau' types that are substituted for
+ * the bounded variables of @sigma1@ in @sigma2@
+ * which must be a valid substitution of the former (up to contexts).
+ -}
+sigmaInst g sigma1 sigma2 = [ s | Just s <-  map (TreeMap.lookupS tree) (Sigma.vars sigma1) ]
+    where tree =  unifySigma g sigma1 sigma2
+
+
+

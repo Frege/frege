@@ -19,7 +19,7 @@ mkdir "dist" unless -d "dist";
 system (qq{find$exe}.q{ build/frege -name "*.java" -exec rm "{}" ";"});
 
 #   find out the version
-my $version = qx{java$exe -cp build frege.compiler.Main -version};
+my $version = qx{java$exe -cp build frege.compiler.Main -version | head -1};
 chomp $version;
 $version =~ s/\s//g;
 print "making dist for version: '$version'\n";

@@ -49,16 +49,16 @@ FREGE    = $(JAVA) -Xss4m -Xmx1800m -cp $(BUILD)
 FREGECJ  = $(FREGE) -jar fregec.jar -d $(BUILD) -hints
 
 #	compile compiler1 with fregec.jar, uses prelude sources from shadow/
-FREGEC0  = $(FREGECJ) -prefix a -sp shadow:.
+FREGEC0  = $(FREGECJ) -prefix a -sp shadow:.  -target 1.7
 
 #	compile compiler2 with compiler1
-FREGEC1  = $(FREGE) afrege.compiler.Main -d $(BUILD) -hints -target 1.7 -inline -prefix b
+FREGEC1  = $(FREGE) afrege.compiler.Main -d $(BUILD) -hints -inline -prefix b
 
 #	compile final compiler with compiler2
-FREGEC2  = $(FREGE) bfrege.compiler.Main -d $(BUILD) -hints -target 1.7 -O
+FREGEC2  = $(FREGE) bfrege.compiler.Main -d $(BUILD) -hints  -O
 
 #	final compiler
-FREGECC  = $(FREGE) frege.compiler.Main -d $(BUILD) -hints -target 1.7 -O
+FREGECC  = $(FREGE) frege.compiler.Main -d $(BUILD) -hints  -O
 
 #	Prelude files in the order they must be compiled
 PRELUDE  = \
@@ -71,6 +71,7 @@ PRELUDE  = \
 		frege/prelude/PreludeIO.fr \
 		frege/prelude/PreludeArrays.fr \
 		frege/java/Lang.fr \
+		frege/java/Util.fr \
 		frege/java/util/Regex.fr \
 		frege/prelude/PreludeText.fr \
 		frege/prelude/Math.fr \
@@ -232,7 +233,9 @@ compiler1: $(FREGE_COMPILER)/grammar/Frege.fr frege/Version.fr
 
 runtime:
 	@echo "[1;42mMaking $@[0m"
-	$(JAVAC) -d $(BUILD) -source 1.7 -target 1.7 frege/runtime/*.java frege/run/*.java
+	mkdir -p build
+	$(JAVAC) -d build frege/run8/*.java
+	$(JAVAC) -d build -nowarn -source 1.7 -target 1.7 frege/runtime/*.java frege/run/*.java frege/run7/*.java
 	@echo Runtime is complete.
 
 #

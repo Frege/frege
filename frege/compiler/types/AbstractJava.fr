@@ -1,0 +1,229 @@
+--- Definitions for the abstract Java language the compiler emits.
+--- This is imported by Global, hence cannot use functions from Global
+
+module frege.compiler.types.AbstractJava where
+
+import frege.Prelude hiding(<+>, break)
+
+import Compiler.common.Roman(romanUpper)
+
+import Compiler.types.JNames
+import Compiler.types.Types
+import Data.Bits
+
+
+{--
+    Java Attributes like *@final@*, *@static@* etc.
+    
+    Attributes are printed in the order listed here, hence annotations
+    come first.
+ -}
+data JAttr = JUnchecked  | JFunctionalInterface | JOverride | JRawTypes
+                | JFinal | JPrivate | JPublic | JProtected | JStatic
+                | JAbstract | JDefault  
+ 
+derive Enum JAttr
+derive Bounded JAttr
+
+
+type Attributes =  BitSet JAttr
+type FormalArg  = (Attributes, Sigma, JType, String)
+
+
+
+{--
+    abstract (introduction of) type variable
+-}
+data JTVar = JTVar { !var ∷ String, !bounds ∷ JTypeBounds }
+
+{--
+    the bounds for a 'JTVar' or a wildcard
+-}
+data JTypeBounds = 
+      UNBOUNDED
+    | EXTENDS [JType]       -- extends A & B
+    | SUPER   JType         -- super T
+
+derive Eq JTypeBounds
+
+
+
+{--
+    abstract Java Type
+ -}
+data JType =
+
+      !Ref   { jname :: JName,  gargs :: [JType] }
+                        --- frege type (extends Lazy)
+
+    | TArg  { !var   :: String }
+                        --- type argument @A@
+    
+    | Wild   { !bounds :: JTypeBounds }
+                        --- ? extends Foo
+
+    | !Nativ { typ   :: String, gargs :: [JType], generic :: Bool }
+                        {-- 
+                            Native or array type
+
+                            An array type looks like
+                            >  Nativ { type = "[]", gargs = [elem]}
+                            where @elem@ is the element type.
+
+                            The gargs are only printed in Java code
+                            when generic is @true@. Otherwise, the
+                            gargs are treated as phantom types.
+
+                            We need this to make String a higher kinded type, sort of.
+
+                        -}
+    -- Box    { !yields, !phantom  :: JType } 
+    | Kinded { !arity :: Int, !gargs :: [JType] }
+
+    | !Lazy  { yields :: JType }
+                        --- a Thunk for some type
+
+    | !Func  { gargs :: [JType] }
+                        {-- function that can take @length gargs - 1@
+                            arguments before yielding a result -} 
+
+    | Constr    { !jname :: JName, !gargs :: [JType] }
+                        --- a class constraint, must never be lazy
+    | Something         {-- something unknown that can be casted
+                            to the desired type -} 
+
+!unboundedWild = Wild{bounds=UNBOUNDED}
+
+--- construct a regular 'Nativ' type
+nativ s gs = Nativ s gs true
+
+derive Eq JType
+
+--- Create a raw type (generated types possibly not functional, except for display)
+rawType ∷ JType → JType
+
+rawType Func{gargs}   = Ref (JName "Func" (romanUpper (length gargs - 1))) []
+rawType Kinded{arity} = Ref (JName "Kind" (romanUpper arity))          []
+rawType Nativ{typ="[]"} = Something
+rawType jt
+    | jt.{generic?}, not jt.generic = jt
+    | jt.{gargs?} = jt.{gargs=[]}
+    | otherwise   = jt
+
+
+{--
+    abstract Java Expression
+ -}
+type JX = JExpr
+
+
+data JExpr =
+    JAtom {!name :: String}              --- local variable, null, this, true, false, literal etc.
+    | JNew {!jt :: JType, !args :: [JExpr]}                 --- @new Foo(...)@
+    | JNewClass {!jt :: JType, !args ::  [JExpr], 
+                                !decls :: [JDecl]}          --- @new Foo(...) {...}@
+    | JLambda {!fargs :: [FormalArg], !code :: (JExpr|JStmt)}       --- @(int a) -> return a+1@
+    | JNewArray {!jt :: JType, !jex :: JExpr}               --- @new Foo[...]@
+    | JInvoke {!jex :: JExpr, !args :: [JExpr]}             --- @foo(...)@
+    | JStMem {!jt :: JType, !name :: String, !targs :: [JType]}           --- @X.name@
+    | JExMem {!jex :: JExpr, !name :: String, 
+                !targs :: [JType]}                          --- obj.m
+    | JCast {!jt :: JType, !jex :: JExpr }                  --- (T)(x)
+    | JUnop { !op :: String, !jex :: JExpr }                --- @!x@
+    | JBin {!j1 :: JExpr, !op::String, !j2 :: JExpr}        --- @a + b@
+    | JQC {!j1 :: JExpr, !j2 :: JExpr, !j3 :: JExpr}        --- a ? b : c
+    | JArrayGet {!j1, !j2 :: JExpr }                        --- arr[i]
+    where
+        ---  Syntactic precedence of java constructs
+        ---  Higher numbers mean more tight binding.
+        prec JLambda{} = 1
+        prec JQC{}     = 2
+        prec JBin{}    = 3
+        prec JUnop{}   = 4
+        prec JCast{}   = 5
+        prec JArrayGet{} = 6
+        prec JExMem{}  = 9
+        prec JStMem{}  = 9
+        prec JInvoke{} = 9
+        prec JAtom{}   = 9
+        prec JNew{}    = 7
+        prec JNewClass{} = 7
+        prec JNewArray{} = 7
+        --- create a 'JAtom'
+        atom   = JAtom
+        --- create an instance member without type arguments
+        jexmem x s = JExMem{jex=x, name=s, targs=[]}
+        --- @invoke args expr@ ---> expr.(args)
+        invoke = flip JInvoke
+        --- @new args type@    ---> new type(args)
+        new    = flip JNew
+        --- @cast type expr@   ---> (type) expr
+        cast   = JCast
+        --- @xmem "name" expr@  ---> expr.name
+        xmem   = flip jexmem
+        --- @static "forName" (Nativ "java.lang.Class" [A])@ ---> Class.<A>forName
+        static name (t@Nativ{typ, gargs, generic})
+                            = JStMem{jt = t.{gargs=[]} , name, targs=if generic then gargs else []}
+        static name t
+            | t.{gargs?}    = JStMem{jt = t.{gargs=[]} , name, targs=t.gargs}
+            --Lazy x <- t   = JStMem{jt = Nativ "frege.run.Lazy" [], name, targs=[x]}
+            | otherwise     = JStMem{jt = t, name, targs = []}
+        --- make a 'JStMem' from a 'JName'
+        staticMember (JName cl base) = JStMem{jt = nativ cl [], name = base, targs = []}
+
+
+
+
+{--
+    abstract Java Statement
+ -}
+data JStmt =
+    !JError String          --- code that makes javac fail (generated by incomplete code generation)
+    | JEmpty                --- empty statement
+    | !JBlock  {stmts::[JStmt]}        --- { statements }
+    | !JReturn JExpr         --- return expr
+    | !JThrow  JExpr         --- throw expr
+    | !JAssert JExpr         --- assert expr
+    | !JEx     JExpr
+    | !JAssign JExpr JExpr   --- a = b
+    | !JLocal  {decl::JDecl}
+    | !JCond   {keyword :: String, jex :: JExpr, stmts :: [JStmt]}   --- if/while (cond) { ... }
+    | !JBlockX {keyword :: String, stmts :: [JStmt]}      --- try/else/catch ... { .... }
+    | !JCase   {jex :: JExpr, stmt :: JStmt }
+
+
+--- placeholder for pipehole optimization
+postOpt x = x
+
+
+{--
+    abstract Java Declaration
+ -}
+data JDecl =
+      JComment String   --- > // this is a java comment
+    | !JClass {attr::Attributes, 
+                name :: String, gvars :: [JTVar],
+                extend :: Maybe JType, 
+                implement :: [JType], defs :: [JDecl] }
+                        {--
+                            > class Name extends Foo implements Bar, Baz {
+                            > ...
+                            > }
+                        -}
+
+    | !JInterface {attr::Attributes, 
+                name :: String, gvars :: [JTVar],
+                implement :: [JType], defs :: [JDecl] }
+                        {--
+                            > interface Name extends Bar, Baz {
+                            > ...
+                            > }
+                        -}
+
+
+    | !JMethod {attr::Attributes, gvars :: [JTVar], jtype:: JType, name :: String,
+               args::[FormalArg], body:: JStmt}
+    | !JConstr {attr::Attributes, jtype::JType, args::[FormalArg], body:: JStmt}
+    | !JMember {attr::Attributes, jtype::JType, name::String, init::Maybe JExpr}
+    | !JWhile  {body::JStmt}
+

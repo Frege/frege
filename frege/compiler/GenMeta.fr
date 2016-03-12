@@ -57,6 +57,7 @@ import  Compiler.enums.RFlag
 import  Compiler.enums.Visibility
 import  Compiler.enums.Literals
 import  Compiler.enums.CaseKind
+-- import  Compiler.enums.Flags ()
 
 import  Compiler.types.Kinds
 import  Compiler.types.Positions
@@ -74,49 +75,61 @@ import  Compiler.types.Global as G
 
 import  Compiler.common.Errors as E()
 import  Compiler.common.Annotate
+import  Compiler.common.AnnotateG
 
 import  Compiler.classes.Nice
 
 import frege.compiler.Utilities as U(print, println)
 import frege.lib.PP hiding(group, line, break)
 import frege.compiler.Transform (patsComplete, openCaseWhen, caseComplete)
-import frege.compiler.gen.Util
+-- import frege.compiler.gen.Util
 import frege.compiler.passes.Final
 
 --- This pass writes annotations to the java source file
 genmeta = do
     g <- getSTT
     let JName pack main = g.packClass g.thisPack
+    -- remember the main class name, it is surprisingly hard to come by
+    changeSTT Global.{gen ← _.{main}}
     when (pack != "") do print "package "; print pack; println ";"; println ""
+
     -- imports
-    -- println "import frege.runtime.Meta;"
-    -- println "import frege.runtime.Runtime;"
-    -- println "import frege.runtime.*;"
-    unless (false && inPrelude g.thisPack g) do
-        let javaimport p = do
-                g <- getSTT
-                let b = g.packClass p
-                liftStG $ when (b.qual == "" && pack != "") do
-                    let pos = fromMaybe g.sub.thisPos do
-                                ns <- g.sub.packWhy.lookup p
-                                g.sub.nsPos.lookup ns
-                    E.error pos (msgdoc (
-                        "java restriction: we can't use a class from an unnamed package in a named package."
-                        ))
-                    E.hint pos (msgdoc (
-                        "Cannot use module with the simple name " ++ g.unpack p 
-                        ++ " in this module with the qualified name " ++ g.unpack g.thisPack 
-                        ))
-                
-                when (b.base `notElem` (main:javaLangNames)
-                    -- do not import classes from unnamed packages, 
-                    -- it's not proper java syntax (Issue#78)
-                    && b.qual != "" 
-                    && g.gen.jimport.lookup b.base == Nothing) do
-                        changeSTT Global.{gen <- GenSt.{jimport <- insert b.base p}}  
-                        println  ("import " ++ b.show ++ ";")
-                    
-        forM_ (keys g.packages) javaimport 
+
+    forM_ targetNames do
+        \s → unless (main == s) do
+            let run = if g.hasLambdaSupport then "frege.run8." else "frege.run7." 
+            println ("import " ++ run ++ s ++ ";")
+    -- import all runtime classes
+    forM_ (each shortClassName) do 
+        \(long, short) → unless (main == short || long.startsWith "java.lang") do
+                            println ("import " ++ long ++ ";")
+
+    -- import java classes corresponding to imported modules
+    -- so that code size is reduced
+    let javaimport p = do
+            g <- getSTT
+            let b = g.packClass p
+            liftStG $ when (b.qual == "" && pack != "") do
+                let pos = fromMaybe g.sub.thisPos do
+                            ns <- g.sub.packWhy.lookup p
+                            g.sub.nsPos.lookup ns
+                E.error pos (msgdoc (
+                    "java restriction: we can't use a class from an unnamed package in a named package."
+                    ))
+                E.hint pos (msgdoc (
+                    "Cannot use module with the simple name " ++ g.unpack p 
+                    ++ " in this module with the qualified name " ++ g.unpack g.thisPack 
+                    ))
+
+            when (b.base != main && not (isReserved b.base)
+                -- do not import classes from unnamed packages, 
+                -- it's not proper java syntax (Issue#78)
+                && b.qual != "" 
+                && g.gen.jimport.lookup b.base == Nothing) do
+                    changeSTT Global.{gen <- GenSt.{jimport <- insert b.base p}}  
+                    println  ("import " ++ b.show ++ ";")
+
+    forM_ (keys g.packages) javaimport 
 
 
     println ""
@@ -127,7 +140,7 @@ genmeta = do
         imported = map (Pack.raw • snd) nss
         namespcs = map (NSName.unNS • fst) nss
 
-    let ops = [ mkOp (s,x) | (s,x) <- each g.optab, x >= LOP0 ]
+    -- let ops = [ mkOp (s,x) | (s,x) <- each g.optab, x >= LOP0 ]
 
     let asyms = [sym | sym@SymA {pos} <- values g.thisTab, sym.vis!=Private]
     symas <- liftStG $ mapSt annoSymA asyms
@@ -155,11 +168,12 @@ genmeta = do
         asigs = table g.sTree
         exprs = table g.xTree
         kinds = table g.kTree
-    pp  (annotation "FregePackage" [
+    liftIO $ prettyIO g.printer 120  (meta g "FregePackage" [
                 ("source", anno g.options.source),
                 ("time",   anno ctime),
+                ("jmajor", anno g.options.target.major),
+                ("jminor", anno g.options.target.minor),
                 ("doc", maybe PP.nil anno g.packageDoc),
-                ("ops",  anno ops),
                 ("imps", anno imported),
                 ("nmss", anno namespcs),
                 ("symas", some symas),
@@ -168,11 +182,11 @@ genmeta = do
                 ("symts", some symts),
                 ("symvs", some symvs),
                 ("symls", some symls),
-                ("taus",  anno ataus),
-                ("rhos",  anno arhos),
-                ("sigmas", anno asigs),
-                ("exprs", anno exprs),
-                ("kinds", anno kinds)])
+                ("taus",  annoListG g ataus),
+                ("rhos",  annoListG g  arhos),
+                ("sigmas", annoListG g  asigs),
+                ("exprs", annoListG g  exprs),
+                ("kinds", annoListG g  kinds)])
 
     println ""
 
@@ -180,11 +194,12 @@ genmeta = do
     
     return ("annotations", 12
         + length imported * 2
-        + length ops
         + length symas + length symis + length symcs + length symts
         + length symvs + length symls
         + length ataus + length arhos + length asigs
         + length exprs)
+
+
 
 --- create annotations for all SymV in an environment
 envValues :: Symtab -> StG [DOCUMENT]
@@ -197,8 +212,8 @@ envValues env = do
 envLinks :: Symtab -> StG [DOCUMENT]
 envLinks env = do
     g <- getST
-    let syms = [annoSymL sym | sym@SymL {alias} <- values env, sym.vis != Private]
-    stio syms
+    let syms = [ sym | sym@SymL {alias} <- values env, sym.vis != Private]
+    mapM annoSymL syms
 
 --- create annotations for all SymD in an environment
 envCons :: Symtab -> StG [DOCUMENT]
@@ -210,11 +225,11 @@ envCons env = do
 banner v = do
     g <- getSTT
 
-    pp (PP.bracket "/*" (sep ""  [
+    liftIO $ prettyIO g.printer 120 (PP.bracket "/*" (sep ""  [
         text "Source code is in UTF-8 encoding.",
         text "The following symbols may appear, among others:",
         text "α β γ δ ε ζ η θ ι κ λ μ ν ξ ο π ρ ς σ τ υ φ χ ψ ω",
-        text "« • ¦ » ",
+        text "« • ¦ » ∀ ∃ ∷ … → ←",
         text "ﬁ ﬂ ƒ",
         text "If you can't read this, you're out of luck.",
         text "This code was generated with the frege compiler version",
@@ -227,16 +242,9 @@ banner v = do
     println ""
 
 
-annoSimple kind val = text "@Meta." <> text kind <> bracket "(" val ")"
-annoArr    kind vs  = text "@Meta." <> text kind <> bracket "({" (sep "," vs) "})"
+-- annoSimple kind val = text "@Meta." <> text kind <> bracket "(" val ")"
+-- annoArr    kind vs  = text "@Meta." <> text kind <> bracket "({" (sep "," vs) "})"
 some vs = bracket "{" (sep "," vs) "}"     -- some annotations in a list
-
-
-
-mkOp (s,tid)
-    | tid < ROP0 = AOP s 0 (ord tid - ord LOP0)
-    | tid < NOP0 = AOP s 1 (ord tid - ord ROP0)
-    | otherwise  = AOP s 2 (ord tid - ord NOP0)
 
 flatKind KType = stio (KindA {kind=0, suba=0, subb=0})
 flatKind KGen  = stio (KindA {kind=1, suba=0, subb=0})
@@ -430,7 +438,7 @@ expIndex exp = encodeX exp >>= mbIndex
                     flat3 [] = [] 
                 return (Just defEA.{xkind=9, alts = flat3 triples, subx1=exp})
         encodeX (Lit {kind, value}) = stio (Just defEA.{xkind = 6, lkind = ord kind, varval = Just value})
-        encodeX (Vbl {name=Local _ s}) = stio (Just defEA.{varval = Just s})
+        encodeX (Vbl {name=Local u s}) = stio (Just defEA.{subx1 = u})
         encodeX (Vbl {name}) = do   -- no private data
             sym <- U.findV name
             stio (if sym.vis != Private then Just defEA.{xkind = 8, name = Just name} else Nothing)
@@ -454,7 +462,7 @@ expIndex exp = encodeX exp >>= mbIndex
                     foldM mkea cx psx
                 else stio Nothing
         encodeP (PLit {kind, value}) = encodeX (Lit {pos=Position.null, typ = Nothing, kind, value})
-        encodeP (PVar {var}) = stio (Just defEA.{varval = Just var})
+        encodeP (PVar {uid}) = stio (Just defEA.{subx1 = uid})
         encodeP (PAt  {var,uid,pat}) = do
             px <- encodeP pat
             case px of
@@ -492,12 +500,13 @@ eaIndex expa = do
             stio g.xunique
 
 annoSymA syma = do
+    g  ←  getST
     vars <- mapSt tauIndex (Symbol.vars syma)
     typ  <- sigIndex (Symbol.typ syma)
     kind <- kindIndex syma.kind
-    let a = annotation "SymA" [
+    let a = meta g "SymA" [
                 ("offset", anno syma.pos.first.offset),
-                ("name", anno (Symbol.name syma)),
+                ("name", annoG g (Symbol.name syma)),
                 ("vars", anno vars),
                 ("typ",  anno typ),
                 ("kind", anno kind),
@@ -508,6 +517,7 @@ annoSymA syma = do
 
 annoSymV symv = do
     g <- getST
+    gargs ← mapM tauIndex symv.gargs
     case isPSigma (Symbol.typ symv) of
         true -> E.fatal symv.pos (text (symv.nice g ++ " has no type."))
         false -> do
@@ -544,9 +554,9 @@ annoSymV symv = do
                      (text ("The code of " ++ nice symv g
                                 ++ " cannot be exported because it " ++ reason ++ ". "))
             ttaus <- mapM (tauIndex) symv.throwing                                
-            let a = annotation "SymV" [
+            let a = meta g "SymV" [
                     ("offset", anno symv.pos.first.offset),
-                    ("name", anno symv.name),
+                    ("name", annoG g symv.name),
                     ("stri", lit symv.strsig.show),
                     ("sig",  anno sig),
                     ("nativ", maybe PP.nil anno symv.nativ),
@@ -558,17 +568,20 @@ annoSymV symv = do
                     ("publik", if symv.vis == Public then PP.nil else anno false),
                     ("doc", maybe PP.nil anno symv.doc),
                     ("throwing", if null ttaus then PP.nil else anno ttaus),
-                    ("over", if null symv.over then PP.nil else anno symv.over),
+                    ("over", if null symv.over then PP.nil else annoListG g symv.over),
+                    ("gargs", if null gargs then PP.nil else anno gargs),
                     ("op", if symv.op == NOP16 then PP.nil else anno (ord symv.op))]
             -- in build mode, remember the expression number for this symbol
             when (buildMode g && exp > 0) do
                 changeST Global.{gen <- _.{expSym <- insert symv.name exp}}
             stio a
 
-annoSymL sym = annotation "SymL" [
+annoSymL sym = do
+    g ← getST
+    pure $ meta g "SymL" [
                     ("offset", anno (Symbol.pos sym).first.offset),
-                    ("name",  anno (Symbol.name  sym)),
-                    ("alias", anno (Symbol.alias sym)),
+                    ("name",  annoG g (Symbol.name  sym)),
+                    ("alias", annoG g (Symbol.alias sym)),
                     ("publik", if sym.vis == Public then PP.nil else anno false),
                     -- ("doc", maybe PP.nil anno (Symbol.doc sym))
                     ]
@@ -577,13 +590,13 @@ annoSymD sym = do
     g <- getST
     typ <- sigIndex (Symbol.typ sym)
     fields <- mapSt conFieldA sym.flds
-    let a = annotation "SymD" [
+    let a = meta g "SymD" [
                     ("offset", anno (Symbol.pos sym).first.offset),
-                    ("name",  anno (Symbol.name  sym)),
+                    ("name",  annoG g (Symbol.name  sym)),
                     -- ("stri",  lit sym.strsig.show),
                     ("cid",   anno (Symbol.cid   sym)),
                     ("typ",   anno typ),
-                    ("fields", anno fields),
+                    ("fields", annoListG g fields),
                     -- ("fnms",  if null fnms || all null fnms then PP.nil else anno fnms),
                     -- ("ftys",  if null ftys then PP.nil else anno ftys),
                     ("priv",  if sym.vis == Private then anno true else PP.nil),
@@ -598,8 +611,8 @@ conFieldA Field{pos, name, doc, vis, strict, typ} = do
     sig <- sigIndex typ
     return FieldA{pos, name, doc, vis, strict, typ=sig}
  
-instance Anno ConFieldA where
-    anno FieldA{pos, name, doc, vis, strict, typ} = annotation "Field" [
+instance AnnoG ConFieldA where
+    annoG g FieldA{pos, name, doc, vis, strict, typ} = meta g "Field" [
             ("doc",     maybe PP.nil anno doc),
             ("name",    maybe PP.nil anno name),
             ("offset",  anno pos.first.offset),
@@ -610,16 +623,17 @@ instance Anno ConFieldA where
 
 
 annoSymC sym = do
+    g ← getST
     tau <- tauIndex (Symbol.tau sym)
     meml <- envLinks  (Symbol.env sym)
     memv <- envValues (Symbol.env sym)
-    let a = annotation "SymC" [
+    let a = meta g "SymC" [
                     ("offset", anno (Symbol.pos sym).first.offset),
-                    ("name",  anno (Symbol.name  sym)),
+                    ("name",  annoG g (Symbol.name  sym)),
                     ("tau",   anno tau),
-                    ("sups",  if null sym.supers then PP.nil else anno sym.supers),
-                    ("ins1",  if null sym.insts  then PP.nil else anno (map fst sym.insts)),
-                    ("ins2",  if null sym.insts  then PP.nil else anno (map snd sym.insts)),
+                    ("sups",  if null sym.supers then PP.nil else annoListG g sym.supers),
+                    ("ins1",  if null sym.insts  then PP.nil else annoListG g (map fst sym.insts)),
+                    ("ins2",  if null sym.insts  then PP.nil else annoListG g (map snd sym.insts)),
                     ("lnks",  some meml),
                     ("funs",  some memv),
                     ("publik", if sym.vis == Public then PP.nil else anno false),
@@ -627,13 +641,14 @@ annoSymC sym = do
     stio a
 
 annoSymI sym = do
+    g ← getST
     typ <- sigIndex (Symbol.typ sym)
     meml <- envLinks  (Symbol.env sym)
     memv <- envValues (Symbol.env sym)
-    let a = annotation "SymI" [
+    let a = meta g "SymI" [
                     ("offset", anno (Symbol.pos sym).first.offset),
-                    ("name",  anno (Symbol.name  sym)),
-                    ("clas",  anno (Symbol.clas  sym)),
+                    ("name",  annoG g (Symbol.name  sym)),
+                    ("clas",  annoG g (Symbol.clas  sym)),
                     ("typ",   anno typ),
                     ("lnks",  some meml),
                     ("funs",  some memv),
@@ -641,14 +656,16 @@ annoSymI sym = do
     stio a
 
 annoSymT sym = do
+    g ← getST
     typ <- sigIndex (Symbol.typ sym)
     memc <- envCons   (Symbol.env sym)
     meml <- envLinks  (Symbol.env sym)
     memv <- envValues (Symbol.env sym)
     kind <- kindIndex sym.kind
-    let a = annotation "SymT" [
+    gargs ← mapM tauIndex sym.gargs
+    let a = meta g "SymT" [
                     ("offset", anno (Symbol.pos sym).first.offset),
-                    ("name",  anno (Symbol.name  sym)),
+                    ("name",  annoG g (Symbol.name  sym)),
                     ("typ",   anno typ),
                     ("kind",  anno kind),
                     ("cons",  some memc),
@@ -659,6 +676,7 @@ annoSymT sym = do
                     ("pur",  if sym.pur then anno true else PP.nil),
                     ("newt",  if sym.newt then anno true else PP.nil),
                     ("nativ", maybe PP.nil anno (Symbol.nativ sym)),
+                    ("gargs", if null gargs then PP.nil else anno gargs),
                     ("publik", if sym.vis == Public then PP.nil else anno false),
                     ("mutable", if sym.mutable then anno true else PP.nil),
                     ("doc", maybe PP.nil anno (Symbol.doc sym))]

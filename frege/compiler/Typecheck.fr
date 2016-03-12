@@ -318,7 +318,10 @@ checkgroup7 nms = do
                             changeSym sym.{expr = Just (return ex)} 
               where
                     scrapCtx it = do
-                        let sig = (Symbol.typ it).{rho <- Rho.{context=[]}}
+                        let sig = (Symbol.typ it).{rho <- clear}
+                            clear ∷ Rho → Rho
+                            clear RhoFun{context, sigma, rho} = RhoFun{context=[], sigma, rho = clear rho}
+                            clear RhoTau{context, tau} = RhoTau{context=[], tau}
                         nex <- case it.expr of
                             Just x  -> x >>= U.mapEx false removeCtx >>= (return . Just . return)
                             Nothing -> return Nothing
@@ -329,14 +332,33 @@ checkgroup7 nms = do
                         return (Left it)
                     removeCtx x = return (Left x)
 
-checkKind sym = case Symbol.name sym of
-    Local{} -> return sym
-    global  -> do
-        (sig, _) <- K.kiSigma [] [] sym.typ
-        let new = sym.{typ=sig}
-        changeSym new
+checkKind ∷ Symbol → StG Symbol
+checkKind sym = correctK empty sym
+  where
+    correctK ∷ TreeMap String Tau → Symbol → StG Symbol
+    correctK subst (sym@SymV{typ,expr}) = do
+        --g ← getST
+        --E.logmsg TRACEZ sym.pos (text "Checking kind of" <+> text (nice sym g))
+        sig     ← bool
+                    (pure typ) 
+                    (fst <$> K.kiSigma [] [] typ)
+                    (null typ.bound)
+        let rsubst = TreeMap.insertList subst (zip sig.vars (sig.tvars sym.pos))
+        ex      ← maybe
+                    (pure Nothing)
+                    (\x → Just <$> (x >>= mapEx false (correctKind rsubst)))
+                    expr
+        let new = sym.{typ=sig, expr = fmap pure ex}
         return new
-         
+    correctK subst sym = error "only SymV allowed" 
+
+    correctKind subst Let{env, ex, typ} = do
+        syms    ← mapM U.findV env
+        mapM_ (correctK subst) syms
+        ex'     ←  mapEx false (correctKind subst) ex
+        pure $ Right Let{env, ex = ex', typ = fmap (substSigma subst) typ }
+    correctKind subst x = pure $ Left  x.{typ ← fmap (substSigma subst)}
+
 checkAmbiguous sym (ForAll bnd r) = do
         let ra = r.{context=[]}                     -- ctx => rho    --> rho
             rb = (rhoInt).{context=r.context}       -- Int           --> ctx => Int
@@ -426,7 +448,7 @@ substInstMethod qname = do
                 x <- mapEx true substInst x
                 changeSym sym.{expr = Just (return x)}
 
---- replace class member with instance member
+--- replace class member with instance member, if possible
 substInst (vbl@Vbl {pos, name = MName tn bs, typ = Just (ForAll [] rho)})
         -- check if vbl is instaniated to tn
     | [ctx@Ctx {cname, tau=ctau}] <- filter ((==tn) • Context.cname) rho.context
@@ -444,8 +466,8 @@ substInst (vbl@Vbl {pos, name = MName tn bs, typ = Just (ForAll [] rho)})
                             case g.findit (MName iname bs) of
                                 Just imem -> do 
                                     let nrho = rho.{context <- filter (not • sameCtx ctx)}
-                                        strho = U.substRho 
-                                                    (U.unifySigma g imem.typ ForAll{bound=[], rho=nrho}) 
+                                        strho = substRho 
+                                                    (unifySigma g imem.typ ForAll{bound=[], rho=nrho}) 
                                                     imem.typ.rho
                                         !repl | SymV{} <- imem = vbl.{name=imem.name, 
                                                                         typ = Just (ForAll [] strho)}
@@ -481,6 +503,10 @@ substInst (vbl@Vbl {pos, name = MName tn bs, typ = Just (ForAll [] rho)})
         g <- getST
         E.logmsg TRACEO pos (text ("no suitable constraint: " ++ vbl.nice g ++ " :: " ++ rho.nicer g))
         stio (Left vbl)
+--- Also, make sure no DWIM literal has a constraint in its type.
+substInst (lit@Lit{pos, kind, value, typ=Just (ForAll [] rho)})
+    | kind == LInt || kind == LDouble,
+      not (null rho.context) = pure (Right lit.{typ=Just (ForAll [] rho.{context=[]})})
 substInst x = stio (Left x)
 
 
@@ -508,8 +534,8 @@ checkName nm = do
                 | not (isPSigma t),
                   MName c _ <- name,
                   Just (SymC {pos}) <- g.findit c = do
-                    -- t <- canonicSignature t
-                    changeSym sym.{state=Typechecked, vis=Abstract}
+                    (sig, _) <- K.kiSigma [] [] t
+                    changeSym sym.{state=Typechecked, vis=Abstract, typ = sig}
                     stio t
                 | otherwise = do
                     E.error pos (msgdoc ("implementation missing for " ++ sym.nice g))
@@ -613,7 +639,8 @@ zonkRigid bound ex = do
         symWork (symv@ SymV {pos, expr, typ = sig}) = do
                         g <- getST
                         -- E.logmsg TRACEZ (getpos ex) (text ("symWork: " ++ show (bound ++ sig.vars) ++ " " ++ nice ex g))
-                        let rho = substRigidRho (bound ++ sig.vars) sig.rho
+                        rhoz ← zonkRho sig.rho
+                        let rho  = substRigidRho (bound ++ sig.vars) rhoz
                         expr  <- case expr of
                             Just dx  -> do
                                 x <- dx
@@ -630,7 +657,7 @@ zonkRigid bound ex = do
                 ex  <- zonkRigid bound ex
                 stio (Right x.{ex,typ = Just sig})
         zonk (x@Lam {pat,ex,typ}) = do                  -- update also environment of lambda
-            syms <- mapSt U.findV (map U.pVarLocal (U.patVars pat))
+            syms <- mapSt U.findV (map U.pVarLocal (patVars pat))
             foreach syms symWork
             case Expr.typ x of
                 Just sigm -> do
@@ -648,7 +675,7 @@ zonkRigid bound ex = do
             stio (Right (Case ckind ex alts typ))
           where
             zonkAlt (CAlt {pat,ex}) = do
-                syms <- mapSt U.findV (map U.pVarLocal (U.patVars pat))
+                syms <- mapSt U.findV (map U.pVarLocal (patVars pat))
                 foreach syms symWork
                 ex  <- zonkRigid bound ex
                 stio (CAlt {pat,ex})
@@ -715,12 +742,13 @@ checkSigma1 annotated x s = do
         badTvs = [ tv | tv <- skolTvs, tv `elem` aTvs ]
         pos = getpos x
 
-    
+    let nicek g t = nice t g ++ "::" ++ show (MetaTv.kind t) 
+
     E.logmsg TRACET pos (text ("checkSigma1 " ++ show annotated ++ "  " ++ nice s g))
-    E.logmsg TRACET pos (text ("skolTvs:  " ++ joined ", " (map (flip nice g) skolTvs)))
-    E.logmsg TRACET pos (text ("sigmaTvs: " ++ joined ", " (map (flip nice g) tvs)))
-    E.logmsg TRACET pos (text ("envTvs:   " ++ joined ", " (map (flip nice g) eTvs)))
-    E.logmsg TRACET pos (text ("badTvs: "   ++ joined ", " (map (flip nice g) badTvs)))
+    E.logmsg TRACET pos (text ("skolTvs:  " ++ joined ", " (map (nicek g) skolTvs)))
+    E.logmsg TRACET pos (text ("sigmaTvs: " ++ joined ", " (map (nicek g) tvs)))
+    E.logmsg TRACET pos (text ("envTvs:   " ++ joined ", " (map (nicek g) eTvs)))
+    E.logmsg TRACET pos (text ("badTvs: "   ++ joined ", " (map (nicek g) badTvs)))
     if null badTvs 
     then if annotated || not (null s.bound)
         then checkConstraints skolTvs x rho
@@ -748,7 +776,7 @@ checkSigma1 annotated x s = do
                 g    <- getST
                 let rhometas = rhoTvs g rho.{context=[]}
                     ctxmetas = map (ctxTvs g) rho.context
-                
+
                 let fctx    = map snd . filter relevantCtx $ zip ctxmetas rho.context
                     -- onlyrho = filter (`notElem` tvs) rhometas -- only in rho, but not in skolTvs
                     relevantCtx
@@ -759,11 +787,11 @@ checkSigma1 annotated x s = do
                         | otherwise     = any (`elem` tvs)
                                             -- . filter (not . MetaTv.isFlexi) 
                                             . fst
-                        
+
                     frho = rho.{context=fctx}
                 x    <- return (x.{typ = Just sigma.{rho=frho}})                  
                 let ety = canonicContext g expty
-                
+
                 E.logmsg TRACET pos (text ("expr context:     "   ++ nicectx fctx g))
                 E.logmsg TRACET pos (text ("expected context: "   ++ nicectx ety.context g))
                 -- find constraints that mention skolemised vars that are not in the expected type
@@ -856,9 +884,15 @@ tcRho' (x@Vbl {name})  ety = do
     case sym of 
         SymD{} -> tcRho' Con{pos=x.pos, name=x.name, typ=x.typ} ety
         other  -> case isPSigma sym.typ of
-            false -> do
-                rho <- instantiate sym.typ
-                instRho x rho ety
+            false -> if sym.state != Typechecked 
+                    then do
+                        sig ← fst <$> K.kiSigma [] [] sym.typ
+                        changeSym sym.{typ=sig}
+                        rho <- instantiate sig
+                        instRho x rho ety 
+                    else do
+                        rho <- instantiate sym.typ
+                        instRho x rho ety
             true -> if sym.state == Unchecked
                 then do
                     checkName name
@@ -894,8 +928,8 @@ tcRho' (x@Case {ex,alts}) ety
     | Check crho <- ety = do
         (rho,ex) <- inferRho ex
         alts <- mapSt (checkAlt rho ety) alts
-        let asig = (unJust • Expr.typ • CAlt.ex • head) alts
-        instSigma x.{ex, alts} asig ety
+        let arho = (Sigma.rho . unJust • Expr.typ • CAlt.ex • head) alts
+        instRho x.{ex, alts} arho ety
     where
         checkAlt rho ety (alt@CAlt {ex,pat})  = do
             (pat,ex) <- dwimPatEx pat ex
@@ -1034,12 +1068,14 @@ tcRho' (x@Ifte a b c _) (ety@Infer _) = do
 tcRho' (x@Ifte a b c _) (ety@Check erho) = do
     a <- checkRho a (rhoBool)
     b <- checkRho b erho
-    c <- checkSigma c (unJust b.typ)
-    instSigma (Ifte a b c Nothing) (unJust c.typ) ety
+    let trho = Sigma.rho (unJust b.typ)
+    c <- checkRho c trho
+    instRho (Ifte a b c Nothing) trho ety
 
 tcRho' (x@Ann ex (Just s)) ety  = do         -- a genuine forall, should be rare
-    ex <- checkAnnotated ex s
-    instSigma ex s ety
+    sig ← fst <$> K.kiSigma [] [] s
+    ex <- checkAnnotated ex sig
+    instSigma ex sig ety
     -- instSigma ex (unJust ex.typ) ety         -- we don't want to see Ann after typechecking anymore
 
 tcRho' x (Check _) = do
@@ -1127,8 +1163,9 @@ tcPat' (p@PCon {qname,pats}) ety = do
             instPatSigma p (ForAll [] res) ety
 
 tcPat' (p@PAnn {pat,typ}) ety = do
-    checkPat pat typ
-    instPatSigma p typ ety
+    sig ← fst <$> K.kiSigma [] [] typ
+    checkPat pat sig
+    instPatSigma p sig ety
 
 tcPat' (p@PUser {pat}) ety = tcPat' pat ety
 
@@ -1149,20 +1186,22 @@ private real = TName{pack=pPreludeBase, base="Real"}
 private num  = TName{pack=pPreludeBase, base="Num"}
 
 --- Type the literals
+--- Make sure all constraints are removed when a type is found
 literalType ctxs (lit@Lit{pos, kind, value, typ=Just sigma})
     | kind != LInt, kind != LDouble = return (Left lit)
     | kind == LInt, isDWIM LInt value, RhoTau _ taut <- sigma.rho = do
             
             g <- getST
             let tau = reduced taut g
+                
             
             case tau of
                 TCon{pos, name}
-                    | name == rhoInt.tau.name     = return (Right lit)
-                    | name == rhoLong.tau.name    = return (Right lit.{kind=LLong, value <- (++"L")})
-                    | name == rhoInteger.tau.name = return (Right lit.{kind=LBig})
-                    | name == rhoFloat.tau.name   = return (Right lit.{kind=LFloat, value <- (++"F")})
-                    | name == rhoDouble.tau.name  = return (Right lit.{kind=LDouble, value <- (++"D")})
+                    | name == rhoInt.tau.name     = strip lit
+                    | name == rhoLong.tau.name    = strip lit.{kind=LLong, value <- (++"L")}
+                    | name == rhoInteger.tau.name = strip lit.{kind=LBig}
+                    | name == rhoFloat.tau.name   = strip lit.{kind=LFloat, value <- (++"F")}
+                    | name == rhoDouble.tau.name  = strip lit.{kind=LDouble, value <- (++"D")}
                     | otherwise = fromInt
                 Meta Flexi{uid, hint, kind}  = do  -- unbound, because already reduced
                         
@@ -1171,42 +1210,44 @@ literalType ctxs (lit@Lit{pos, kind, value, typ=Just sigma})
                                     Ctx{pos, cname, tau = Meta Flexi{uid=id}} <- rctxs, 
                                     uid == id ] 
                         if (real `elem` qns
-                            ||  TName{pack=pPreludeMath, base="PrimitiveFloating"} `elem` qns
+                            ||  TName{pack=pPreludeMath, base="Floating"} `elem` qns
                             ||  any (U.isSuper real g) qns)
                         then instRho lit.{kind=LDouble, value <- (++"D")} sigma.rho (Check rhoDouble)
-                                >>= return . Right       -- infer Double
+                                >>= strip       -- infer Double
                         else checkRho lit rhoInt
-                                >>= return . Right       -- infer Int
+                                >>= strip       -- infer Int
                 Meta Rigid{} -> fromInt
                 TApp _ _     -> fromInt             -- force type error unless Num             
-                default -> do
+                _            -> do
                     x <- checkRho lit rhoInt        -- fix unresolved to Int
-                    return (Right x)                -- or force type error
+                    strip x                         -- or force type error
     | kind == LDouble, isDWIM LDouble value, RhoTau _ taut <- sigma.rho = do
             g <- getST
             let tau = reduced taut g
             
             case tau of
                 TCon{pos, name}
-                    | name == rhoFloat.tau.name   = return (Right lit.{kind=LFloat, value <- (++"F")})
-                    | name == rhoDouble.tau.name  = return (Right lit.{kind=LDouble, value <- (++"D")})
+                    | name == rhoFloat.tau.name   = strip lit.{kind=LFloat, value <- (++"F")}
+                    | name == rhoDouble.tau.name  = strip lit.{kind=LDouble, value <- (++"D")}
                     | otherwise = fromDouble
                 Meta Rigid{} -> fromDouble
                 TApp _ _     -> fromDouble          -- force type error unless Real             
-                default -> do
+                _            -> do
                     x <- checkRho lit rhoDouble     -- fix unresolved to Double
-                    return (Right x)                -- or force type error
-    | kind == LDouble = checkRho lit rhoDouble >>= return . Right   -- no DWIM
-    | otherwise       = checkRho lit rhoInt    >>= return . Right   -- no DWIM
+                    strip x                         -- or force type error
+    | kind == LDouble = checkRho lit rhoDouble >>= strip   -- no DWIM
+    | otherwise       = checkRho lit rhoInt    >>= strip   -- no DWIM
     where
+        strip ∷ ExprT → StG (ExprT | ExprT)
+        strip x = pure . Right $ x.{typ ← fmap _.{rho ← _.{context = []}}}
         frmIntlit = nApp frmInt lit.{typ=Just sigInt}
         frmDbllit = nApp frmDbl lit.{typ=Just sigDouble}
         frmInt = Vbl{pos = pos.change VARID "fromInt", 
                      name = MName{tynm=num, base="fromInt"}, typ=Nothing}
         frmDbl = Vbl{pos= pos.change VARID "fromDouble",
                      name = MName{tynm=real, base="fromDouble"}, typ=Nothing}
-        fromInt    = checkRho frmIntlit sigma.rho >>= return . Right
-        fromDouble = checkRho frmDbllit sigma.rho >>= return . Right
+        fromInt    = checkRho frmIntlit sigma.rho.{context=[]} >>= strip
+        fromDouble = checkRho frmDbllit sigma.rho.{context=[]} >>= strip
 literalType _ x = return (Left x)
 
 

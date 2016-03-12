@@ -1,0 +1,300 @@
+{--
+    
+    Looks up quick check predicates in the given modules and tests them.
+
+    [Usage:] java -cp fregec.jar frege.tools.Quick [ option ... ] modulespec ...
+    
+    Options:
+    
+    -    -v      print a line for each predicate that passed
+    -    -n num  run _num_ tests per predicate, default is 100
+    -    -p pred1,pred2,... only test the given predicates
+    -    -x pred1,pred2,... do not test the given predicates
+    -    -l  just print the names of the predicates available.
+    
+    Ways to specify modules:
+    
+    - module  the module name (e.g. my.great.Module), will be lookup up in
+              the current class path.
+    - dir/    A directory path. The directory is searched for class files,
+              and for each class files an attempt is made to load it as if
+              the given directory was in the class path. The directory must
+              be the root of the classes contained therein, otherwise the
+              classes won't get loaded.
+    - path-to.jar A jar or zip file is searched for class files, and for each
+              class file found an attempt is made to load it as if the
+              jar was in the class path.
+    
+     The number of passed/failed tests is reported. If any test failed or other
+     errors occurred, the exit code will be non zero.
+     
+     The code will try to heat up your CPU by running tests on all available cores.
+     This should be faster on multi-core computers than running the tests
+     sequentially. It makes it feasible to run more tests per predicate.
+-}
+
+module frege.tools.Quick where
+
+import frege.java.lang.Reflect
+import frege.control.monad.State
+import Test.QuickCheckGen as QCG public(Gen)
+import Test.QuickCheck QC()
+import Test.QuickCheckProperty (Prop)
+-- import frege.lib.Random (StdGen, newStdGen)
+
+--- functionality relies on the absolute name of type 'QC.Gen'
+propName = TName{pack=Pack.new "frege.test.QuickCheckProperty", base="Prop"}
+genName  = TName{pack=Pack.new "frege.test.QuickCheckGen", base="Gen"}
+
+import  Compiler.enums.Flags as Compilerflags(WITHCP, IDEMODE)
+import  Compiler.types.Positions(Position)
+import  Compiler.types.NSNames(NSX)
+import  Compiler.types.Packs
+import  Compiler.types.QNames
+import  Compiler.types.Types
+import  Compiler.types.Symbols
+import  Compiler.types.Targets
+import  Compiler.types.Global as G hiding (Options)
+
+import  Compiler.common.CompilerOptions as CO(standardGlobal, theClassLoader)
+import  Compiler.common.Errors
+
+
+import frege.compiler.passes.Imp (importClass)
+import frege.compiler.Javatypes (forName)
+import frege.lib.Modules (zipWalk, dirWalk)
+
+import Data.TreeMap (values)
+import Data.Monoid
+import Data.Bits
+
+-- import Java.Util
+import Java.util.Zip
+-- import frege.control.Concurrent
+
+
+data Options = Opt {    list, verbose, excluded, detailed :: Bool, 
+                        ntimes :: Int, props :: [String],
+                        global :: Global }
+
+defaultOptions = Opt { verbose = false, list = false, excluded = false, detailed = false,
+                        props = [], ntimes = 100, global = undefined }
+
+data Counter = !Counter { passed, failed :: Int, aborted :: Bool }
+
+derive Eq Counter
+
+instance Monoid Counter where
+    mempty = Counter 0 0 false
+    mappend c1 c2 = Counter{passed  = c1.passed  +  c2.passed, 
+                            failed  = c1.failed  +  c2.failed,
+                            aborted = c1.aborted || c2.aborted}
+
+counterMconcat = QC.once (Counter.mempty == mconcat (replicate 1_000_000 mempty))
+
+testFailed = Counter {passed = 0, failed = 1, aborted = false}
+testPassed = Counter {passed = 1, failed = 0, aborted = false}
+testAborted =  Counter.mempty.{aborted = true}
+unAborted c
+    | Counter.aborted c = mempty
+    | otherwise         = c 
+
+main :: [String] -> IO Bool
+main [] = do
+    mapM_ stderr.println [
+        "usage: java -cp fregec.jar frege.tools.Quick [ options ] modules ...",
+        "",
+        "    Options:",
+        "       -v      verbose checks",
+        "       -vv     most detailed output, use for a single check",
+        "       -n num  each check will be running num times, default 100",
+        "       -p pred1,pred2,...      only check the named predicates",
+        "       -x pred1,pred2,...      do not check the predicates listed",
+        "       -l      list predicates available, do not check them",
+        "",
+        "    Modules can be specified in three ways:",
+        "      modulename      the Java class for this module must be on the class path.",
+        "      directory/      all modules that could be loaded if the given directory was",
+        "                      on the class path.",
+        "      path.jar        all modules in the specified JAR file",
+        ""
+        ]
+    return false
+
+
+
+main args = do
+    (options, modules) <- getOpt defaultOptions args
+    g <- standardGlobal >>= execStateT myTarget
+    results <- mapM (checkThing options.{global=g}) modules
+    let result = mconcat results
+    println ("Properties passed: " ++ show result.passed
+        ++ ", failed: " ++ show result.failed)
+    if (result.failed > 0 || result.aborted) 
+        then return false
+        else return true
+
+--- find the target this module was compiled for
+myTarget = do
+    g  ← getSTT
+    fp ← Imp.getFP (g.unpack pPreludeBase)
+    case fp of
+        Right (Just fp) → do
+            changeSTT _.{options ← _.{target = Target fp.jmajor fp.jminor}}
+        _ = do
+            liftIO (stderr.println "can't find target for PreludeBase???")
+            liftIO (System.exit 1) 
+
+getOpt :: Options -> [String] -> IO (Options, [String])
+getOpt options [] = return (options, [])   
+getOpt options ("-v":xs) = getOpt options.{verbose=true} xs
+getOpt options ("-vv":xs) = getOpt options.{detailed=true} xs
+getOpt options ("-l":xs) = getOpt options.{list=true}    xs
+getOpt options ("-n":num:xs) = 
+    case num.int of
+        Left _ -> do
+            main []
+            stderr.println("number expected instead of `" ++ num ++ "`")
+            getOpt options xs
+        Right n -> getOpt options.{ntimes = n} xs
+getOpt options ("-p":ps:xs) = getOpt options.{excluded=false, props=´,\s*´.splitted ps} xs
+getOpt options ("-x":ps:xs) = getOpt options.{excluded=true, props=´,\s*´.splitted ps} xs
+getOpt options (xss@´^-´ : xs) = do
+    main []
+    stderr.println("unknown flag `" ++ head xss ++ "`, ignored.")
+    getOpt options xs
+getOpt options xs = return (options, xs) 
+
+checkThing :: Options -> String -> IO Counter
+checkThing opts arg = do
+    f <- File.new arg
+    directory <- f.isDirectory
+    regular   <- f.isFile
+    
+    if directory || regular
+        then do
+            let silent = opts.global.{options <- G.Options.{flags <- flip BitSet.unionE IDEMODE}}
+            let gpath = silent.{options <- G.Options.{path  =  [arg], 
+                                                    flags <- flip BitSet.differenceE WITHCP}}
+            loader <- theClassLoader gpath.options  
+            let gldr  = gpath.{sub <- G.SubSt.{loader}}
+                gopts = opts.{global=gldr} 
+            packs <- if directory then dirWalk loader "" f 
+                         else ZipFile.new f >>= zipWalk loader
+            counts <- mapM (checkModule gopts) (map fst packs)
+            return (mconcat counts)
+            -- return true
+        else do
+            checkModule opts arg
+
+
+checkModule :: Options -> String -> IO Counter 
+checkModule opts pack = do
+    -- stderr.println ("checkModule: " ++ pack)
+    (res, newg) <- StateT.run (getProps pack) opts.global
+    
+    if newg.errors == 0 
+    then if opts.list then do
+            println (pack ++ ": " ++ joined ", " res)
+            return mempty
+        else checkProps opts pack res
+    else return testAborted
+
+--- import a package and extract all toplevel properties
+getProps pack = do
+    let p = Pack.new pack
+    importClass Position.null (NSX "Quick") p
+    g <- getSTT
+    case g.packages.lookup p of
+        Nothing -> do
+            when (g.errors > 0) printAndClearErrors
+            return []
+        Just env -> return [ sym.name.base |
+                sym@SymV{} <- values env,
+                ForAll _ RhoTau{context=[], tau} <- Just sym.typ,
+                TApp TCon{name=gen} TCon{name=prop} <- Just tau,
+                gen  == genName,
+                prop == propName 
+            ]
+
+
+checkProps :: Options -> String -> [String] -> IO Counter
+checkProps opts modul props = do
+        ec <- forName modul true opts.global.sub.loader
+        case ec of
+            Left notfound -> do
+                stderr.println (notfound.show)
+                return testAborted  
+            Right cl -> do
+                results <- mapM (checkField opts modul cl) props
+                return (mconcat results)
+    -- `catch` errors
+  where
+    errors :: Error -> IO Counter
+    -- errors exc = do
+    --     stderr.println ("Couldn't initialize module " ++ modul)
+    --     stderr.println exc.show
+    --     return testAborted
+    -- noSuchMethodError :: NoSuchMethodError -> IO Counter
+    errors err = do
+        stderr.println ("Couldn't initialize module " 
+            ++ modul ++ " (do you need to recompile that module?)")
+        stderr.println err.show
+        return testAborted
+{-- 
+    This does the magic.
+
+    We know that the type of the item is 'Gen' 'Prop' on the Frege level.
+    This will be compiled to something that is a TGen in Java terms.
+
+    Hence the cast is a no-op, and the native interface will believe 
+    our claim that the Lambda is a Property and will allow us to
+    use it just like any other 'Property'.
+-}
+native toGen "Quick.toGenImpl" :: Object -> IO (Gen Prop)
+
+native module where {
+    @SuppressWarnings("unchecked")
+    public static QuickCheckGen.TGen<
+                    QuickCheckProperty.TRose<
+                        QuickCheckProperty.TResult>> toGenImpl(Object it) {
+        // since Gen is data, it must implement Lazy
+        final Lazy<QuickCheckGen.TGen<
+                    QuickCheckProperty.TRose<
+                        QuickCheckProperty.TResult>>> prop
+            = (Lazy<QuickCheckGen.TGen<
+                    QuickCheckProperty.TRose<
+                        QuickCheckProperty.TResult>>>) it;
+        return prop.call(); 
+    } 
+}
+
+checkField :: Options -> String -> Class a -> String -> IO Counter
+checkField Opt{excluded=true, props} _ _ prop | prop `elem` props = return mempty
+checkField Opt{excluded=false,props} _ _ prop | not (null props), 
+                                                prop `notElem` props = return mempty
+-- either not excluded, or included, or no props given at all    
+checkField opts modul clas prop = do
+        fld <- clas.getDeclaredField prop
+        obj <- fld.get Nothing
+        p   <- toGen obj
+        when (opts.verbose) do print (modul ++ "." ++ prop ++ ": ")
+        result <- if opts.detailed
+            then QC.verboseCheckWithResult QC.stdArgs.{maxSuccess=opts.ntimes, chatty=opts.verbose} p
+            else QC.quickCheckWithResult QC.stdArgs.{maxSuccess=opts.ntimes, chatty=opts.verbose} p
+        when (not (QC.isSuccess result) && not opts.verbose) do
+            println (modul ++ "." ++ prop  ++ " FAILED")
+        return (if QC.isSuccess result then testPassed else testFailed)
+    `catch` exceptions
+    -- `catch` errors
+    -- ExceptionInInitializerError is passed to caller, so as to avoid getting it multiple times
+  where
+    exceptions :: Exception -> IO Counter
+    exceptions exc = do
+        stderr.println (exc.show ++ " while checking property " ++ modul ++ "." ++ prop)
+        return testFailed
+    errors :: Error -> IO Counter
+    errors exc = do
+        stderr.println (exc.show ++ " while checking property " ++ modul ++ "." ++ prop)
+        return testFailed
+

@@ -4,17 +4,31 @@ module frege.compiler.common.Trans where
 import  frege.Prelude  hiding(<+>)
 import  Data.TreeMap  as  TM(TreeMap, TreeSet, lookup, insert, keys, values, each, fromKeys, including, contains, union)
 import  Data.List (partitioned)
-import  frege.compiler.types.Positions
-import  frege.compiler.types.Tokens
-import  frege.compiler.types.QNames
-import  frege.compiler.types.Expression
-import  frege.compiler.types.Symbols
-import  frege.compiler.types.Global  as  G
-import  frege.compiler.Utilities  as  U(allourvars, allvars)
+import  Lib.PP(text, msgdoc)
 
+import  Compiler.enums.TokenID(VARID)
+import  Compiler.enums.SymState(Typechecked)
+import  Compiler.enums.CaseKind(CWhen)
+
+import  Compiler.classes.Nice(nice, nicer)
+
+import  Compiler.types.Positions
+import  Compiler.types.Tokens
+import  Compiler.types.QNames
+import  Compiler.types.Expression
+import  Compiler.types.Symbols
+import  Compiler.types.Types
+import  Compiler.types.Global  as  G
+
+import  Compiler.tc.Util as TCU()
+
+import  Compiler.Utilities  as  U(allourvars, allvars)
+
+import  Compiler.common.SymbolTable(enter)
 import  Compiler.common.Binders
 import  Compiler.types.Patterns
 import  Compiler.enums.Literals
+import  Compiler.common.Errors as E()
 -- import  Compiler.types.Expression
 
 {--
@@ -135,6 +149,16 @@ productCon (MName tname _) g = case g.findit tname of
         other -> error ("productCon " ++ tname.nice g ++ " is not a type")
 productCon _ _ = false
 
+{--
+ * [usage] @newtypeCon name g@
+ * [returns] *@true@* if @name@ names a constructor of a newtype in @g@,
+ *           *@false@* otherwise
+ * [requires] @name@ must name a member of a data type in @g@
+ -}
+newtypeCon (MName tname _) g = case g.findit tname of
+        Just (SymT {newt}) -> newt
+        other -> error ("productCon " ++ tname.nice g ++ " is not a type")
+newtypeCon _ _ = false
 
 {--
  * [usage] @patsComplete g [pat, ...]@
@@ -278,5 +302,140 @@ patsComplete g ps
                                 uncon (p:ps) = subpats p ++ ps
                                 uncon [] = undefined
                                 f n xs = recon (rec (take n xs) : drop n xs)
+
+
+
+
+classMethodOfInstMethod :: Position -> QName -> String -> StG Symbol
+classMethodOfInstMethod pos inst base = do
+    g <- getST 
+    case g.findit inst of
+        Just isym | SymI{clas} <- isym = case g.findit clas of
+            Just csym | SymC{supers} <- csym = do
+                let sym = head [ sym | c <- clas:supers, SymC{env} <- g.findit c,
+                            sym <- values env,
+                            sym.name.base == base ]
+                return sym
+            other -> E.fatal pos (text ("classMethodOfInstMethod: " ++ nice clas g ++ " not a type class."))
+        other -> E.fatal pos (text ("classMethodOfInstMethod: " ++ nice inst g ++ " not an instance."))
+
+
+{--
+    Eta expansion, applied to a value @x@ with function type
+    yields another expression @\\n -> x n@ with the same type.
+
+    This is done as long as the lambda body has still function type.
+
+    This will remove points free stype from definitions like
+
+    > sum = fold (+) 0
+
+    and will turn it into
+
+    > sum n = fold (+) 0 n
+
+    thus promoting fully satisfied applications as often as possible.
+
+    Eta expansion must be done after type check and should be done before strictness check.
+-}
+etaExpand :: Expr -> StG Expr
+
+etaExpand (lam@Lam {}) = do                 -- eta (\a -> x) = \a -> eta x
+            nex <- etaExpand lam.ex
+            stio lam.{ex=nex}
+
+etaExpand (x@Ann {}) = do                   -- eta (x :: y) = (eta x :: y)
+            nex <- etaExpand x.ex
+            stio x.{ex=nex}
+
+etaExpand x = case x.typ of                 -- all other expressions
+    Just (ForAll [] (RhoTau ctx tau))
+        | Just (farg, fret) <- tau.getFun = do
+            uniq <- uniqid
+            let var = "η" ++ show uniq
+                pos  = (getpos x).change VARID var
+                arg = ForAll [] (RhoTau [] farg)
+                res = RhoTau [] fret
+                sym = U.patLocal pos uniq var
+                app = App x (Vbl {pos, name=sym.name, typ = Just arg}) (Just (ForAll [] res))
+                pat = PVar {pos=pos, uid=uniq, var}
+                -- env = insert Nil pat.var (U.patLocal pos pat.var).{sid=uniq}
+            enter sym.{state=Typechecked, typ=arg}
+            body <- etaExpand app
+            stio  Lam {pat, ex=body, typ = Just (ForAll [] (RhoFun ctx arg res))}
+        | otherwise = stio x
+    Just (ForAll [] (RhoFun ctx arg res)) = do
+            uniq <- uniqid
+            sarg <- TCU.skolemise arg
+            let pos = (getpos x).change VARID name
+                name = "η" ++ show uniq
+                pat = PVar{pos=getpos x, uid=uniq, var=name}
+                sym = U.patLocal pos uniq name
+                iarg = ForAll [] (snd sarg)     -- Num t42#a => t42#a -> t42#a
+                app = App x (Vbl {pos, name=sym.name, typ = Just iarg}) (Just (ForAll [] res))
+            -- sym <- U.mkLocal pat
+            enter sym.{state=Typechecked, typ=arg}
+            body <- etaExpand app
+            stio  Lam {pat, ex=body, typ = x.typ}
+
+    Just sig = do
+        g <- getST
+        E.warn (getpos x) (msgdoc ("can't do eta expansion for an expression of type " ++ nice sig g))
+        E.hint (getpos x) (msgdoc ("try to write the surrounding binding in a eta expanded form"))
+        stio x
+    Nothing -> do
+        g <- getST
+        E.fatal (getpos x) (msgdoc ("eta expansion must be done after type check for "
+             ++ nice x g))
+        stio x
+
+
+
+--- a bit simpler than isSimple, as code duplication is avoided (no lambdas)
+isMeager :: Expr -> Bool
+isMeager (App a b _)     = isMeager a && isMeager b
+isMeager (Ifte a b c _)  = isMeager a && isMeager b && isMeager c
+isMeager (Ann {ex})      = isMeager ex
+isMeager (Vbl {pos})     = true
+isMeager (Lit {pos})     = true
+isMeager (Con {pos})     = true
+isMeager _               = false
+
+--- Check if a CAF is simple, which is the case if it contains only
+---  - literals
+---  - constructors
+---  - native functions or CAFs
+simpleCAF :: Global -> Bool -> Expr -> Bool
+simpleCAF g local Vbl{pos, name, typ}         = case g.findit name of
+    Just (sym@SymV{}) 
+        | Just _ <- sym.nativ   = true
+        | otherwise             = local || sym.depth == 0
+    other                       = false
+simpleCAF g local Con{pos, name, typ}         = true
+simpleCAF g local App{fun, arg, typ}          = simpleCAF g local fun && simpleCAF g local arg
+simpleCAF g local Lit{pos, kind, value, typ}  = true
+simpleCAF g local Let{env, ex, typ}           = false
+simpleCAF g local Lam{pat, ex, typ}           = true
+simpleCAF g local Ifte{cnd, thn, els, typ}    = simpleCAF g local cnd 
+                                            && simpleCAF g local thn
+                                            && simpleCAF g local els
+simpleCAF g local Mem{ex, member, typ}        = false     -- should not happen here
+simpleCAF g local Case{ckind, ex, alts, typ}  = false 
+                                          -- simpleCAF g ex && all (simpleCAF g . _.ex) alts
+simpleCAF g local Ann{ex, typ}                = simpleCAF g local ex
+
+
+{--
+    tell if an expression is just a literal, variable or constructor name
+ -}
+isAtomic Vbl {} = true
+isAtomic Lit {} = true
+isAtomic Con {} = true
+isAtomic _      = false
+
+
+--- true iff the expression is a guard case
+isCaseWhen (Case CWhen _ _ _) = true
+isCaseWhen _ = false
 
 

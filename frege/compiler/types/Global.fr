@@ -8,7 +8,7 @@ import  frege.data.TreeMap as TM(TreeMap, each)
 import  frege.java.Net(URLClassLoader)
 import  frege.control.monad.State  (State, StateT)
 
-import  frege.compiler.enums.Flags  as  Compilerflags(Flag, Flags)
+import  frege.compiler.enums.Flags  as  Compilerflags(Flag, Flags, isOn, isOff)
 import  frege.compiler.enums.TokenID(TokenID)
 import  frege.compiler.types.Positions
 import  frege.compiler.types.Tokens
@@ -17,7 +17,8 @@ import  frege.data.Bits  (BitSet.BitSet, BitSet.member, BitSet.union bitunion, B
 import  frege.compiler.types.NSNames
 import  frege.compiler.enums.Literals
 import  frege.compiler.types.JNames
-import  frege.compiler.types.JTypes
+import  frege.compiler.types.JTypes as OldJT()
+import  frege.compiler.types.AbstractJava as NewJT()
 import  frege.compiler.types.SNames
 import  frege.compiler.types.Packs
 import  frege.compiler.types.QNames
@@ -82,7 +83,7 @@ type Symtab = TreeMap String Symbol
 --- items that are created early and seldom changed later so that copying them all the time is costly
 data SubSt = !Sub {
     loader      :: URLClassLoader       --- class loader for access to imported classes
-    optab       :: TreeMap String TokenID  --- operator table
+    -- optab       :: TreeMap String TokenID  --- operator table
     toks        :: JArray Token         --- array of tokens returned from scanner
     idKind      :: TreeMap KeyToken IdInfo --- information about how id tokens got resolved
     packageDoc  :: Maybe String         --- documentation for this package
@@ -126,7 +127,9 @@ data GenSt = !Gen {
     consts  :: TreeMap (Literalkind, String) Int   --- constant table
     lambdas :: TreeMap Symbol (Maybe JName)        --- table of functions we need a FuncN for
     syminfo :: TreeMap Symbol SymInfo      --- cached information about symbols return/arg types
+    symi8   :: TreeMap Symbol SymInfo8     --- cached information about symbols return/arg types
     jimport :: TreeMap String Pack         --- packages we have a java import statement for, by base name
+    main    :: String                   --- bare name of the top level class, set in GenMeta
 }
 
 
@@ -147,7 +150,7 @@ data Global = !Global {
     --- true if and only if we are generating code for a top level item
     toplevel (g::Global)    = null g.genEnv
     -- make it look like all the items live in Global
-    optab (g::Global)       = g.sub.optab
+    -- optab (g::Global)       = g.sub.optab
     tRanges (g::Global)     = g.options.tRanges
     sourcePath ∷ Global → [String]
     sourcePath (g::Global)  = g.options.sourcePath
@@ -243,6 +246,10 @@ data Global = !Global {
     bound :: Global -> MetaTvT a -> Maybe Tau
     bound g (Flexi{uid}) = g.tySubst.lookupI uid
     bound g (Rigid{})   = Nothing
+    
+    --- tells if the target we are compiling for has lambda support
+    hasLambdaSupport ∷ Global → Bool
+    hasLambdaSupport g = g.options.target > java7  
 
 
 {--
@@ -281,26 +288,95 @@ primitiveTypes ∷ [String]
 primitiveTypes = ["byte", "short", "boolean", "char", "int", "long", "float", "double" ]
 
 
---- The names of certain classes in @java.lang@
-{-- If we have a package imported whose base name is one of this, we better do not
-    generate a java import statement for it and use it unqualified.
-    -}
-javaLangNames ∷ [String]
-javaLangNames = [
-    "Appendable", "AutoCloseable", "CharSequence", "Cloneable", "Comparable",
-    "Iterable", "Runnable", 
-    "Boolean", "Byte", 
-    "Character", "Class", "ClassLoader", "ClassValue", "Compiler",
-    "Double", "Enum", "Float",
-    "InheritableThreadLocal", "Integer",
-    "Long", "Math", "Number", "Object",
-    "Package", "Process", "ProcessBuilder",
-    "Runtime", "RuntimePermission",
-    "SecurityManager", "Short", "StackTraceElement", "StrictMath", 
-    "String", "StringBuffer", "StringBuilder", "System",
-    "Thread", "ThreadGroup", "ThreadLocal", "Throwable",
-    "Void", "Value"]
+{-- 
+    "Reserved" module names.
+    
+    If the last component of a module name equals a name of a class or interface in
+    @java.lang@ or @frege.run@ it will not be imported in the generated java code.
+    
+    This is so that we don't have to use the long names for classes that we need
+    all the time (think @Func@, @Integer@, @String@ etc.) just to avoid
+    name clashes with imported modules. 
+-}
+reservedNames = TM.fromKeys (snd javaLangNames
+                    ++ snd fregeRunNames
+                    ++ snd fregeRuntimeNames
+                    ++ targetNames
+                    ++ otherReserved)
 
+--- check if a module name is reserved
+isReserved m = case reservedNames.lookupS m of
+    Just _  → true
+    _       → false
+
+{--
+    The short name of some class name in a (Map fully-qualified-name short-name).
+
+    The names herein must be independent of the compilation target.
+-}
+shortClassName = TM.fromList [ (k ++ "." ++ n, n) | 
+            (k,ns)  ← [javaLangNames, fregeRunNames, fregeRuntimeNames, fregeRuntimePhantomNames ],
+            n       ← ns
+    ]
+
+--- Abbreviate a class name, if possible
+abbreviate ∷ Global → String → String
+abbreviate g k = case shortClassName.lookupS k of
+    Just s | g.gen.main != s    = s
+    _                           = k
+
+--- The name we must use for target dependent classes like Func, Lazy and Thunk that are used in the code generator.
+targetName ∷ Global → String → String
+targetName g s = if g.gen.main == s then
+                if g.hasLambdaSupport 
+                    then "frege.run8." ++ s
+                    else "frege.run7." ++ s
+            else s
+
+--- When a native name starts with @package.@ or @module.@, it will be replaced according to target
+substRuntime ∷ Global → String → String
+substRuntime g s
+    | g.hasLambdaSupport = s.replaceFirst ´^(package|module)\.´ "frege.run8."
+    | otherwise          = s.replaceFirst ´^(package|module)\.´ "frege.run7."
+
+
+javaLangNames,fregeRunNames, fregeRuntimeNames ∷ (String, [String])
+javaLangNames = (,) "java.lang" [
+    -- java.lang Interfaces
+    "Appendable", "AutoCloseable", "CharSequence", "Cloneable", "Comparable",
+    "Iterable", "Readable", "Runnable",
+    -- java.lang Classes
+    "Boolean", "Byte", "Character", "Class", "ClassLoader", "ClassValue",
+    "Compiler", "Double", "Enum", "Float", "InheritableThreadLocal", 
+    "Integer", "Long", "Math", "Number", "Object", "Package", "Process",
+    "ProcessBuilder", "Runtime", "RuntimePermission", "SecurityManager",
+    "Short", "StackTraceElement", "StrictMath", "String", "StringBuffer",
+    "StringBuilder", "System", "Thread", "ThreadGroup", "ThreadLocal",
+    "Throwable", "Void",
+    -- java.lang Exceptions & Errors (ommitted)
+    -- java.lang Annotations
+    "Deprecated", "FunctionalInterface", "Override", "SafeVarargs", 
+    "SuppressWarnings", ]
+
+--- The corresponding classes will be automatically imported in GenMeta
+fregeRunNames = (,) "frege.run" [
+    "Kind", "RunTM"
+    ]
+
+--- The corresponding classes will be automatically imported in GenMeta
+fregeRuntimeNames = (,) "frege.runtime" [
+     "Meta"
+    ]
+
+fregeRuntimePhantomNames = (,) "frege.runtime.Phantom" [ "RealWorld" ]
+
+--- The following will be imported as either @frege.run7.XXX@ or @frege.run8.XXX@,
+--- depending on the compilation target.
+targetNames = ["Func", "Lazy", "Thunk"]
+
+--- Other reserved names, see 'reservedNames'
+--- [@K@] the name of the nested class where constant expressions are kept.
+otherReserved = ["K"]
 
 --- avoid writing 'State' 'Global' all the time
 type StG = State Global
@@ -321,7 +397,7 @@ liftStG = State.promote
 {-- Convenience function for injecting an @a@ into ('StG').
     This is just 'StG.return' typed as @a -> State Global a@ -}
 stio :: a -> StG a
-stio !a = StG.return a
+stio !a = StG.pure a
 
 
 
@@ -446,12 +522,23 @@ tokens pos
     
     -}
 data SymInfo = SI {
-        returnJT    :: JType     --- the type delivered by a call to this function
-        argJTs      :: [JType]   --- declared argument java types
-        argSigs     :: [Sigma]   --- argument sigma types
-        retSig      :: Sigma     --- return sigma type
+        returnJT    :: OldJT.JType     --- the type delivered by a call to this function
+        argJTs      :: [OldJT.JType]   --- declared argument java types
+        argSigs     :: [Sigma]       --- argument sigma types
+        retSig      :: Sigma         --- return sigma type
     }
 
+{--
+    Information needed for generating function calls, etc.
+    (For new code generator.)
+    
+    -}
+data SymInfo8 = SI8 {
+        returnJT    :: NewJT.JType     --- the type delivered by a call to this function
+        argJTs      :: [NewJT.JType]   --- declared argument java types
+        argSigs     :: [Sigma]       --- argument sigma types
+        retSig      :: Sigma         --- return sigma type
+    }
 
 --- produce a unique number
 --- The numbers come out in not strictly ascending order so as to avoid rebalances of the trees
@@ -463,3 +550,5 @@ uniqid = do
 
 --- function used to make the numbers not strictly ascending/descending
 uniqfun = (1+) . (0x5555 .^.)
+
+

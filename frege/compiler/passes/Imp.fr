@@ -41,6 +41,7 @@
 
 package frege.compiler.passes.Imp where
 
+import frege.Prelude hiding (<+>)
 
 import Data.TreeMap as TM(TreeMap, keys, insert, each, values, lookup)
 import Data.List as DL(sortBy, zipWith4)
@@ -61,6 +62,7 @@ import  Compiler.types.Packs
 import  Compiler.types.ImportDetails
 import  Compiler.types.QNames
 import  Compiler.types.Types
+import  Compiler.types.Targets
 -- import  Compiler.types.Definitions(Expr)
 import  Compiler.types.SourceDefinitions
 import  Compiler.types.ConstructorField
@@ -78,7 +80,7 @@ import frege.compiler.Classtools    as CT()
 import frege.compiler.Utilities     as U()
 import frege.compiler.gen.Const
 
-import Lib.PP(msgdoc, text)
+import Lib.PP(msgdoc, text, <+>, <>, </>)
 
 
 
@@ -89,7 +91,6 @@ pass = do
             initenv g.thisPack
             g <- getSTT
             -- changeSTT Global.{sub <- _.{localSV = g.locals}}
-            liftStG (U.debugST TRACE2 (show (each g.namespaces)))
             return ("packages", length (keys g.packages))
     where
         initenv p
@@ -207,7 +208,7 @@ importHere (imp@ImpDcl {pos,imports}) = do
                 let old = g.unpack oldp
                 when (pack != oldp) do
                     E.error pos (msgdoc ("namespace `"
-                                        ++ NSName.unNS as ++ "` previously opend for `"
+                                        ++ NSName.unNS as ++ "` previously opened for `"
                                         ++ old ++ "`"))
                 when (pack == oldp) do
                     -- g <- getST
@@ -283,25 +284,26 @@ linkHere ns (item@Item {publik,name,members,alias=newn}) sym = do
     g <- getST
     E.logmsg TRACE2 pos (text ("linkHere: " ++ ns ++ "." ++ newn ++ ", vis =" ++ show vis
         ++ " ==> " ++  nice sym g))
-    case sym.name of
-        TName _ b
-            | newn == sym.name.base || conid = U.linkqvp (TName g.thisPack newn) sym vis pos
+    changeST Global.{sub <- SubSt.{
+        idKind <- insert (KeyTk pos.first) (Right sym.name)}}
+
+    let !errors = case sym.name of
+          TName _ b
+            | newn == sym.name.base || conid = linkqvp (TName g.thisPack newn) sym vis pos
             | otherwise = do
                 E.error pos (msgdoc ("Alias for " ++ nice sym g ++ " must be a type name, not `" ++ newn ++ "'"))
                 stio ()
-        _
-            | newn == sym.name.base || conid == conidOk = U.linkqvp (VName g.thisPack newn) sym vis pos
+          _
+            | newn == sym.name.base || conid == conidOk = linkqvp (VName g.thisPack newn) sym vis pos
             -- allow variables that link to constructors
-            | SymD{} <- sym, !conid = U.linkqvp (VName g.thisPack newn) sym vis pos 
+            | SymD{} <- sym, !conid = linkqvp (VName g.thisPack newn) sym vis pos 
             | otherwise = do
                 E.error pos (msgdoc ("Alias for " ++ nice sym g ++ " must be a "
                     ++ (if conidOk then "constructor" else "variable")
                     ++ " name, not  `" ++ newn ++ "'"))
                 stio ()
-    
-    changeST Global.{sub <- SubSt.{
-        idKind <- insert (KeyTk pos.first) (Right sym.name)}}
-    
+
+    errors 
     case sym of
         SymT {env}
             | Nothing <- members = do        -- link constructors also
@@ -434,43 +436,59 @@ importClassData pos why pack = do
         Right Nothing -> do
             liftStG $ E.error pos (msgdoc ("`" ++ clname ++ "` is not a frege module"))
             return Nothing
+        Right (Just fp)
+            | that <- Target  fp.jmajor fp.jminor,
+              thisTarget <- g.options.target,
+              (thisTarget <= java7) != (that <= java7) = do
+                liftStG $ E.error pos (text "cannot import" <+> text clname 
+                    </> (text "compiled for target " <+> text (show that) 
+                        <+> text (if that <= java7 
+                                        then "(without lambda support)" 
+                                        else "(with lambda support)")
+                        )
+                    </> (text "when the current target " <+> text (show thisTarget)
+                        <+> text (if thisTarget <= java7
+                                    then "hasn't lambda support."
+                                    else "has lambda support")) 
+                    )
+                return Nothing 
         Right (Just fp) -> do
             g <- getSTT
             let packs = [ Pack.new p | 
-                            p <- map fp.imps.elemAt (enumFromTo 0 (fp.imps.length-1)) ]
+                            p <- listFromArray fp.imps ]
             forM_ packs (importClass pos why)
             -- now everything is in place for making the new symtab
             changeSTT Global.{packages <- insert pack empty}
-            importFunctionPointers pack
+            -- importFunctionPointers pack
             -- tell why we imported this
             changeSTT _.{sub <- _.{packWhy <- insert pack why}}
             let -- itree = fold rebuildTau Tree.empty (enumFromTo 0 (fp.taus.length-1))
                 -- Relies on the property that there may be no forward references.
                 -- The function that builds it must guarantee this. see GenMeta.tauIndex
-                
+
                 -- Tau
                 tarray = arrayCache rebuildTau fp.taus.length
                 rebuildTau n t = tauFromA karray (ctTau fp.taus.[n]) t
                 nTau i = elemAt tarray i
-                
+
                 -- Kinds
                 karray = arrayCache rebuildKind fp.kinds.length
                 rebuildKind n arr = kindFromA (ctKind fp.kinds.[n]) arr
                 nKind i = elemAt karray i
                      
                 -- Rhos
-                saarr  = arrayMap ctSigma fp.sigmas
+                saarr  = genericArrayMap ctSigma fp.sigmas
                 rarray = arrayCache rebuildRho fp.rhos.length
                 rebuildRho n arr = rhoFromA karray tarray saarr (ctRho fp.rhos.[n]) arr
                 -- nRho i = elemAt rarray i
                 
                 
                 -- Sigmas
-                sarray = arrayMap (sigmaFromA karray rarray) saarr    
+                sarray = genericArrayMap (sigmaFromA karray rarray) saarr    
                 nSigma i = sarray.[i]
                 
                 -- Exprs
-                eaarr = arrayMap ctExpr fp.exprs
+                eaarr = genericArrayMap ctExpr fp.exprs
                 rbExpr :: Int -> Maybe (ExprD Global)
                 rbExpr 0 = Nothing
                 rbExpr ix = Just (exprFromA sarray eaarr eaarr.[ix])
@@ -483,7 +501,7 @@ importClassData pos why pack = do
                     name = rebuildQN sym.name,
                     typ = nSigma sym.typ,
                     kind = nKind sym.kind,
-                    vars = [ nTau varn | varn <- sym.vars]}
+                    vars = [ nTau varn | varn <- listFromArray sym.vars]}
                   where sym = elemAt fp.symas n
                         vis = if sym.publik then Public else Protected
                 rbSymV :: CT.SymVArr -> Int -> Symbol
@@ -494,8 +512,9 @@ importClassData pos why pack = do
                     anno = true, state = StrictChecked, exported = sym.expr != 0,
                     strsig = decodeS sym.stri,
                     depth = sym.depth, rkind = BitSet{set=fromInt sym.rkind},
-                    throwing = [ nTau tau | tau <- sym.throwing], 
+                    throwing = [ nTau tau | tau <- listFromArray sym.throwing], 
                     over = map rebuildQN (toList sym.over),
+                    gargs = map nTau (listFromArray sym.gargs),
                     op = if sym.op == 0 then NOP16 else from sym.op}
                   where sym = elemAt arr n
                         v = if sym.abst then Abstract else if sym.publik then Public else Protected
@@ -561,6 +580,7 @@ importClassData pos why pack = do
                     nativ = if sym.nativ == "" then Nothing else Just sym.nativ,
                     pur = sym.pur, newt = sym.newt, mutable = sym.mutable,
                     kind = nKind sym.kind,
+                    gargs = map nTau (listFromArray sym.gargs),
                     env  = empty}
                 rebuildTyp n = do
                     let sym = elemAt fp.symts n
@@ -608,7 +628,7 @@ preludeBasics = do
         -- sigmaRhoTau xs t = ForAll xs (RhoTau [] t)
     enter (SymT {name = unitT, typ=unitTy, env = empty, nativ = Nothing,
                 product = true, enum = true, pur = false, newt = false, mutable = false,
-                kind = KType,
+                kind = KType, gargs = [],
                 sid=0, pos=Position.null, vis=Public, doc=Just "Unit type"})
     enter (SymD {name = unitC, typ=unitTy, flds = [], cid = 0,
                 sid=0, pos=Position.null, vis=Public, doc=Just "Unit value",
@@ -631,14 +651,14 @@ preludeBasics = do
     -- tuples
     enter (SymT {name = listT, typ = listTy, env = empty, nativ = Nothing,
                 product = false, enum = false, pur = false, newt = false,
-                kind = Kind.unary, mutable = false,
+                kind = Kind.unary, mutable = false, gargs = [],
                 sid=0, pos=Position.null, vis=Public, doc=Just "list type"})
     enter (SymD {name = listNil, typ = listTy, flds = [], cid=0,
                 sid=0, pos=Position.null, vis=Public, doc=Just "empty list",
                 op = NOP16, strsig = U})
     enter (SymD {name = listCons, typ = consTy, cid=1,
                    flds = [ aField false (ForAll [] (RhoTau [] va)),
-                            aField false listTy],
+                            aField false (ForAll [] listRho)],
                    sid=0, pos=Position.null, vis=Public, doc=Just "list construction",
                    op = ROP4, strsig = U})
     enter (SymL {name = VName pPreludeBase "[]", alias = listNil,
@@ -652,7 +672,7 @@ preludeBasics = do
         funT  = TName pPreludeBase "->"
     enter (SymT {name = funT, typ = funTy, env = empty, nativ = Nothing,
                     product = false, enum = false, mutable = false,
-                    kind = Kind.fun,
+                    kind = Kind.fun, gargs = [],
                     pur = false, newt = false, sid=0, pos=Position.null, 
                     vis=Public, doc=Just "function"})
   where
@@ -678,7 +698,7 @@ preludeBasics = do
         enter (SymT {name = tupleT, typ = tupleSig, env = empty, nativ = Nothing,
                         product = true, enum = false, kind = Kind.kind n,
                         sid=0, pos=Position.null, vis=Public, doc=Just (show n ++ "-tuple"),
-                        pur = false, newt = false, mutable = false})
+                        pur = false, newt = false, mutable = false, gargs = []})
         enter (SymD {name = tupleC, typ = ForAll vks conRho, flds = flds, cid=0,
                         sid=0, pos=Position.null, vis=Public, doc=Just (show n ++ "-tuple constructor"),
                         op = NOP16, strsig = U})

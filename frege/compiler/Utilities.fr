@@ -1,6 +1,6 @@
 {- 
 
-    Copyright © 2011 - 2015, Ingo Wechsung
+    Copyright © 2011 - 2016, Ingo Wechsung
     All rights reserved.
 
     Redistribution and use in source and binary forms, with or
@@ -40,7 +40,7 @@
     Simple utility functions for the frege compiler
  -}
 
-package frege.compiler.Utilities
+module frege.compiler.Utilities
     where
 
 import frege.Prelude except (error, print, println, break, <+>)
@@ -50,7 +50,7 @@ import Data.List as DL(partitioned, sortBy, minimumBy)
 
 import Lib.PP(fill, break, pretty, text, nest, msgdoc, <+>, <>, DOCUMENT)
 
-import Compiler.enums.Flags 
+-- import Compiler.enums.Flags 
 import Compiler.enums.TokenID(TokenID)
 import Compiler.enums.RFlag(RState)
 import Compiler.enums.Visibility
@@ -61,7 +61,6 @@ import  Compiler.types.Positions
 import  Compiler.types.Tokens
 import  Compiler.types.Strictness
 import  Compiler.types.NSNames
-import  Compiler.types.JNames
 import  Compiler.types.SNames
 import  Compiler.types.Packs
 import  Compiler.types.QNames
@@ -71,91 +70,12 @@ import  Compiler.types.Symbols
 import  Compiler.types.Expression
 import  Compiler.types.Global as G
 import  Compiler.classes.Nice(Nice)
-import  Compiler.common.Mangle
 import  Compiler.common.Errors as E()
 import  Compiler.common.Resolve as R
 import  Compiler.instances.Nicer 
 import  Compiler.common.SymbolTable
 import  Compiler.common.Binders
-import  Compiler.common.Types as CT(tauRho)
-
-
---################### functions operating on the state ##############################
-{-- trace output from stateful computation -}
-debugST :: Flag -> String -> StG Bool
-debugST f s = do
-    g <- getST
-    return (debug f s g)
-
-
-{-- trace from anywhere -}
-debug :: Flag -> String -> Global -> Bool
-debug f s g = if isOn g.options.flags f
-    then traceLn (show f ++ ": " ++ s)
-    else false
-
-
-unflatx xs = unflat (reverse xs) where
-    unflat [(e,t)] = e
-    unflat ((h,t):es) = App (unflat es) h t
-    unflat [] = Prelude.error "unflat: cannot happen"
-
-
---- Get the variables in a pattern in the form of 'PVar's
---- This does not care about duplicates, but duplicates are forbidden anyway.
-patVars :: PatternT a -> [PatternT a]
-patVars = loop [] where
-    loop acc (p@PVar{})           = p:acc
-    loop acc PAt{pos,var,uid,pat} = loop nacc pat where nacc = PVar{pos,var,uid} : acc
-    loop acc PMat{uid,pos,var}    = PVar{pos,var,uid} : acc
-    loop acc p | p.{pat?}         = loop acc p.pat
-    loop acc PCon{pats}           = fold loop acc pats
-    loop acc PConFS{fields}       = fold loop acc (map snd fields)
-    loop acc _                    = acc
-
-
---- Get the variables in a pattern in the form of 'Local's
-patNames :: PatternT a -> [QName]
-patNames = loop [] where
-    loop acc (p@PVar{})           = Local p.uid p.var:acc
-    loop acc PAt{pos,var,uid,pat} = loop nacc pat where nacc = Local uid var : acc
-    loop acc PMat{uid,pos,var}    = Local uid var : acc
-    loop acc p | p.{pat?}         = loop acc p.pat
-    loop acc PCon{pats}           = fold loop acc pats
-    loop acc PConFS{fields}       = fold loop acc (map snd fields)
-    loop acc _                    = acc
-
-
-
---- get the 'Position' of a rho type
-rhoPos = Rho.getpos
-
---- get the 'Position' of a tau type
-tauPos = Tau.getpos
-
-
-{-- create a symbolic link to given qname -}
-linkq :: QName -> Symbol -> StG ()
-linkq from sym = linkqv from sym sym.vis
-
-
---- create a symbolic link to a given 'Symbol' with a given 'Visibility'
-linkqv :: QName -> Symbol -> Visibility -> StG ()
-linkqv from sym vis = do
-    g <- getST
-    E.logmsg TRACE3 sym.pos (text ("`" ++ from.nice g ++ "` link to " ++ sym.nice g))
-    enter (SymL {sid=0, pos=sym.pos, vis, -- doc=Nothing,
-                    name=from, alias=sym.name})
-
-
--- create a symbolic link to a given 'Symbol' with a given 'Visibility' and 'Position'
-linkqvp :: QName -> Symbol -> Visibility -> Position -> StG ()
-linkqvp from sym vis pos = do
-    g <- getST
-    E.logmsg TRACE3 pos (text ("`" ++ from.nice g ++ "` link to " ++ sym.nice g))
-    enter (SymL {sid=0, pos=pos, vis, -- doc=Nothing,
-                    name=from, alias=sym.name})
-
+import  Compiler.common.Types as CT
 
 --- Associate a java class name with a type
 nativeType nativ tname = do
@@ -205,7 +125,6 @@ findC qname = do
         Just sym -> E.fatal sym.pos (fill (break ("looked for class " ++ qname.nice g ++ ", found "
                                     ++ sym.nice g)))
         Nothing -> E.fatal Position.null (fill (break ("looked for class " ++ qname.nice g ++ ", found Nothing")))
-
 
 
 findI qname = do
@@ -275,7 +194,6 @@ freeTVnames :: [String] -> RhoT a -> [String]
 freeTVnames bound rho = keys (freeRhoTVars bound TreeMap.empty rho)
 
 
-
 freeRhoTVars bound collected (RhoFun ctx (ForAll bndleft rho1) rho2) =
     freeRhoTVars (map fst bndleft ++ bound) (freeRhoTVars bound ctxcoll rho2) rho1
         where ctxcoll = freeCtxTVars bound collected ctx
@@ -299,35 +217,6 @@ freeTauTVars bound collected (TApp a b)
 freeTauTVars _ collected _ = collected
 
 
---- note: type must not contain bound Metas
-substSigma :: TreeMap String (TauT t) ->  SigmaT t  -> SigmaT t
-substSigma t (ForAll bndrs rho) = ForAll bndrs (substRho t' rho)
-    where t' = fold TreeMap.delete t (map fst bndrs)
-
-
-substRho t (RhoFun ctx sig rho) = let
-            ctx' = map (substCtx t) ctx
-            sig' = substSigma t sig 
-            rho' = substRho t rho 
-        in (RhoFun ctx' sig' rho')
-substRho t (RhoTau ctx tau)  = RhoTau (map (substCtx t) ctx) (substTau t tau)
-
-
-
-substTau t (tau@TCon{})      = tau
-substTau t (TApp a b)        = TApp (substTau t a) (substTau t b)
-substTau t (typ@Meta _)      = typ     -- Meta must be unbound
-substTau t (typ@TVar {var})  = case TreeMap.lookupS t var of
-        Just tau -> tau
-        Nothing  -> typ
-substTau t (typ@TSig s) = TSig (substSigma t s)
-
-
-
-substCtx :: TreeMap String (TauT a) -> ContextT a -> ContextT a        
-substCtx t x  = x.{tau <- substTau t}
-
-
 --- return a list of constructors in this environment ordered by constructor number
 envConstructors :: Symtab -> [Symbol]
 envConstructors env = sortBy (comparing Symbol.cid) [ sy | (sy::Symbol) <- values env, sy.{cid?} ]
@@ -336,11 +225,11 @@ envConstructors env = sortBy (comparing Symbol.cid) [ sy | (sy::Symbol) <- value
 --- provide a new Position for a Pattern
 pPos newp (p@PCon{}) = do
     pats <- mapSt (pPos newp) p.pats
-    return p.{pats}
+    return p.{pats, pos=newp}
 pPos newp (p@PConFS{}) = do
     let ret (nm, pat) = do p <- pPos newp pat; return (nm, p)
     fields <- mapSt ret p.fields
-    return p.{fields}
+    return p.{fields, pos=newp}
 pPos newp (p@PAt{pos, var, pat}) = do
     npat ← pPos newp pat
     return p.{pat=npat, pos = newp.change VARID var}
@@ -427,7 +316,7 @@ vSym pos name = SymV {pos,
                     state=Unchecked,
                     strsig = Strictness.U, depth = 0, 
                     rkind = RState.empty,
-                    throwing = [], over = [], 
+                    throwing = [], over = [], gargs = [],
                     op = NOP16 }
 
 
@@ -648,7 +537,6 @@ sigmaAsTau (ForAll [] (r@RhoFun{})) | RhoTau [] t <- tauRho r  = Just t
 sigmaAsTau _ = Nothing
 
 
-
 forceTau sig = case (sigmaAsTau sig) of
     Just t  -> return t
     Nothing -> do
@@ -671,7 +559,7 @@ appTauSigmas tau sigs = foldM appTauSig tau sigs >>= return . tauAsSigma
             where 
                 noway = do
                     g <- getST
-                    E.error tau.pos (msgdoc ("illegal type argument  " ++ nicer sig g 
+                    E.error (getpos tau) (msgdoc ("illegal type argument  " ++ nicer sig g 
                         ++ " in type application of  " ++ nicer tau g
                         ++ ", forall types are not allowed here."))
                     return tau
@@ -686,7 +574,6 @@ symWarning warn sym msg = do
      case sym.doc of
         Just ´^\s*nowarn:´ -> return ()
         other -> warn sym.pos msg
-
 
 
 {- ################# functions introduced through Classes.fr ############## -}
@@ -902,7 +789,18 @@ copyExpr mbp t x = mapEx false (copy t) x where
         where
             npos = (fromMaybe v.pos mbp).change VARID v.name.base
     copy _ (x@Ann{}) = stio (Left x)        -- keep annotations!
-    copy _ x = stio (Left x)
+    copy _ x
+        | x.{pos?}, 
+          Just pos ← mbp 
+                    = pure (Left x.{pos = Pos{
+                            first = x.pos.first.{line=pos.first.line, 
+                                                 col=pos.first.col,
+                                                 offset=pos.first.offset}, 
+                            last = x.pos.last.{line=pos.last.line,
+                                                col=pos.last.col,
+                                                offset=pos.last.offset}}})
+
+        | otherwise = pure (Left x)
 
 
 --- copy a local symbol
@@ -1029,6 +927,7 @@ print x = do
     liftIO $ g.printer.print (display x)
     return ()
 
+
 println x = do
     g <- getSTT
     liftIO $ g.printer.println (display x)
@@ -1062,15 +961,6 @@ returnTypeN n rho = Prelude.error "returnTypeN: too many arguments"
 
 
 
-{--
-    make @RhoTau (TFun a b)@ into @RhoFun (RhoTau a) (unTau (RhoTau b))@
- -}
-unTau (RhoTau ctx fun)
-    | Just (a,b) <- fun.getFun = RhoFun ctx (ForAll [] (RhoTau [] a)) (unTau (RhoTau [] b))
-unTau (RhoFun ctx sig rho)     = RhoFun ctx sig                       (unTau rho)
-unTau rho = rho
-
-
 --- tell if a given type is a java type
 isJavaType (TCon {name}) = do
     sym <- findT name
@@ -1088,72 +978,12 @@ arity sym = case returnType (Symbol.typ sym).rho of
     (_, xs) -> length xs
 
 
-{--
- * [usage] @javaName g qname@
- * [return] a java identifier for the corresponding java object, if there is one
- * [requires] the named item must be in scope
- -}
-javaName :: Global -> QName -> JName
-javaName g (Local uid s) = JName "" (mangled s ++ "_" ++ show uid)
-
-javaName g qname = case g.findit qname of
-        Just sym -> case sym of
-            SymT {name} -> t "T" name
-            SymD {name = MName tname base} -> case g.findit tname of
-                Just (SymT {product,enum}) -> if enum
-                    then memberOf (t "T" tname) (mangled base)
-                    else if product
-                        then t "T" tname
-                        else memberOf (t "T" tname) ("D" ++ mangled base)
-                fail -> Prelude.error "javaName: tname is no SymT"
-            SymC {name} -> t "C" name
-            SymI {name} -> t "I" name
-            SymV {name = MName tname base} = case g.findit tname of
-                    Just (SymT {product=false,enum=false,newt=false,nativ=Nothing}) 
-                                      = memberOf (memberOf tjname "M") mbase
-                    Just (SymC {sid}) = memberOf (memberOf tjname "I") mbase
-                    otherwise         = memberOf tjname mbase
-                where tjname = javaName g tname
-                      mbase  = mangled sym.name.base
-            SymV {name = VName pname base}
-                | pname == g.thisPack   = JName jpack.base vbase
-                | hasJavaImport pname g = JName jpack.base vbase
-                | otherwise = memberOf jpack vbase
-                where 
-                    vbase = mangled sym.name.base
-                    jpack = g.packClass pname
-            other -> Prelude.error ("javaName: strange symbol " ++ nice sym g)
-        Nothing -> Prelude.error ("javaName: cannot findit " ++ nice qname g)
-    where
-        -- vid name = mangled name
-        t letter (TName pack base)
-            | pack == g.thisPack   = JName    ""                   (letter ++ mangled base)
-            | hasJavaImport pack g = JName    (g.packClass pack).base (letter ++ mangled base)
-            | otherwise            = memberOf (g.packClass pack)   (letter ++ mangled base)
-        t _ _ = Prelude.error "t: need a TName"
-
-
-{-- 
-    By convention, if the classname base of some package is unique among
-    all known packages, an import statement will be generated so that we can
-    use the package base name unqualified.
-
-    This is to avoid even more clutter in java code.
-    -}
-hasJavaImport :: Pack -> Global -> Bool    
-hasJavaImport p g = case g.gen.jimport.lookup ((g.packClass p).base) of
-    Just imported -> imported == p
-    otherwise     -> false
-
-
 isList (TApp (TCon {name = TName p "[]"}) ty) | p == pPreludeBase = Just ty
 isList _                                                          = Nothing
 
 
-
 isUnit (ty@TCon {name = TName p "()"}) | p == pPreludeBase = Just ty
 isUnit _                                               = Nothing
-
 
 
 isMaybe (TApp (TCon {name = TName p "Maybe"}) ty) | p == pPreludeBase = Just ty
@@ -1185,6 +1015,7 @@ isThrowable g ty = case instTauSym ty g of
                                      || "java.lang.Throwable" `elem` supersOfNativ x g
         other -> false
 
+
 {--
     > isClassMember sym = Just SymC{}
     If  @sym@ is a class member, return the class it belongs to,
@@ -1198,56 +1029,3 @@ isClassMember _ _ = Nothing
 
 
 -- sigma manipulation stuff
-{--
- * Unify 2 Sigmas
- *
- * The first one is a quantified type from some symbol table item.
- * The second one is the actual type of some expression and must be an instance
- * of the first one.
- *
- * > unifySigma (forall a b. Maybe a -> [b]) (Maybe Int -> [Float]) ==> [(a,Int), (b, Float)]
- -}
-unifySigma g (ForAll [] _) _ = empty
-unifySigma g s1 (ForAll _ rho) = unifyRho g empty s1.rho rho
-
-
-unifyRho :: Global -> TreeMap String Tau -> Rho -> Rho -> TreeMap String Tau
-unifyRho g t (rho1@RhoFun{}) rho2
-    | RhoFun{}      <- rho2       = result
-    | rfun@RhoFun{} <- unTau rho2 = unifyRho g t rho1 rfun
-    | otherwise                   = t           -- no match
-    where
-        result = unifyRho g t2 rho1.rho rho2.rho
-        t2     = unifyRho g t  rho1.sigma.rho rho2.sigma.rho
--- rho1 must be a RhoTau as the first clause catches all cases where it is a RhoFun
-unifyRho g t rho1 rho2
-    | RhoTau{}      <- rho2        = unifyTau   t  rho1.tau   rho2.tau
-    | rtau@RhoTau{} <- tauRho rho2 = unifyRho g t  rho1       rtau
-unifyRho g t _ _ = t
-
-
-
--- unifyTau :: Tree String (TauT δ) -> TauT α -> TauT δ -> Tree String (TauT δ)
-unifyTau t (TVar {var}) b = insert var b t
-unifyTau t (tau1@TApp a b) (tau2@TApp c d) = unifyApp a c
-    where
-        -- do not match unequals!
-        unifyApp TVar{} _ 
-            = unifyTau  (unifyTau  t a c) b d
-        unifyApp TCon{name=n1} TCon{name=n2}
-            | n1 == n2 = unifyTau  (unifyTau  t a c) b d
-            | otherwise = t
-        unifyApp (TApp x _) (TApp y _) = unifyApp x y
-        unifyApp _ _ = t
-unifyTau t _ _ = t
-
-
-{--
- * [usage] @sigmaInst sigma1 sigma2@
- * [returns] a list of 'Tau' types that are substituted for
- * the bounded variables of @sigma1@ in @sigma2@
- * which must be a valid substitution of the former (up to contexts).
- -}
-sigmaInst g sigma1 sigma2 = [ s | Just s <-  map (TreeMap.lookupS tree) (Sigma.vars sigma1) ]
-    where tree =  unifySigma g sigma1 sigma2
-

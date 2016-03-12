@@ -15,7 +15,7 @@
         copyright notice, this list of conditions and the following
         disclaimer in the documentation and/or other materials provided
         with the distribution. 
-        
+
         Neither the name of the copyright holder
         nor the names of its contributors may be used to endorse or
         promote products derived from this software without specific
@@ -100,11 +100,15 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type thenx           Token
 //%type elsex           Token
 //%type mbdot           Token
+//%type datakw          Bool
 //%type commata         Int
 //%type semicoli        Int
 //%type packagename     (String, Position)
 //%type packagename1    (String, Position)
 //%type nativename      String
+//%type rawnativename   String
+//%type nativespec      (String, Maybe [TauS])
+//%type gargs           [TauS]
 //%type nativepur       (Bool, Bool)
 //%type docs            String
 //%type opstring        String
@@ -130,7 +134,9 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type qconid          SName
 //%type tyname          SName
 //%type annoitem        Token
-//%type nativestart     Token
+//%type fitem           Token
+//%type jitem           String
+//%type methodspec      (Token, String, Maybe [TauS])
 //%type importspec      ImportItem
 //%type importspecs     [ImportItem]
 //%type memspec         ImportItem
@@ -234,6 +240,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type wheretokens     [Token]
 //%type typeclause      (Maybe TauS)
 //%type interfaces      [TauS]
+//%explain datakw       data or newtype
 //%explain typeclause   the type this module derives from
 //%explain interfaces   the interfaces this module implements
 //%explain mbdot        '.' or '•'
@@ -318,10 +325,15 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%explain wheredef     declarations local to a class, instance or type
 //%explain annoitems    a list of items to annotate
 //%explain annoitem     an annotated item
-//%explain nativestart  a native item
+//%explain fitem        the frege name of the native method
+//%explain jitem        a native item
+//%explain methodspec   a specification of a native item
 //%explain nativedef    a declaration of a native item
 //%explain impurenativedef    a declaration of a native item
 //%explain nativename   a valid java identifier
+//%explain rawnativename   a valid java identifier
+//%explain nativespec   a native generic type
+//%explain gargs        native generic type arguments
 //%explain nativepur    a native data type
 //%explain documentation documentation
 //%explain funhead      left hand side of a function or pattern binding
@@ -378,7 +390,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 %}
 
 %token VARID CONID QVARID QCONID QUALIFIER DOCUMENTATION
-%token PACKAGE IMPORT INFIX INFIXR INFIXL NATIVE DATA WHERE CLASS
+%token PACKAGE IMPORT INFIX INFIXR INFIXL NATIVE NEWTYPE DATA WHERE CLASS
 %token INSTANCE ABSTRACT TYPE TRUE FALSE IF THEN ELSE CASE OF DERIVE
 %token LET IN DO FORALL PRIVATE PROTECTED PUBLIC PURE THROWS MUTABLE
 %token INTCONST STRCONST LONGCONST FLTCONST DBLCONST CHRCONST REGEXP BIGCONST
@@ -401,24 +413,30 @@ package:
     packageclause ';' definitions               { \(a,d,p)\w\b     -> do {
                                                         changeST Global.{sub <- SubSt.{
                                                             thisPos = p}};
-                                                        YYM.return $ Program.Module (a,b,d) }}
+                                                        YYM.pure $ Program.Module (a,b,d) }}
     | packageclause WHERE '{' definitions '}'   { \(a,d,p)\w\_\b\_ -> do {
                                                         changeST Global.{sub <- SubSt.{
                                                             thisPos = p}};
-                                                        YYM.return $ Program.Module (a,b,d) }}
+                                                        YYM.pure $ Program.Module (a,b,d) }}
     | INTERPRET script {\_\d -> d}
     ;
 
 script:
     expr {\e -> do {
-                                YYM.return $ Program.Expression e}}
+                                YYM.pure $ Program.Expression e}}
     ;
 
 nativename:
+    rawnativename               { \r -> do { g <- getST; pure (substRuntime g r) }}
+    ;
+
+rawnativename:
       VARID                     { \t -> Token.value t }
     | CONID                     { \t -> Token.value t }
-    | VARID  '.' nativename     { \a\_\c -> Token.value a ++ "." ++ c }
-    | QUALIFIER  nativename     { \a\c   -> Token.value a ++ "." ++ c }
+    | PACKAGE                   { \t -> Token.value t }
+    | VARID    '.' rawnativename     { \a\_\c -> Token.value a ++ "." ++ c }
+    | PACKAGE  '.' rawnativename     { \a\_\c -> Token.value a ++ "." ++ c }
+    | QUALIFIER    rawnativename     { \a\c   -> Token.value a ++ "." ++ c }
     | STRCONST                  { \x -> let s = Token.value x; i = length s - 1 in substr s 1 i }
     ;
 
@@ -426,7 +444,7 @@ packagename1:
     CONID                       { \t     -> do {
                                                 changeST Global.{sub <- SubSt.{
                                                     idKind <- insert (KeyTk t) (Left())}};
-                                                YYM.return (Token.value t, yyline t) }}
+                                                YYM.pure (Token.value t, yyline t) }}
     | varidkw '.' packagename1  { \a\_\(c,p) -> (repljavakws (Token.value a) ++ "." ++ c,
                                                  (yyline a).merge p) }
     | QUALIFIER packagename1    { \a\(c,p)   -> (Token.value a ++ "." ++ c,
@@ -450,12 +468,12 @@ packageclause:
                                                     g <- getST;
                                                     changeST Global.{options = g.options.{
                                                         flags = setFlag g.options.flags INPRELUDE}};
-                                                    YYM.return (fst b, Just docu, snd b) }}
+                                                    YYM.pure (fst b, Just docu, snd b) }}
     | PROTECTED PACKAGE packagename         { \p\_\b   -> do {
                                                     g <- getST;
                                                     changeST Global.{options = g.options.{
                                                         flags = setFlag g.options.flags INPRELUDE}};
-                                                    YYM.return (fst b, Nothing, snd b) }}
+                                                    YYM.pure (fst b, Nothing, snd b) }}
     | packageclause words '(' qvarids ')'   { \p\vs\v\qs\_ -> do {
                                                      g <- getST;
                                                      let {clause = unwords vs};
@@ -465,7 +483,7 @@ packageclause:
                                                      };
                                                      changeST Global.{sub <- SubSt.{
                                                             toExport = qs}};
-                                                     YYM.return p;}
+                                                     YYM.pure p;}
                                                  }
     ;
 
@@ -612,11 +630,11 @@ import:
             when (Token.value a != "as") do
                 yyerror (yyline a) (show "as" ++ " expected instead of " ++ show (Token.value a))
             changeST Global.{sub <- SubSt.{idKind <- insert (KeyTk c) (Left()) }}
-            YYM.return ImpDcl {pos = snd p, pack = fst p, imports = l, as = Just (Token.value c)}
+            YYM.pure ImpDcl {pos = snd p, pack = fst p, imports = l, as = Just (Token.value c)}
         }
     | IMPORT packagename CONID importliste { \i\p\c\l -> do
             changeST Global.{sub <- SubSt.{idKind <- insert (KeyTk c) (Left()) }}
-            YYM.return ImpDcl {pos = snd p, pack = fst p, imports = l, as = Just (Token.value c)}
+            YYM.pure ImpDcl {pos = snd p, pack = fst p, imports = l, as = Just (Token.value c)}
         }
     ;
 
@@ -625,7 +643,7 @@ importliste:
     | varid '(' importspecs ')' { \v\_\is\_ -> do
             when ( v.value `notElem` [ "except", "excluding", "without", "außer", "ohne", "hiding" ]) do
                 yyerror (yyline v) (show "hiding" ++ " expected instead of " ++ show v.value)
-            YYM.return linkAll.{items=is}
+            YYM.pure linkAll.{items=is}
         }
     | '(' ')'               { \_\_    -> linkNone }
     | '(' importspecs ')'   { \_\is\_ -> linkNone.{items = is}  }
@@ -670,7 +688,7 @@ memspecs:
 alias:
     VARID
     | CONID
-    | operator              { \v -> do { op <- unqualified v; return op }} 
+    | operator              { \v -> do { op <- unqualified v; pure op }} 
     ;
 
 varid:   VARID
@@ -719,13 +737,13 @@ unop: '!' | '?' ;
 fixity:
       INFIX  INTCONST   { \f\i -> do
                                     t <- infixop (yyline i) NOP1 (Token.value i)
-                                    YYM.return (FixDcl {pos=Pos f i, opid=t, ops=[]}) }
+                                    YYM.pure (FixDcl {pos=Pos f i, opid=t, ops=[]}) }
     | INFIXL INTCONST   { \f\i -> do
                                     t <- infixop (yyline i) LOP1 (Token.value i)
-                                    YYM.return (FixDcl {pos=Pos f i, opid=t, ops=[]}) }
+                                    YYM.pure (FixDcl {pos=Pos f i, opid=t, ops=[]}) }
     | INFIXR INTCONST   { \f\i -> do
                                     t <- infixop (yyline i) ROP1 (Token.value i)
-                                    YYM.return (FixDcl {pos=Pos f i, opid=t, ops=[]}) }
+                                    YYM.pure (FixDcl {pos=Pos f i, opid=t, ops=[]}) }
     ;
 
 
@@ -766,12 +784,26 @@ nativedef:
     | impurenativedef
     ;
 
-nativestart:
-      NATIVE annoitem      { flip const }
-    | NATIVE operator      { \_\b  -> do unqualified b }
-    | NATIVE unop          { \_\b  -> b }
-    | NATIVE '-'           { \_\b  -> b }
+fitem:
+    annoitem 
+    | unop
+    | '-'
+    | operator              { \o -> do unqualified o }
     ;
+    
+jitem: 
+    nativename
+    | operator              { \o -> do unqualified o >>= pure . _.value }
+    | unop                  { Token.value }
+    ;
+    
+methodspec:
+      fitem jitem gargs     { \f\j\g -> (f,j,Just g) }
+    | fitem jitem           { \f\j -> (f,j,Nothing) }
+    | fitem gargs           { \f\g -> (f,Token.value f, Just g)  }
+    | fitem                 { \f   -> (f,Token.value f, Nothing) }
+    ;
+
 
 sigex: 
     sigma THROWS tauSC      { \a\_\c -> (a, c) }
@@ -784,24 +816,11 @@ sigexs:
     ;
 
 impurenativedef:
-    nativestart DCOLON sigexs
-                    { \item\col\t -> NatDcl {pos=yyline item, vis=Public, name=item.value,
-                                                meth=item.value, txs=t, isPure=false, 
+    NATIVE methodspec DCOLON sigexs { \_\(fr,jv,ga)\col\t ->
+                    NatDcl {pos=yyline fr, vis=Public, name=fr.value,
+                                                meth=jv, txs=t, isPure=false,
+                                                gargs = ga, 
                                                 doc=Nothing}}
-    | nativestart nativename DCOLON sigexs
-                    { \item\j\col\t -> NatDcl {pos=yyline item, vis=Public, name=item.value,
-                                                meth=j, txs=t, isPure=false, 
-                                                doc=Nothing}}
-    | nativestart operator   DCOLON sigexs
-                    { \item\o\col\t -> do {
-                            o <- unqualified o;
-                            YYM.return (NatDcl {pos=yyline item, vis=Public, name=item.value,
-                                                meth=o.value, txs=t, isPure=false, 
-                                                doc=Nothing})}}
-    | nativestart unop      DCOLON sigexs
-                    { \item\o\col\t -> NatDcl {pos=yyline item, vis=Public, name=item.value,
-                                                meth=Token.value o, txs=t, isPure=false, 
-                                                doc=Nothing}} 
     ;
 
 
@@ -829,14 +848,14 @@ mbdot:
                                         when (Token.value dot != "•") do
                                             yyerror (yyline dot)
                                                 ("'.' expected instead of " ++ show dot.value)
-                                        YYM.return dot
+                                        YYM.pure dot
                                     }
     ;
 
 rho:
     tapp EARROW rhofun               { \tau\t\rho -> do
                                         context <- tauToCtx tau
-                                        YYM.return (Rho.{context} rho)
+                                        YYM.pure (Rho.{context} rho)
                                      }
     | rhofun              
     ;
@@ -881,7 +900,6 @@ simpletype:
     tyvar
     | tyname            { \(tn::SName) -> TCon (yyline tn.id) tn}
     | '(' tau ')'       { \_\t\_ -> t }
-    // '(' sigma ')'     { \_\s\_ -> TSig s }
     | '(' tau ',' tauSC ')'
                         {\_\t\(c::Token)\ts\_ ->
                             let
@@ -923,15 +941,15 @@ simplekind:
                                 when  (w != "*") do
                                     yyerror (yyline star) 
                                             ("expected `*`, found `" ++ w ++ "`") 
-                                return KType
+                                pure KType
                             }
     | VARID                 { \v -> do
                                 let w = Token.value v
-                                if w == "generic" then return KGen
+                                if w == "generic" then pure KGen
                                 else do
                                     yyerror (yyline v) 
                                             ("expected `generic` instead of `" ++ w ++ "`")
-                                    return KType
+                                    pure KType
                             }
     | '(' kind ')'          { \_\b\_ -> b }
     ;
@@ -957,7 +975,7 @@ classdef:
     CLASS ccontext EARROW CONID tyvar wheredef {
         \_\ctxs\_\c\v\defs -> do
             sups <- classContext (Token.value c) ctxs (v::TauS).var
-            return ClaDcl{
+            pure ClaDcl{
                     pos = yyline c, 
                     vis = Public,
                     name = Token.value c,
@@ -973,7 +991,7 @@ classdef:
                     (yyerror (yyline kw) "classname missing after contexts")
                 when (SName.{ty?} cname)
                     (yyerror (yyline cname.id) "classname must not be qualified") 
-                return ClaDcl {pos, vis = Public, name=cname.id.value,
+                pure ClaDcl {pos, vis = Public, name=cname.id.value,
                                clvar = tau, supers = [],
                                defs, doc = Nothing}
             _ -> Prelude.error "fatal: empty ccontext (cannot happen)" 
@@ -1010,7 +1028,7 @@ insthead:
             Ctx{pos, cname, tau}:rest -> do
                 unless (null rest) 
                         (yyerror pos "classname missing after instance contexts")
-                return InsDcl {
+                pure InsDcl {
                     pos, vis = Public, clas = cname,
                     typ = ForAll [] (RhoTau [] tau),
                     defs = [],
@@ -1043,26 +1061,51 @@ nativepur:
     | NATIVE            { \_   -> (false, false) }
     ;
 
+nativespec:
+      nativename                { \x     ->  (x; Nothing) }
+    | nativename gargs          { \x\gs  ->  (x; Just gs) }
+    ;
+
+gargs:
+      '{' tauSC '}'             { \_\ts\_   -> ts }
+    | '{' '}'                   { \_\_      -> [] }
+    ;
+
+
 datainit:
-    DATA CONID '=' nativepur nativename {
-        \dat\d\docu\pur\jt -> JavDcl {pos=yyline d, vis=Public, name=Token.value d,
-                                    jclas=jt, vars=[], defs=[], 
+    DATA CONID '=' nativepur nativespec {
+        \dat\d\docu\pur\(jt,gargs) -> JavDcl {pos=yyline d, vis=Public, name=Token.value d,
+                                    jclas=jt, vars=[], defs=[],
+                                    gargs,  
                                     isPure = fst pur, isMutable = snd pur, 
                                     doc=Nothing}
     }
-    | DATA CONID dvars '=' nativepur nativename {
-        \dat\d\ds\docu\pur\jt -> JavDcl {pos=yyline d, vis=Public, name=Token.value d,
-                                    jclas=jt, vars=ds, defs=[], 
+    | DATA CONID dvars '=' nativepur nativespec {
+        \dat\d\ds\docu\pur\(jt,gargs) -> JavDcl {pos=yyline d, vis=Public, name=Token.value d,
+                                    jclas=jt, vars=ds, defs=[],
+                                    gargs, 
                                     isPure = fst pur, isMutable = snd pur,
                                     doc=Nothing}
     }
     | DATA CONID dvars '=' dalts {
         \dat\d\ds\docu\alts -> DatDcl {pos=yyline d, vis=Public, name=Token.value d,
-                                       vars=ds, ctrs=alts, defs=[], doc=Nothing}
+                                        newt = false,
+                                        vars=ds, ctrs=alts, defs=[], doc=Nothing}
     }
     | DATA CONID '=' dalts {
         \dat\d\docu\alts -> DatDcl {pos=yyline d, vis=Public, name=Token.value d,
-                                    vars=[], ctrs=alts, defs=[], doc=Nothing}
+                                        newt = false,
+                                        vars=[], ctrs=alts, defs=[], doc=Nothing}
+    }
+    | NEWTYPE CONID dvars '=' dalt {
+        \dat\d\ds\docu\alt -> DatDcl {pos=yyline d, vis=Public, name=Token.value d,
+                                        newt = true,
+                                        vars=ds, ctrs=[alt], defs=[], doc=Nothing}
+    }
+    | NEWTYPE CONID '=' dalt {
+        \dat\d\docu\alt -> DatDcl {pos=yyline d, vis=Public, name=Token.value d,
+                                        newt = true,
+                                        vars=[], ctrs=[alt], defs=[], doc=Nothing}
     }
     ;
 
@@ -1113,7 +1156,7 @@ contypes:
                                                     • toSig
                                         toSig (TSig s) = s
                                         toSig tau      = (ForAll [] . RhoTau []) tau
-                                    return (map field taus)
+                                    pure (map field taus)
                                 }
     ;
 
@@ -1161,7 +1204,7 @@ strictfldid:
 plainfldid:
     varid                       { \v -> do
                                     g <- getST
-                                    return (yyline v, v.value, Public, false)
+                                    pure (yyline v, v.value, Public, false)
                                 }
     ;
 
@@ -1197,11 +1240,11 @@ fundef:
     | funhead guards        { \(ex,pats)\gds -> fungds ex pats gds }
     | fundef wherelet       { \fdefs\defs ->
         case fdefs of
-            [fd@FunDcl {expr=x}] -> YYM.return [fd.{expr = nx}] where
+            [fd@FunDcl {expr=x}] -> YYM.pure [fd.{expr = nx}] where
                                 nx = Let defs x
             _ -> do
                 yyerror (head fdefs).pos ("illegal function definition, where { ... } after annotation?")
-                YYM.return fdefs
+                YYM.pure fdefs
     }
     ;
 
@@ -1209,7 +1252,7 @@ fundef:
 funhead:
     binex                           { \x -> do
                                             x <- funhead x
-                                            YYM.return x
+                                            YYM.pure x
                                     }
     ;
 
@@ -1236,7 +1279,7 @@ aeq: ARROW | '=';
 
 lcqual:
     gqual
-    | expr '=' expr                { \e\t\x -> do { (ex,pat) <- funhead e; YYM.return (Right (fundef ex pat x)) }}
+    | expr '=' expr                { \e\t\x -> do { (ex,pat) <- funhead e; YYM.pure (Right (fundef ex pat x)) }}
     | LET '{' letdefs '}'           { \_\_\ds\_ -> Right ds }
     ;
 
@@ -1361,7 +1404,7 @@ primary:
     | DO  '{' dodefs  '}'             { \d\_\defs\_   -> do mkMonad (yyline d) defs }
     | primary   '.' VARID             { \p\_\(v::Token) -> umem p v id}
     | primary   '.' operator          { \p\_\v -> do {v <- unqualified v;
-                                                    YYM.return (umem p v id)}}
+                                                    YYM.pure (umem p v id)}}
     | primary   '.' unop              { \p\_\v -> umem p v id}
     | qualifiers    '{' VARID '?' '}' { \q\_\(v::Token)\_\_ ->
                                             Vbl  (q v.{value <- ("has$" ++)}) }
@@ -1421,10 +1464,17 @@ term:
                                                                    (fromBase x.{tokid=CONID, value=tuple (1+length es)})
                                                                    )
                                                               (e:es)}
-    | '(' expr ';' exprSS ')'       { \a\e\(x::Token)\es\_ -> fold nApp (Vbl 
-                                                                   (fromBase x.{tokid=VARID, value="strictTuple" ++ show (1+length es)})
-                                                                    )
-                                                              (e:es)}
+    | '(' expr ';' exprSS ')'       { \a\e\(x::Token)\es\_ -> do
+                                            g <- getST
+                                            E.warn (yyline x) (PP.text "strict tuples are deprecated, use ',' to separate elements")
+                                            pure (
+                                                fold nApp 
+                                                    (Con 
+                                                        (fromBase x.{tokid=CONID, value=tuple (1+length es)})
+                                                        )
+                                                    (e:es)
+                                              )
+                                        }
     | '(' expr ')'                  { \_\x\_ -> Term x }
     | '[' ']'                       { \a\z ->  Con (fromBase z.{tokid=CONID, value="[]"})}
     | '[' exprSC ']'                { \b\es\z -> 
@@ -1451,9 +1501,9 @@ fields:
                                         if elemBy (using fst) a ls then do {
                                                 E.warn (yyline c) (msgdoc ("field `" ++ fst a
                                                     ++ "` should appear only once."));
-                                                YYM.return ls
+                                                YYM.pure ls
                                             } else
-                                                YYM.return (a:ls)
+                                                YYM.pure (a:ls)
                                     }
     | field ','                     { (const . single) }
     ;

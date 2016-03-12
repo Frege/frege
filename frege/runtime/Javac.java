@@ -19,14 +19,14 @@ public class Javac {
 		final JavaCompiler compiler =
 				fregeJavac == null || fregeJavac.startsWith("internal") ?
 					ToolProvider.getSystemJavaCompiler() : null;
-	    final StandardJavaFileManager fileManager = 
-	    		compiler == null ? null : compiler.getStandardFileManager(null, null, null);
-
+	    
 		StringBuilder sb = new StringBuilder();
 		for (String s : cmd) { sb.append(s); sb.append(" "); }
 		
-		if (compiler != null && fileManager != null) {
+		if (compiler != null) {
 			// use the internal compiler
+			final StandardJavaFileManager fileManager = 
+		    			compiler.getStandardFileManager(null, null, null);
 			int lastopt = cmd.length - 1;
 			while (cmd[lastopt].endsWith(".java")) lastopt--;
 			File[] files = new File[cmd.length-1-lastopt];
@@ -46,9 +46,10 @@ public class Javac {
 		    boolean success = task.call();
 		    try {
 				fileManager.flush();
+				fileManager.close();
 			} catch (IOException e) {
 				// what can we do here?
-				System.err.println(e.getMessage() + " while flushing javac file manager.");
+				System.err.println(e.getMessage() + " while flushing/closing javac file manager.");
 				return 1;
 			}
 		    return success ? 0 : 1;
