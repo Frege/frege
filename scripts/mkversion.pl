@@ -13,6 +13,7 @@ $version =~ s/-(\d+)-.*$/.$1/;
 $commit =~ s/\n/\\n/g;
 $commit =~ s/\r//g;
 $commit =~ s/"/\\"/g;
+$commit =~ s/<[^>]*>//;
 print <<XXX;
 -- automatically created with $0
 -- based on git describe
