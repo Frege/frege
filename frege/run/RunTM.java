@@ -100,4 +100,17 @@ public class RunTM {
 		if (v instanceof Integer) return ((Integer)v).intValue();
 		return 0;
 	}
+	
+	/** 
+	 * <p> Comamnd line arguments </p>
+	 * 
+	 * <p>When a Frege program is run by evaluating <b>main</b>, the command line
+	 * arguments will be saved here and can be retrieved with
+	 * the 'getArgs' function from System.Environment.
+	 * 
+	 * Note that when Frege code is invoked from elsewhere, the command line
+	 * arguments will be the empty array, unless reset through different means.
+	 * </p>
+	 */
+	public static String[] argv = new String[0];
 }
