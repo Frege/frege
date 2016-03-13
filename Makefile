@@ -21,6 +21,7 @@
 
 .SUFFIXES: .class .fr
 
+TARGET                = 1.8
 DOC                   = ../frege.github.com/doc
 BUILD                 = build
 BUILD6                = $(BUILD)6
@@ -55,10 +56,10 @@ FREGEC0  = $(FREGECJ) -prefix a -sp shadow:.  -target 1.7
 FREGEC1  = $(FREGE) afrege.compiler.Main -d $(BUILD) -hints -inline -prefix b
 
 #	compile final compiler with compiler2
-FREGEC2  = $(FREGE) bfrege.compiler.Main -d $(BUILD) -hints  -O
+FREGEC2  = $(FREGE) bfrege.compiler.Main -d $(BUILD) -hints  -O -target $(TARGET)
 
 #	final compiler
-FREGECC  = $(FREGE) frege.compiler.Main -d $(BUILD) -hints  -O
+FREGECC  = $(FREGE) frege.compiler.Main -d $(BUILD) -hints  -O -target $(TARGET)
 
 #	Prelude files in the order they must be compiled
 PRELUDE  = \
