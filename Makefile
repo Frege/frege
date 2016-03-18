@@ -42,9 +42,9 @@ JAVAC    = javac -encoding UTF-8
 YACC     = `which byacc || which byaccj || which pbyacc || false`
 JAVA     = java -Dfrege.javac=internal
 CP       = cp -pf
-RM       = rm -fr
+RM       = rm -rf
 MKDIR    = mkdir -p
-FREGE    = $(JAVA) -Xss4m -Xmx1800m -cp $(BUILD)
+FREGE    = /usr/bin/time -f "%E %Mk" $(JAVA) -Xss4m -Xmx2222m -cp $(BUILD)
 
 #	compile using the fregec.jar in the working directory
 FREGECJ  = $(FREGE) -jar fregec.jar -d $(BUILD) -hints
@@ -223,7 +223,7 @@ $(BUILD_FREGE_COMPILER)/Main.class: compiler2
 
 compiler2: compiler1
 	@echo "[1;42mMaking $@[0m"
-	( test -d $(BUILD_BFREGE) -a $(COMPF1)/Main.class -nt $(BUILD_BFREGE_COMPILER)/Main.class && $(RM) $(BUILD_BFREGE) ) || true
+	( test -d $(BUILD_BFREGE) -a $(BUILD_AFREGE_COMPILER)/Main.class -nt $(BUILD_BFREGE_COMPILER)/Main.class && $(RM) $(BUILD_BFREGE) ) || true
 	$(FREGEC1) -v -make frege.compiler.Main
 	@echo stage 2 compiler ready
 
