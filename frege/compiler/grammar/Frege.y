@@ -1062,8 +1062,8 @@ nativepur:
     ;
 
 nativespec:
-      nativename                { \x     ->  (x; Nothing) }
-    | nativename gargs          { \x\gs  ->  (x; Just gs) }
+      nativename                { \x     ->  (x, Nothing) }
+    | nativename gargs          { \x\gs  ->  (x, Just gs) }
     ;
 
 gargs:
