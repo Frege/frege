@@ -1,7 +1,9 @@
 /**
  * 
  */
-package frege.run7;
+package frege.run;
+
+import java.util.concurrent.Callable;
 
 
 /**
@@ -123,19 +125,7 @@ public class Concurrent {
      *  @return true
      * 
      */
-    final public static<A> boolean fork(final Func.U<Boolean, A> f) {
-    	final Thunk<A> it = Thunk.<A>shared(
-    			new Lazy<A>() {
-    	            public  A call() {
-    	                return f.apply(Thunk.lazyTrue).call();
-    	            }
-
-					@Override
-					public Thunk<A> asThunk() {
-						return null;
-					}}
-    		);
-
+    final public static<A> boolean fork(final Callable<A> it) {
         if (java.util.concurrent.ForkJoinTask.inForkJoinPool())
         	java.util.concurrent.ForkJoinTask.adapt(it).fork();
         else {
