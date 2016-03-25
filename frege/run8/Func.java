@@ -10,6 +10,9 @@ public class Func  {
     public default Func.U<𝓐, 𝓑> call() {
       return this;
     }
+    public default boolean isShared() {
+      return true;
+    }
   }
   @FunctionalInterface public interface B<𝓐, 𝓑, 𝓒> 
     extends Lazy<Func.B<𝓐, 𝓑, 𝓒>>, Kind.U<Func.B<𝓐, 𝓑, ?>, 𝓒>,
@@ -18,6 +21,9 @@ public class Func  {
     public Lazy<𝓒> apply(final Lazy<𝓐> a, final Lazy<𝓑> b) ;
     public default Func.B<𝓐, 𝓑, 𝓒> call() {
       return this;
+    }
+    public default boolean isShared() {
+      return true;
     }
   }
   @FunctionalInterface public interface T<𝓐, 𝓑, 𝓒, 𝓓> 
@@ -28,6 +34,9 @@ public class Func  {
     public Lazy<𝓓> apply(final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c) ;
     public default Func.T<𝓐, 𝓑, 𝓒, 𝓓> call() {
       return this;
+    }
+    public default boolean isShared() {
+      return true;
     }
   }
   @FunctionalInterface public interface Q<𝓐, 𝓑, 𝓒, 𝓓, 𝓔> 
@@ -41,6 +50,9 @@ public class Func  {
     ) ;
     public default Func.Q<𝓐, 𝓑, 𝓒, 𝓓, 𝓔> call() {
       return this;
+    }
+    public default boolean isShared() {
+      return true;
     }
   }
   @FunctionalInterface public interface V<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕> 
@@ -56,6 +68,9 @@ public class Func  {
     ) ;
     public default Func.V<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕> call() {
       return this;
+    }
+    public default boolean isShared() {
+      return true;
     }
   }
   @FunctionalInterface public interface VI<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖> 
@@ -75,6 +90,9 @@ public class Func  {
     public default Func.VI<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖> call() {
       return this;
     }
+    public default boolean isShared() {
+      return true;
+    }
   }
   @FunctionalInterface public interface VII<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗> 
     extends Lazy<Func.VII<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗>>,
@@ -93,6 +111,9 @@ public class Func  {
     ) ;
     public default Func.VII<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗> call() {
       return this;
+    }
+    public default boolean isShared() {
+      return true;
     }
   }
   @FunctionalInterface public interface VIII<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘> 
@@ -114,6 +135,9 @@ public class Func  {
     public default Func.VIII<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘> call() {
       return this;
     }
+    public default boolean isShared() {
+      return true;
+    }
   }
   @FunctionalInterface public interface IX<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙> 
     extends Lazy<Func.IX<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙>>,
@@ -134,6 +158,9 @@ public class Func  {
     ) ;
     public default Func.IX<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙> call() {
       return this;
+    }
+    public default boolean isShared() {
+      return true;
     }
   }
   @FunctionalInterface public interface X<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚> 
@@ -159,6 +186,9 @@ public class Func  {
     ) ;
     public default Func.X<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚> call() {
       return this;
+    }
+    public default boolean isShared() {
+      return true;
     }
   }
   @FunctionalInterface public interface XI<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛> 
@@ -198,6 +228,9 @@ public class Func  {
     ) ;
     public default Func.XI<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛> call() {
       return this;
+    }
+    public default boolean isShared() {
+      return true;
     }
   }
   @FunctionalInterface public interface XII<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜> 
@@ -244,6 +277,9 @@ public class Func  {
     ) ;
     public default Func.XII<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜> call() {
       return this;
+    }
+    public default boolean isShared() {
+      return true;
     }
   }
   @FunctionalInterface public interface XIII<
@@ -299,6 +335,9 @@ public class Func  {
     ) ;
     public default Func.XIII<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝> call() {
       return this;
+    }
+    public default boolean isShared() {
+      return true;
     }
   }
   @FunctionalInterface public interface XIV<
@@ -361,6 +400,9 @@ public class Func  {
     ) ;
     public default Func.XIV<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝, 𝓞> call() {
       return this;
+    }
+    public default boolean isShared() {
+      return true;
     }
   }
   @FunctionalInterface public interface XV<
@@ -432,6 +474,9 @@ public class Func  {
       𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝, 𝓞, 𝓟
     > call() {
       return this;
+    }
+    public default boolean isShared() {
+      return true;
     }
   }
   @FunctionalInterface public interface XVI<
@@ -517,6 +562,9 @@ public class Func  {
       𝓠
     > call() {
       return this;
+    }
+    public default boolean isShared() {
+      return true;
     }
   }
   @FunctionalInterface public interface XVII<
@@ -612,6 +660,9 @@ public class Func  {
       𝓠, 𝓡
     > call() {
       return this;
+    }
+    public default boolean isShared() {
+      return true;
     }
   }
   @FunctionalInterface public interface XVIII<
@@ -713,6 +764,9 @@ public class Func  {
       𝓠, 𝓡, 𝓢
     > call() {
       return this;
+    }
+    public default boolean isShared() {
+      return true;
     }
   }
   @FunctionalInterface public interface XIX<
@@ -819,6 +873,9 @@ public class Func  {
       𝓠, 𝓡, 𝓢, 𝓣
     > call() {
       return this;
+    }
+    public default boolean isShared() {
+      return true;
     }
   }
   @FunctionalInterface public interface XX<
@@ -939,6 +996,9 @@ public class Func  {
       𝓠, 𝓡, 𝓢, 𝓣, 𝓤
     > call() {
       return this;
+    }
+    public default boolean isShared() {
+      return true;
     }
   }
   @FunctionalInterface public interface XXI<
@@ -1080,6 +1140,9 @@ public class Func  {
       𝓠, 𝓡, 𝓢, 𝓣, 𝓤, 𝓥
     > call() {
       return this;
+    }
+    public default boolean isShared() {
+      return true;
     }
   }
   @FunctionalInterface public interface XXII<
@@ -1242,6 +1305,9 @@ public class Func  {
       𝓠, 𝓡, 𝓢, 𝓣, 𝓤, 𝓥, 𝓦
     > call() {
       return this;
+    }
+    public default boolean isShared() {
+      return true;
     }
   }
   @FunctionalInterface public interface XXIII<
@@ -1424,6 +1490,9 @@ public class Func  {
       𝓠, 𝓡, 𝓢, 𝓣, 𝓤, 𝓥, 𝓦, 𝓧
     > call() {
       return this;
+    }
+    public default boolean isShared() {
+      return true;
     }
   }
   @FunctionalInterface public interface XXIV<
@@ -1620,6 +1689,9 @@ public class Func  {
       𝓠, 𝓡, 𝓢, 𝓣, 𝓤, 𝓥, 𝓦, 𝓧, 𝓨
     > call() {
       return this;
+    }
+    public default boolean isShared() {
+      return true;
     }
   }
   @FunctionalInterface public interface XXV<
@@ -1830,6 +1902,9 @@ public class Func  {
       𝓠, 𝓡, 𝓢, 𝓣, 𝓤, 𝓥, 𝓦, 𝓧, 𝓨, 𝓩
     > call() {
       return this;
+    }
+    public default boolean isShared() {
+      return true;
     }
   }
   @FunctionalInterface public interface XXVI<
@@ -2055,6 +2130,9 @@ public class Func  {
       𝓠, 𝓡, 𝓢, 𝓣, 𝓤, 𝓥, 𝓦, 𝓧, 𝓨, 𝓩, Ω
     > call() {
       return this;
+    }
+    public default boolean isShared() {
+      return true;
     }
   }
   @SuppressWarnings("unchecked") final public static <𝓐, 𝓑> Func.U<

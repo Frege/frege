@@ -8,9 +8,13 @@ public class Func  {
    {
     public Lazy<𝓑> apply(final Lazy<𝓐> a) ;
     public Func.U<𝓐, 𝓑> call() ;
+    public boolean isShared() ;
     public static abstract class D<𝓐, 𝓑> implements Func.U<𝓐, 𝓑> {
       public Func.U<𝓐, 𝓑> call() {
         return this;
+      }
+      public boolean isShared() {
+        return true;
       }
       public Thunk<Func.U<𝓐, 𝓑>> asThunk() {
         return null;
@@ -24,9 +28,13 @@ public class Func  {
    {
     public Lazy<𝓒> apply(final Lazy<𝓐> a, final Lazy<𝓑> b) ;
     public Func.B<𝓐, 𝓑, 𝓒> call() ;
+    public boolean isShared() ;
     public static abstract class D<𝓐, 𝓑, 𝓒> implements Func.B<𝓐, 𝓑, 𝓒> {
       public Func.B<𝓐, 𝓑, 𝓒> call() {
         return this;
+      }
+      public boolean isShared() {
+        return true;
       }
       public Thunk<Func.B<𝓐, 𝓑, 𝓒>> asThunk() {
         return null;
@@ -41,9 +49,13 @@ public class Func  {
    {
     public Lazy<𝓓> apply(final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c) ;
     public Func.T<𝓐, 𝓑, 𝓒, 𝓓> call() ;
+    public boolean isShared() ;
     public static abstract class D<𝓐, 𝓑, 𝓒, 𝓓> implements Func.T<𝓐, 𝓑, 𝓒, 𝓓> {
       public Func.T<𝓐, 𝓑, 𝓒, 𝓓> call() {
         return this;
+      }
+      public boolean isShared() {
+        return true;
       }
       public Thunk<Func.T<𝓐, 𝓑, 𝓒, 𝓓>> asThunk() {
         return null;
@@ -61,9 +73,13 @@ public class Func  {
       final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d
     ) ;
     public Func.Q<𝓐, 𝓑, 𝓒, 𝓓, 𝓔> call() ;
+    public boolean isShared() ;
     public static abstract class D<𝓐, 𝓑, 𝓒, 𝓓, 𝓔> implements Func.Q<𝓐, 𝓑, 𝓒, 𝓓, 𝓔> {
       public Func.Q<𝓐, 𝓑, 𝓒, 𝓓, 𝓔> call() {
         return this;
+      }
+      public boolean isShared() {
+        return true;
       }
       public Thunk<Func.Q<𝓐, 𝓑, 𝓒, 𝓓, 𝓔>> asThunk() {
         return null;
@@ -85,11 +101,15 @@ public class Func  {
       final Lazy<𝓐> a, final Lazy<𝓑> b, final Lazy<𝓒> c, final Lazy<𝓓> d, final Lazy<𝓔> e
     ) ;
     public Func.V<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕> call() ;
+    public boolean isShared() ;
     public static abstract class D<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕> 
       implements Func.V<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕>
      {
       public Func.V<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕> call() {
         return this;
+      }
+      public boolean isShared() {
+        return true;
       }
       public Thunk<Func.V<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕>> asThunk() {
         return null;
@@ -114,11 +134,15 @@ public class Func  {
       final Lazy<𝓕> f
     ) ;
     public Func.VI<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖> call() ;
+    public boolean isShared() ;
     public static abstract class D<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖> 
       implements Func.VI<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖>
      {
       public Func.VI<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖> call() {
         return this;
+      }
+      public boolean isShared() {
+        return true;
       }
       public Thunk<Func.VI<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖>> asThunk() {
         return null;
@@ -145,11 +169,15 @@ public class Func  {
       final Lazy<𝓕> f, final Lazy<𝓖> g
     ) ;
     public Func.VII<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗> call() ;
+    public boolean isShared() ;
     public static abstract class D<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗> 
       implements Func.VII<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗>
      {
       public Func.VII<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗> call() {
         return this;
+      }
+      public boolean isShared() {
+        return true;
       }
       public Thunk<Func.VII<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗>> asThunk() {
         return null;
@@ -177,11 +205,15 @@ public class Func  {
       final Lazy<𝓕> f, final Lazy<𝓖> g, final Lazy<𝓗> h
     ) ;
     public Func.VIII<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘> call() ;
+    public boolean isShared() ;
     public static abstract class D<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘> 
       implements Func.VIII<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘>
      {
       public Func.VIII<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘> call() {
         return this;
+      }
+      public boolean isShared() {
+        return true;
       }
       public Thunk<Func.VIII<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘>> asThunk() {
         return null;
@@ -210,11 +242,15 @@ public class Func  {
       final Lazy<𝓕> f, final Lazy<𝓖> g, final Lazy<𝓗> h, final Lazy<𝓘> i
     ) ;
     public Func.IX<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙> call() ;
+    public boolean isShared() ;
     public static abstract class D<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙> 
       implements Func.IX<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙>
      {
       public Func.IX<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙> call() {
         return this;
+      }
+      public boolean isShared() {
+        return true;
       }
       public Thunk<Func.IX<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙>> asThunk() {
         return null;
@@ -247,11 +283,15 @@ public class Func  {
       final Lazy<𝓕> f, final Lazy<𝓖> g, final Lazy<𝓗> h, final Lazy<𝓘> i, final Lazy<𝓙> j
     ) ;
     public Func.X<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚> call() ;
+    public boolean isShared() ;
     public static abstract class D<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚> 
       implements Func.X<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚>
      {
       public Func.X<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚> call() {
         return this;
+      }
+      public boolean isShared() {
+        return true;
       }
       public Thunk<Func.X<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚>> asThunk() {
         return null;
@@ -299,11 +339,15 @@ public class Func  {
       final Lazy<𝓚> k
     ) ;
     public Func.XI<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛> call() ;
+    public boolean isShared() ;
     public static abstract class D<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛> 
       implements Func.XI<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛>
      {
       public Func.XI<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛> call() {
         return this;
+      }
+      public boolean isShared() {
+        return true;
       }
       public Thunk<Func.XI<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛>> asThunk() {
         return null;
@@ -358,11 +402,15 @@ public class Func  {
       final Lazy<𝓚> k, final Lazy<𝓛> l
     ) ;
     public Func.XII<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜> call() ;
+    public boolean isShared() ;
     public static abstract class D<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜> 
       implements Func.XII<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜>
      {
       public Func.XII<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜> call() {
         return this;
+      }
+      public boolean isShared() {
+        return true;
       }
       public Thunk<Func.XII<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜>> asThunk() {
         return null;
@@ -424,11 +472,15 @@ public class Func  {
       final Lazy<𝓚> k, final Lazy<𝓛> l, final Lazy<𝓜> m
     ) ;
     public Func.XIII<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝> call() ;
+    public boolean isShared() ;
     public static abstract class D<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝> 
       implements Func.XIII<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝>
      {
       public Func.XIII<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝> call() {
         return this;
+      }
+      public boolean isShared() {
+        return true;
       }
       public Thunk<
         Func.XIII<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝>
@@ -499,11 +551,15 @@ public class Func  {
       final Lazy<𝓚> k, final Lazy<𝓛> l, final Lazy<𝓜> m, final Lazy<𝓝> n
     ) ;
     public Func.XIV<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝, 𝓞> call() ;
+    public boolean isShared() ;
     public static abstract class D<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝, 𝓞> 
       implements Func.XIV<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝, 𝓞>
      {
       public Func.XIV<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝, 𝓞> call() {
         return this;
+      }
+      public boolean isShared() {
+        return true;
       }
       public Thunk<
         Func.XIV<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝, 𝓞>
@@ -582,11 +638,15 @@ public class Func  {
       final Lazy<𝓚> k, final Lazy<𝓛> l, final Lazy<𝓜> m, final Lazy<𝓝> n, final Lazy<𝓞> o
     ) ;
     public Func.XV<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝, 𝓞, 𝓟> call() ;
+    public boolean isShared() ;
     public static abstract class D<
       𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝, 𝓞, 𝓟
     > implements Func.XV<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝, 𝓞, 𝓟> {
       public Func.XV<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝, 𝓞, 𝓟> call() {
         return this;
+      }
+      public boolean isShared() {
+        return true;
       }
       public Thunk<
         Func.XV<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝, 𝓞, 𝓟>
@@ -677,6 +737,7 @@ public class Func  {
       final Lazy<𝓟> p
     ) ;
     public Func.XVI<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝, 𝓞, 𝓟, 𝓠> call() ;
+    public boolean isShared() ;
     public static abstract class D<
       𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝, 𝓞, 𝓟,
       𝓠
@@ -686,6 +747,9 @@ public class Func  {
         𝓟, 𝓠
       > call() {
         return this;
+      }
+      public boolean isShared() {
+        return true;
       }
       public Thunk<
         Func.XVI<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝, 𝓞, 𝓟, 𝓠>
@@ -789,6 +853,7 @@ public class Func  {
       𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝, 𝓞, 𝓟,
       𝓠, 𝓡
     > call() ;
+    public boolean isShared() ;
     public static abstract class D<
       𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝, 𝓞, 𝓟,
       𝓠, 𝓡
@@ -803,6 +868,9 @@ public class Func  {
         𝓟, 𝓠, 𝓡
       > call() {
         return this;
+      }
+      public boolean isShared() {
+        return true;
       }
       public Thunk<
         Func.XVII<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝, 𝓞, 𝓟, 𝓠, 𝓡>
@@ -915,6 +983,7 @@ public class Func  {
       𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝, 𝓞, 𝓟,
       𝓠, 𝓡, 𝓢
     > call() ;
+    public boolean isShared() ;
     public static abstract class D<
       𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝, 𝓞, 𝓟,
       𝓠, 𝓡, 𝓢
@@ -929,6 +998,9 @@ public class Func  {
         𝓟, 𝓠, 𝓡, 𝓢
       > call() {
         return this;
+      }
+      public boolean isShared() {
+        return true;
       }
       public Thunk<
         Func.XVIII<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝, 𝓞, 𝓟, 𝓠, 𝓡, 𝓢>
@@ -1047,6 +1119,7 @@ public class Func  {
       𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝, 𝓞, 𝓟,
       𝓠, 𝓡, 𝓢, 𝓣
     > call() ;
+    public boolean isShared() ;
     public static abstract class D<
       𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝, 𝓞, 𝓟,
       𝓠, 𝓡, 𝓢, 𝓣
@@ -1061,6 +1134,9 @@ public class Func  {
         𝓟, 𝓠, 𝓡, 𝓢, 𝓣
       > call() {
         return this;
+      }
+      public boolean isShared() {
+        return true;
       }
       public Thunk<
         Func.XIX<𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝, 𝓞, 𝓟, 𝓠, 𝓡, 𝓢, 𝓣>
@@ -1193,6 +1269,7 @@ public class Func  {
       𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝, 𝓞, 𝓟,
       𝓠, 𝓡, 𝓢, 𝓣, 𝓤
     > call() ;
+    public boolean isShared() ;
     public static abstract class D<
       𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝, 𝓞, 𝓟,
       𝓠, 𝓡, 𝓢, 𝓣, 𝓤
@@ -1207,6 +1284,9 @@ public class Func  {
         𝓟, 𝓠, 𝓡, 𝓢, 𝓣, 𝓤
       > call() {
         return this;
+      }
+      public boolean isShared() {
+        return true;
       }
       public Thunk<
         Func.XX<
@@ -1363,6 +1443,7 @@ public class Func  {
       𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝, 𝓞, 𝓟,
       𝓠, 𝓡, 𝓢, 𝓣, 𝓤, 𝓥
     > call() ;
+    public boolean isShared() ;
     public static abstract class D<
       𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝, 𝓞, 𝓟,
       𝓠, 𝓡, 𝓢, 𝓣, 𝓤, 𝓥
@@ -1377,6 +1458,9 @@ public class Func  {
         𝓟, 𝓠, 𝓡, 𝓢, 𝓣, 𝓤, 𝓥
       > call() {
         return this;
+      }
+      public boolean isShared() {
+        return true;
       }
       public Thunk<
         Func.XXI<
@@ -1554,6 +1638,7 @@ public class Func  {
       𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝, 𝓞, 𝓟,
       𝓠, 𝓡, 𝓢, 𝓣, 𝓤, 𝓥, 𝓦
     > call() ;
+    public boolean isShared() ;
     public static abstract class D<
       𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝, 𝓞, 𝓟,
       𝓠, 𝓡, 𝓢, 𝓣, 𝓤, 𝓥, 𝓦
@@ -1568,6 +1653,9 @@ public class Func  {
         𝓟, 𝓠, 𝓡, 𝓢, 𝓣, 𝓤, 𝓥, 𝓦
       > call() {
         return this;
+      }
+      public boolean isShared() {
+        return true;
       }
       public Thunk<
         Func.XXII<
@@ -1766,6 +1854,7 @@ public class Func  {
       𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝, 𝓞, 𝓟,
       𝓠, 𝓡, 𝓢, 𝓣, 𝓤, 𝓥, 𝓦, 𝓧
     > call() ;
+    public boolean isShared() ;
     public static abstract class D<
       𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝, 𝓞, 𝓟,
       𝓠, 𝓡, 𝓢, 𝓣, 𝓤, 𝓥, 𝓦, 𝓧
@@ -1780,6 +1869,9 @@ public class Func  {
         𝓟, 𝓠, 𝓡, 𝓢, 𝓣, 𝓤, 𝓥, 𝓦, 𝓧
       > call() {
         return this;
+      }
+      public boolean isShared() {
+        return true;
       }
       public Thunk<
         Func.XXIII<
@@ -1992,6 +2084,7 @@ public class Func  {
       𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝, 𝓞, 𝓟,
       𝓠, 𝓡, 𝓢, 𝓣, 𝓤, 𝓥, 𝓦, 𝓧, 𝓨
     > call() ;
+    public boolean isShared() ;
     public static abstract class D<
       𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝, 𝓞, 𝓟,
       𝓠, 𝓡, 𝓢, 𝓣, 𝓤, 𝓥, 𝓦, 𝓧, 𝓨
@@ -2006,6 +2099,9 @@ public class Func  {
         𝓟, 𝓠, 𝓡, 𝓢, 𝓣, 𝓤, 𝓥, 𝓦, 𝓧, 𝓨
       > call() {
         return this;
+      }
+      public boolean isShared() {
+        return true;
       }
       public Thunk<
         Func.XXIV<
@@ -2232,6 +2328,7 @@ public class Func  {
       𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝, 𝓞, 𝓟,
       𝓠, 𝓡, 𝓢, 𝓣, 𝓤, 𝓥, 𝓦, 𝓧, 𝓨, 𝓩
     > call() ;
+    public boolean isShared() ;
     public static abstract class D<
       𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝, 𝓞, 𝓟,
       𝓠, 𝓡, 𝓢, 𝓣, 𝓤, 𝓥, 𝓦, 𝓧, 𝓨, 𝓩
@@ -2246,6 +2343,9 @@ public class Func  {
         𝓟, 𝓠, 𝓡, 𝓢, 𝓣, 𝓤, 𝓥, 𝓦, 𝓧, 𝓨, 𝓩
       > call() {
         return this;
+      }
+      public boolean isShared() {
+        return true;
       }
       public Thunk<
         Func.XXV<
@@ -2487,6 +2587,7 @@ public class Func  {
       𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝, 𝓞, 𝓟,
       𝓠, 𝓡, 𝓢, 𝓣, 𝓤, 𝓥, 𝓦, 𝓧, 𝓨, 𝓩, Ω
     > call() ;
+    public boolean isShared() ;
     public static abstract class D<
       𝓐, 𝓑, 𝓒, 𝓓, 𝓔, 𝓕, 𝓖, 𝓗, 𝓘, 𝓙, 𝓚, 𝓛, 𝓜, 𝓝, 𝓞, 𝓟,
       𝓠, 𝓡, 𝓢, 𝓣, 𝓤, 𝓥, 𝓦, 𝓧, 𝓨, 𝓩, Ω
@@ -2501,6 +2602,9 @@ public class Func  {
         𝓟, 𝓠, 𝓡, 𝓢, 𝓣, 𝓤, 𝓥, 𝓦, 𝓧, 𝓨, 𝓩, Ω
       > call() {
         return this;
+      }
+      public boolean isShared() {
+        return true;
       }
       public Thunk<
         Func.XXVI<
