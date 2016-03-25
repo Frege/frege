@@ -50,7 +50,7 @@ FREGE    = /usr/bin/time -f "%E %Mk" $(JAVA) -Xss4m -Xmx2222m -cp $(BUILD)
 FREGECJ  = $(FREGE) -jar fregec.jar -d $(BUILD) -hints
 
 #	compile compiler1 with fregec.jar, uses prelude sources from shadow/
-FREGEC0  = $(FREGECJ) -prefix a -sp shadow:.  -target 1.7
+FREGEC0  = $(FREGECJ) -nocp -prefix a -sp shadow:.  -target 1.7
 
 #	compile compiler2 with compiler1
 FREGEC1  = $(FREGE) afrege.compiler.Main -d $(BUILD) -hints -inline -prefix b

@@ -7,7 +7,7 @@ package frege.run7;
  * <p>Java values and primitives can be put in boxes to make them lazy. This should use less
  * memory than {@link Thunk}s, and may also avoid auto(un)boxing for primitives.</p>
  * 
- * <p>The method {@link Thunk#box} will create appropriate boxes.</p>
+ * <p>The method {@link Thunk#lazy} will create appropriate boxes.</p>
  * @author ingo
  *
  */
@@ -22,6 +22,12 @@ public  class Box<R> implements Lazy<R> {
 	@Override
 	public R call() { return item; }
 	
+	@Override
+	public boolean isShared() { return true; }
+
+	@Override
+	public Thunk<R> asThunk() { return null; }
+
 	public static class B implements Lazy<Boolean> {
 
 		final boolean data;
@@ -34,6 +40,8 @@ public  class Box<R> implements Lazy<R> {
 		@Override
 		public Thunk<Boolean> asThunk() { return null; }
 		
+		@Override
+		public boolean isShared() { return true; }
 	}
 	
 	/**
@@ -53,6 +61,8 @@ public  class Box<R> implements Lazy<R> {
 		@Override
 		public Thunk<Byte> asThunk() { return null; }
 		
+		@Override
+		public boolean isShared() { return true; }
 	}
 
 	public static class S implements Lazy<Short> {
@@ -67,6 +77,8 @@ public  class Box<R> implements Lazy<R> {
 		@Override
 		public Thunk<Short> asThunk() { return null; }
 		
+		@Override
+		public boolean isShared() { return true; }
 	}
 	
 	public static class C implements Lazy<Character> {
@@ -79,6 +91,9 @@ public  class Box<R> implements Lazy<R> {
 
 		@Override
 		public Thunk<Character> asThunk() { return null; }
+		
+		@Override
+		public boolean isShared() { return true; }
 	}
 	
 	public static class I implements Lazy<Integer> {
@@ -91,6 +106,9 @@ public  class Box<R> implements Lazy<R> {
 
 		@Override
 		public Thunk<Integer> asThunk() { return null; }
+		
+		@Override
+		public boolean isShared() { return true; }
 	}
 
 	public static class L implements Lazy<Long> {
@@ -103,6 +121,9 @@ public  class Box<R> implements Lazy<R> {
 
 		@Override
 		public Thunk<Long> asThunk() { return null; }
+		
+		@Override
+		public boolean isShared() { return true; }
 	}
 
 	public static class F implements Lazy<Float> {
@@ -115,6 +136,9 @@ public  class Box<R> implements Lazy<R> {
 
 		@Override
 		public Thunk<Float> asThunk() { return null; }
+		
+		@Override
+		public boolean isShared() { return true; }
 	}
 	
 	public static class D implements Lazy<Double> {
@@ -127,9 +151,9 @@ public  class Box<R> implements Lazy<R> {
 
 		@Override
 		public Thunk<Double> asThunk() { return null; }
+		
+		@Override
+		public boolean isShared() { return true; }
 	}
-
-	@Override
-	public Thunk<R> asThunk() { return null; }
 
 }

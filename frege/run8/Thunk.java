@@ -246,6 +246,8 @@ public class Thunk<R> implements Lazy<R> {
 		}
 	}
 
+	@Override public boolean isShared() { return true; }
+	
 	/**
 	 * <p>tell if this Thunk is already evaluated.</p>
 	 * @return true, if it is already evaluated, false otherwise
@@ -286,14 +288,13 @@ public class Thunk<R> implements Lazy<R> {
 	/**
 	 * <p>Static form of the constructor</p>
 	 
-	 * <p>For   {@link Thunk}s, this is the identity.</p>
+	 * <p>For  {@link Lazy} values that are already shared, this is the identity.</p>
 	 * <p>Other {@link Lazy} instances are wrapped in a {@link Thunk}, this makes them shared.</p>
 	 * 
-	 * @return a {@link Thunk}, no matter what.
+	 * @return a shared version of the {@link Lazy} value.
 	 */
-	public final static<R> Thunk<R> shared(Lazy<R> v)   {
-		Thunk<R> that = v.asThunk();
-		return that == null ? new Thunk<R>(v) : that; 
+	public final static<R> Lazy<R> shared(Lazy<R> v)   {
+		return v.isShared() ? v : new Thunk<R>(v); 
 	}
 	
 	/**
@@ -343,7 +344,7 @@ public class Thunk<R> implements Lazy<R> {
 	 * double lazy ones. But this would dramatically complicate the code generator.</p> 
 	 */
 	@SuppressWarnings("unchecked")
-	public final static<R> Thunk<R> nested(Lazy<Lazy<R>> v) { 
+	public final static<R> Lazy<R> nested(Lazy<Lazy<R>> v) { 
 		return (Thunk<R>) new Thunk<Lazy<R>>(v); 
 	}
 	
