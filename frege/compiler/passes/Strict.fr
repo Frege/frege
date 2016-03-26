@@ -14,9 +14,7 @@ import  frege.compiler.enums.SymState
 import  frege.compiler.enums.Literals
 import  frege.compiler.enums.CaseKind
 import  frege.compiler.types.Positions
--- import  frege.compiler.types.Tokens
 import  frege.compiler.types.Strictness
-import  frege.compiler.types.Packs
 import  frege.compiler.types.QNames
 import  frege.compiler.types.Types
 import  frege.compiler.types.Patterns
@@ -441,57 +439,6 @@ lambdaStrictness (x@Lam {pat,ex}) = do
 lambdaStrictness x = stio []        -- not a lambda
 
 
-{--
- * [usage] @patternStrictness pat@
- * [returns] the 'Strictness' value for the 'Pattern' @pat@
- * [requires] The environment where the pattern bound variables are held must be active.
- * [see] 'productCon'
- *
- * A pattern is /strict/, if it is /refutable/ or if it contains strict variables.
- * A pattern is /refutable/ if the match can possibly fail. Variables and product constructor
- * applications that contain only irrefutable patterns are irrefutable.
- -}
-patternStrictness p = case p of
-        PVar {uid,var} -> do
-            g ← getST
-            v <- U.findV (Local uid var)
-            E.logmsg TRACES (getpos p) (
-                    text "patternStrictness: "
-                    <+> text (nicer p g)
-                    <+> text " :: "
-                    <+> text (nice v.typ g)
-                    <+> text (if v.typ.isFun then " function" else " no function")
-                )
-            if v.typ.isFun 
-            then do
-                unless v.strsig.isStrict do
-                    changeSym v.{strsig = S[]}
-                pure (S[]) 
-            else pure v.strsig
-        PAt {pos,uid,var,pat} -> do
-            ps <- patternStrictness pat
-            if ps == U then patternStrictness (PVar {pos,uid,var}) else stio ps
-        PUser {pat, lazy} -> do
-            ps <- patternStrictness pat
-            if lazy then case pat of
-                    PVar{uid, var} -> do
-                        v <- U.findV (Local uid var)
-                        when v.strsig.isStrict do changeSym v.{strsig = U}
-                        pure U
-                    other → pure U
-            else if ps == U then stio (S[]) else stio ps
-        PLit {pos} -> stio (S[])
-        PMat {pos} -> stio (S[])
-        PAnn {pat} -> patternStrictness pat
-        PCon {pos,qname,pats} = do
-                g <- getST
-                if not (productCon qname g) then stio (S[])
-                  else do
-                    ps <- mapSt patternStrictness pats
-                    -- if all (U==) ps then stio U else stio (S ps)
-                    return (S ps)
-        PConFS {pos} -> E.fatal pos (text ("patternStrictness: found PConFS")) -- not allowed anymore at this time
-
 
 
 
@@ -778,70 +725,5 @@ strictReturn notLazy sids x = strictness sids x where
                         ++ ", expr="  ++ show (isJust v.expr)))
                 _ -> error "appstr: no appropriate sym"
         appstr _ = error "appstr: []"
-
-
-{--
-    > caseComplete g (Case ...)
-    
-    Check if a normal @case@ statement covers all cases.
-    This is true if the patterns of the alternatives that 
-    have no 'openCaseWhen' expression are complete.
-    
-    If this is itself a 'CWhen' @case@, the result is the same as
-    for 'openCaseWhen'.
- 
--}
-caseComplete g x
-    | Case{ckind, ex, alts, typ} <- x = case ckind of
-        CWhen -> openCaseWhen g x
-        _ -> case partitioned (isNothing . openCaseWhen g . CAlt.ex) alts of
-                            -- use of head justified because there are no case
-                            -- statements without alternatives
-            ([], oalts) -> openCaseWhen g . CAlt.ex . head $ oalts
-            (ralts, _)  -> maybe Nothing (Just . Right) (patsComplete g (map CAlt.pat ralts))
-    | otherwise = Nothing   -- not a case?  
-
-
-{--
- * checks whether an expression is a case expression made from a guard (CWhen)
- * that has no trailing otherwise or irrefutable pattern match
- * If so, returns the expression or pattern that could cause the CaseWhen to fall through
- -}
-openCaseWhen :: Global -> Expr -> Maybe (Either Expr Pattern)
-openCaseWhen g (Case CWhen _ [alt1, alt2] _) = openCaseWhen g alt2.ex
-openCaseWhen g (e@Case CWhen x [alt1] _)
-    |  caseOtherwise g e              = Nothing           -- can't fall through
-    |  isPTrue alt1.pat, !(isXTrue x) = Just (Left x)
-    |  patternRefutable g alt1.pat    = Just (Right alt1.pat)
-    |  otherwise = openCaseWhen g alt1.ex
-openCaseWhen g (Let {ex}) = openCaseWhen g ex
-openCaseWhen _ _ = Nothing
-
-
-{--
- * tells if this is the pattern "true"
- -}
-isPTrue (PLit {kind=LBool, value="true"}) = true
-isPTrue p | p.{pat?} = isPTrue p.pat
-isPTrue _ = false
-
-
-{--
- * tells if this is the constant "true"
- -}
-isXTrue (Lit {kind=LBool, value="true"}) = true
-isXTrue (Vbl {name = VName p "otherwise"}) | pPreludeBase == p = true
-isXTrue _ = false
-
-
-{--
- * tells us if this is the "otherwise" case
- *  > case true of true -> notopencase
- -}
-caseOtherwise g (Case CWhen x [alt] _)
-    | isCaseWhen alt.ex = false
-    | isXTrue x && isPTrue alt.pat = true
-    | otherwise = !(patternRefutable g alt.pat)
-caseOtherwise _ _ = false
 
 
