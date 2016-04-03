@@ -1,0 +1,361 @@
+{--
+    Reads the Frege YACC grammar and outputs it in 
+    'https://www.w3.org/TR/REC-xml/#sec-notation the EBNF variant used by W3C'.
+    The resulting file can be processed by the 
+    'http://www.bottlecaps.de/rr/ui Railroad Diagram Generator'
+    to produce nice syntax diagrams.
+
+    > Grammar ::= Production* 
+    > Production  ::= NCName '::=' ( Choice | Link )  
+    > NCName  ::= [http://www.w3.org/TR/xml-names/#NT-NCName] 
+    > Choice  ::= SequenceOrDifference ( '|' SequenceOrDifference )*  
+    > SequenceOrDifference    ::= (Item ( '-' Item | Item* ))?    
+    > Item    ::= Primary ( '?' | '*' | '+' )?    
+    > Primary ::= NCName | StringLiteral | CharCode | CharClass | '(' Choice ')'  
+    > StringLiteral   ::= '"' [^"]* '"' | "'" [^']* "'"   /* ws: explicit */
+    > CharCode    ::= '#x' [0-9a-fA-F]+   /* ws: explicit */
+    > CharClass   ::= '[' '^'? ( Char | CharCode | CharRange | CharCodeRange )+ ']'   /* ws: explicit */
+    > Char    ::= [http://www.w3.org/TR/xml#NT-Char]  
+    > CharRange   ::= Char '-' ( Char - ']' ) /* ws: explicit */
+    > CharCodeRange   ::= CharCode '-' CharCode   /* ws: explicit */
+    > Link    ::= '[' URL ']' 
+    > URL ::= [^#x5D:/?#]+ '://' [^#x5D#]+ ('#' NCName)?  /* ws: explicit */
+    > Whitespace  ::= S | Comment 
+    > S   ::= #x9 | #xA | #xD | #x20  
+    > Comment ::= '/*' ( [^*] | '*'+ [^*/] )* '*'* '*/'   /* ws: explicit */
+-}
+module examples.Yacc2EBNF where
+
+import Data.MicroParsec as P()
+import Data.HashMap as Map()
+import Data.Iterators(StringIterator SI)
+import Data.List
+import Data.Graph
+import Lib.PP(DOCUMENT, text, <>, bracket)
+
+-- ---------------------------------------------------------------------------
+--      EBNF data types
+-- ---------------------------------------------------------------------------
+
+
+--- an EBNF grammar is a list of productions
+type EGram = [EProd]
+
+--- An EBNF production is a choice that defines a non-terminal.
+data EProd = EProd String EChoice
+
+--- An EBNF Choice is a nonempty list of alternative sequences
+data EChoice = EChoice [ESeq]
+
+--- An EBNF Sequence is a maybe empty list of EBNF Items
+data ESeq = ESeq [EItem]
+
+--- An EBNF Item is a possibly quantified EBNF Primary
+data EItem = EItem EPrimary (Maybe EQuantor)
+
+--- An EBNF Item can be quantified with ?, * or +
+data EQuantor = Many | Some | Optional
+
+--- An EBNF Primary is a name, a string, a character class or a 'EChoice'
+data EPrimary = EName String | ETerm String | Choice EChoice
+
+
+-- ---------------------------------------------------------------------------
+--      YACC data types
+-- ---------------------------------------------------------------------------
+
+--- terminals and non-terminals are the foundations of YACC grammars
+data Element = Terminal String | NonTerminal String
+
+deriving Eq Element
+
+--- a YACC rule is simply a possibly empty sequence of terminals and non-terminals 
+newtype YRule = YRule [Element]
+
+--- A YACC production is a list of alternative rules that defines a non-terminal.
+--- Invariant: at most one rule is empty
+data YProd = YProd String [YRule]
+
+--- A YACC grammar is a sequence of productions
+--- Each production defines a unique non terminal.
+type YGram = Map.HashMap String [YRule]
+
+-- ---------------------------------------------------------------------------
+--      Parsers
+-- ---------------------------------------------------------------------------
+
+--- Parse 'EProd'
+pEProd = do
+    P.skip (P.space <|> pComment)
+    p ← pName
+    P.symbol (P.expect ':')
+    alt ← pEChoice
+    P.symbol (P.expect ';')
+    pure (EProd p alt)
+
+--- Parse 'EPrimary'
+pEPrimary ∷ P.Parser Iterators.StringIterator Char EPrimary
+pEPrimary = 
+        EName <$> pName
+    <|> ETerm <$> (pChar <|> pStr <|> pClass)
+    <|> P.symbol do
+            Choice <$> P.between pLeft pRight pEChoice
+
+--- Parse 'EChoice'
+pEChoice ∷ P.Parser SI Char EChoice
+pEChoice = EChoice <$> P.sepBy1 pESeq pBar
+
+--- Parse 'ESeq'
+pESeq ∷ P.Parser SI Char ESeq
+pESeq = ESeq <$> P.many pEItem
+
+--- Parse 'EItem'
+pEItem ∷ P.Parser SI Char EItem
+pEItem = do
+    p ← pEPrimary
+    q ← P.optional pQuantor
+    pure (EItem p q)
+
+pQuantor ∷ P.Parser SI Char EQuantor
+pQuantor = P.symbol (
+            const Optional <$> P.expect '?' 
+        <|> const Many     <$> P.expect '*' 
+        <|> const Some     <$> P.expect '+')
+            
+--- parse (
+pLeft ∷ P.Parser SI Char Char
+pLeft = P.symbol (P.expect '(')
+
+--- parse )
+pRight ∷ P.Parser SI Char Char
+pRight = P.symbol (P.expect ')')
+
+--- An identifier
+pName ∷ P.Parser SI Char String
+pName = P.symbol $ _.match <$> P.match '^\w+'
+
+--- A sequence of characters enclosed in apostrophes (doesn't handle escape sequences)
+--- Also, assumes there is at least one character between the apostrophes
+pChar ∷ P.Parser SI Char String
+pChar = P.symbol $ do
+    P.expect '\''
+    inner ← packed <$> P.manyWhile (!= '\'')
+    P.expect '\''
+    pure ("'" ++ inner ++ "'") 
+
+--- A sequence of characters enclosed in quotes (doesn't handle escape sequences)
+pStr ∷ P.Parser SI Char String
+pStr = P.symbol do
+    P.expect '"'
+    inner ← packed <$> P.manyWhile (!= '"')
+    P.expect '"'
+    pure ("\"" ++ inner ++ "\"") 
+
+--- Parses an EBNF character class
+pClass ∷ P.Parser SI Char String
+pClass = P.symbol $ do
+            P.expect '['
+            inner ← packed <$> P.manyWhile (!=']')
+            P.expect ']'
+            pure ("[" ++ inner ++ "]")
+
+--- Parse a block enclosed in braces
+pBlock = do 
+            P.between (P.symbol (P.expect '{')) 
+                      (P.symbol (P.expect '}'))
+                      (P.skip (pBlock <|> const () <$> P.satisfy (\c → c != '{' && c != '}')))
+            P.spaces
+
+--- Parse an element
+pElement = NonTerminal <$> pName <|> Terminal <$> pChar
+
+--- Parse a rule
+pRule = YRule <$> P.many pElement <* P.optional pBlock 
+
+--- Parse a vertical bar
+pBar = P.symbol (P.expect '|')
+
+--- Parse a C-comment
+pComment = do
+        P.expect '/'
+        P.expect '*'
+        P.match  '^(?s).*?\*/'
+        P.spaces
+        pure ' '
+
+--- Parse a production
+pProd = do
+    P.skip (P.space <|> pComment)
+    p ← pName
+    P.symbol (P.expect ':')
+    alts ← P.sepBy1 pRule pBar
+    P.symbol (P.expect ';')
+    pure (YProd p alts)
+
+--- Parse a YACC grammar and enforce invariants
+grammar = do
+        prods ← P.some pProd
+        P.eos
+        collect empty prods
+    where
+        collect map [] = pure map
+        collect map (YProd p alts:ps) = do
+                let emptys = length [ () | YRule [] <- alts ]
+                case Map.lookup p map of
+                    Just _  → P.failure ("found multiple rules for non-terminal `" ++ p ++ "´")
+                    Nothing → if emptys > 1 
+                        then P.failure ("production `" ++ p ++ "´ has " ++ show emptys ++ " empty rules.")
+                        else collect (Map.insert p alts map) ps 
+
+--- Parse a list of EBNF prods
+ebnf = do
+    prods ← P.some pEProd
+    P.eos
+    pure prods 
+
+
+parseYacc :: String -> IO (Either String YGram)
+parseYacc src = do
+        content ← readFile src 
+        let lines = '\r?\n'.splitted content
+            yaccsep = '^%%\s*$'
+            ylines = takeWhile (!~ yaccsep) . drop 1 . dropWhile (!~ yaccsep) $ lines
+            yytext = SI.from (joined "\n" ylines)
+        stderr.printf "We have %d lines, %d of which are interesting.\n" (length lines) (length ylines)
+        -- mapM_ stderr.println (take 5 ylines)
+        case P.Parser.run grammar yytext of
+            (result, rest) -> do
+                when (length rest > 0) do stderr.println (SI.to (take 64 rest))
+                pure result
+    `catch` \(e::IOException) -> pure . Left $ e.show 
+
+parseEBNF :: String -> IO (Either String EGram)
+parseEBNF src = do
+        content ← readFile src 
+        let yytext = SI.from content
+        case P.Parser.run ebnf yytext of
+            (result, rest) -> do
+                when (length rest > 0) do stderr.println (SI.to (take 64 rest))
+                pure result
+    `catch` \(e::IOException) -> pure . Left $ e.show
+
+-- ---------------------------------------------------------------------------
+--      Functions to pretty print EBNF
+-- ---------------------------------------------------------------------------
+
+--- pretty print a 'EPrimary'
+ppPrim :: EPrimary → DOCUMENT
+ppPrim (EName s)   = text s
+ppPrim (ETerm s)   = text s
+ppPrim (Choice c)  = text "(" <> ppChoice c <> text ")"
+
+--- pretty print a 'EChoice'
+ppChoice :: EChoice → DOCUMENT
+ppChoice (EChoice seq)  = PP.spread . intersperse (text "|") . map ppSeq $ seq
+
+--- pretty print a 'ESeq'
+ppSeq ∷ ESeq → DOCUMENT
+ppSeq (ESeq items)  = PP.spread . map ppItem $ items
+
+--- pretty print a 'EItem'
+ppItem ∷ EItem → DOCUMENT
+ppItem (EItem prim quantified) = case quantified  of
+    Nothing →  ppPrim prim
+    Just q  →  case q  of
+        Many     →  ppPrim prim <> text "*"
+        Some     →  ppPrim prim <> text "+"
+        Optional →  ppPrim prim <> text "?"
+
+--- pretty print a 'EProd'
+ppProd ∷ EProd → DOCUMENT
+ppProd (EProd name choice) = text name PP.<+> text "::=" PP.<+> ppChoice choice
+
+--- pretty print a 'EGram'
+ppGram ∷ [EProd] -> DOCUMENT
+ppGram = PP.stack . map ppProd
+
+
+
+
+
+-- ---------------------------------------------------------------------------
+--      Functions to convert and manipulate grammars
+-- ---------------------------------------------------------------------------
+
+
+--- Make a dependency list for the yacc grammar
+deps :: YGram -> [(String, [String])]
+deps = fold (\ds\(name, rules) → (name, depsOf rules):ds) [] . Map.each
+    where
+        depsOf  = fold (++) [] . map ruleDep
+        ruleDep (YRule es) = [ s | NonTerminal s ← es ]
+
+--- Sort the dependencies topologically
+topo = concat . Graph.stronglyConnectedComponents . deps
+
+--- Convert a YYProd to EBNF
+convProd ∷ YProd → EProd
+convProd (YProd name rules) = EProd name choice
+    where
+        choice = EChoice (map convRule rules)
+
+convRule ∷ YRule → ESeq
+convRule (YRule elems) = ESeq (map convItem elems)
+
+convItem ∷ Element → EItem
+convItem (Terminal "'\\\\'") = EItem (ETerm "'\\'") Nothing
+convItem (Terminal s)        = EItem (ETerm s) Nothing
+convItem (NonTerminal s)     = EItem (EName s) Nothing
+
+optimize ∷ EProd → EProd
+optimize = id
+
+convert ∷ Map.HashMap String EProd → YProd → Map.HashMap String EProd
+convert map (yprod@YProd name rules) = Map.insert name eprod map
+    where
+        eprod = optimize (convProd yprod) 
+
+simple (EProd _ _) = false
+
+work ∷ YGram → Map.HashMap String EProd → DOCUMENT
+work ymap emap = PP.stack (ydocs ++ edocs)
+    where
+        order = topo ymap       -- dependency order, items with least dependencies first
+        oprod = [ YProd n rs | n ← order, rs ← Map.lookup n ymap ]
+        emap' = fold convert emap oprod -- full EBNF
+        ydocs = [ ppProd eprod | n ← reverse order,     -- print only non simple ones 
+                                    eprod ← Map.lookup n emap',
+                                    not (simple eprod) ]
+        edocs = [ ppProd eprod | eprod ← Map.values emap, not (simple eprod) ] 
+        
+{--
+    Run with
+    > java ... examples.Yacc2EBNF foo.y bar.ebnf
+
+    The first argument must name a YACC source.
+
+    The optional second argument names a file with additional syntax given in EBNF.
+    This can be used for specifying lexical syntax of your tokens, which makes sense
+    if your grammar has terminal symbols produced by a tokenizer/lexer.
+
+-}
+main args = case args of
+    [yaccsrc, ebnfsrc]
+        | '\.y$' ← yaccsrc, '\.ebnf' ← ebnfsrc = do
+            answer ← parseYacc yaccsrc 
+            case answer of
+                Right rules  → do
+                    stderr.printf "%s: parsed %d yacc rules\n" yaccsrc (Map.size rules)
+                    answer ← parseEBNF ebnfsrc
+                    case answer of
+                        Right eprods → do
+                            stderr.printf "%s: parsed %d EBNF rules\n" ebnfsrc (length eprods)
+                            let emap = fold (\m\(eprod@EProd p ch) -> Map.insert p eprod m) empty eprods
+                            PP.prettyIO stdout 1000 (work rules emap)
+                            stdout.println
+                        Left error → do
+                            stderr.println (ebnfsrc ++ ": " ++ error)
+                Left error   → stderr.println (yaccsrc ++ ": " ++ error)
+    _ -> do
+        stderr.println "Usage: java ... examples.Yacc2EBNF foo.y bar.ebnf"
+
