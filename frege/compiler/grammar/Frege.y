@@ -94,7 +94,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
  Note that you cannot lie about the type of nonterminal reduction rules.
  Note that types like "Maybe x" on the RHS must be given like so: (Maybe x)
  -}
-//%type package         ParseResult
+//%type module         ParseResult
 //%type script          ParseResult
 //%type varop           Token
 //%type thenx           Token
@@ -103,8 +103,8 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type datakw          Bool
 //%type commata         Int
 //%type semicoli        Int
-//%type packagename     (String, Position)
-//%type packagename1    (String, Position)
+//%type modulename     (String, Position)
+//%type modulename1    (String, Position)
 //%type nativename      String
 //%type rawnativename   String
 //%type nativespec      (String, Maybe [TauS])
@@ -115,7 +115,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type boundvar        String
 //%type operators       [String]
 //%type boundvars       [String]
-//%type packageclause   (String, Maybe String, Position)
+//%type moduleclause   (String, Maybe String, Position)
 //%type unop            Token
 //%type operator        Token
 //%type rop13           Token
@@ -247,10 +247,10 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%explain thenx        then branch
 //%explain elsex        else branch
 //%explain qualifiers   qualified type name
-//%explain package      a module
-//%explain packageclause a module clause
-//%explain packagename  a module name
-//%explain packagename1 a module name
+//%explain module      a module
+//%explain moduleclause a module clause
+//%explain modulename  a module name
+//%explain modulename1 a module name
 //%explain script      a frege script
 //%explain semicoli     the next definition
 //%explain varop        a variable or an operator
@@ -402,19 +402,19 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 %token SOMEOP
 %token INTERPRET
 
-%start package
+%start module
 
 %right      SOMEOP '-'
 %right      ARROW
 
 %%
 
-package:
-    packageclause ';' definitions               { \(a,d,p)\w\b     -> do {
+module:
+    moduleclause ';' definitions               { \(a,d,p)\w\b     -> do {
                                                         changeST Global.{sub <- SubSt.{
                                                             thisPos = p}};
                                                         YYM.pure $ Program.Module (a,b,d) }}
-    | packageclause WHERE '{' definitions '}'   { \(a,d,p)\w\_\b\_ -> do {
+    | moduleclause WHERE '{' definitions '}'   { \(a,d,p)\w\_\b\_ -> do {
                                                         changeST Global.{sub <- SubSt.{
                                                             thisPos = p}};
                                                         YYM.pure $ Program.Module (a,b,d) }}
@@ -440,19 +440,19 @@ rawnativename:
     | STRCONST                  { \x -> let s = Token.value x; i = length s - 1 in substr s 1 i }
     ;
 
-packagename1:
+modulename1:
     CONID                       { \t     -> do {
                                                 changeST Global.{sub <- SubSt.{
                                                     idKind <- insert (KeyTk t) (Left())}};
                                                 YYM.pure (Token.value t, yyline t) }}
-    | varidkw '.' packagename1  { \a\_\(c,p) -> (repljavakws (Token.value a) ++ "." ++ c,
+    | varidkw '.' modulename1  { \a\_\(c,p) -> (repljavakws (Token.value a) ++ "." ++ c,
                                                  (yyline a).merge p) }
-    | QUALIFIER packagename1    { \a\(c,p)   -> (Token.value a ++ "." ++ c,
+    | QUALIFIER modulename1    { \a\(c,p)   -> (Token.value a ++ "." ++ c,
                                                  (yyline a).merge p) }
     ;
 
-packagename:
-    packagename1                { \(nm, pos) -> (magicPack nm, pos) }
+modulename:
+    modulename1                { \(nm, pos) -> (magicPack nm, pos) }
     ;
 
 docs:
@@ -461,20 +461,20 @@ docs:
     | DOCUMENTATION semicoli docs       { \b\_\a -> (Token.value b ++ "\n" ++ a) }
     ;
 
-packageclause:
-    docs PACKAGE packagename                { \docu\p\b   -> (fst b, Just docu, snd b) }
-    | PACKAGE packagename                   { \p\b        -> (fst b, Nothing, snd b) }
-    | docs PROTECTED PACKAGE packagename    { \docu\p\_\b   -> do {
+moduleclause:
+    docs PACKAGE modulename                { \docu\p\b   -> (fst b, Just docu, snd b) }
+    | PACKAGE modulename                   { \p\b        -> (fst b, Nothing, snd b) }
+    | docs PROTECTED PACKAGE modulename    { \docu\p\_\b   -> do {
                                                     g <- getST;
                                                     changeST Global.{options = g.options.{
                                                         flags = setFlag g.options.flags INPRELUDE}};
                                                     YYM.pure (fst b, Just docu, snd b) }}
-    | PROTECTED PACKAGE packagename         { \p\_\b   -> do {
+    | PROTECTED PACKAGE modulename         { \p\_\b   -> do {
                                                     g <- getST;
                                                     changeST Global.{options = g.options.{
                                                         flags = setFlag g.options.flags INPRELUDE}};
                                                     YYM.pure (fst b, Nothing, snd b) }}
-    | packageclause words '(' qvarids ')'   { \p\vs\v\qs\_ -> do {
+    | moduleclause words '(' qvarids ')'   { \p\vs\v\qs\_ -> do {
                                                      g <- getST;
                                                      let {clause = unwords vs};
                                                      let {expected = ["inline" , "inline candidates"]};
@@ -624,15 +624,15 @@ letdefs:
 
 
 import:
-    IMPORT   packagename importliste
+    IMPORT   modulename importliste
         { \i\b\c -> ImpDcl {pos=snd b, pack=fst b, imports=c, as=Nothing} }
-    | IMPORT packagename VARID CONID importliste { \i\p\a\c\l -> do
+    | IMPORT modulename VARID CONID importliste { \i\p\a\c\l -> do
             when (Token.value a != "as") do
                 yyerror (yyline a) (show "as" ++ " expected instead of " ++ show (Token.value a))
             changeST Global.{sub <- SubSt.{idKind <- insert (KeyTk c) (Left()) }}
             YYM.pure ImpDcl {pos = snd p, pack = fst p, imports = l, as = Just (Token.value c)}
         }
-    | IMPORT packagename CONID importliste { \i\p\c\l -> do
+    | IMPORT modulename CONID importliste { \i\p\c\l -> do
             changeST Global.{sub <- SubSt.{idKind <- insert (KeyTk c) (Left()) }}
             YYM.pure ImpDcl {pos = snd p, pack = fst p, imports = l, as = Just (Token.value c)}
         }
@@ -719,7 +719,9 @@ qconid:  QUALIFIER QUALIFIER CONID  { \n\t\v     -> With2 n t v}
     ;
 
 varop:
-    VARID | unop
+    VARID 
+    | unop
+    ;
 
 qvarop:  QUALIFIER QUALIFIER varop  { \n\t\v     -> With2 n t v}
     |    QUALIFIER varop            { \t\v       -> With1 t v}
@@ -790,13 +792,13 @@ fitem:
     | '-'
     | operator              { \o -> do unqualified o }
     ;
-    
+
 jitem: 
     nativename
     | operator              { \o -> do unqualified o >>= pure . _.value }
     | unop                  { Token.value }
     ;
-    
+
 methodspec:
       fitem jitem gargs     { \f\j\g -> (f,j,Just g) }
     | fitem jitem           { \f\j -> (f,j,Nothing) }
@@ -1240,9 +1242,8 @@ fundef:
     | funhead guards        { \(ex,pats)\gds -> fungds ex pats gds }
     | fundef wherelet       { \fdefs\defs ->
         case fdefs of
-            [fd@FunDcl {expr=x}] -> YYM.pure [fd.{expr = nx}] where
-                                nx = Let defs x
-            _ -> do
+            [fd] | FunDcl {expr=x} <- fd = YYM.pure [fd.{expr = Let defs x}]
+            _ = do
                 yyerror (head fdefs).pos ("illegal function definition, where { ... } after annotation?")
                 YYM.pure fdefs
     }
