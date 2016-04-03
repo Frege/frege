@@ -41,6 +41,9 @@ import Lib.PP(DOCUMENT, text, <>, bracket)
 --- an EBNF grammar is a list of productions
 type EGram = [EProd]
 
+--- a map of EBNF productions
+type EMap = Map.HashMap String EProd
+
 --- An EBNF production is a choice that defines a non-terminal.
 data EProd = EProd String EChoice
 
@@ -307,15 +310,74 @@ convItem (Terminal "'\\\\'") = EItem (ETerm "'\\'") Nothing
 convItem (Terminal s)        = EItem (ETerm s) Nothing
 convItem (NonTerminal s)     = EItem (EName s) Nothing
 
-optimize ∷ EProd → EProd
-optimize = id
+--- Perform all optimizations on a production
+optimize ∷ EMap → EProd → EProd
+optimize map eprod = inline map eprod
 
-convert ∷ Map.HashMap String EProd → YProd → Map.HashMap String EProd
+--- Inline 'trivial' EBNFs
+inline ∷ EMap → EProd → EProd
+inline emap (EProd name choice) = EProd name (inlChoice choice)
+    where
+        inlChoice (EChoice alts) = EChoice (map inlSeq alts)
+        inlSeq    (ESeq items)   = flatSeq (ESeq (map inlItem items))
+        inlItem   (EItem p q)    = EItem (inlPrim p) q
+        inlPrim   (EName s)      = case Map.lookup s emap of
+                                    Just eprod | trivial eprod = Choice (theChoice eprod)
+                                    _ -> EName s
+        inlPrim  (Choice ch)     = Choice (inlChoice ch)
+        inlPrim   prime          = prime
+
+--- access the 'EChoice' in an 'EProd'
+theChoice ∷ EProd → EChoice
+theChoice (EProd _ c) = c
+
+--- Change
+--- > foo (bar baz) foo
+--- to 
+--- > foo bar baz foo
+--- Also
+--- > foo (bar)? baz
+--- becomes
+--- > foo bar? baz
+--- Note that quantified sequences with length > 1 cannot be simplified. 
+flatSeq ∷ ESeq → ESeq
+flatSeq (ESeq items) = ESeq (go items)
+    where
+        go [] = []
+        go ((item@EItem p q) : is) = case p  of
+            EName _ →  item : go is
+            ETerm _ →  item : go is
+            Choice (EChoice alts)
+                | [alt] ← alts  = case flatSeq alt of
+                    ESeq [EItem p' q'] →  case (q,q') of
+                        (Nothing, q'') → go (EItem p' q'' : is)
+                        (q'', Nothing) → go (EItem p' q'' : is)
+                        _              → item : go is -- something like (bar?)+, leave it at that
+                    ESeq list | not (null list), Nothing ← q = go (list ++ is)
+                              | otherwise = item : go is
+                | otherwise = item : go is
+
+
+
+convert ∷ EMap → YProd → EMap
 convert map (yprod@YProd name rules) = Map.insert name eprod map
     where
-        eprod = optimize (convProd yprod) 
+        eprod = optimize map (convProd yprod) 
 
-simple (EProd _ _) = false
+--- Check if a production is trivial
+--- The following are trivial
+--- > 'term1' | 'term2' | 'term3' | 'term4' | 'term5'       -- up to 5 alternative terminals
+--- > foo bar baz                                           -- up to 3 terminals nonterminals
+--- Quantifications allowed only in single sequence mode on simple items. No sub-choices allowed.
+trivial (EProd _ ch) = trivialCh ch
+    where
+        singleTerm (ESeq [EItem (ETerm _) Nothing]) = true
+        singleTerm _                                = false
+        simpleItem (EItem (ETerm _) _)        = true
+        simpleItem (EItem (EName _) _)        = true
+        simpleItem _                          = false
+        trivialCh (EChoice [ESeq items]) = length items < 4 && all simpleItem items 
+        trivialCh (EChoice seqs)  = length seqs > 0 && length seqs < 6 && all singleTerm seqs 
 
 work ∷ YGram → Map.HashMap String EProd → DOCUMENT
 work ymap emap = PP.stack (ydocs ++ edocs)
@@ -325,8 +387,8 @@ work ymap emap = PP.stack (ydocs ++ edocs)
         emap' = fold convert emap oprod -- full EBNF
         ydocs = [ ppProd eprod | n ← reverse order,     -- print only non simple ones 
                                     eprod ← Map.lookup n emap',
-                                    not (simple eprod) ]
-        edocs = [ ppProd eprod | eprod ← Map.values emap, not (simple eprod) ] 
+                                    not (trivial eprod) ]
+        edocs = [ ppProd eprod | eprod ← Map.values emap, not (trivial eprod) ] 
         
 {--
     Run with
