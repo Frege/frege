@@ -418,12 +418,9 @@ module:
                                                         changeST Global.{sub <- SubSt.{
                                                             thisPos = p}};
                                                         YYM.pure $ Program.Module (a,b,d) }}
-    | INTERPRET script {\_\d -> d}
-    ;
-
-script:
-    expr {\e -> do {
-                                YYM.pure $ Program.Expression e}}
+    | '{' definitions '}'                       { \p\d\_ -> do {
+                                                    changeST Global.{sub <- SubSt.{thisPos = yyline p}};
+                                                    YYM.pure $ Program.Module ("Main", d, Nothing); }}
     ;
 
 nativename:
