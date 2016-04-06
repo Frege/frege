@@ -31,50 +31,114 @@ import Data.HashMap as Map()
 import Data.Iterators(StringIterator SI)
 import Data.List
 import Data.Graph
-import Lib.PP(DOCUMENT, text, <>, bracket)
+
 
 -- ---------------------------------------------------------------------------
 --      EBNF data types
 -- ---------------------------------------------------------------------------
 
+--- Data type for extended Backus-Naur Form (EBNF) rules.
+--- The problem with EBNF is that nonsensical expressions can be built, like
+---     > (foo? | bar?)+
+--- In the same way, illegal (or, at least, undesirable) EBNF expressions can be build.
+--- The function 'normalize' can be used to flat-out unnesseray nested expressions like:
+--- > (a | (b|c) | d)   ==> (a|b|c|d)
+--- > (a (b c) d)       ==> (a b c d)
+--- > (a||b)            ==> (a | b)?
+  
+data EBNF = Alt {elems :: [EBNF] }      --- alternatives, normally not empty
+          | Seq {elems :: [EBNF] }      --- sequence, may be empty
+          | Qnt { quantor :: Quantor, elem :: EBNF }   --- ebnf quantified with "?", "+" or "*"
+          | NonT {name :: String }      --- non terminal
+          | Term {name :: String }      --- non terminal
+          where
+    --- precedence of the construct
+    prec Alt{} = 0
+    prec Seq{} = 1
+    prec Qnt{} = 2
+    prec _     = 3
+    --- the empty EBNF
+    isEmpty (Seq []) = true
+    isEmpty _        = false
+    --- sepearator between elements for show and pretty printing
+    sep Alt{} = "|"
+    sep _     = " " 
+    showp p e 
+        | e.{elems?}  → inparens (joined e.sep (map (showp e.prec) e.elems))
+        | e.{elem?}   → inparens (showp e.prec e.elem ++ mark e.quantor)
+        | otherwise   → e.name         
+        where 
+            mark Many = "*"
+            mark Some = "+"
+            mark _    = "?"
+            parens = prec e < p
+            inparens s = if parens then "(" ++ s ++ ")" else s
+          
+example = Alt [Seq [NonT "definition", 
+                    Qnt Optional (
+                        Alt [Term "'default'", 
+                            Qnt Many (NonT "definition")])], 
+                    Term "';'" ] 
 
---- an EBNF grammar is a list of productions
-type EGram = [EProd]
+instance Show EBNF where show = EBNF.showp 0
+derive Eq EBNF
 
---- a map of EBNF productions
-type EMap = Map.HashMap String EProd
+--- An EBNF definition
+data EDef = Def { !name :: String, !ebnf :: EBNF }
+derive Eq EDef
+instance Show EDef where
+    show def = def.name ++ " ::= " ++ show def.ebnf
 
---- An EBNF production is a choice that defines a non-terminal.
-data EProd = EProd String EChoice
+--- remove unnessecary complexity from EBNF, and give errors for multiple quantifications
+normalize Alt{elems} = case flatAlt elems of
+        es' | any (_.isEmpty) es' = Qnt Optional . normalize . Alt . filter (not . _.isEmpty) $ es'
+        [] = Seq [] -- canonical empty
+        [x] = x
+        xs = Alt xs
+    where
+        flatAlt [] = []
+        flatAlt (x:xs) = case normalize x of
+            Alt{elems} → flatAlt (elems ++ xs)
+            y          → y : flatAlt xs
+normalize Seq{elems} = case flatSeq elems of
+        [x] → x
+        xs  → Seq xs
+    where
+        flatSeq [] = []
+        flatSeq (x:xs) = case normalize x of
+            Seq{elems}  → flatSeq (elems ++ xs)
+            y           → y : flatSeq xs
 
---- An EBNF Choice is a nonempty list of alternative sequences
-data EChoice = EChoice [ESeq]
+normalize Qnt{quantor, elem} = case normalize elem of
+        e@Qnt{} → error ("Illegal EBNF: "  ++ show Qnt{quantor, elem}
+                    ++ "\nnormalizes to: " ++ show Qnt{quantor, elem=e})
+        e   → Qnt{quantor, elem=e}
 
---- An EBNF Sequence is a maybe empty list of EBNF Items
-data ESeq = ESeq [EItem]
+normalize e = e
 
---- An EBNF Item is a possibly quantified EBNF Primary
-data EItem = EItem EPrimary (Maybe EQuantor)
+--- compute a list of items that are referenced by an EBNF expression
+--- (duplicates are not removed)
+references :: EBNF -> [String]
+references = go [] 
+    where
+        go acc  Alt{elems}  = fold go acc elems
+        go acc  Seq{elems}  = fold go acc elems
+        go acc  Qnt{elem}   = go acc elem
+        go acc  NonT{name}  = name : acc
+        go acc  Term{name}  = acc
+
+--- Tell if a production is recursive
+isRecursive ∷ EDef → Bool
+isRecursive Def{name, ebnf} = name `elem` references ebnf
 
 --- An EBNF Item can be quantified with ?, * or +
-data EQuantor = Many | Some | Optional
+data Quantor = Many | Some | Optional
+deriving Eq     Quantor
+deriving Show   Quantor
+          
 
---- An EBNF Primary is a name, a string, a character class or a 'EChoice'
-data EPrimary = EName String | ETerm String | Choice EChoice
-
-deriving Eq     EQuantor
-deriving Eq     EPrimary
-deriving Eq     EChoice
-deriving Eq     ESeq
-deriving Eq     EItem
-deriving Eq     EProd
-
-deriving Show   EQuantor
-deriving Show   EPrimary
-deriving Show   EChoice
-deriving Show   ESeq
-deriving Show   EItem
-deriving Show   EProd
+--- a map of EBNF productions
+type EMap = Map.HashMap String EDef
 
 
 -- ---------------------------------------------------------------------------
@@ -101,39 +165,50 @@ type YGram = Map.HashMap String [YRule]
 --      Parsers
 -- ---------------------------------------------------------------------------
 
---- Parse 'EProd'
-pEProd = do
+--- Parse 'Alt'
+pAlt ∷ P.Parser Iterators.StringIterator Char EBNF
+pAlt = do
+    P.skip (P.space <|> pComment)
+    normalize . Alt <$> P.sepBy1 pSeq pBar
+
+--- Parse 'Seq'
+pSeq ∷ P.Parser Iterators.StringIterator Char EBNF
+pSeq = do
+    P.skip (P.space <|> pComment)
+    Seq <$> P.many pQnt
+
+--- Parse 'Qnt'
+pQnt ∷ P.Parser Iterators.StringIterator Char EBNF
+pQnt = do
+    P.spaces
+    e ← pTerm
+    q ← P.optional pQuantor
+    pure (maybe id Qnt q e)
+
+--- Parse a 'Term', 'NonT' or 'Alt' in parentheses    
+pTerm ∷ P.Parser Iterators.StringIterator Char EBNF
+pTerm = Term <$> pName
+    <|> NonT <$> (pChar <|> pStr <|> pClass)
+    <|> P.symbol (P.between pLeft pRight pAlt)
+
+--- Parse "::=", ":" or "="
+pEquals = P.symbol $ 
+    (P.expect ':' >> P.expect ':' >> P.expect '=')
+    <|> P.expect ':'
+    <|> P.expect '='
+
+--- Parse 'Edef'  
+pDef ∷ P.Parser Iterators.StringIterator Char EDef
+pDef = do
     P.skip (P.space <|> pComment)
     p ← pName
-    P.symbol (P.expect ':')
-    alt ← pEChoice
+    pEquals
+    alt ← pAlt
     P.symbol (P.expect ';')
-    pure (EProd p alt)
+    pure (Def p alt)
+              
 
---- Parse 'EPrimary'
-pEPrimary ∷ P.Parser Iterators.StringIterator Char EPrimary
-pEPrimary = 
-        EName <$> pName
-    <|> ETerm <$> (pChar <|> pStr <|> pClass)
-    <|> P.symbol do
-            Choice <$> P.between pLeft pRight pEChoice
-
---- Parse 'EChoice'
-pEChoice ∷ P.Parser SI Char EChoice
-pEChoice = EChoice <$> P.sepBy1 pESeq pBar
-
---- Parse 'ESeq'
-pESeq ∷ P.Parser SI Char ESeq
-pESeq = ESeq <$> P.many pEItem
-
---- Parse 'EItem'
-pEItem ∷ P.Parser SI Char EItem
-pEItem = do
-    p ← pEPrimary
-    q ← P.optional pQuantor
-    pure (EItem p q)
-
-pQuantor ∷ P.Parser SI Char EQuantor
+pQuantor ∷ P.Parser SI Char Quantor
 pQuantor = P.symbol (
             const Optional <$> P.expect '?' 
         <|> const Many     <$> P.expect '*' 
@@ -226,7 +301,7 @@ grammar = do
 
 --- Parse a list of EBNF prods
 ebnf = do
-    prods ← P.some pEProd
+    prods ← P.some pDef
     P.eos
     pure prods 
 
@@ -246,7 +321,7 @@ parseYacc src = do
                 pure result
     `catch` \(e::IOException) -> pure . Left $ e.show 
 
-parseEBNF :: String -> IO (Either String EGram)
+parseEBNF :: String -> IO (Either String [EDef])
 parseEBNF src = do
         content ← readFile src 
         let yytext = SI.from content
@@ -255,44 +330,6 @@ parseEBNF src = do
                 when (length rest > 0) do stderr.println (SI.to (take 64 rest))
                 pure result
     `catch` \(e::IOException) -> pure . Left $ e.show
-
--- ---------------------------------------------------------------------------
---      Functions to pretty print EBNF
--- ---------------------------------------------------------------------------
-
---- pretty print a 'EPrimary'
-ppPrim :: EPrimary → DOCUMENT
-ppPrim (EName s)   = text s
-ppPrim (ETerm s)   = text s
-ppPrim (Choice c)  = text "(" <> ppChoice c <> text ")"
-
---- pretty print a 'EChoice'
-ppChoice :: EChoice → DOCUMENT
-ppChoice (EChoice seq)  = PP.spread . intersperse (text "|") . map ppSeq $ seq
-
---- pretty print a 'ESeq'
-ppSeq ∷ ESeq → DOCUMENT
-ppSeq (ESeq items)  = PP.spread . map ppItem $ items
-
---- pretty print a 'EItem'
-ppItem ∷ EItem → DOCUMENT
-ppItem (EItem prim quantified) = case quantified  of
-    Nothing →  ppPrim prim
-    Just q  →  case q  of
-        Many     →  ppPrim prim <> text "*"
-        Some     →  ppPrim prim <> text "+"
-        Optional →  ppPrim prim <> text "?"
-
---- pretty print a 'EProd'
-ppProd ∷ EProd → DOCUMENT
-ppProd (EProd name choice) = text name PP.<+> text "::=" PP.<+> ppChoice choice
-
---- pretty print a 'EGram'
-ppGram ∷ [EProd] -> DOCUMENT
-ppGram = PP.stack . map ppProd
-
-
-
 
 
 -- ---------------------------------------------------------------------------
@@ -311,96 +348,34 @@ deps = fold (\ds\(name, rules) → (name, depsOf rules):ds) [] . Map.each
 topo = Graph.stronglyConnectedComponents . deps
 
 --- Convert a YYProd to EBNF
-convProd ∷ YProd → EProd
-convProd (YProd name rules) = EProd name choice
+convProd ∷ YProd → EDef
+convProd (YProd name rules) = Def name (normalize choice)
     where
-        choice = EChoice (map convRule rules)
+        choice = Alt (map convRule rules)
 
-convRule ∷ YRule → ESeq
-convRule (YRule elems) = ESeq (map convItem elems)
+convRule ∷ YRule → EBNF
+convRule (YRule elems) = Seq (map convItem elems)
 
-convItem ∷ Element → EItem
-convItem (Terminal "'\\\\'") = EItem (ETerm "'\\'") Nothing
-convItem (Terminal s)        = EItem (ETerm s) Nothing
-convItem (NonTerminal s)     = EItem (EName s) Nothing
+convItem ∷ Element → EBNF
+convItem (Terminal "'\\\\'") = Term "'\\'"
+convItem (Terminal s)        = Term s
+convItem (NonTerminal s)     = NonT s
 
 --- Perform all optimizations on a production
-optimize ∷ EMap → EProd → EProd
+optimize ∷ EMap → EDef → EDef
 optimize emap eprod = inline emap eprod
 
 --- Inline 'trivial' EBNFs
-inline ∷ EMap → EProd → EProd
-inline emap (EProd name choice) = EProd name (inlChoice choice)
+inline ∷ EMap → EDef → EDef
+inline emap (Def name choice) = Def name (inl choice)
     where
-        inlChoice (EChoice alts) = flatChoice (EChoice (map inlSeq alts))
-        inlSeq    (ESeq items)   = flatSeq (ESeq (map inlItem items))
-        inlItem   (EItem p q)    = EItem (inlPrim p) q
-        inlPrim   (EName s)      = case Map.lookup s emap of
-                                    Just eprod | trivial eprod = Choice (theChoice eprod)
-                                    _ -> EName s
-        inlPrim  (Choice ch)     = Choice (inlChoice ch)
-        inlPrim   prime          = prime
-
---- access the 'EChoice' in an 'EProd'
-theChoice ∷ EProd → EChoice
-theChoice (EProd _ c) = c
-
---- access the name in an 'EProd'
-theName (EProd n _) = n
-
-
---- Change
---- > (foo | bar) | baz
---- to
---- > foo | bar | baz
---- and eliminate empty sequences:
---- > foo | | baz
---- > (foo | baz)?
-flatChoice (EChoice seqs) = elimEmpty (elimSubAlts seqs)
-    where
-        elimSubAlts [] = []
-        elimSubAlts (seq:seqs) = case seq  of
-            ESeq [EItem (Choice (EChoice sub)) Nothing] →  elimSubAlts sub ++ elimSubAlts seqs
-            _                                           →  seq : elimSubAlts seqs
-        emptySeq (ESeq is) = null is
-        elimEmpty seqs = case partitioned emptySeq seqs of
-            (empty, nonempty) 
-                | not (null empty), not (null nonempty)  
-                = EChoice . pure 
-                          . ESeq 
-                          . pure 
-                          . flip EItem (Just Optional) 
-                          . Choice . EChoice . reverse $ nonempty
-                | otherwise 
-                = EChoice seqs     
-
----
---- Change
---- > foo (bar baz) foo
---- to 
---- > foo bar baz foo
---- Also
---- > foo (bar)? baz
---- becomes
---- > foo bar? baz
---- Note that quantified sequences with length > 1 cannot be simplified. 
-flatSeq ∷ ESeq → ESeq
-flatSeq (ESeq items) = ESeq (go items)
-    where
-        go [] = []
-        go ((item@EItem p q) : is) = case p  of
-            EName _ →  item : go is
-            ETerm _ →  item : go is
-            Choice (EChoice alts)
-                | [alt] ← alts  = case flatSeq alt of
-                    ESeq [EItem p' q'] →  case (q,q') of
-                        (Nothing, q'') → go (EItem p' q'' : is)
-                        (q'', Nothing) → go (EItem p' q'' : is)
-                        _              → item : go is -- something like (bar?)+, leave it at that
-                    ESeq list | not (null list), Nothing ← q = go (list ++ is)
-                              | otherwise = item : go is
-                | otherwise = item : go is
-
+        inl Alt{elems}  = (normalize . Alt) (map inl elems)
+        inl Seq{elems}  = Seq (map inl elems)
+        inl Qnt{quantor, elem}   = Qnt quantor (inl elem)
+        inl NonT{name}  = case Map.lookup name emap of
+                            Just prod | trivial prod = prod.ebnf
+                            other = Term name
+        inl nont        = nont   
 
 
 convert ∷ EMap → YProd → EMap
@@ -408,37 +383,42 @@ convert map (yprod@YProd name rules) = Map.insert name eprod map
     where
         eprod = optimize map (convProd yprod) 
 
+isAtomic Term{name} = true
+isAtomic NonT{name} = true
+isAtomic _          = false
+
 --- Check if a production is trivial
 --- The following are trivial
 --- > 'term1' | 'term2' | 'term3' | 'term4' | 'term5'       -- up to 5 alternative terminals
 --- > foo bar baz                                           -- up to 3 terminals nonterminals
 --- Quantifications allowed only in single sequence mode on simple items. No sub-choices allowed.
-trivial (EProd _ ch) = trivialCh ch
+trivial def
+    | isRecursive def = false
+    | otherwise = triv def.ebnf
     where
-        singleTerm (ESeq [EItem (ETerm _) Nothing]) = true
-        singleTerm _                                = false
-        simpleItem (EItem (ETerm _) _)        = true
-        simpleItem (EItem (EName _) _)        = true
-        simpleItem _                          = false
-        trivialCh (EChoice [ESeq items]) = length items < 4 && all simpleItem items 
-        trivialCh (EChoice seqs)  = length seqs > 0 && length seqs < 6 && all singleTerm seqs 
+        triv Alt{elems} = length elems < 5 && all isAtomic elems
+        triv Qnt{elem}  = isAtomic elem
+        triv Seq{elems} = all noAlt elems && all triv elems
+        triv _          = true
+        noAlt Alt{} = false
+        noAlt _     = true
 
-work ∷ YGram → Map.HashMap String EProd → DOCUMENT
-work ymap emap = PP.stack (ydocs ++ edocs)
+work ∷ YGram → Map.HashMap String EDef → [String]
+work ymap emap =(ydocs ++ edocs)
     where
         order = topo ymap       -- dependency order, items with least dependencies first
         oprod = [ [ YProd n rs | n ← group, rs ← Map.lookup n ymap ] | group ← order ]
         emap' = fold convertgroup emap oprod -- full EBNF
         convertgroup emap yprods = insProds emap oprods
             where
-                insProds = fold (\m eprod → Map.insert (theName eprod) eprod m)
+                insProds = fold (\m eprod → Map.insert eprod.name eprod m)
                 eprods = map convProd yprods
                 mapp   = insProds emap eprods
                 oprods = map (optimize mapp) eprods 
-        ydocs = [ ppProd eprod | n ← reverse (concat order),     -- print only non simple ones 
+        ydocs = [ show eprod | n ← reverse (concat order),     -- print only non simple ones 
                                     eprod ← Map.lookup n emap',
                                     true || not (trivial eprod) ]
-        edocs = [ ppProd eprod | eprod ← Map.values emap, true || not (trivial eprod) ] 
+        edocs = [ show eprod | eprod ← Map.values emap, true || not (trivial eprod) ] 
         
 {--
     Run with
@@ -462,8 +442,8 @@ main args = case args of
                     case answer of
                         Right eprods → do
                             stderr.printf "%s: parsed %d EBNF rules\n" ebnfsrc (length eprods)
-                            let emap = fold (\m\(eprod@EProd p ch) -> Map.insert p eprod m) empty eprods
-                            PP.prettyIO stdout 1000 (work rules emap)
+                            let emap = fold (\m\def -> Map.insert def.name def m) empty eprods
+                            mapM_ println (work rules emap)
                             stdout.println
                         Left error → do
                             stderr.println (ebnfsrc ++ ": " ++ error)
