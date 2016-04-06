@@ -90,6 +90,11 @@ instance Show EDef where
     show def = def.name ++ " ::= " ++ show def.ebnf
 
 --- remove unnessecary complexity from EBNF, and give errors for multiple quantifications
+--- Invariants guaranteed after completion:
+--- 1. An 'Alt' contains no empty 'Seq'
+--- 2. Elements of 'Alt' are not 'Alt' themselves.
+--- 3. An empty 'Seq' is not quantified.
+--- 4. Elements of 'Seq' are not 'Seq's themselves.
 normalize Alt{elems} = case flatAlt elems of
         es' | any (_.isEmpty) es' = Qnt Optional . normalize . Alt . filter (not . _.isEmpty) $ es'
         [] = Seq [] -- canonical empty
@@ -112,6 +117,8 @@ normalize Seq{elems} = case flatSeq elems of
 normalize Qnt{quantor, elem} = case normalize elem of
         e@Qnt{} → error ("Illegal EBNF: "  ++ show Qnt{quantor, elem}
                     ++ "\nnormalizes to: " ++ show Qnt{quantor, elem=e})
+        e@Seq [] → error ("Illegal EBNF: " ++ show Qnt{quantor, elem}
+                    ++ "\nnormalizes to: " ++ show Qnt{quantor, elem=e})
         e   → Qnt{quantor, elem=e}
 
 normalize e = e
@@ -130,6 +137,13 @@ references = go []
 --- Tell if a production is recursive
 isRecursive ∷ EDef → Bool
 isRecursive Def{name, ebnf} = name `elem` references ebnf
+
+--- Tell the prefix and the remaining part
+--- Apply only to normalized expressions that are not @Seq []@
+prefix a = case a of
+    Seq xs = (head xs, tail xs)
+    e      = (e, [])
+    
 
 --- An EBNF Item can be quantified with ?, * or +
 data Quantor = Many | Some | Optional
@@ -363,20 +377,36 @@ convItem (NonTerminal s)     = NonT s
 
 --- Perform all optimizations on a production
 optimize ∷ EMap → EDef → EDef
-optimize emap eprod = inline emap eprod
+optimize emap eprod = eprod.{ebnf ← factorLeft . inline emap}
 
 --- Inline 'trivial' EBNFs
-inline ∷ EMap → EDef → EDef
-inline emap (Def name choice) = Def name (inl choice)
+inline ∷ EMap → EBNF → EBNF
+inline emap x = inl x
     where
         inl Alt{elems}  = (normalize . Alt) (map inl elems)
         inl Seq{elems}  = Seq (map inl elems)
         inl Qnt{quantor, elem}   = Qnt quantor (inl elem)
         inl NonT{name}  = case Map.lookup name emap of
                             Just prod | trivial prod = prod.ebnf
-                            other = Term name
-        inl nont        = nont   
+                            other = NonT name
+        inl term        = term   
 
+--- Factor left
+--- > (a b | a c | d) ==> (a (b | c) | d)
+factorLeft Alt{elems=seqs} = case go . map prefix $ seqs of
+        elems | elems == seqs = normalize . Alt . map factorLeft $ elems
+              | otherwise     = factorLeft . Alt $ elems
+    where
+        go [] = []
+        go ((xp,xt):ys) 
+            | null ts = normalize (Seq (xp:xt)) : go ys
+            | otherwise = normalize (Seq [xp, Alt (map Seq (xt:map snd ts)) ]) : go xs
+            where
+                (ts,xs) = partitioned ((xp==) . fst) ys
+factorLeft Seq{elems} = normalize . Seq . map factorLeft $ elems
+factorLeft Qnt{quantor, elem} = normalize . Qnt quantor . factorLeft $ elem
+factorLeft other = other
+   
 
 convert ∷ EMap → YProd → EMap
 convert map (yprod@YProd name rules) = Map.insert name eprod map
