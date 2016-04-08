@@ -40,50 +40,50 @@
 {--
     This is the grammar for the Frege language.
 -}
-module frege.compiler.grammar.Frege where
+module frege.compiler.grammar.Frege; -- where
 
     {-
        !!! DO NOT CHANGE FILE Frege.fr, IT HAS BEEN CREATED AUTOMATICALLY !!!
     -}
 
-import frege.Prelude hiding(<+>, break)
+import frege.Prelude hiding(<+>, break);
 
-import frege.control.monad.State(State)
+import frege.control.monad.State(State);
 
-import Data.TreeMap(insert)
-import Data.List as DL(elemBy)
+import Data.TreeMap(insert);
+import Data.List as DL(elemBy);
 
-import  Compiler.enums.Flags 
-import  Compiler.enums.TokenID(TokenID)
-import  Compiler.enums.Visibility
-import  Compiler.enums.Literals
-import  Compiler.enums.CaseKind
+import  Compiler.enums.Flags ;
+import  Compiler.enums.TokenID(TokenID);
+import  Compiler.enums.Visibility;
+import  Compiler.enums.Literals;
+import  Compiler.enums.CaseKind;
 
-import  Compiler.types.Positions
-import  Compiler.types.Tokens
-import  Compiler.types.Kinds
-import  Compiler.types.SNames
-import  Compiler.types.Packs(magicPack)
-import  Compiler.types.ImportDetails
-import  Compiler.types.Types
-import  Compiler.types.SourceDefinitions
-import  Compiler.types.ConstructorField
-import  Compiler.types.Global as G
+import  Compiler.types.Positions;
+import  Compiler.types.Tokens;
+import  Compiler.types.Kinds;
+import  Compiler.types.SNames;
+import  Compiler.types.Packs(magicPack);
+import  Compiler.types.ImportDetails;
+import  Compiler.types.Types;
+import  Compiler.types.SourceDefinitions;
+import  Compiler.types.ConstructorField;
+import  Compiler.types.Global as G;
 
-import  Compiler.common.Mangle
-import  Compiler.common.Errors as E()
-import  Compiler.common.Resolve as R(enclosed)
+import  Compiler.common.Mangle;
+import  Compiler.common.Errors as E();
+import  Compiler.common.Resolve as R(enclosed);
 
-import Lib.PP (group, break, msgdoc)
-import frege.compiler.common.Tuples as T(tuple)
-import frege.compiler.common.Desugar
+import Lib.PP (group, break, msgdoc);
+import frege.compiler.common.Tuples as T(tuple);
+import frege.compiler.common.Desugar;
 
-import frege.compiler.grammar.Lexer (substQQ)
+import frege.compiler.grammar.Lexer (substQQ);
 
 
 -- this will speed up the parser by a factor of 70, cause yyprods comes out monotyped.
 private yyprod1 :: [(Int, YYsi ParseResult Token)]
-    -> StG (YYsi ParseResult Token, [(Int, YYsi ParseResult Token)])
+    -> StG (YYsi ParseResult Token, [(Int, YYsi ParseResult Token)]);
 
 
 {-
@@ -455,7 +455,7 @@ modulename:
 docs:
     DOCUMENTATION                       { Token.value }
     | DOCUMENTATION docs                { \b\a   -> (Token.value b ++ "\n" ++ a) }
-    | DOCUMENTATION semicoli docs       { \b\_\a -> (Token.value b ++ "\n" ++ a) }
+    | DOCUMENTATION ';' docs       { \b\_\a -> (Token.value b ++ "\n" ++ a) }
     ;
 
 moduleclause:
@@ -493,20 +493,14 @@ words:
     | word words                    { (:) }
     ;
 
-semicoli:
-    ';'                             { const 1 }
-    | ';' semicoli                  { \_\n -> 1+n}
-    ;
-
 definitions:
     definition
-    | definition semicoli               { const }
-    | definition semicoli definitions   { \a\_\b -> a ++ b }
+    | definition ';'               { const }
+    | definition ';' definitions   { \a\_\b -> a ++ b }
     ;
 
 definition:
     documentation                       { single }
-    // documentation definition          { (:) }
     | topdefinition
     | visibledefinition
     ;
@@ -584,8 +578,8 @@ publicdefinition:
 
 localdefs:
     dplocaldef
-    | dplocaldef semicoli                { const }
-    | dplocaldef semicoli localdefs      { \d\_\ds -> d ++ ds }
+    | dplocaldef ';'                { const }
+    | dplocaldef ';' localdefs      { \d\_\ds -> d ++ ds }
     ;
 
 localdef:
@@ -615,8 +609,8 @@ letdef:
 
 letdefs:
     letdef
-    | letdef semicoli                   { const }
-    | letdef semicoli letdefs           { \ds1\_\ds2 -> ds1 ++ ds2 }
+    | letdef ';'                   { const }
+    | letdef ';' letdefs           { \ds1\_\ds2 -> ds1 ++ ds2 }
     ;
 
 
@@ -1290,8 +1284,8 @@ lcquals:
 
 dodefs:
     lcqual                          { single }
-    | lcqual semicoli               { (const . single) }
-    | lcqual semicoli dodefs        { liste }
+    | lcqual ';'               { (const . single) }
+    | lcqual ';' dodefs        { liste }
     ;
 
 
@@ -1538,6 +1532,6 @@ exprSS:
 %%
 {--
     the parser pass
- -}
-pass :: [Token] -> StG (Maybe ParseResult) -- Global -> IO (Maybe ParseResult, Global)
-pass = yyparse . substQQ
+ -};
+pass :: [Token] -> StG (Maybe ParseResult); -- Global -> IO (Maybe ParseResult, Global);
+pass = yyparse . substQQ;
