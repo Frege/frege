@@ -506,7 +506,7 @@ definitions:
 
 definition:
     documentation                       { single }
-    | documentation definition          { (:) }
+    // documentation definition          { (:) }
     | topdefinition
     | visibledefinition
     ;
