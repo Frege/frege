@@ -111,11 +111,12 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type gargs           [TauS]
 //%type nativepur       (Bool, Bool)
 //%type docs            String
+//%type docsO           (Maybe String)
 //%type opstring        String
 //%type boundvar        String
 //%type operators       [String]
 //%type boundvars       [String]
-//%type moduleclause   (String, Maybe String, Position)
+//%type moduleclause   (String, Position)
 //%type unop            Token
 //%type operator        Token
 //%type rop13           Token
@@ -263,6 +264,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%explain annotation   an annotation
 //%explain qconid       a qualified constructor or type name
 //%explain docs         a sequence of doc comments
+//%explain docsO        a possibly empty sequence of doc comments
 //%explain importliste  an import list
 //%explain importspecs  a list of import items
 //%explain importspec   an import specification
@@ -410,17 +412,18 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 %%
 
 module:
-    moduleclause ';' definitions               { \(a,d,p)\w\b     -> do {
+    docsO moduleclause ';' definitions               { \d\(a,p)\w\b     -> do {
                                                         changeST Global.{sub <- SubSt.{
                                                             thisPos = p}};
                                                         YYM.pure $ Program.Module (a,b,d) }}
-    | moduleclause WHERE '{' definitions '}'   { \(a,d,p)\w\_\b\_ -> do {
+    | docsO moduleclause WHERE '{' definitions '}'   { \d\(a,p)\w\_\b\_ -> do {
                                                         changeST Global.{sub <- SubSt.{
                                                             thisPos = p}};
                                                         YYM.pure $ Program.Module (a,b,d) }}
-    | '{' definitions '}'                       { \p\d\_ -> do {
-                                                    changeST Global.{sub <- SubSt.{thisPos = yyline p}};
-                                                    YYM.pure $ Program.Module ("Main", d, Nothing); }}
+    | docsO '{' definitions '}'                      { \d\p\b\_ -> do {
+                                                        changeST Global.{sub <- SubSt.{
+                                                            thisPos = yyline p}};
+                                                        YYM.pure $ Program.Module ("Main", b, d); }}
     ;
 
 nativename:
@@ -455,22 +458,21 @@ modulename:
 docs:
     DOCUMENTATION                       { Token.value }
     | DOCUMENTATION docs                { \b\a   -> (Token.value b ++ "\n" ++ a) }
-    | DOCUMENTATION ';' docs       { \b\_\a -> (Token.value b ++ "\n" ++ a) }
     ;
 
+docsO:
+                                        { Nothing }
+    | docs                              { Just }
+    ;
+
+
 moduleclause:
-    docs PACKAGE modulename                { \docu\p\b   -> (fst b, Just docu, snd b) }
-    | PACKAGE modulename                   { \p\b        -> (fst b, Nothing, snd b) }
-    | docs PROTECTED PACKAGE modulename    { \docu\p\_\b   -> do {
-                                                    g <- getST;
-                                                    changeST Global.{options = g.options.{
-                                                        flags = setFlag g.options.flags INPRELUDE}};
-                                                    YYM.pure (fst b, Just docu, snd b) }}
+    PACKAGE modulename                     { \p\b        -> (fst b, snd b) }
     | PROTECTED PACKAGE modulename         { \p\_\b   -> do {
                                                     g <- getST;
                                                     changeST Global.{options = g.options.{
                                                         flags = setFlag g.options.flags INPRELUDE}};
-                                                    YYM.pure (fst b, Nothing, snd b) }}
+                                                    YYM.pure (fst b, snd b) }}
     | moduleclause words '(' qvarids ')'   { \p\vs\v\qs\_ -> do {
                                                      g <- getST;
                                                      let {clause = unwords vs};
@@ -1167,11 +1169,8 @@ conflds:
     ;
 
 confld:
-    fldids DCOLON sigma           { \vs\_\t -> [Field pos (Just name) Nothing vis strict t |
-                                                (pos,name,vis,strict) <- vs ]
-                                  }
-    | docs fldids DCOLON sigma    { \(d::String)\vs\_\t ->
-                                        map ConField.{doc=Just d}
+    docsO fldids DCOLON sigma    { \(d::Maybe String)\vs\_\t ->
+                                        map ConField.{doc=d}
                                             [Field pos (Just name) Nothing vis strict t |
                                                 (pos,name,vis,strict) <- vs ]
                                   }
