@@ -6,14 +6,15 @@ import  frege.compiler.types.SNames
 import  frege.compiler.types.Packs
 import  frege.compiler.types.QNames
 
-
+type Kind  = KindT QName
+type KindS = KindT SName
 
 --- encoding for type kinds    
-data Kind =
-        KVar                     --- unifies with every other kind 
-        | KType                  --- indicates any type
-        | KGen                   --- indicates a type that must appear as generic type
-        | KApp Kind Kind         --- indicates it will be 2nd kind when applied to 1st kind
+data KindT a =
+        KVar                            --- unifies with every other kind 
+        | KType                         --- indicates any type
+        | !KGen (TauT a)                --- indicates a type that must appear as generic type
+        | !KApp (KindT a) (KindT a)     --- indicates it will be 2nd kind when applied to 1st kind
         where
             --- * -> * -> *
             fun   = kind 2
@@ -24,23 +25,29 @@ data Kind =
             kind n = KApp KType (kind (n-1))
             kvar 0 = KType
             kvar n = KApp KVar  (kvar (n-1))
-            kref 0 = KGen
-            kref n = KApp KVar  (kref (n-1))
 
 
-instance Show Kind where
+
+instance Show (KindT s) where
     show KType        = "*"
-    show KGen         = "generic"
+    show KGen{}       = "generic"
     show KVar         = "?"
     show (KApp k1 k2) = showsub k1 ++ "->" ++ show k2
     showsub KType     = "*"
     showsub KVar      = "?"
-    showsub KGen      = "generic"
+    showsub KGen{}    = "generic"
     showsub k         = "(" ++ show k ++ ")"
 
+--- check equality of kinds, gets inprecise with 'KGen' where the types are checked with 'Tau.textualEq'
+keq :: Eq a ⇒ KindT a → KindT a → Bool 
+keq KType KType           = true
+keq KVar  KVar            = true
+keq (KApp a b) (KApp c d) = (a `keq` c) && (b `keq` d)
+keq (KGen a)   (KGen b)   = a.textualEq b
+keq apple      orange     = false
 
-derive Eq Kind
-derive ArrayElement Kind
+
+derive ArrayElement (KindT s)
 
 
 
@@ -55,8 +62,8 @@ derive ArrayElement Kind
     Such a binding is represented by an entry in 'frege.compiler.types.Global#tySubst'
  -}
 data MetaTvT s =
-          Flexi {!uid::Int, !hint::String, !kind::Kind}
-        | Rigid {!uid::Int, !hint::String, !kind::Kind}
+          Flexi {!uid::Int, !hint::String, !kind::KindT s}
+        | Rigid {!uid::Int, !hint::String, !kind::KindT s}
         where
             --- tell if the 'MetaTv' is flexible
             isFlexi (Flexi{}) = true
@@ -78,12 +85,13 @@ type MetaTv = MetaTvT QName
 
 
 {-
- * The type for modelling tau-types.
+    The type for modelling tau-types. 
+    Those are ordinary types, without quantification or constraints.
  -}
 data TauT s =
       !TApp (TauT s) (TauT s)           --- type application
     | !TCon {pos::Position, name::s}    --- type constructor
-    | !TVar {pos::Position,  kind::Kind, var::String}   --- type variable quantified over
+    | !TVar {pos::Position,  kind::KindT s, var::String}   --- type variable quantified over
     | !TSig (SigmaT s)                  -- only used in parser for now
     | !Meta (MetaTvT s)                 --- type variable
     where
@@ -108,7 +116,16 @@ data TauT s =
             flatapp t ts          = t:ts
         -- flat (TFun a b) = [TCon 0 (TName pPrelude "->"), a, b]
         flat t = [t]
-
+        --- check very sloppily for textual equal'ness
+        --- - 'TSig' never equals anything
+        --- - type constructors and variables match only if their names are textually equal.
+        --- This function is necessary and used only in kind inference. 
+        textualEq ∷ Eq a ⇒ TauT a → TauT a → Bool
+        textualEq (TApp a b)   (TApp c d)   = a.textualEq c && b.textualEq d
+        textualEq TCon{name=a} TCon{name=b} = a == b
+        textualEq TVar{var=a}  TVar{var=b}  = a == b
+        textualEq (Meta a)     (Meta b)     = a == b
+        textualEq apfel        birne        = false
 
 --- tau types as created by parser
 type TauS = TauT SName
@@ -117,6 +134,7 @@ type TauS = TauT SName
 --- tau types use in TC
 type Tau = TauT QName
 
+
 derive ArrayElement Tau 
 derive ArrayElement Rho
 derive ArrayElement Sigma  
@@ -124,10 +142,10 @@ derive ArrayElement Sigma
 {--
     The type for modelling sigma types (@forall@ types)
  -}
-data SigmaT s = ForAll { !bound :: [(String, Kind)], !rho :: RhoT s } where
+data SigmaT s = ForAll { !bound :: [(String, KindT s)], !rho :: RhoT s } where
     --- get the names of the bound type variables
     vars  (ForAll b _)  = map fst b
-    --- get the 'Kind's of the bound type variables
+    --- get the 'KindT's of the bound type variables
     kinds (ForAll b _)  = map snd b
     --- get the bound type variables as list of 'TVar's.
     tvars (ForAll b _) pos = zipWith (\(v,k)\p -> TVar p k v) b (repeat pos)

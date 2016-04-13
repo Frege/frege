@@ -233,8 +233,8 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type guard           Guard
 //%type guards          [Guard]
 //%type qualifiers      (Token -> SName)
-//%type kind            Kind
-//%type simplekind      Kind
+//%type kind            KindS
+//%type simplekind      KindS
 //%type jtoken          Token
 //%type jtokens         [Token]
 //%type wheretokens     [Token]
@@ -937,14 +937,14 @@ simplekind:
                                             ("expected `*`, found `" ++ w ++ "`") 
                                 pure KType
                             }
-    | VARID                 { \v -> do
+    /* | VARID                 { \v -> do
                                 let w = Token.value v
                                 if w == "generic" then pure KGen
                                 else do
                                     yyerror (yyline v) 
                                             ("expected `generic` instead of `" ++ w ++ "`")
                                     pure KType
-                            }
+                            } */
     | '(' kind ')'          { \_\b\_ -> b }
     ;
 
