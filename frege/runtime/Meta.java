@@ -92,8 +92,6 @@ public class Meta {
         SymV[]      symvs()     default {};
         /** <p>Table of expressions.</p> */
         Expr[]      exprs()     default {};
-        /** <p>Table of kinds.</p> */
-        Kind[]      kinds()     default {};
     }
 
 
@@ -110,32 +108,19 @@ public class Meta {
     }
 
     /**
-     *  <p>The equivalent for a Tau.</p>
-     *  <p>References to other Tau's appear as indexes into the Tau table. </p>
+     *  <p>The equivalent for a Tau or Kind.</p>
+     *  <p>References to other Tau's and Kind's appear as indexes into the Tau table. </p>
      */
     // public enum TKind {TApp, TFun, TCon, TVar, TMeta};
     @Retention(RetentionPolicy.RUNTIME)
     public @interface Tau {
-        int     kind()      default 3;      // TApp=0, TFun=1, TCon=2, TVar=3
+        int     kind()      default 3;      // TApp=0, TFun=1, TCon=2, TVar=3, KApp=8, KType=9, KVar=10, KGen=11
         QName[] tcon()      default {};     // TCon
-        int     suba()      default 0;      // TApp a b or TFun a b, kind for TCon and TVar
-        int     subb()      default 0;
+        int     suba()      default 0;      // TApp a b or TFun a b, Tau for KGen, kind for TCon and TVar Tapp
+        int     subb()      default 0;      // second Tau for TApp, second Kind for KApp
         String  tvar()      default "";     // TVar
     }
-    
-    /**
-     * <p>The equivalent for a Kind.</p
-     * <p>References to other Kinds appear as indexes into the Kind table. </p>
-     * @author ingo
-     *
-     */
-    @Retention(RetentionPolicy.RUNTIME)
-    public @interface Kind {
-    	int		kind()		default 2;		// KType, KRef, KVar, KApp
-    	int		suba()		default 0;		// 1st arg of KApp
-    	int		subb()		default 0;		// 2nd arg of KApp
-    }
-    
+
     /**
      * the equivalent to a Sigma
      */
