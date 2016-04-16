@@ -112,9 +112,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type docs            String
 //%type docsO           (Maybe String)
 //%type opstring        String
-//%type boundvar        String
 //%type operators       [String]
-//%type boundvars       [String]
 //%type moduleclause   (String, Position)
 //%type unop            Token
 //%type operator        Token
@@ -294,7 +292,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%explain opstring     an operator
 //%explain tyvar        a type variable
 //%explain tvapp        a type variable application
-//%explain dvars        a sequence of type variables
+//%explain dvars        type variables bound in forall or data/type/newtype
 //%explain tyname       a type constructor
 //%explain tau          a non function type
 //%explain tauSC        a list of types
@@ -309,8 +307,6 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%explain sigma        a qualified type
 //%explain sigex        a method type with optional throws clause
 //%explain sigexs       method types with optional throws clauses
-//%explain boundvar     a type variable bound in a forall
-//%explain boundvars    type variables bound in a forall
 //%explain rop13        ':'
 //%explain aeq          '='
 //%explain scontext     simple constraint
@@ -390,7 +386,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%explain wheretokens  java code
 %}
 
-%token VARID CONID QVARID QCONID QUALIFIER DOCUMENTATION
+%token VARID CONID QUALIFIER DOCUMENTATION EXTENDS SUPER
 %token PACKAGE IMPORT INFIX INFIXR INFIXL NATIVE NEWTYPE DATA WHERE CLASS
 %token INSTANCE ABSTRACT TYPE TRUE FALSE IF THEN ELSE CASE OF DERIVE
 %token LET IN DO FORALL PRIVATE PROTECTED PUBLIC PURE THROWS MUTABLE
@@ -401,7 +397,6 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 %token NOP1 NOP2 NOP3 NOP4 NOP5 NOP6 NOP7 NOP8 NOP9 NOP10 NOP11 NOP12 NOP13 NOP14 NOP15 NOP16
 %token NOP0 LOP0 ROP0       /*** pseudo tokens never seen by parser */
 %token SOMEOP
-%token INTERPRET
 
 %start module
 
@@ -542,7 +537,7 @@ wheretokens:
     ;
 
 jtoken:
-      VARID     | CONID     | QVARID    | QCONID    | QUALIFIER | DOCUMENTATION
+      VARID     | CONID     | QUALIFIER | EXTENDS   | SUPER     | DOCUMENTATION
     | PACKAGE   | IMPORT    | INFIX     | INFIXR    | INFIXL    | NATIVE 
     | DATA      | WHERE     | CLASS     | INSTANCE  | ABSTRACT  | TYPE 
     | TRUE      | FALSE     | IF        | THEN      | ELSE      | CASE 
@@ -550,7 +545,6 @@ jtoken:
     | PRIVATE   | PROTECTED | PUBLIC    | PURE      | THROWS    | MUTABLE
     | INTCONST  | STRCONST  | LONGCONST | FLTCONST  | DBLCONST  | CHRCONST
     | ARROW     | DCOLON    | GETS      | EARROW    | DOTDOT    | SOMEOP
-    | INTERPRET
     | ',' | '|' | '[' | ']' | '(' | ')' | '.' | '?' | '-' | ';' | '!' | '=' | '\\'
     ;
 
@@ -818,14 +812,6 @@ impurenativedef:
     ;
 
 
-boundvars:
-      boundvar                    { single }
-    | boundvar boundvars          { (:)    }
-    ;
-
-boundvar:
-    VARID                          { Token.value }
-    ;
 
 sigma:
     forall
@@ -833,7 +819,7 @@ sigma:
     ;
 
 forall:
-    FORALL boundvars mbdot rho      { \_\bs\_\r      -> ForAll  [ (b,KVar) | b <- bs ]  r }
+    FORALL dvars mbdot rho        { \_\bs\_\r      -> ForAll  [ (b.var, b.kind) | b@TVar{} <- bs ]  r }
     ;
 
 mbdot:
@@ -911,9 +897,12 @@ simpletype:
 
 
 tyvar:
-    VARID                        { \n         -> TVar (yyline n) KVar (Token.value n)  }
-    | '('  VARID DCOLON kind ')' { \_\n\_\k\_ -> TVar (yyline n) k    (Token.value n)  }
-;
+    VARID                           { \n         -> TVar (yyline n) KVar (Token.value n)  }
+    | '('  VARID DCOLON kind ')'    { \_\n\_\k\_ -> TVar (yyline n) k    (Token.value n)  }
+    | '('  VARID EXTENDS tapp  ')'  { \_\v\x\k\_ -> TVar (yyline v) (KGen k) (v.value)    } 
+    | '('  EXTENDS tapp ')'         { \_\x\k\_   -> TVar (yyline x) (KGen k) ("<")        }
+    | '('  SUPER tapp ')'           { \_\x\k\_   -> TVar (yyline x) (KGen k) (">")        }
+    ;
 
 
 tyname:
@@ -937,14 +926,6 @@ simplekind:
                                             ("expected `*`, found `" ++ w ++ "`") 
                                 pure KType
                             }
-    /* | VARID                 { \v -> do
-                                let w = Token.value v
-                                if w == "generic" then pure KGen
-                                else do
-                                    yyerror (yyline v) 
-                                            ("expected `generic` instead of `" ++ w ++ "`")
-                                    pure KType
-                            } */
     | '(' kind ')'          { \_\b\_ -> b }
     ;
 
