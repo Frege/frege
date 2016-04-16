@@ -127,7 +127,7 @@ instPatSigma pat sigma esig = do
 -- subsCheck exp s1 (RhoTau 
 subsCheck exp s1 s2 = do
     g <- getST
-    E.logmsg TRACET (exp.getpos) (text ("subsCheck: " ++ s1.nice g ++ " :> " ++ s2.nice g))
+    E.logmsg TRACET (exp.getpos) (text ("subsCheck: " ++ s1.nice g ++ " <= " ++ s2.nice g))
     (!skol_tvs, !skol) ← skolemise s2
     off ← instantiate s1
     subsCheckRR exp off skol
@@ -199,7 +199,7 @@ checkConstraints exp s1 s2 = do
 -- subsCheckRR :: (Positioned e, Nice e) => e -> Rho -> Rho -> StG ()
 subsCheckRR ex ty ety = do
         g <- getST
-        E.logmsg TRACET (getpos ex) (text ("subsCheckRR: " ++ ty.nice g ++ " :> " ++ ety.nice g))
+        E.logmsg TRACET (getpos ex) (text ("subsCheckRR: " ++ ty.nice g ++ " <= " ++ ety.nice g))
         subsCheckRR' ex ty ety
     where
             {-
@@ -317,14 +317,14 @@ skolemise (ForAll ns ty) = do
     tvs <- mapSt newRigidTyVar ns
     let tree = TreeMap.fromList (zip (map fst ns) (map Meta tvs))
         rho  = substRho tree ty
-    stio (tvs, rho)
+    pure (tvs, rho)
 
 instantiate :: Sigma -> StG Rho
 instantiate (ForAll [] ty) = stio ty
 instantiate (ForAll ns ty) = do
     tvs <- mapSt newMeta ns
     let tree = TreeMap.fromList (zip (map fst ns) tvs)
-    return (substRho tree ty)
+    pure (substRho tree ty)
 
 {--
  * like instantiate, but give the tvs back
@@ -460,15 +460,38 @@ unifyVar ex tv lrtau = do
                 E.error (getpos ex) (msgdoc (tv.nicer g ++ " occurs in type " ++ tau.nicer g
                     ++ " rendering " ++ ex.is ++ " " ++ ex.nice g ++ " untypable."))
                 stio false
-            else do
-                writeTv tv tau
-                g <- getST
-                E.logmsg TRACET (getpos ex) (text ("unifyVar: " 
-                        ++ show tv.uid ++ " " 
-                        ++ tv.nice g
-                        ++ " :: " ++ show tv.kind))
-                stio true
+            else case tv.kind of 
+                KGen t -> unifyKinded t tau  
+                other -> do
+                    writeTv tv tau
+                    g <- getST
+                    E.logmsg TRACET (getpos ex) (text ("unifyVar: " 
+                            ++ show tv.uid ++ " " 
+                            ++ tv.nice g
+                            ++ " :: " ++ show tv.kind))
+                    stio true
+    -- We have tv≤Foo and Bar
+    -- Unification is ok when Bar is a subtype of Foo
+    -- We need to expand the MetaTv one step 
+    unifyKinded t tau = do
+        st ← substMeta tv.uid (Meta tv) t
+        unified ex st tau
 
+--- substitute MetaTV with given UID in a Tau
+substMeta ∷ Int → Tau → Tau → StG Tau
+substMeta uid rep tau = case tau of
+    TVar{kind=KGen t}  = substMeta uid rep t >>= pure . tau.{kind=} . KGen
+    TApp a b           = liftM2 TApp (substMeta uid rep a) (substMeta uid rep b)
+    TCon{}             = pure tau
+    Meta tv | uid == tv.uid = pure rep
+    Meta tv           = do
+        bound ← readTv tv
+        case bound of 
+            Just ty -> substMeta uid rep ty      -- skip enclosing Metas
+            Nothing -> case tv.kind of
+                KGen ty ->  substMeta uid rep ty >>= pure . Meta . tv.{kind=} . KGen
+                other   ->  pure tau
+    other              = pure tau
 
 
 
