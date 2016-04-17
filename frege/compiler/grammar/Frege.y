@@ -819,7 +819,7 @@ sigma:
     ;
 
 forall:
-    FORALL dvars mbdot rho        { \_\bs\_\r      -> ForAll  [ (b.var, b.kind) | b@TVar{} <- bs ]  r }
+    FORALL dvars mbdot rho        { \_\vs\_\r      -> ForAll  vs  r }
     ;
 
 mbdot:
