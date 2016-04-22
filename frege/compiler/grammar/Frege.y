@@ -1420,7 +1420,7 @@ term:
     | '(' ')'                       { \z\_   -> Con (fromBase z.{tokid=CONID, value="()"})}
     | '(' commata ')'               { \z\n\_ -> Con (fromBase z.{tokid=CONID, value=tuple (n+1)})}
     | '(' unop ')'                  { \_\x\_ -> Vbl {name=Simple x} }
-    | '(' operator ')'              { \_\o\_ -> (varcon o) (opSname o)}
+    | '(' operator ')'              { \a\o\z -> Enclosed{firstT=a, lastT=z, ex=(varcon o) (opSname o)}}
     | '(' '-' ')'                   { \_\m\_ -> (Vbl (fromBase m)) }
     | '(' operator expr ')'         { \z\o\x\_ ->  let -- (+1) --> flip (+) 1
                                         flp = Vbl (contextName z "flip") 
