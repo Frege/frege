@@ -1,11 +1,61 @@
 --- The data types to represent types.
 module frege.compiler.types.Types where 
 
-import  frege.compiler.types.Kinds
 import  frege.compiler.types.Positions
 import  frege.compiler.types.SNames
 import  frege.compiler.types.Packs
 import  frege.compiler.types.QNames
+import  Data.TreeMap(insert)
+
+type Kind  = KindT QName
+type KindS = KindT SName
+
+--- encoding for type kinds
+data KindT a =
+        KVar                            --- unifies with every other kind 
+        | KType                         --- indicates any type
+        | !KGen (TauT a)                --- indicates a type that must appear as generic type
+        | !KApp (KindT a) (KindT a)     --- indicates it will be 2nd kind when applied to 1st kind
+        where
+            --- * -> * -> *
+            fun   = kind 2
+            --- * -> *    
+            unary = kind 1     
+            --- @(kind n)@ is the kind of a type constructor with @n@ type arguments of kind 0
+            kind 0 = KType
+            kind n = KApp KType (kind (n-1))
+            kvar 0 = KType
+            kvar n = KApp KVar  (kvar (n-1))
+            --- is this generic kind, give back @Just t@ or @Nothing@
+            isGen (KGen t) = Just t
+            isGen _        = Nothing
+
+
+
+instance Show (KindT s) where
+    show KType        = "*"
+    show KGen{}       = "generic"
+    show KVar         = "?"
+    show (KApp k1 k2) = showsub k1 ++ "->" ++ show k2
+    showsub KType     = "*"
+    showsub KVar      = "?"
+    showsub KGen{}    = "generic"
+    showsub k         = "(" ++ show k ++ ")"
+
+--- check equality of kinds, gets inprecise with 'KGen' where the types are checked with 'Tau.textualEq'
+keq :: Eq a ⇒ KindT a → KindT a → Bool 
+keq KType KType           = true
+keq KVar  KVar            = true
+keq (KApp a b) (KApp c d) = (a `keq` c) && (b `keq` d)
+keq (KGen a)   (KGen b)   = a.textualEq b
+keq apple      orange     = false
+
+
+derive ArrayElement (KindT s)
+
+
+
+
 
 {--
     Represents type variables in type checking
@@ -16,8 +66,8 @@ import  frege.compiler.types.QNames
     Such a binding is represented by an entry in 'frege.compiler.types.Global#tySubst'
  -}
 data MetaTvT s =
-          Flexi {!uid::Int, !hint::String, !kind::Kind}
-        | Rigid {!uid::Int, !hint::String, !kind::Kind}
+          Flexi {!uid::Int, !hint::String, !kind::KindT s}
+        | Rigid {!uid::Int, !hint::String, !kind::KindT s}
         where
             --- tell if the 'MetaTv' is flexible
             isFlexi (Flexi{}) = true
@@ -39,12 +89,62 @@ type MetaTv = MetaTvT QName
 
 
 {-
- * The type for modelling tau-types.
+    The type for modelling tau-types. 
+    Those are ordinary types, without quantification or constraints.
+
+    Special provisions exist for type variables that correspond to bounded Java type variables
+    (generic type vars).
+
+    If a type variable has a kind 'KGen' with an associated type (for example, Number) 
+
+    > (v :: Number)     -- used for Java <V extends Number>
+
+    then the following holds:
+
+    - the notation @(v :: Object)@ will be translated to (v :: *) if and only if @Object@ is
+      a Frege name for the native type @java.lang.Object@
+    - the type must be a native type, or a tuple of native types.
+    
+    A corresponding  (flexible) meta type variable unifies with 
+    - type applications that denote a native type is narrower than all of the mentioned types.
+    - meta type vars with kind @*@ where the substitution for the other type var is set to the 
+      generic type var when the @*@ type is the expected type. When the generic type is the expected
+      one, the substitution will be the first (or sole) associated type (where all occurences
+      of the generic type variable will have the original kind).
+    - Another generic type variable. The expected types first (or only) bound must be narrower
+      than the other types first or only bound. The type variable with the wider type 
+      gets the type variable with the narrower type as substitution, where the latter ones kind
+      is the union of all subsequent types (i.e. interfaces) of both generic bounds.
+    
+
+    In arguments of type applications, Java wildcards can be modeled like so:
+
+    > (? extends Number)    -- used for <? extends Number>  (upper bound)
+    > (? super Number)      -- used for <? super Number>    (lower bound)
+
+    This will be represented with a wild-card 'TVar'
+
+    > TVar{kind=Number, var="<"}
+    > TVar{kind=Number, var=">"}
+
+    On instantiation or skolemization, each wild-card gets a fresh 'Meta' type variable, with hint set to "<"
+    or ">".
+    The flexible meta type variable @<@ unifies in the same way as a generic type variable.
+    The flexible meta type variable @>@ unifies with
+    - a type application that denotes a wider type than the kind type (there may be only one!)
+      This is checked even when the @>@ variable is already bound (see below).
+    - meta type variables with kind @*@  ???
+    - other generic type variables that specify an upper bound: the upper bound must be wider
+      than the lower bound. The substitution for @>@ is set to the other variable. In this way,
+      when yet another type is unified the range lower bound .. upper bound is checked.
+    - other generic type variables that specify a lower bound: the substitution for the narrower type
+      is the type variable with the wider type.
+    On generalization and when not substituted with anything, yields the type bound.
  -}
 data TauT s =
       !TApp (TauT s) (TauT s)           --- type application
     | !TCon {pos::Position, name::s}    --- type constructor
-    | !TVar {pos::Position,  kind::Kind, var::String}   --- type variable quantified over
+    | !TVar {pos::Position,  kind::KindT s, var::String}   --- type variable quantified over
     | !TSig (SigmaT s)                  -- only used in parser for now
     | !Meta (MetaTvT s)                 --- type variable
     where
@@ -69,6 +169,45 @@ data TauT s =
             flatapp t ts          = t:ts
         -- flat (TFun a b) = [TCon 0 (TName pPrelude "->"), a, b]
         flat t = [t]
+        --- check very sloppily for textual equal'ness
+        --- - 'TSig' never equals anything
+        --- - type constructors and variables match only if their names are textually equal.
+        --- This function is necessary and used only in kind inference. 
+        textualEq ∷ Eq a ⇒ TauT a → TauT a → Bool
+        textualEq (TApp a b)   (TApp c d)   = a.textualEq c && b.textualEq d
+        textualEq TCon{name=a} TCon{name=b} = a == b
+        textualEq TVar{var=a}  TVar{var=b}  = a == b
+        textualEq (Meta a)     (Meta b)     = a == b
+        textualEq apfel        birne        = false
+        --- tell if this 'TVar' or 'MetaTv' is generic
+        isGeneric ∷ TauT α → Bool
+        isGeneric TVar{pos, kind=KGen{}, var} = true
+        isGeneric (Meta mt) | KGen{} ← mt.kind = true
+        isGeneric _ = false
+        --- Returns @Just ">"@ or @Just "<"@ if this is a generic wildcard, otherwise @Nothing@ 
+        wildTau ∷ TauT α → Maybe String
+        wildTau TVar{pos, kind=KGen{}, var} | var == "<" || var == ">" = Just var
+        wildTau (Meta mt) | KGen{} ← mt.kind, mt.hint == "<" || mt.hint == ">" = Just mt.hint
+        wildTau _ = Nothing
+        --- Returns the bounds when this type is a generic (meta) type variable.
+        --- Occurences of the same (meta) variable in the bound type appear as having kind ?
+        bounds ∷ TauT α → Maybe (TauT α)
+        bounds TVar{pos, kind, var} = unkindVar  var   <$> kind.isGen
+        bounds (Meta t)             = unkindMeta t.uid <$> t.kind.isGen
+        bounds _                    = Nothing
+
+unkindVar :: String -> TauT a -> TauT a
+unkindVar s TVar{pos, kind, var} |  s == var = TVar{pos, kind=KVar, var}
+unkindVar s (TApp a b)   = TApp (unkindVar s a) (unkindVar s b)
+unkindVar _ other        = other
+
+unkindMeta :: Int -> TauT a -> TauT a
+unkindMeta uid (Meta tv) | uid == tv.uid = Meta tv.{kind=KVar}
+unkindMeta uid (TApp a b)  = TApp (unkindMeta uid a) (unkindMeta uid b)
+unkindMeta _ other = other
+
+
+ 
 
 
 --- tau types as created by parser
@@ -78,6 +217,7 @@ type TauS = TauT SName
 --- tau types use in TC
 type Tau = TauT QName
 
+
 derive ArrayElement Tau 
 derive ArrayElement Rho
 derive ArrayElement Sigma  
@@ -85,16 +225,18 @@ derive ArrayElement Sigma
 {--
     The type for modelling sigma types (@forall@ types)
  -}
-data SigmaT s = ForAll { !bound :: [(String, Kind)], !rho :: RhoT s } where
+data SigmaT s = ForAll { !bound :: [TauT s], !rho :: RhoT s } where
     --- get the names of the bound type variables
-    vars  (ForAll b _)  = map fst b
-    --- get the 'Kind's of the bound type variables
-    kinds (ForAll b _)  = map snd b
+    vars  (ForAll b _)  = map _.var b
+    --- get the 'KindT's of the bound type variables
+    kinds (ForAll b _)  = map _.kind b
     --- get the bound type variables as list of 'TVar's.
-    tvars (ForAll b _) pos = zipWith (\(v,k)\p -> TVar p k v) b (repeat pos)
+    tvars (ForAll b _)  = b  -- zipWith (\(v,k)\p -> TVar p k v) b (repeat pos)
     --- tell if this is a function
     isFun (ForAll _ RhoFun{})    = true
     isFun (ForAll _ RhoTau{tau}) = tau.isFun
+    --- add our bound variables to a type environment
+    extendEnv (ForAll bound _) env = fold (\e\tv → insert tv.var tv e) env bound
 
 
 --- sigmas after translation
@@ -110,7 +252,6 @@ data ContextT s = Ctx {!pos :: Position, !cname :: s, !tau :: TauT s }
 
 
 type Context    = ContextT QName
-
 
 type ContextS   = ContextT SName
 
@@ -177,7 +318,6 @@ instance Positioned (SigmaT a) where
 
 
 
-
 --- true if and only if the 'Tau' type is a 'TVar' or an application of 'TVar's
 isTvApp (TVar {}) = true
 isTvApp (TApp a b) = isTvApp a && isTvApp b
@@ -208,5 +348,3 @@ rhoPos = Rho.getpos
 
 --- get the 'Position' of a tau type
 tauPos = Tau.getpos
-
-

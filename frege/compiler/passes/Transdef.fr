@@ -51,7 +51,6 @@ import Compiler.enums.SymState
 import Compiler.enums.Literals
 import Compiler.enums.CaseKind
 
-import  Compiler.types.Kinds
 import  Compiler.types.Positions
 import  Compiler.types.Tokens
 import  Compiler.types.Strictness
@@ -157,7 +156,7 @@ inlineCandidates = do
                 notHC RhoTau{} = true
                 notHC RhoFun{sigma=ForAll bound srho, rho}
                     | t <- U.freeCtxTVars [] empty srho.context,
-                      any (`elem` map fst bound) (keys t) = false
+                      any (`elem` map _.var bound) (keys t) = false
                     | otherwise = notHC srho && notHC rho
         notOurCode (sym, p) = do
             g <- getST
@@ -318,6 +317,9 @@ transNatDcl env fname (d@NatDcl {pos}) = do
                     mkGargs ∷ Bool → Symbol → DefinitionS → Sigma → StG [Tau]
                     mkGargs ovld sym d sig = do
                         g   ← getST
+                        dgargs ← case d.gargs of
+                                    Just gs -> (mapM (\t → transTau t >>= forceTau)) gs
+                                    Nothing -> pure []
                         let nik = if sig.isFun then niKind d.meth else NIOp  -- fake
                             (rt, sigs) = U.returnType sig.rho
                             -- for a class method
@@ -344,14 +346,14 @@ transNatDcl env fname (d@NatDcl {pos}) = do
                             -- type variables that are valid
                             sigvars = filter 
                                     ((`notElem` avoid) . _.var) 
-                                    (sig.tvars sym.pos)
+                                    (sig.tvars)
                             bound = map _.var sigvars
                             inferred = if nik == NIMethod || nik == NIStatic then sigvars else []
-                            initial = fromMaybe inferred d.gargs
-                            sgargs
+                            initial = maybe inferred (const dgargs) d.gargs
+                            gargs
                                 | ovld       = filter (null . freeTVnames bound . RhoTau []) initial
                                 | otherwise  = initial
-                        gargs ← mapM transTau sgargs >>= mapM forceTau
+                        -- gargs ← mapM transTau sgargs >>= mapM forceTau
                         when (length gargs > 1 && isNothing d.gargs) do
                             E.error d.pos (
                                 text "Cannot infer the order of the generic type arguments."
@@ -428,11 +430,26 @@ transInsDcl env fname (d@InsDcl {pos}) = do
             nothing -> do E.fatal pos (text ("Cannot happen, instance " ++ iname.nice g ++ " missing"))
 transInsDcl _ _ d = E.fatal d.pos (text "not a ins dcl")
 
+
+private refreshType ∷ DefinitionS → Symbol → StG Symbol
+private refreshType d sym = do
+    g ← getST
+    vars  ← mapM (\t → transTau t >>= forceTau) d.vars
+    let !dname = TName g.thisPack d.name
+        dtcon  = TCon {pos=d.pos, name=dname}
+        dtau  = dtcon.mkapp vars :: Tau
+        !dsig  = ForAll vars (RhoTau [] dtau)
+        !kind  = foldr KApp KType dsig.kinds :: Kind
+        newsym = sym.{typ=dsig, kind=kind}  
+    changeSym newsym
+    pure newsym
+
 transDatDcl env fname (d@DatDcl {pos}) = do
         g <- getST
         let tname = TName g.thisPack d.name
         case g.findit tname of
             Just sym | SymT {pos} <- sym = do
+                sym ← refreshType d sym
                 foreach d.ctrs (transCon sym.typ (MName tname))
                 foreach d.defs (transdef [] (MName tname))
                 polymorphicFields tname
@@ -564,15 +581,16 @@ transDatDcl env fname (d@DatDcl {pos}) = do
                 Just (con@SymD {pos}) = do
                     let transSigma1 (ForAll [] (RhoTau [] t)) = transTau t
                         transSigma1 s = do      -- field types can be sigmas
-                            ForAll bound frho <- U.validSigma1 (map fst bndrs) s
-                            frho <- U.transRho (map fst bound ++ map fst bndrs) frho
-                            stio (ForAll bound frho)
+                            ForAll bound frho <- U.validSigma1 (map _.var bndrs) s
+                            frho <- U.transRho (map _.var bound ++ map _.var bndrs) frho
+                            bounds ← U.transBounds bound
+                            stio (ForAll bounds frho)
                     sigmas <- mapSt (transSigma1 • ConField.typ) d.flds
                     let nfs sigs = zipWith ConField.{typ=}  con.flds sigs
                         typ = ForAll bndrs (foldr (RhoFun []) rho sigmas)
                     E.logmsg TRACE5 con.pos (text (con.nice g ++ " :: " ++ typ.nice g))
                     sig <- U.validSigma typ >>= kiSigma [] [] >>= pure . fst
-                    let additional = filter (`notElem` map fst bndrs) (map fst sig.bound)
+                    let additional = filter (`notElem` map _.var bndrs) (map _.var sig.bound)
                     unless (null additional) do
                         E.error pos (text ("type variable(s) " 
                             ++ joined ", " additional
@@ -588,10 +606,13 @@ transJavDcl env fname (d@JavDcl {pos}) = do
         case g.findit tname of
             Just sym 
                 | SymT {nativ = Just nativ} <- sym = do
+                    -- Redo types
+                    sym ← refreshType d sym
                     -- extract and translate generic type arguments
-                    sgargs = fromMaybe (sym.typ.tvars sym.pos) d.gargs
-                    gargs ← mapM transTau sgargs >>= mapM forceTau
-                    let bound = map fst sym.typ.bound
+                    let doit (Just gs) = mapM transTau gs >>= mapM forceTau
+                        doit Nothing   = pure sym.typ.tvars
+                    gargs ← doit d.gargs -- fromMaybe (pure (sym.typ.tvars sym.pos))  (map transTau <$> d.gargs)
+                    let bound = sym.typ.vars
                     -- check that generic type arguments do not contain free type variables
                     forM_ gargs $ \tau → do
                         let free = freeTVnames bound (RhoTau [] tau)
@@ -653,8 +674,9 @@ transModDcl _ _ d = E.fatal d.pos (text "not a mod dcl")
 
 --- Type for overloaded functions
 ovlsigma :: Sigma
-ovlsigma = ForAll{  bound=[("ω", KType)], 
+ovlsigma = ForAll{  bound=[tvar], 
                     rho = RhoTau [] TVar{pos=Position.null, kind=KType, var="ω"}}
+            where tvar = TVar{pos=Position.null, kind=KType, var="ω"}
 
 --- java types where we know for sure that they are pure
 pureTypes = primitiveTypes ++ ["java.lang.String", "java.math.BigInteger", "java.util.regex.Pattern",
@@ -979,6 +1001,11 @@ transExpr env fname ex = do
                                 when (g.errors == 0) do 
                                     E.error pos (msgdoc ("looked for constructor " ++ name.nice g ++ ", found Nothing"))
                                 stio vUndef
+        Enclosed{firstT, lastT, ex} -> do
+            x ← transExpr env fname ex
+            case x of
+                y | y.{pos?} = pure y.{pos = Pos firstT lastT}
+                  | otherwise = pure y
         _ -> do
             E.error (getpos ex) (text "cannot transExpr: " </> text (nicer ex g))
             return D.Lit{pos=getpos ex, kind=LBool, value="true", typ=Nothing}

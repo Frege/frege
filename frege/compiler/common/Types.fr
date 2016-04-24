@@ -3,14 +3,13 @@ module frege.compiler.common.Types
         inline (isFun)
     where 
 
-import  Data.TreeMap as Map(member, keys, insert, TreeSet, TreeMap)
+import  Data.TreeMap as Map(member, keys, insert, lookup, TreeSet, TreeMap)
 
 import  frege.compiler.types.Types as T
 import  Compiler.types.Global as G
 import  Compiler.types.QNames (QName)
-import  Compiler.types.Kinds
 import  Compiler.types.Positions (Position, getpos)
--- import  Compiler.types.Packs(pPreludeBase)
+import  Compiler.common.Binders
 import  frege.compiler.classes.Nice(Nice)
 
 --- tell if the 'SigmaT' represents a function type. 
@@ -61,7 +60,9 @@ unboundTauTvs' g (Meta m) acc = case m  of
     -- then it is unbound.
     Flexi{uid} →  case g.tySubst.lookupI uid of
         Just t  → unboundTauTvs' g t acc    -- follow substitution
-        Nothing → acc.insertI uid ()        -- would print as t<uid>
+        Nothing → case (Meta m).bounds of   -- dive also into kind
+            Just b → unboundTauTvs' g b (acc.insertI uid ())
+            none   → acc.insertI uid ()        -- would print as t<uid>
     Rigid{} →  acc
 
 unboundTauTvs' g TVar{} acc = acc
@@ -93,7 +94,9 @@ substTauUID g m tau = case tau  of
     Meta v →  case v  of
         Flexi{uid}
             -- if this UID is in the substitution map, we insert the fake UID 
-            | Just n <- m.lookupI uid           → Meta v.{uid=n}
+            | Just n <- m.lookupI uid           → case tau.bounds of
+                Just b → Meta v.{uid=n, kind = KGen (substTauUID g m b)}
+                none   → Meta v.{uid=n}
             -- if the type var was actually bound, we substitute the bound type
             | Just t <- g.tySubst.lookupI uid   → substTauUID g m t
             -- this should not happen, as every unbound Meta var must be in the map
@@ -153,12 +156,12 @@ instanceHead clas rho = RhoTau{context=rho.context, tau=TApp tcon tau}
     where
         tau = (tauRho rho).tau
         tcon = TCon{pos=getpos tau, name=clas}
-        
+
 
 --- note: type must not contain bound Metas
 substSigma :: TreeMap String (TauT t) ->  SigmaT t  -> SigmaT t
 substSigma t (ForAll bndrs rho) = ForAll bndrs (substRho t' rho)
-    where t' = fold TreeMap.delete t (map fst bndrs)
+    where t' = fold TreeMap.delete t (map Tau.var bndrs)
 
 
 substRho t (RhoFun ctx sig rho) = let
@@ -174,13 +177,24 @@ substTau t (tau@TCon{})      = tau
 substTau t (TApp a b)        = TApp (substTau t a) (substTau t b)
 substTau t (typ@Meta _)      = typ     -- Meta must be unbound
 substTau t (typ@TVar {var})  = case TreeMap.lookupS t var of
+        Just (Meta tv)       = Meta tv.{kind ← substKind t var (Meta tv.{kind=KVar})}  
         Just tau -> tau
-        Nothing  -> typ
+        Nothing  -> typ.{kind ← substKind t var typ.{kind=KVar}}
 substTau t (typ@TSig s) = TSig (substSigma t s)
 
+{-- 
+    Substitute the 'Tau' in a 'Kind'
+    Because this could be recursive, there is the extra elements, which must be a 
+    varaibale name and a type 'TVar'.
+    So when we have
+    > e ≤ Enum e
+    we can replace the @e@ inside the kind with one that has kind 'KType'
+    before applying 'substTau' to @Enum e@
+-}
+substKind t s v (KGen tau) = KGen (substTau t (substTau (Map.singleton s v) tau))
+substKind _ s v k          = k
 
-
-substCtx :: TreeMap String (TauT a) -> ContextT a -> ContextT a        
+substCtx :: TreeMap String (TauT a) -> ContextT a -> ContextT a
 substCtx t x  = x.{tau <- substTau t}
 
 
@@ -204,6 +218,78 @@ sigmaKind (ForAll _ rho) = rhoKind rho
 --- A 'RhoFun' will always be 'KType', as it is equivalent to application of @(->)@
 rhoKind RhoFun{} = KType
 rhoKind RhoTau{tau} = tauKind tau
+
+{--
+    Alpha conversion of a sigma.
+    
+    We don't want inner *forall*s and sigmas for fields and let bound functions
+    have type variable names that are already used further outwards. The reason is that while
+    the Frege compiler never confuses different type variables just because they
+    have the same name, this is not so in Java code. Here, we don't have any means to
+    distinguish type variables *except* by name. And when we use that name, it will always 
+    refer to the innermost introduction of that type variable.
+    
+    See also 'https://github.com/Frege/frege/issues/270 Issue #270'
+    
+    We change variable names by trying to modify drawing a unique name from 
+    the latin letter supply and appending a number.
+    This way, no type variable name created during generalization will ever conflict
+    with a renamed one. 
+
+    This can still lead to errors when the outer function is not annotated, and the inner one
+    uses type variables from the same character set that will be used in quantification. Such
+    variables are potential duplicates and must be replaced precautionally.
+
+    Therefore, we need the following parameters:
+    
+    1) the names to avoid (from outer sigmas).
+    2) a 'Regex' that describes potential duplicates. If the outer 'Sigma' is indeed
+    annotated, this can be a 'Regex' that would never match any type variable name. Otherwise,
+    it should match every element of the supply that is currently in use.
+
+    Of course, we simply encode this with a property function that tells us whether a certain
+    variable must be avoided and needs replacement. 
+
+    Because the renamings of user supplied 'Sigma's can lead to hard to understand error
+    messages, there should be a warning when the 'Sigma' was actually alpha-converted. 
+-}
+
+avoidSigma avoid (ForAll tvs rho) = ForAll ntvs (avoidRho (\s -> avoid s ||  s `elem` new) rho')
+    where
+        old = map _.var tvs                         -- old variables
+        bads = filter avoid old                     -- the variables that need replacement
+        safe s = not (avoid s) && s `notElem` old   -- check for a safe name
+        salvage s = head
+                    . filter safe
+                    . (++) (map (s++) ["'", "1", "2", "3"]) -- prefer slight modification of original name
+                    $ [ bn | b ← Binders.allAsciiBinders,   -- or else just invent something
+                             n ← ["'", "1", "2", "3"],
+                             let {bn = s ++ b ++ n}
+                      ]
+        binders = map salvage bads              -- our new safe names
+        reps = Map.fromList (zip bads binders)  -- a substitution for variable names
+        ntvs = map (rnTVar reps) tvs            -- renamed affected type variables
+        new = map _.var ntvs                    -- the variable names of the new Sigma
+        subst = Map.fromList (zip bads [ tv | tv ← ntvs, tv.var `elem` binders ]) 
+        rho' = substRho subst rho               -- substitute the new tvars in the rest of the type
+
+avoidRho :: (String → Bool) -> Rho -> Rho
+avoidRho avoid (rhofun@RhoFun{})  = rhofun.{sigma ← avoidSigma avoid, rho ← avoidRho avoid}
+avoidRho avoid (rhotau@RhoTau{})  = rhotau
+
+rnTVar :: TreeMap String String → Tau → Tau
+rnTVar tree (TApp a b)  = TApp (rnTVar tree a) (rnTVar tree b)
+rnTVar tree (t@TCon{})  = t
+rnTVar tree (t@TVar{})  = case lookup t.var tree of
+    Just v  →   t.{kind ← rnKind tree, var=v}
+    Nothing →   t
+rnTVar tree (t@TSig _)  = t
+rnTVar tree (t@Meta _)  = t
+
+rnKind :: TreeMap String String → Kind → Kind
+rnKind tree (KGen t)  = KGen (rnTVar tree t)
+rnKind tree (KApp k1 k2)  = KApp (rnKind tree k1) (rnKind tree k2)
+rnKind tree k  = k
 
 
 {--

@@ -49,7 +49,6 @@ import Data.List as DL(unique, uniq, sort, elemBy, partition)
 
 import frege.compiler.enums.Flags as Compilerflags(TRACET)
 
-import  Compiler.types.Kinds
 import  Compiler.types.Positions
 import  Compiler.types.QNames
 import  Compiler.types.Types
@@ -73,11 +72,14 @@ import frege.compiler.Javatypes
 
 data Expected t = Check t | Infer t
 
-newSigmaTyVar d = do rho <- newRhoTyVar d; stio (ForAll [] rho)
-newRhoTyVar   d = do ty <- newMeta d; stio (RhoTau [] ty)
-newMeta       d = do flexi <- newFlexiTyVar d; stio (Meta flexi)
-newFlexiTyVar (t,k) = do u <- uniqid; stio (Flexi u t k)
-newRigidTyVar (n,k) = do u <- uniqid; stio (Rigid u n k)
+newSigmaTyVar d = ForAll [] <$>  newRhoTyVar d
+newRhoTyVar   d = RhoTau [] <$>  newMeta2 d
+newMeta       d = Meta      <$>  newFlexiTyVar d
+newMeta2      d = Meta      <$>  newFlexiTyVar (TVar Position.null (snd d) (fst d))
+newFlexiTyVar TVar{kind=k, var=n} = do u <- uniqid; stio (Flexi u n k)
+newFlexiTyVar _ = error "no tyvar"
+newRigidTyVar TVar{kind=k, var=n} = do u <- uniqid; stio (Rigid u n k)
+newRigidTyVar _ = error "no tyvar"
 
 instSigma ex sig erho = do
         g <- getST
@@ -128,7 +130,7 @@ instPatSigma pat sigma esig = do
 -- subsCheck exp s1 (RhoTau 
 subsCheck exp s1 s2 = do
     g <- getST
-    E.logmsg TRACET (exp.getpos) (text ("subsCheck: " ++ s1.nice g ++ " :> " ++ s2.nice g))
+    E.logmsg TRACET (exp.getpos) (text ("subsCheck: " ++ s1.nice g ++ " <= " ++ s2.nice g))
     (!skol_tvs, !skol) ← skolemise s2
     off ← instantiate s1
     subsCheckRR exp off skol
@@ -200,7 +202,7 @@ checkConstraints exp s1 s2 = do
 -- subsCheckRR :: (Positioned e, Nice e) => e -> Rho -> Rho -> StG ()
 subsCheckRR ex ty ety = do
         g <- getST
-        E.logmsg TRACET (getpos ex) (text ("subsCheckRR: " ++ ty.nice g ++ " :> " ++ ety.nice g))
+        E.logmsg TRACET (getpos ex) (text ("subsCheckRR: " ++ ty.nice g ++ " <= " ++ ety.nice g))
         subsCheckRR' ex ty ety
     where
             {-
@@ -221,34 +223,25 @@ subsCheckFun exp s1 r1 s2 r2 = do
             subsCheck   exp s2 s1
             subsCheckRR exp r1 r2
 
-unifyFun exp (RhoFun cx (ForAll b arg) res) = do    -- assume RhoFun is canonical
-        stio (ForAll b arg, res)
-unifyFun exp (RhoTau cx tau) | tau.isFun = unifyFun exp (U.rhoTau tau).{context=cx}
-unifyFun exp (rho@RhoTau cx (Meta tv)) = do
-        mbty <- readTv tv
-        case mbty of
-            Just ty -> unifyFun exp (RhoTau cx ty)
-            Nothing -> unifyFun2 exp rho
-unifyFun exp rho = unifyFun2 exp rho
-
-unifyFun2 exp (RhoTau cx tau)     = do
+unifyFun exp (RhoFun cx sigma res) = pure (sigma, res)
+unifyFun exp (RhoTau cx tau) =  do
         g <- getST
-        arg_ty <- newMeta ("arg", KType)
-        res_ty <- newMeta ("res", KType)
-        b <- unified exp tau (Tau.tfun arg_ty res_ty)
+        arg_ty <- newMeta2 ("arg", KType)
+        res_ty <- newMeta2 ("res", KType)
+        let !funty = Tau.tfun arg_ty res_ty
+        b <- unified exp tau funty
         unless b do
             g <- getST
-            E.error (getpos exp) (message g)
+            E.error (getpos exp) (message g funty)
             E.hint  (getpos exp) (text ("too many or too few arguments perhaps?"))
-        stio (ForAll [] (RhoTau [] arg_ty), RhoTau [] res_ty)
+        pure (ForAll [] (RhoTau [] arg_ty), RhoTau [] res_ty)
     where
-        message g = part1 </> part2 </> part3
+        message g funty = part1 </> part2 </> part3
             where
-                part1 = msgdoc "type error in" <+/> text exp.is <+/> text (exp.nicer g)
-                part2 = msgdoc "type is apparently" <+/> text (tau.nicer g)
-                part3 = msgdoc "used as function"
+                part1 = text "type error in" <+> text exp.is </> nest 2 (nicest g exp)
+                part2 = text "type is apparently " <+> text (tau.nicer g)
+                part3 = text "does not match function type " <+> text (better g funty) 
 
-unifyFun2 exp rho = error "unifyFun2: no rhotau"
 
 
 --- return the unbound sigma type variables
@@ -316,16 +309,16 @@ skolemise :: Sigma -> StG ([MetaTv], Rho)
 skolemise (ForAll [] ty) = stio ([], ty)
 skolemise (ForAll ns ty) = do
     tvs <- mapSt newRigidTyVar ns
-    let tree = TreeMap.fromList (zip (map fst ns) (map Meta tvs))
+    let tree = TreeMap.fromList (zip (map _.var ns) (map Meta tvs))
         rho  = substRho tree ty
-    stio (tvs, rho)
+    pure (tvs, rho)
 
 instantiate :: Sigma -> StG Rho
 instantiate (ForAll [] ty) = stio ty
 instantiate (ForAll ns ty) = do
     tvs <- mapSt newMeta ns
-    let tree = TreeMap.fromList (zip (map fst ns) tvs)
-    return (substRho tree ty)
+    let tree = TreeMap.fromList (zip (map _.var ns) tvs)
+    pure (substRho tree ty)
 
 {--
  * like instantiate, but give the tvs back
@@ -333,7 +326,7 @@ instantiate (ForAll ns ty) = do
 instantiateTvs (ForAll [] ty) = stio ([], ty)
 instantiateTvs (ForAll ns ty) = do
     tvs <- mapSt newMeta ns
-    let tree = TreeMap.fromList (zip (map fst ns) tvs)
+    let tree = TreeMap.fromList (zip (map _.var ns) tvs)
         rho  = substRho tree ty
     stio (tvs, rho)
 
@@ -346,12 +339,12 @@ unify ex t1 t2 = do
             let pos = getpos ex
             E.error pos (part1 g </> part2 g </> part3 g)
     where
-        better g  = flip nicer g . betterReadable g 
         -- better2 = betterReadable t2
-        part1 g = text "type error in" <+> text ex.is <+> text (ex.nicer g)
+        part1 g = text "type error in" <+> text ex.is </> nest 2  (nicest g ex)
         part2 g = text "type is :" <+> text (better g t1)
         part3 g = text "expected:" <+> text (better g t2)
 
+better g  = flip nicer g . betterReadable g
 
 --- resolve 'Meta' type, if possible
 --- If this returns a 'Meta' then it is unbound. 
@@ -456,20 +449,46 @@ unifyVar ex tv lrtau = do
     unbound tau = do            -- unifyUnboundVar
         g <- getST
         let tauTvs = getTauTvs g tau
-
+            tvar   = TVar{pos=getpos tau, kind=KVar, var=" occurs in type "}    -- trick to make 'better' work
+            tapp   = TApp (TApp (Meta tv) tvar) tau                             -- fake type for showing
         if tauTvs `contains` tv then do
-                E.error (getpos ex) (msgdoc (tv.nicer g ++ " occurs in type " ++ tau.nicer g
-                    ++ " rendering " ++ ex.is ++ " " ++ ex.nice g ++ " untypable."))
+                E.error (getpos ex) (
+                    text (better g tapp)    -- "t1 occurs in type (t2->t1)"
+                    </> (text "caused by" <+> text ex.is)
+                    </> nicest g ex)
                 stio false
-            else do
-                writeTv tv tau
-                g <- getST
-                E.logmsg TRACET (getpos ex) (text ("unifyVar: " 
-                        ++ show tv.uid ++ " " 
-                        ++ tv.nice g
-                        ++ " :: " ++ show tv.kind))
-                stio true
+            else case tv.kind of 
+                KGen t -> unifyKinded t tau  
+                other -> do
+                    writeTv tv tau
+                    g <- getST
+                    E.logmsg TRACET (getpos ex) (text ("unifyVar: " 
+                            ++ show tv.uid ++ " " 
+                            ++ tv.nice g
+                            ++ " :: " ++ show tv.kind))
+                    stio true
+    -- We have tv≤Foo and Bar
+    -- Unification is ok when Bar is a subtype of Foo
+    -- We need to expand the MetaTv one step 
+    unifyKinded t tau = do
+        st ← substMeta tv.uid (Meta tv) t
+        unified ex st tau
 
+--- substitute MetaTV with given UID in a Tau
+substMeta ∷ Int → Tau → Tau → StG Tau
+substMeta uid rep tau = case tau of
+    TVar{kind=KGen t}  = substMeta uid rep t >>= pure . tau.{kind=} . KGen
+    TApp a b           = liftM2 TApp (substMeta uid rep a) (substMeta uid rep b)
+    TCon{}             = pure tau
+    Meta tv | uid == tv.uid = pure rep
+    Meta tv           = do
+        bound ← readTv tv
+        case bound of 
+            Just ty -> substMeta uid rep ty      -- skip enclosing Metas
+            Nothing -> case tv.kind of
+                KGen ty ->  substMeta uid rep ty >>= pure . Meta . tv.{kind=} . KGen
+                other   ->  pure tau
+    other              = pure tau
 
 
 
@@ -518,7 +537,7 @@ zonkTau other = stio other      -- TVar and TCon
 
 substRigidSigma [] sigma = sigma
 substRigidSigma bound (ForAll b rho) = ForAll b
-        (substRigidRho (filter (`notElem` map fst b) bound) rho)
+        (substRigidRho (filter (`notElem` map _.var b) bound) rho)
         
 substRigidRho [] rho = rho
 substRigidRho bound (RhoFun ctxs sig rho) = RhoFun 
@@ -564,7 +583,8 @@ quantifiedExcept exc rhos = do
             -- make sigma for rho with the tvs that appear in that rho
             mksig ∷ [(String,MetaTv)] → (Rho,[MetaTv]) → StG Sigma
             mksig bound (rho,tvs) = liftM (ForAll nv) (zonkRho rho)
-                where nv = [ (n,MetaTv.kind v) | (n,v) <- bound, v `elem` tvs]
+                where nv = [ TVar{pos, kind=MetaTv.kind v, var=n} | (n,v) <- bound, v `elem` tvs]
+                      pos = getpos rho
         foreach bound bind                              -- actually write TVars in the MetaTvs
         mapSt (mksig bound) (zip rhos rhosTvs)          -- create (and return) the sigmas
     where
@@ -588,7 +608,7 @@ canonicSignature sig = (instantiate sig >>= zonkRho) >>= quantify
  -}
 tyVarBndrs ty = (uniq • sort) (bndrs ty) where
     bndrs (RhoFun _ (ForAll tvs arg) res)
-                = (map fst tvs ++ bndrs arg) ++ bndrs res
+                = (map _.var tvs ++ bndrs arg) ++ bndrs res
     bndrs _     = []
 
 {--

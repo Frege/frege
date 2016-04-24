@@ -171,15 +171,11 @@ fregec6.jar: fregec.jar savejava
 	@echo
 
 #
-#	Avoid recompilation of everything, just remake the compiler with itself and jar it.
+#	Avoid recompilation of everything, just remake the compiler with itself
 #
 rebuild:
 	@echo "[1;43mMaking $@[0m"
 	$(FREGEC2) -make frege.compiler.Main frege.ide.Utilities
-	$(RM) $(BUILD)/fregec.jar
-	jar -cf $(BUILD)/fregec.jar -C $(BUILD) frege
-	jar -uvfe $(BUILD)/fregec.jar frege.compiler.Main
-	#$(CP) $(BUILD)/fregec.jar ../eclipse-plugin/lib/fregec.jar
 
 test: compiler
 	@echo "[1;42mMaking $@[0m"
