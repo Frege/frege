@@ -43,7 +43,6 @@ import frege.Prelude hiding(<+>, break)
 
 import  Compiler.enums.Flags as Compilerflags(TRACEK)
 
-import  Compiler.types.Kinds as K
 import  Compiler.types.Positions(Positioned)
 import  Compiler.types.QNames
 import  Compiler.types.Types
@@ -98,10 +97,8 @@ kiTypeSym names sym = do
     sym ← U.findT sym.name
     let kflat (KApp k ks) = k : kflat ks
         kflat ks          = [ks]
-        typ = ForAll (zip (map fst sym.typ.bound) (kflat sym.kind)) sym.typ.rho
-        showbound :: (String, Kind) -> String
-        showbound (v, k) = "(" ++ v ++ "∷" ++ show k ++ ")"
-        showbnds = text . joined " " . map showbound
+        typ = ForAll (zipWith Tau.{kind=} (sym.typ.bound) (kflat sym.kind)) sym.typ.rho
+        showbnds = text . joined " " . map (flip nice g)
     changeSym sym.{typ}
     E.logmsg TRACEK (Symbol.pos sym) (text "type is now ∀"
             <+> showbnds typ.bound <+> text "." <+> text (nicer typ.rho g)
@@ -119,10 +116,14 @@ kiSigmaX :: Sigma -> Kind -> StG (Sigma, Kind)
 kiSigmaX sigma kind = do
     g <- getST
     E.logmsg TRACEK (getpos sigma) (text ("kind check " ++ nice sigma g ++ " for " ++ show kind))
-    let e = TM.fromList sigma.bound
+    let e = Tau.kind <$> sigma.extendEnv empty
     (rho, envs, kind) <- kiRhoX sigma.rho [e] kind
     let e' = fmap repKVar (head envs) 
-    return (sigma.{bound = each e', rho = substRhoKind e' rho}, repKVar kind)
+    return (substSigmaBound sigma.{rho = substRhoKind e' rho} e', repKVar kind)
+
+substSigmaBound (ForAll bound rho) e = ForAll new rho
+    where
+        new = [ tv.{kind=k} | tv ← bound, k ← lookup tv.var e ]
 
 kiRhoX :: Rho -> Envs -> Kind -> StG (Rho, Envs, Kind)
 kiRhoX (it@RhoTau{}) env kind = do
@@ -146,8 +147,8 @@ kiSigmaC :: String -> Kind -> Sigma -> StG (Sigma, Envs)
 kiSigmaC name kind sigma = do
     g <- getST
     E.logmsg TRACEK (getpos sigma) (text ("kind check " ++ nice sigma g))
-    let se = TM.fromList sigma.bound
-        e  = if kind == KVar then se else insert name kind se
+    let se = Tau.kind <$> sigma.extendEnv empty
+        e  = if kind `keq` KVar then se else insert name kind se
     -- the sub rho is checked with an extended env, i.e. one that is 1 longer than the
     -- one passed in.
     -- If kiRho always returns an env with the same length as passed,
@@ -157,14 +158,14 @@ kiSigmaC name kind sigma = do
     -- as it is 1 longer than env (which may be the empty list). 
     (rho, envs) <- kiRho [] (e:[]) sigma.rho
     let e' = fmap repKVar (head envs)
-    return (sigma.{bound = each e', rho = substRhoKind e' rho}, tail envs)
+    return (substSigmaBound sigma.{rho = substRhoKind e' rho} e', tail envs)
     
 --- kind inference on a 'Sigma' type
 kiSigma :: [QName] -> Envs -> Sigma -> StG (Sigma, Envs)
 kiSigma names env sigma = do
     g <- getST
     E.logmsg TRACEK (getpos sigma) (text ("kind check " ++ nice sigma g))
-    let e = TM.fromList sigma.bound
+    let e = Tau.kind <$> sigma.extendEnv empty
     -- the sub rho is checked with an extended env, i.e. one that is 1 longer than the
     -- one passed in.
     -- If kiRho always returns an env with the same length as passed,
@@ -174,7 +175,7 @@ kiSigma names env sigma = do
     -- as it is 1 longer than env (which may be the empty list). 
     (rho, envs) <- kiRho names (e:env) sigma.rho
     let e' = fmap repKVar (head envs)
-    return (sigma.{bound = each e', rho = substRhoKind e' rho}, tail envs)
+    return (substSigmaBound sigma.{rho = substRhoKind e' rho} e', tail envs)
 
 -- unVar KVar = KVar
 -- unVar x    = repKVar x
@@ -193,10 +194,10 @@ substRhoKind env (it@RhoFun{}) = it.{
         -- the bound variables except the ones bound here
         env' = foldr delete env it.sigma.vars    
 
-substCtxKind :: TreeMap String Kind -> ContextT β -> ContextT β
+substCtxKind :: TreeMap String (KindT β) -> ContextT β -> ContextT β
 substCtxKind env it = it.{tau <- substTauKind env}
 
-substTauKind :: TreeMap String Kind -> TauT β -> TauT β
+substTauKind :: TreeMap String (KindT β) -> TauT β -> TauT β
 substTauKind env (it@TVar{}) = case env.lookup it.var of
     Just kind -> it.{kind}
     _         -> it    
@@ -251,18 +252,20 @@ unifyTauKind names env (TVar{pos,var,kind}) exp = do
             Just k  -> do
                 -- let k = unVar kn
                 E.logmsg TRACEK pos (text ("unifyTauKind: " ++ var ++ "  result " ++ show k))
-                if (varkind == KGen && k == KType)
-                then return (k, updenv env var varkind)
-                else return (k, updenv env var k) 
-            Nothing -> if (varkind == KType && exp == KGen) 
+                --if (varkind == KGen && k == KType)
+                --then return (k, updenv env var varkind)
+                --else return (k, updenv env var k)
+                pure (k, updenv env var k) 
+            Nothing -> 
+                {- if (varkind == KType && exp == KGen) 
                 then return (KGen, updenv env var KGen)
-                else do
+                else -} do
                     E.error pos (text ("kind error, type variable `" 
                                         ++ var 
                                         ++ "` has kind " 
                                         ++ show varkind
                                         ++ ", expected was " ++ show exp))
-                    return (varkind, updenv env var varkind)
+                    pure (varkind, updenv env var varkind)
     where varkind = fromMaybe kind (findenv env var)
 
 
@@ -277,7 +280,7 @@ unifyTauKind names env (TCon{pos,name}) exp = do
     
     case unifyKind sym.kind exp of
         Just k -> do
-            when (k != sym.kind && sym.name `elem` names) do 
+            when (! (k `keq` sym.kind) && sym.name `elem` names) do 
                 changeSym sym.{kind=k}
             E.logmsg TRACEK pos (text ("unifyTauKind: " ++ nice name g ++ "  result " ++ show k))
             return (k, env)
@@ -298,7 +301,7 @@ unifyTauKind names env (it@TApp a b) exp = do
         KApp kb kx = do
             E.logmsg TRACEK (getpos it) (text ("unifyTauKind: " ++ nice it g ++ " result " ++ show kx))
             (kb2, env) <- unifyTauKind names env b kb
-            if kb2 == kb
+            if kb2 `keq` kb
                 then return (kx, env)
                 else do
                     (kr, env) <- unifyTauKind names env a (KApp kb2 kx)
@@ -355,10 +358,10 @@ findenv [] k = Nothing
         
 
 unifyKind :: Kind -> Kind -> Maybe Kind
-unifyKind KGen KType = Just KType
-unifyKind KGen KGen = Just KGen
+unifyKind (a@KGen{}) KType = Just a
+unifyKind (a@KGen{}) (b@KGen{}) = if  a `keq` b then Just a else Nothing
 unifyKind KType KType = Just KType
-unifyKind KType KGen = Nothing -- Just KRef
+unifyKind KType (b@KGen{}) = Just b
 unifyKind KVar x = Just x
 unifyKind x KVar = Just x
 unifyKind (KApp a b) (KApp c d) = do

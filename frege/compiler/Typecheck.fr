@@ -85,7 +85,6 @@ import Compiler.enums.Visibility
 import Compiler.enums.SymState
 import Compiler.enums.Literals
 
-import  Compiler.types.Kinds
 import  Compiler.types.Positions
 import  Compiler.types.Tokens
 import  Compiler.types.Packs
@@ -100,6 +99,7 @@ import  Compiler.common.Errors as E()
 import  Compiler.common.Types  as TH
 import  Compiler.common.Resolve as R(weUse)
 import  Compiler.common.SymbolTable
+import  Compiler.common.Binders(avoidBinders)
 
 import  Compiler.classes.Nice
 
@@ -222,7 +222,7 @@ annotateMain = do
 
 checkMain = do
     g <- getST
-    tau <- Util.newMeta ("a", KType)
+    tau <- Util.newMeta2 ("a", KType)
     case g.findit (VName g.thisPack "main") of
         Just sym | sym.name.pack == g.thisPack -> do
             let m = Vbl {pos = sym.pos, name = sym.name, typ = Just pSigma}
@@ -267,19 +267,22 @@ checkgroup  nms = do
 checkgroup7 nms = do
     g <- getST
     E.logmsg TRACEZ Position.null (text ("typechecking group: " ++ joined " " (map (flip QName.nice g) nms)))
-    syms <- mapSt findV nms
+    unless (null g.typEnv) do
+        mapSt findV nms >>= mapM_ renameSigma
     -- we set up typEnv with the names of the group members so that 'envTvs' will find them
     changeST Global.{typEnv <- (nms ++)}
 
     -- with Nil do
         -- sequence_ enterChecked
         -- foreach syms (\sym -> U.linkq (Local (show (Symbol.sid sym))) sym)
+    -- foreach nms verbose
     foreach nms checkName
     syms <- mapSt findV nms
     when (length syms > 1 || any ((==Recursive) • Symbol.state) syms)
             (foreach nms checkName)
     changeST Global.{typEnv <- drop (length nms)}
     g <- getST
+    -- foreach nms verbose
     when (length g.typEnv == 0)  do
         quantifyMany nms
     -- DO NOT quantify let
@@ -343,7 +346,7 @@ checkKind sym = correctK empty sym
                     (pure typ) 
                     (fst <$> K.kiSigma [] [] typ)
                     (null typ.bound)
-        let rsubst = TreeMap.insertList subst (zip sig.vars (sig.tvars sym.pos))
+        let rsubst = sig.extendEnv subst -- (zip sig.vars (sig.tvars sym.pos))
         ex      ← maybe
                     (pure Nothing)
                     (\x → Just <$> (x >>= mapEx false (correctKind rsubst)))
@@ -384,7 +387,7 @@ checkReturn sym sigma =
     case U.returnType sigma.rho of
         (_, []) -> stio ()
         (t, ss) -> do
-            let svars = [ v | ForAll bs br <- ss, v <- U.freeTVnames (map fst bs) br ]
+            let svars = [ v | ForAll bs br <- ss, v <- U.freeTVnames (map _.var bs) br ]
                         ++ keys (U.freeCtxTVars [] empty sigma.rho.context)
                 tvars = case t of
                     TVar {pos} -> [t.var]
@@ -509,10 +512,28 @@ substInst (lit@Lit{pos, kind, value, typ=Just (ForAll [] rho)})
       not (null rho.context) = pure (Right lit.{typ=Just (ForAll [] rho.{context=[]})})
 substInst x = stio (Left x)
 
+renameSigma ∷ Symbol -> StG ()
+renameSigma sym | sym.name.isLocal && sym.anno = do
+    g   ← getST
+    outer ← mapSt findV g.typEnv
+    let avoid  = \c → c `elem` concatMap (Sigma.vars . Symbol.typ) outer 
+                    || (any (null . Sigma.vars . Symbol.typ) outer && avoidBinders g c)
+        newsym = sym.{typ ← avoidSigma avoid }
+    when (sym.typ.vars != newsym.typ.vars) do
+        E.warn sym.pos ((text "Renamed type variables in annotated type of let bound function "
+                            <+> text sym.name.base) 
+                            </> (text "was: " <+> text (sym.typ.nicer g))
+                            </> (text "now: " <+> text (newsym.typ.nicer g))
+                            </> text "because of (potential) type variable naming conflicts.")
+        changeSym newsym
+    pure ()
+renameSigma other = pure ()
+
 
 checkName nm = do
     g       <- getST
     sym     <- findV nm
+    -- sym     <- if nm.isLocal && sym.anno then renameSigma sym else pure sym
     E.logmsg TRACEZ sym.pos (text ("checkName:  " ++ sym.name.nice g ++ " :: " ++ sym.typ.nice g))
     -- E.logmsg TRACET sym.pos (text ("checkName:  " ++ sym.name.nice g ++ " :: " ++ sym.typ.nice g))
     sigma   <- checkSym sym
@@ -527,8 +548,10 @@ checkName nm = do
         case sym of
             SymV {nativ = Just _, typ = t} | not (isPSigma t) -> do
                 (sig, _) <- K.kiSigma [] [] t
+                E.logmsg TRACEZ sym.pos (text "after kind inference: " <+> 
+                    text (sig.nicer g)) 
                 changeSym sym.{typ=sig}
-                M.sanity sym
+                M.sanity sym.{typ=sig}
                 return sig
             SymV {expr = Nothing, name, pos, typ = t}
                 | not (isPSigma t),
@@ -715,14 +738,14 @@ approxRho :: Expr -> StG Rho
 approxRho (Lam {ex,pat}) = do
     sig <- case pat of
         PAnn{pat, typ} -> return typ
-        sonst          -> newSigmaTyVar ("arg", KType)
+        sonst          -> ForAll [] . RhoTau [] <$> newMeta2 ("arg", KType)
     rho <- approxRho ex
     stio (RhoFun [] sig rho)
 approxRho _ = newRhoTyVar ("res", KType)
 
 
 inferRho x = do
-    rho    <- newRhoTyVar ("infer", KVar) -- doio (Ref.new Nothing)
+    rho    <- RhoTau [] <$> newMeta2 ("infer", KVar) -- doio (Ref.new Nothing)
     x      <- tcRho x (Infer rho)
     case x.typ of
         Just s -> return (s.rho, x)
@@ -841,11 +864,11 @@ rhoRegex    = RhoTau [] (TCon {pos=Position.null,name=TName pUtilRegex "Regex"})
 rhoMatcher  = RhoTau [] (TCon {pos=Position.null,name=TName pUtilRegex "MatchResult"})
 rhoInteger  = rhoFor "Integer"
 tauString   = TApp (tc "StringJ") (tc "Char")
-numVar      = ForAll [("int", KType)] 
+numVar      = ForAll [tau] 
                      RhoTau{context=[Ctx{pos, cname=TName pPreludeBase "Num", tau}], tau}
                 where tau = TVar{pos, kind=KType, var="int"}
                       pos = Position.null
-realVar     = ForAll [("int", KType)] 
+realVar     = ForAll [tau] 
                      RhoTau{context=[Ctx{pos, cname=TName pPreludeBase "Real", tau}], tau}
                 where tau = TVar{pos, kind=KType, var="int"}
                       pos = Position.null
