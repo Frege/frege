@@ -1,0 +1,237 @@
+{-- 
+    Code for compiling efficient pattern matches for functions with
+    multi equation definitions with more than a single pattern.
+    
+    This used to be done like 
+    
+    >                                case (a,b,c) of
+    > f a1 b1 c1 = e1                   (a1,b1,c1) -> e1
+    > f a2 b2 c2 = e2                   (a2,b2,c2) -> e2
+    
+    and the code generator has facilities to generate code for matching that 
+    wouldn't construct/deconstruct the tuple.
+    
+    But this approach fails when there are higher rank function arguments, since using
+    them as tuple elements would instantiate them, and thus ruin their higher rankedness.
+    
+    See also 'caseComp'
+    
+    We follow closely 'http://research.microsoft.com/en-us/um/people/simonpj/papers/slpj-book-1987/slpj-book-1987.pdf chapter 5'
+    of the famous "Implementation of Functional Programming Languages".
+    
+    -}
+module frege.compiler.common.PatternCompiler where
+
+import frege.Prelude hiding (<+>)
+
+import Compiler.enums.Flags(TRACE7)
+import Compiler.enums.CaseKind
+
+import Compiler.classes.Nice
+
+import Compiler.types.Symbols
+import Compiler.types.Global
+import Compiler.types.Expression
+import Compiler.types.Patterns
+import Compiler.types.QNames
+import Compiler.types.Positions
+
+import Compiler.common.SymbolTable
+import Compiler.common.Errors as E()
+import Compiler.common.Trans
+
+import Lib.PP(text, <+>, <>, </>)
+import Data.List(sortBy, groupBy)
+import Compiler.Utilities as U()
+
+
+
+
+ccSym (vsym@SymV {pos})
+    | Just x ← vsym.expr = do
+        nx ← x >>= ccExpr
+        changeSym vsym.{expr = Just (return nx)}
+    | otherwise = pure ()
+ccSym sym = do
+    g <- getST
+    E.fatal sym.pos (text ("ccSym no SymV : " ++ sym.nice g))
+
+
+
+ccExpr    = U.mapEx true caseComp
+
+{-- 
+    Canonicalize a pattern for the purpose of the pattern compiler.
+
+    When we have
+
+    > case u of pat -> ex
+
+    but we want _pat_ to be a variable 'PVar' or a constructor 'PCon'.
+
+    We can achieve this by transforming like this, where @v@ resembles a new name
+    and @123@ resembles some literal.
+
+    > p@pat  → ex                               p | pat ← p         = ex
+    > !p     → ex                               v | !p ← v          = ex
+    > 123    → ex                               v | 123 ← v         = ex
+    > (p::t) → ex                               v | (p::t) ← v      = ex
+    > m~´rg´ → ex                               v | m~´rg´ ← v      = ex
+
+    We don't have to look inside, nor do we need recursion, since in the guard
+    the full regex power is available. And we need at most one variable.
+    
+    The first argument *must be* a 'PVar'!
+-}
+canonicPatEx :: Pattern → Pattern → Expr → (Pattern, Expr)
+canonicPatEx vp complex ex = case complex  of
+        PVar{} →  (complex, ex)
+        PCon{} →  (complex, ex)
+        PAt{pos, uid, var, pat} →  (p, pat |<- x) where
+                                        p   = PVar{pos, uid, var}
+                                        x   = Vbl{pos, name=Local{uid, base=var}, typ=Nothing}
+        PUser{} →  (vp, complex |<- vx)
+        PLit{}  →  (vp, complex |<- vx)
+        PAnn{}  →  (vp, complex |<- vx)
+        PMat{}  →  (vp, complex |<- vx)
+        PConFS{} →  error "PCon not allowed here"
+    where
+        vx = Vbl{pos=vp.pos, name=Local{uid=vp.uid, base=vp.var}, typ=Nothing}
+        -- constuct | pat <- x = ex
+        p |<- x = Case{ckind=CWhen, ex=x, alts=[CAlt{pat=p, ex}], typ=Nothing}
+
+--- make the first pattern of a definition canonic
+mkCanonic ∷ ([Pattern],ExprT) → StG ([Pattern],ExprT)
+mkCanonic (p:ps, ex) = do
+    v ← freshVar (getpos p)
+    let (y,x) = canonicPatEx v p ex
+    pure (y:ps, x)
+mkCanonic sonst = pure sonst
+
+{--
+    Find case expressions of the form
+
+    > case (u1, ...., un) of
+    >    (a1, ..., an) -> e1
+    >    (b1, ..., bn) -> e1
+
+    and remove the construction/deconstruction of the tuples.
+
+    This is important to do before typechecking, as the following example shows:
+
+    > foo :: (forall a b.[a] → [b]) -> [c] -> [d] -> ([e],[f])
+    > foo f [] ys = ([], f ys)
+    > foo f xs [] = (f xs, [])      -- error: xs :: [c], expected [e]
+
+    Because in the @Fix@ pass, all the arguments of an equation are stuffed in a tuple,
+    we get a structure like above. But this instantiates the higher rank function and
+    thus we get the error. See also 'https://github.com/Frege/frege/issues/273 Issue 273'
+
+    This will work for all case expressions that scrutinize a product constructor
+    (not just tuples) when the constructor is applied to variables only.
+-}
+caseComp expr = do
+    g ← getST
+    case expr of
+        Case{ckind=CNormal, ex, alts}
+            | App{} ← ex,
+              (tcon@Con{name} : us) ← map fst (flatx ex),
+              productCon name g,
+              all localvariable us,
+              all (proper (length us)) alts         -- do default casing later
+            = do
+                g ← getST
+                E.logmsg TRACE7 (getpos expr) (text "caseComp: found one " <+> text (nicer expr g))
+                pxs ← mapM mkCanonic (map calt alts)
+                e ← match us pxs expr
+                E.logmsg TRACE7 (getpos expr) (text "caseComp: after " <+> text (nicer e g))
+                pure (Left e)
+            | otherwise = pure (Left expr)
+            where
+                localvariable Vbl{name=Local{}} = true
+                localvariable _                 = false
+                proper n CAlt{pat=PCon{pats}, ex} = length pats == n
+                proper n _                        = false
+                -- must be PCon!
+                calt CAlt{pat, ex}     = (pat.pats, ex)
+        other = pure (Left expr)
+
+--- make a completely fresh var
+freshVar pos = do
+    uid ← uniqid
+    let p = PVar{pos, uid, var="p$"++show uid}
+    U.mkLocal p
+    pure p
+
+nicet g x = text (nicer x g)
+
+{--
+    compile the complex case
+-}
+match ∷ [Expr] → [([Pattern],Expr)] → Expr → StG Expr
+match us ys e = do
+        g ← getST
+        logit us ys e
+        case us of
+            [] → case ys of 
+                []          → pure e
+                [([], ex)]  → pure ex
+                ([], ex):_  → do
+                    E.warn (getpos e) (text "Some alternatives can never be reached.")
+                    pure ex
+                _ -> E.fatal (getpos e) (text "bad match parameters, turn on -x7")
+            (u:xs) 
+                | allvars = do
+                    ys' ← mapM (\y → varRule u y >>= mkCanonic) ys
+                    match xs ys' e
+                | allcons = do
+                    -- e.g. [[([Cons a b,...], e1), ...], [([Nil, ...], e2]]
+                    let !gys = groupBy (using (_.qname . head . fst)) sorted
+                    alts ← mapM (mkCalt xs) gys
+                    pure (Case{ckind=CNormal, ex=u, alts, typ=Nothing})
+                | otherwise =  do
+                    let diese = takeWhile (func . head . fst) ys
+                        jene  = drop (length diese) ys
+                    match us jene e >>= match us diese 
+    where
+        isPVar PVar{} = true
+        isPVar _      = false
+        isPCon PCon{} = true
+        isPCon _      = false
+        allvars = all (isPVar . head . fst) ys
+        allcons = all (isPCon . head . fst) ys
+        sorted = sortBy (comparing (_.qname . head . fst)) ys
+        varRule u (pv:ps, ex) = do 
+            nex ← Trans.changeSID pv.uid u.name ex
+            pure (ps, nex)
+        varRule _ _ = error "empty varRule?"
+        conRule (pcon:ps, ex) = (pcon.pats ++ ps, ex)
+        conRule _ = error "empty conRule?"
+        mkPcon pcon = do
+            pats ← replicateM (length pcon.pats) (freshVar (getpos e))
+            pure pcon.{pats}
+        mkCalt ∷ [ExprT] → [([Pattern],ExprT)] → StG CAltT
+        mkCalt us alts = do 
+            pcon ← mkPcon (head . fst . head $ alts)
+            let us' = map (\PVar{pos, uid, var} → Vbl{pos, name=Local{uid, base=var}, typ=Nothing}) pcon.pats
+            ys' ← mapM mkCanonic (map conRule alts)
+            subex ← match (us' ++ us) ys' e
+            pure CAlt{pat=pcon, ex=subex}
+        func = case ys of
+                (PVar{}:_, _):_ → isPVar
+                _               → isPCon
+        logit ∷ [ExprT] → [([Pattern],ExprT)] → ExprT → StG ()
+        logit xs ys e = do
+            g ← getST
+            E.logmsg TRACE7 (getpos e) (
+                    text "MATCH " <+> text "[" <+> PP.spread (map (nicet g) xs)  <+> text "]"
+                    </> PP.stack (
+                        map (\(ps,x) -> text "[" <+> PP.spread (map (nicet g) ps)  <+> text "]"
+                                        <+> nicet g x)
+                            ys
+                    ) 
+                )
+
+
+
+
