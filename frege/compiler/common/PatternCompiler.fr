@@ -1,24 +1,24 @@
 {-- 
     Code for compiling efficient pattern matches for functions with
     multi equation definitions with more than a single pattern.
-    
+
     This used to be done like 
-    
+
     >                                case (a,b,c) of
     > f a1 b1 c1 = e1                   (a1,b1,c1) -> e1
     > f a2 b2 c2 = e2                   (a2,b2,c2) -> e2
-    
+
     and the code generator has facilities to generate code for matching that 
     wouldn't construct/deconstruct the tuple.
-    
+
     But this approach fails when there are higher rank function arguments, since using
     them as tuple elements would instantiate them, and thus ruin their higher rankedness.
-    
+
     See also 'caseComp'
-    
+
     We follow closely 'http://research.microsoft.com/en-us/um/people/simonpj/papers/slpj-book-1987/slpj-book-1987.pdf chapter 5'
     of the famous "Implementation of Functional Programming Languages".
-    
+
     -}
 module frege.compiler.common.PatternCompiler where
 
@@ -26,6 +26,7 @@ import frege.Prelude hiding (<+>)
 
 import Compiler.enums.Flags(TRACE7)
 import Compiler.enums.CaseKind
+import Compiler.enums.Literals
 
 import Compiler.classes.Nice
 
@@ -151,10 +152,10 @@ caseComp expr = do
               all (proper (length us)) alts         -- do default casing later
             = do
                 g ← getST
-                E.logmsg TRACE7 (getpos expr) (text "caseComp: found one " <+> text (nicer expr g))
-                pxs ← mapM (mkCanonic (head us)) (map calt alts)
-                e ← match us pxs expr
-                E.logmsg TRACE7 (getpos expr) (text "caseComp: after " <+> text (nicer e g))
+                E.logmsg TRACE7 (getpos expr) (text "caseComp: found one " <+> nicec g expr)
+                let pxs = map calt alts
+                e ← match (getpos expr) CNormal us pxs 
+                E.logmsg TRACE7 (getpos expr) (text "caseComp: after " <+> nicec g e)
                 pure (Left e)
             | otherwise = pure (Left expr)
             where
@@ -181,66 +182,150 @@ pvar tv = PVar{pos=tv.pos, uid=tv.name.uid, var=tv.name.base}
 vbl :: Pattern → Expr
 vbl pv = Vbl{pos=pv.pos, name=Local{uid=pv.uid, base=pv.var}, typ=Nothing}
 
+--- extensive case printing
+nicec g Case{ckind, ex, alts, typ}
+     = text (if ckind == CWhen then "when" else "case")
+        <+> nicet g ex <+> PP.bracket "{" (PP.stack as) "}" where
+            as = map (\alt → nicet g alt.pat <+> text "→" <+> nicec g alt.ex <> text ";") alts
+nicec g x = nicet g x
+
 
 {--
     compile the complex case
 -}
-match ∷ [Expr] → [([Pattern],Expr)] → Expr → StG Expr
-match us ys e = do
+match ∷ Position → CKind → [Expr] → [([Pattern],Expr)] → StG Expr
+match pos ck us ys = do
         g ← getST
-        logit us ys e
+        -- logit pos us ys
         case us of
             [] → case ys of 
-                []          → pure e
-                [([], ex)]  → pure ex
-                ([], ex):_  → do
-                    E.warn (getpos e) (text "Some alternatives can never be reached.")
+                -- []          → pure e
+                [([], ex)]  → do
+                    E.logmsg TRACE7 (getpos ex) (nicec g ex)
                     pure ex
-                _ -> E.fatal (getpos e) (text "bad match parameters, turn on -x7")
-            (u:xs) 
-                | allvars = do
-                    ys' ← mapM (\y → varRule u y >>= mkCanonic u) ys
-                    match xs ys' e
-                | allcons = do
-                    -- e.g. [[([Cons a b,...], e1), ...], [([Nil, ...], e2]]
-                    let !gys = groupBy (using (_.qname . head . fst)) sorted
-                    alts ← mapM (mkCalt xs) gys
-                    pure (Case{ckind=CNormal, ex=u, alts, typ=Nothing})
-                | otherwise =  do
-                    let diese = takeWhile (func . head . fst) ys
-                        jene  = drop (length diese) ys
-                    match us jene e >>= match us diese 
+                ([], ex):exs  →
+                    foldM (flip add) ex (map snd exs) 
+                    --do
+                    --forM_ exs $ \(_,ux) -> 
+                    --    E.warn (getpos ux) (text "Alternative can never be reached.")
+                    --E.logmsg TRACE7 (getpos ex) (nicec g ex)
+                    --pure ex
+                _ -> E.fatal pos (text "bad match parameters, turn on -x7")
+            (u:xs) -> do
+                ys' ← mapM (mkCanonic u) ys
+                logit pos us ys'
+                case () of
+                     () | allvars ys' = do
+                            ys'' ← mapM (varRule u) ys'
+                            match pos ck xs ys'' 
+                        | allcons ys' = do
+                            -- e.g. [[([Cons a b,...], e1), ...], [([Nil, ...], e2]]
+                            let gys = groupBy (using (_.qname . head . fst)) (sorted ys')
+                            alts ← mapM (mkCalt xs) gys
+                            mkCase u alts
+                        | allbool ys' = do
+                            let gys = groupBy (using (getLit . head . fst)) (sortlit ys')
+                            alts ← mapM (mkBool xs) gys
+                            mkCase u alts
+                        | alllits ys' = do
+                            -- let gys = groupBy (using (getLit . head . fst)) (sortlit ys')
+                            alts ← mapM (mkLits xs) ys'
+                            mkCase u alts
+                        | otherwise =  do
+                            let diese = takeWhile (func ys' . head . fst) ys'
+                                jene  = drop (length diese) ys'
+                            e1 ← match pos CWhen us diese
+                            e2 ← match pos ck    us jene
+                            add e2 e1 
+              where
+                mkCase u alts = case ck of 
+                    CNormal → do
+                        let ex = Case{ckind=CNormal, ex=u, alts, typ=Nothing} 
+                        E.logmsg TRACE7 (getpos ex) (text "mkCase NORMAL: " <+> nicec g ex)
+                        pure ex
+                    _ → do
+                            forM_ alts (\alt →
+                                E.logmsg TRACE7 (getpos alt.ex) (
+                                    text "mkCase ALT: " <+> nicet g alt.pat <+> text " → "
+                                    <+> nicec g alt.ex
+                                    ))
+                            ex ← nest alts
+                            E.logmsg TRACE7 (getpos ex) (text "mkCase WHEN: " <+> nicec g ex)
+                            pure ex 
+                        where
+                                nest [alt] = pure (Case {ckind=CWhen, ex=u, alts=[alt], typ=Nothing})
+                                nest (alt:alts) = do
+                                    p ← freshVar (getpos (head alts).pat)
+                                    e ← nest alts
+                                    pure (Case{ckind=CWhen, ex=u, alts=[alt, CAlt p e], typ=Nothing})
+                                nest [] = error "nest: []"
     where
         isPVar PVar{} = true
         isPVar _      = false
         isPCon PCon{} = true
         isPCon _      = false
-        allvars = all (isPVar . head . fst) ys
-        allcons = all (isPCon . head . fst) ys
-        sorted = sortBy (comparing (_.qname . head . fst)) ys
+        isPLit PLit{} = true
+        isPLit PMat{} = true
+        isPLit _      = false
+        isBool PLit{kind=LBool} = true
+        isBool _                = false
+        getLit PLit{value} = value
+        getLit PMat{value} = value
+        getLit _ = ""
+        allvars ys = all (isPVar . head . fst) ys
+        allcons ys = all (isPCon . head . fst) ys
+        allbool ys = all (isBool . head . fst) ys
+        alllits ys = all (isPLit . head . fst) ys
+        sorted ys  = sortBy (comparing (_.qname . head . fst)) ys
+        sortlit ys = sortBy (comparing (getLit  . head . fst)) ys 
         varRule u (pv:ps, ex) = do 
             nex ← Trans.changeSID pv.uid u.name ex
             pure (ps, nex)
         varRule _ _ = error "empty varRule?"
         conRule (pcon:ps, ex) = (pcon.pats ++ ps, ex)
         conRule _ = error "empty conRule?"
+        litRule (_:ps, ex) = (ps, ex)
+        litRule _ = error "empty litRule?"
         mkPcon pcon = do
-            pats ← replicateM (length pcon.pats) (freshVar (getpos e))
+            pats ← replicateM (length pcon.pats) (freshVar (getpos pcon))
             pure pcon.{pats}
         mkCalt ∷ [ExprT] → [([Pattern],ExprT)] → StG CAltT
         mkCalt us alts = do 
             pcon ← mkPcon (head . fst . head $ alts)
             let us' = map vbl pcon.pats ++ us
-            ys' ← mapM (mkCanonic (head us')) (map conRule alts)
-            subex ← match us' ys' e
+                ys' = map conRule alts
+            subex ← match pos ck us' ys'
             pure CAlt{pat=pcon, ex=subex}
-        func = case ys of
+        mkBool ∷ [ExprT] → [([Pattern],ExprT)] → StG CAltT
+        mkBool us alts = do 
+            let tf    = head . fst . head $ alts
+                alts' = map litRule alts
+            subex ← match pos ck us alts'
+            pure CAlt{pat=tf, ex=subex}
+        mkLits us alt = do
+            let alt' = litRule alt
+            subex ← match pos ck us [alt']
+            pure CAlt{pat=(head . fst) alt, ex=subex}
+        func ys = case ys of
                 (PVar{}:_, _):_ → isPVar
-                _               → isPCon
-        logit ∷ [ExprT] → [([Pattern],ExprT)] → ExprT → StG ()
-        logit xs ys e = do
+                (PCon{}:_, _):_ → isPCon
+                _               → isPLit
+        add ∷ ExprT → ExprT → ExprD Global
+        add e2 (e1@Case{ckind=CWhen, alts=[alt]}) = do
+            p ← freshVar (getpos e2)
+            pure e1.{alts = [alt, CAlt p e2]}
+        add e2 (e1@Case{ckind=CWhen, alts=[alt1,alt2]}) = do
+            ex ← add e2 alt2.ex
+            pure e1.{alts=[alt1, alt2.{ex}]}
+        add e2 e1 = do
             g ← getST
-            E.logmsg TRACE7 (getpos e) (
+            E.warn (getrange e2) (text "(some) equation(s) can never be reached:" 
+                                    </> nicest g e2)
+            pure e1
+        logit ∷ Position → [ExprT] → [([Pattern],ExprT)] → StG ()
+        logit pos xs ys = do
+            g ← getST
+            E.logmsg TRACE7 pos (
                     text "MATCH " <+> text "[" <+> PP.spread (map (nicet g) xs)  <+> text "]"
                     </> PP.stack (
                         map (\(ps,x) -> text "[" <+> PP.spread (map (nicet g) ps)  <+> text "]"
