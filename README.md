@@ -4,7 +4,7 @@ What is Frege?
 [![Build Status](https://travis-ci.org/Frege/frege.svg)](https://travis-ci.org/Frege/frege)
 [![Join the chat at https://gitter.im/Frege/frege](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/Frege/frege?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
 
-<img align="right" src="resources/Frege_logo.png"/>
+<img src="resources/Frege_logo.png"/>
 Frege is a Haskell for the JVM.
 
 Like any Haskell, it is purely functional, 
@@ -82,10 +82,11 @@ value where [`cos(x) == x`](http://www.wolframalpha.com/input/?i=cos+0.739085133
 
 Implementations in imperative languages usually involve introducing local mutable state. Not so in Frege:
 ```frege
-    import frege.prelude.Math (cos)
-    cosines = iterate cos 1.0
-    pairsOf xs = zip xs (tail xs)
-    head [ x | (x,y) <- pairsOf cosines, x == y] 
+import frege.prelude.Math (cos)
+
+cosines = iterate cos 1.0
+pairsOf xs = zip xs (tail xs)
+head [ x | (x,y) <- pairsOf cosines, x == y] 
 ```
 After execution it should show you the value
 
