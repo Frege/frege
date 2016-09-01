@@ -82,10 +82,11 @@ value where [`cos(x) == x`](http://www.wolframalpha.com/input/?i=cos+0.739085133
 
 Implementations in imperative languages usually involve introducing local mutable state. Not so in Frege:
 ```frege
-    import frege.prelude.Math (cos)
-    cosines = iterate cos 1.0
-    pairsOf xs = zip xs (tail xs)
-    head [ x | (x,y) <- pairsOf cosines, x == y] 
+import frege.prelude.Math (cos)
+
+cosines = iterate cos 1.0
+pairsOf xs = zip xs (tail xs)
+head [ x | (x,y) <- pairsOf cosines, x == y] 
 ```
 After execution it should show you the value
 
