@@ -4,7 +4,8 @@ What is Frege?
 [![Build Status](https://travis-ci.org/Frege/frege.svg)](https://travis-ci.org/Frege/frege)
 [![Join the chat at https://gitter.im/Frege/frege](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/Frege/frege?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
 
-<img src="resources/Frege_logo.png"/>
+<img width="450" height="450" src="resources/Frege_logo.png"/>
+
 Frege is a Haskell for the JVM.
 
 Like any Haskell, it is purely functional, 
