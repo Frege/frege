@@ -44,7 +44,8 @@ JAVA     = java -Dfrege.javac=internal
 CP       = cp -pf
 RM       = rm -rf
 MKDIR    = mkdir -p
-FREGE    = /usr/bin/time -f "%E %Mk" $(JAVA) -Xss4m -Xmx2222m -cp $(BUILD)
+TIME     = `which gtime || which time || false`
+FREGE    = ${TIME} -f "%E %Mk" $(JAVA) -Xss4m -Xmx2222m -cp $(BUILD)
 
 #	compile using the fregec.jar in the working directory
 FREGECJ  = $(FREGE) -jar fregec.jar -d $(BUILD) -hints
