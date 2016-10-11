@@ -139,7 +139,7 @@ many (free) books, publications, tutorials, online courses, and considerable ind
 **For the Haskell programmer**
 
 Frege gives you the opportunity to **use your skills on the JVM**.
-Most idiomatic Haskell code will run in Frege unmodified or with only minimal, obvious adaptions.
+Most idiomatic Haskell code will run in Frege unmodified or with only minimal, obvious adaptations.
 Even more important: you can bring your purely functional problem solution strategies to your Java projects.
 
 From now on you can also enjoy on the JVM:
