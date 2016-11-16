@@ -209,6 +209,7 @@ Related Projects
 * [Gradle Frege plugin](https://github.com/Frege/frege-gradle-plugin), by Mark Perry and Dierk König
 * [Real World Frege](https://github.com/Dierk/Real_World_Frege/), by Dierk König
 * [sbt Frege plugin](https://github.com/earldouglas/sbt-frege), by James Douglas
+* [An efficient Frege Ray-Tracer](https://github.com/mchav/Frege-RayTracer), by Michael Chavinda
 
 Contributions
 -------------
