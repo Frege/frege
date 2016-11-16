@@ -45,7 +45,7 @@ CP       = cp -pf
 RM       = rm -rf
 MKDIR    = mkdir -p
 TIME     = `which gtime || which time || false`
-FREGE    = ${TIME} -f "%E %Mk" $(JAVA) -Xss4m -Xmx2222m -cp $(BUILD)
+FREGE    = ${TIME} $(JAVA) -Xss4m -Xmx2222m -cp $(BUILD)
 
 #	compile using the fregec.jar in the working directory
 FREGECJ  = $(FREGE) -jar fregec.jar -d $(BUILD) -hints

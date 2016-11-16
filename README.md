@@ -210,6 +210,7 @@ Related Projects
 * [Real World Frege](https://github.com/Dierk/Real_World_Frege/), by Dierk König
 * [sbt Frege plugin](https://github.com/earldouglas/sbt-frege), by James Douglas
 * [An efficient Frege Ray-Tracer](https://github.com/mchav/Frege-RayTracer), by Michael Chavinda
+* [Frege Chat](https://github.com/Dierk/FregeChat), Winner at JavaOne 2016 language competition, Dierk König
 
 Contributions
 -------------
