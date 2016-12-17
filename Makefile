@@ -54,7 +54,7 @@ FREGECJ  = $(FREGE) -jar fregec.jar -d $(BUILD) -hints
 FREGEC0  = $(FREGECJ) -nocp -prefix a -sp "shadow$(PATHSEP)."  -target 1.7
 
 #	compile compiler2 with compiler1
-FREGEC1  = $(FREGE) afrege.compiler.Main -d $(BUILD) -hints -inline -prefix b
+FREGEC1  = $(FREGE) afrege.compiler.Main -d $(BUILD) -hints -inline -prefix b -target $(TARGET)
 
 #	compile final compiler with compiler2
 FREGEC2  = $(FREGE) bfrege.compiler.Main -d $(BUILD) -hints  -O -target $(TARGET)
@@ -232,7 +232,7 @@ compiler1: $(FREGE_COMPILER)/grammar/Frege.fr frege/Version.fr
 runtime:
 	@echo "[1;42mMaking $@[0m"
 	mkdir -p build
-	$(JAVAC) -d build frege/run8/*.java
+	[ "$(TARGET)" == "1.7" ] || $(JAVAC) -d build frege/run8/*.java
 	$(JAVAC) -d build -nowarn -source 1.7 -target 1.7 frege/runtime/*.java frege/run/*.java frege/run7/*.java
 	@echo Runtime is complete.
 
