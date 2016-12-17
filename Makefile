@@ -24,7 +24,6 @@ PATHSEP = :
 TARGET                = 1.8
 DOC                   = ../frege.github.com/doc
 BUILD                 = build
-BUILD6                = $(BUILD)6
 BUILD7                = $(BUILD)7
 BUILD_TEST            = $(BUILD)/test
 BUILD_FREGE           = $(BUILD)/frege
@@ -139,37 +138,6 @@ fregec7.jar:: savejava
 	jar -cf $@ -C $(BUILD7) frege
 	jar -uvfe $@ frege.compiler.Main
 	$(CP) $@ ../eclipse-plugin/lib/fregec.jar
-
-fregec6.jar: fregec.jar savejava
-	@echo "[1;43mMaking $@[0m"
-	@echo The following will probably only work if you just made a fregec.jar
-	@echo Adapting the sources for dumb old java6 ....
-	$(CP) frege/runtime/Concurrent.java6 save/frege/runtime/Concurrent.java
-	$(CP) frege/runtime/Runtime.java6 save/frege/runtime/Runtime.java
-	$(CP) frege/runtime/CompilerSupport.java6 save/frege/runtime/CompilerSupport.java
-	$(RM) $(BUILD6)
-	$(MKDIR) $(BUILD6)
-	@echo You can ignore the compiler warning.
-	$(JAVAC) -J-Xmx1g -source 1.6 -target 1.6 -sourcepath save -d $(BUILD6) save/$(FREGE_COMPILER)/Main.java
-	jar -cf $@ -C $(BUILD6) frege
-	jar -uvfe $@ frege.compiler.Main
-	@echo Looks good .... let us try to make the tools and library ... 
-	grep -v ForkJoin frege/StandardLibrary.fr >save/StandardLibrary.fr
-	$(JAVA) -Xmx1g -Xss4m -Dfrege.javac="javac -source 1.6 -target 1.6" -jar $@ -d $(BUILD6) -nocp -fp $(BUILD6) -make \
-	    frege/StandardTools.fr save/StandardLibrary.fr
-	@echo Still running? Now we have it almost .... 
-	$(CP) frege/tools/yygenpar-fr frege/tools/YYgenparM-fr frege/tools/fregedoc.html $(BUILD6)/frege/tools
-	jar -cf $@ -C $(BUILD6) frege
-	jar -uvfe $@ frege.compiler.Main
-	@echo
-	@echo !-------------- PLEASE NOTE ----------------------------------------------
-	@echo ! The new compiler will itself generate java6 classes if run in a JDK6.
-	@echo ! Unfortunately, the Java 6 compiler may not understand proper Java.
-	@echo ! To avoid those problems, use this JAR always thus:
-	@echo !    java -Dfrege.javac=\"javac -source 1.6 -target 1.6\" -jar fregec6.jar ...
-	@echo ! where javac is a JDK-7 compiler!
-	@echo !-------------------------------------------------------------------------
-	@echo
 
 #
 #	Avoid recompilation of everything, just remake the compiler with itself
