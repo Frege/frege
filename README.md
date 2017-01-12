@@ -1,4 +1,4 @@
-What is Frege?
+What is Frege? [![Build Status](https://travis-ci.org/Frege/frege.svg)](https://travis-ci.org/Frege/frege)
 ==============
 
 <img align="right" src="resources/Frege_logo.png"/>
@@ -158,11 +158,12 @@ The awesome QuickCheck library for advanced unit testing comes bundled with the 
 Related Projects
 ----------------
 
-* [Maven Compiler Plugin for the Frege language](https://github.com/talios/frege-maven-plugin), by Mark Derricut 
+* The REPL projects, consisting of [core JSR 223 scripting support](https://github.com/Frege/frege-interpreter), [interface for the command-line](https://github.com/Frege/frege-repl) and [online REPL](https://github.com/Frege/try-frege), all written and maintained by Marimuthu Madasamy
+* [Maven Compiler Plugin for the Frege language](https://github.com/Frege/frege-maven-plugin), by Mark Derricut 
 * [Frege compiler/library as an OSGi bundle](https://github.com/talios/frege-bundle), by Mark Derricut 
 * [Apache Maven Tile for the Frege Programming Language](https://github.com/talios/frege-maven-tile), by Mark Derricut 
-* [A Leiningen plugin to compile Frege code](https://github.com/seancorfield/lein-fregec), by Sean Corfield
-* [Gradle Frege plugin](https://github.com/galderz/gradle-frege-plugin), by Galder Zamarreño
+* [A Leiningen plugin to compile Frege code](https://github.com/Frege/frege-lein-plugin), by Sean Corfield
+* [Gradle Frege plugin](https://github.com/Frege/frege-gradle-plugin), by Mark Perry and Dierk König
 * [Real World Frege](https://github.com/Dierk/Real_World_Frege/), by Dierk König
 
 Contributions
@@ -178,6 +179,14 @@ If you are interested in contributing, here are some hot topics:
 
 Contact
 -------
+
+**Upcoming talks**
+
+Meet Frege friends at [JAX 2015](http://jax.de/2015/), Mainz, and join the [Frege Session](https://jax.de/2015/sessions/frege-ein-haskell-fuer-die-jvm)
+at April 21st, 9:45. 
+
+The [breathing code conference](http://breathing-code.de) will take place May 4th/5th in Frankfurt, Germany. It solely consists of 
+live coding events and a one-hour session will be devoted to the Frege language.
 
 **For discussions**
 
@@ -210,7 +219,7 @@ Links
 ----
 * [Frege Wiki](https://github.com/Frege/frege/wiki/_pages)
 * [Language reference](http://www.frege-lang.org/doc/Language.pdf)
-* [Author's Blog](http://fregepl.blogspot.com/), [Dierk's Blog](http://www.canoo.com/blog/tag/frege/)
+* [Author's Blog](http://fregepl.blogspot.com/), [Dierk's Blog](http://www.canoo.com/blog/tag/frege/), the [Frege Goodness](http://dierk.github.io/FregeGoodness/html/index.html) series
 * [edX Functional Programming course FP101x](https://www.edx.org/course/introduction-functional-programming-delftx-fp101x) with exercises in Frege
 * Introduction to Frege: [video](https://www.parleys.com/play/543fa326e4b06e1184ae41e6/chapter44/about), [slides](http://de.slideshare.net/Mittie/frege-purely-functional-programming-on-the-jvm)
 

@@ -164,10 +164,10 @@ import frege.runtime.BlackHole;
  * @author ingo
  *
  */
-public class Thunk implements Lazy {
+public class Thunk<R> implements Lazy<R> {
 	/* INVARIANT: exactly one of item and eval is null at any time */
 	private volatile Object item = null;
-	private Lazy eval;
+	private Lazy<R> eval;
 	
 	/**
 	 * <p> Create a thunk from a {@link Lazy} value. </p>
@@ -175,7 +175,7 @@ public class Thunk implements Lazy {
 	 * the result of evaluating the value. </p>
 	 * @param it a lazy value. <b>This must never be null!</b>
 	 */
-	Thunk(Lazy it) { eval = it; }
+	Thunk(Lazy<R> it) { eval = it; }
 	/**
 	 * <p>Create a Thunk from some Object.</p>
 	 * <p>It is checked wether the argument is, in fact, a {@link Lazy}, and if so, the
@@ -183,9 +183,10 @@ public class Thunk implements Lazy {
 	 * ordinary value, this Thunk will only wrap it and return it when called. </p> 
 	 * @param it a possibly lazy value. <b>This must never be null!</b>
 	 */
+	@SuppressWarnings("unchecked")
 	Thunk(Object it) {
 		if (it instanceof Lazy) {
-			eval = (Lazy)it;
+			eval = (Lazy<R>)it;
 		}
 		else {
 			item = it;
@@ -197,30 +198,31 @@ public class Thunk implements Lazy {
 	 * <p> evaluate the {@link Lazy}, and update this Thunk, unless it is already evaluated. </p>
 	 * @return the evaluated value 
 	 */
+	@SuppressWarnings("unchecked")
 	@Override
-	public final synchronized Object call() {
+	public final synchronized R call() {
 		if (item != null) 
 			// value already computed
-			return item;
+			return (R)item;
 		// Detect black holes
 		// When the same thread evaluates this while we are not yet done,
 		// it will return the black hole, and this will, in turn,
 		// give a Class Cast Exception later.
 		// Different threads will have to wait anyway due to the "synchronized".
-		item = BlackHole.it;
+		// item = BlackHole.it;
 		Object o = eval.call();
-		Lazy  t = null;
+		Lazy<R>  t = null;
 		// algebraic datatypes are instances of Lazy, but their call() is the identity
 		// hence we know when to finish if either 
 		// * the result o is not Lazy 
 		// * or if it is the same reference as eval.
-		while (o  instanceof Lazy && (t = (Lazy)o) != eval) {
+		while (o  instanceof Lazy && (t = (Lazy<R>)o) != eval) {
 			eval = t;
 			o = eval.call();
 		}
 		item = o;
 		eval = null;	// make sure all the closed over things are not referenced anymore
-		return o;
+		return (R)item;
 	}
 
 	
@@ -250,27 +252,18 @@ public class Thunk implements Lazy {
 	public final static<R> R forced(Object o) {
 		Object r = null;
 		while (o instanceof Lazy) { 
-			r = ((Lazy)o).call();
+			r = ((Lazy<R>)o).call();
 			if (r==o) break;
 			o = r;
 		}
 		return (R) o;
 	}
 	
-	/**
-	 * <p> evaluate this Thunk and return the value as the required type </p>
-	 * @see the static version of this function.
-	 */
-	
-	@SuppressWarnings("unchecked")
-	public final <R> R forced() {
-		return (R) call();
-	}
 	
 	/**
 	 * Make sure we have a {@link Lazy} value.
 	 * 
-	 * <p>This is, in a sense, the exact opposite of {@link Thunk#forced}. 
+	 * <p>This is, in a sense, the exact opposite of {@link Thunk#call}. 
 	 * Whereas the latter evaluates a {@link Thunk}, unless already evaluated,
 	 * this method constructs a {@link Thunk} value unless it is already a {@link Lazy} 
 	 * one.</p>
@@ -283,9 +276,10 @@ public class Thunk implements Lazy {
 	 *           Otherwise it is wrapped in a {@link Thunk.Value} and returned.
 	 *   @author ingo 
 	 */
-	public static final Lazy delayed(Object val) {
-		if (val instanceof Lazy) return (Lazy) val;
-		return new Thunk(val);
+	@SuppressWarnings("unchecked")
+	public final static<X>  Lazy<X> delayed(X val) {
+		if (val instanceof Lazy) return (Lazy<X>) val;
+		return new Thunk<X>(val);
 	}
 	
 	/**
@@ -298,9 +292,9 @@ public class Thunk implements Lazy {
 	 * 
 	 * @return a {@link Thunk}, no matter what.
 	 */
-	public final static Thunk shared(Thunk v)  { return v; }
-	public final static Thunk shared(Lazy v)   { return new Thunk(v); }
-	public final static Thunk shared(Object v) { return new Thunk(v); }
+	public final static<R> Thunk<R> shared(Thunk<R> v)  { return v; }
+	public final static<R> Thunk<R> shared(Lazy<R> v)   { return new Thunk<R>(v); }
+	public final static<R> Thunk<R> shared(R v) 		{ return new Thunk<R>(v); }
 	
 	/***
 	 * <p>Utility function to get some value and clearing it at the same time.</p>
@@ -313,5 +307,5 @@ public class Thunk implements Lazy {
 	 * @return the first argument
 	 * 
 	 */
-	static public<X> X once(X obj, X nul) { return obj; }
+	public final static<X> X once(X obj, X nul) { return obj; }
 }

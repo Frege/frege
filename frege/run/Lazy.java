@@ -8,12 +8,12 @@ import java.util.concurrent.Callable;
  * @author ingo
  *
  */
-public interface Lazy extends Callable<Object> {
+public interface Lazy<R> extends Callable<R> {
 
 	/**
 	 * <p> Compute the value if it is needed. </p>
 	 * 
 	 * @see java.util.concurrent.Callable#call()
 	 */
-	public abstract Object call();
+	public abstract R call();
 }
