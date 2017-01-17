@@ -200,7 +200,7 @@ compiler1: $(FREGE_COMPILER)/grammar/Frege.fr frege/Version.fr
 runtime:
 	@echo "[1;42mMaking $@[0m"
 	mkdir -p build
-	[ "$(TARGET)" == "1.7" ] || $(JAVAC) -d build frege/run8/*.java
+	[ "$(TARGET)" = "1.7" ] || $(JAVAC) -d build frege/run8/*.java
 	$(JAVAC) -d build -nowarn -source 1.7 -target 1.7 frege/runtime/*.java frege/run/*.java frege/run7/*.java
 	@echo Runtime is complete.
 
