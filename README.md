@@ -4,7 +4,8 @@ What is Frege?
 [![Build Status](https://travis-ci.org/Frege/frege.svg)](https://travis-ci.org/Frege/frege)
 [![Join the chat at https://gitter.im/Frege/frege](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/Frege/frege?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
 
-<img align="right" src="resources/Frege_logo.png"/>
+<img width="450" height="450" src="resources/Frege_logo.png"/>
+
 Frege is a Haskell for the JVM.
 
 Like any Haskell, it is purely functional, 
@@ -82,10 +83,11 @@ value where [`cos(x) == x`](http://www.wolframalpha.com/input/?i=cos+0.739085133
 
 Implementations in imperative languages usually involve introducing local mutable state. Not so in Frege:
 ```frege
-    import frege.prelude.Math (cos)
-    cosines = iterate cos 1.0
-    pairsOf xs = zip xs (tail xs)
-    head [ x | (x,y) <- pairsOf cosines, x == y] 
+import frege.prelude.Math (cos)
+
+cosines = iterate cos 1.0
+pairsOf xs = zip xs (tail xs)
+head [ x | (x,y) <- pairsOf cosines, x == y] 
 ```
 After execution it should show you the value
 
@@ -137,7 +139,7 @@ many (free) books, publications, tutorials, online courses, and considerable ind
 **For the Haskell programmer**
 
 Frege gives you the opportunity to **use your skills on the JVM**.
-Most idiomatic Haskell code will run in Frege unmodified or with only minimal, obvious adaptions.
+Most idiomatic Haskell code will run in Frege unmodified or with only minimal, obvious adaptations.
 Even more important: you can bring your purely functional problem solution strategies to your Java projects.
 
 From now on you can also enjoy on the JVM:
@@ -207,6 +209,8 @@ Related Projects
 * [Gradle Frege plugin](https://github.com/Frege/frege-gradle-plugin), by Mark Perry and Dierk König
 * [Real World Frege](https://github.com/Dierk/Real_World_Frege/), by Dierk König
 * [sbt Frege plugin](https://github.com/earldouglas/sbt-frege), by James Douglas
+* [An efficient Frege Ray-Tracer](https://github.com/mchav/Frege-RayTracer), by Michael Chavinda
+* [Frege Chat](https://github.com/Dierk/FregeChat), Winner at JavaOne 2016 language competition, Dierk König
 
 Contributions
 -------------
@@ -268,7 +272,7 @@ Links
 * [Language reference](http://www.frege-lang.org/doc/Language.pdf)
 * [InfoQ Article on Frege's history, current state, and future plans](http://www.infoq.com/news/2015/08/frege-haskell-for-jvm)
 * [Author's Blog](http://fregepl.blogspot.com/), [Dierk's Blog](http://www.canoo.com/blog/tag/frege/)
-* [edX Functional Programming course FP101x](https://www.edx.org/course/introduction-functional-programming-delftx-fp101x) with exercises in Frege
+* [edX Functional Programming course FP101x](https://www.edx.org/course/introduction-functional-programming-delftx-fp101x-0) with exercises in Frege
 * Functional Programming [13 videos](https://www.youtube.com/playlist?list=PLoJC20gNfC2gpI7Dl6fg8uj1a-wfnWTH8) by Dr. Erik Meijer
 * [<img align="right" src="https://raw.githubusercontent.com/Dierk/FregeGoodness/master/FregeGoodness.png">](http://dierk.gitbooks.io/fregegoodness)Introduction to Frege: [video](https://www.parleys.com/play/543fa326e4b06e1184ae41e6/chapter44/about), [slides](http://de.slideshare.net/Mittie/frege-purely-functional-programming-on-the-jvm)
 * The [Frege Goodness](http://dierk.gitbooks.io/fregegoodness) free ebook 

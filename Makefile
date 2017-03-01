@@ -1,7 +1,7 @@
 # Makefile for the frege compiler distribution.
 # When you need to run this under Windows (poor guy!),
 # change the path separator characters.
-
+PATHSEP = :
 #
 # Make sure you have sensible values for JAVAC, YACC and JAVA
 # The standard distribution needs a Java 1.7 (or higher) JDK.
@@ -24,7 +24,6 @@
 TARGET                = 1.8
 DOC                   = ../frege.github.com/doc
 BUILD                 = build
-BUILD6                = $(BUILD)6
 BUILD7                = $(BUILD)7
 BUILD_TEST            = $(BUILD)/test
 BUILD_FREGE           = $(BUILD)/frege
@@ -44,16 +43,17 @@ JAVA     = java -Dfrege.javac=internal
 CP       = cp -pf
 RM       = rm -rf
 MKDIR    = mkdir -p
-FREGE    = /usr/bin/time -f "%E %Mk" $(JAVA) -Xss4m -Xmx2222m -cp $(BUILD)
+TIME     = `which gtime || which time || false`
+FREGE    = ${TIME} $(JAVA) -Xss4m -Xmx2222m -cp $(BUILD)
 
 #	compile using the fregec.jar in the working directory
 FREGECJ  = $(FREGE) -jar fregec.jar -d $(BUILD) -hints
 
 #	compile compiler1 with fregec.jar, uses prelude sources from shadow/
-FREGEC0  = $(FREGECJ) -nocp -prefix a -sp shadow:.  -target 1.7
+FREGEC0  = $(FREGECJ) -nocp -prefix a -sp "shadow$(PATHSEP)."  -target 1.7
 
 #	compile compiler2 with compiler1
-FREGEC1  = $(FREGE) afrege.compiler.Main -d $(BUILD) -hints -inline -prefix b
+FREGEC1  = $(FREGE) afrege.compiler.Main -d $(BUILD) -hints -inline -prefix b -target $(TARGET)
 
 #	compile final compiler with compiler2
 FREGEC2  = $(FREGE) bfrege.compiler.Main -d $(BUILD) -hints  -O -target $(TARGET)
@@ -139,37 +139,6 @@ fregec7.jar:: savejava
 	jar -uvfe $@ frege.compiler.Main
 	$(CP) $@ ../eclipse-plugin/lib/fregec.jar
 
-fregec6.jar: fregec.jar savejava
-	@echo "[1;43mMaking $@[0m"
-	@echo The following will probably only work if you just made a fregec.jar
-	@echo Adapting the sources for dumb old java6 ....
-	$(CP) frege/runtime/Concurrent.java6 save/frege/runtime/Concurrent.java
-	$(CP) frege/runtime/Runtime.java6 save/frege/runtime/Runtime.java
-	$(CP) frege/runtime/CompilerSupport.java6 save/frege/runtime/CompilerSupport.java
-	$(RM) $(BUILD6)
-	$(MKDIR) $(BUILD6)
-	@echo You can ignore the compiler warning.
-	$(JAVAC) -J-Xmx1g -source 1.6 -target 1.6 -sourcepath save -d $(BUILD6) save/$(FREGE_COMPILER)/Main.java
-	jar -cf $@ -C $(BUILD6) frege
-	jar -uvfe $@ frege.compiler.Main
-	@echo Looks good .... let us try to make the tools and library ... 
-	grep -v ForkJoin frege/StandardLibrary.fr >save/StandardLibrary.fr
-	$(JAVA) -Xmx1g -Xss4m -Dfrege.javac="javac -source 1.6 -target 1.6" -jar $@ -d $(BUILD6) -nocp -fp $(BUILD6) -make \
-	    frege/StandardTools.fr save/StandardLibrary.fr
-	@echo Still running? Now we have it almost .... 
-	$(CP) frege/tools/yygenpar-fr frege/tools/YYgenparM-fr frege/tools/fregedoc.html $(BUILD6)/frege/tools
-	jar -cf $@ -C $(BUILD6) frege
-	jar -uvfe $@ frege.compiler.Main
-	@echo
-	@echo !-------------- PLEASE NOTE ----------------------------------------------
-	@echo ! The new compiler will itself generate java6 classes if run in a JDK6.
-	@echo ! Unfortunately, the Java 6 compiler may not understand proper Java.
-	@echo ! To avoid those problems, use this JAR always thus:
-	@echo !    java -Dfrege.javac=\"javac -source 1.6 -target 1.6\" -jar fregec6.jar ...
-	@echo ! where javac is a JDK-7 compiler!
-	@echo !-------------------------------------------------------------------------
-	@echo
-
 #
 #	Avoid recompilation of everything, just remake the compiler with itself
 #
@@ -231,7 +200,7 @@ compiler1: $(FREGE_COMPILER)/grammar/Frege.fr frege/Version.fr
 runtime:
 	@echo "[1;42mMaking $@[0m"
 	mkdir -p build
-	$(JAVAC) -d build frege/run8/*.java
+	[ "$(TARGET)" = "1.7" ] || $(JAVAC) -d build frege/run8/*.java
 	$(JAVAC) -d build -nowarn -source 1.7 -target 1.7 frege/runtime/*.java frege/run/*.java frege/run7/*.java
 	@echo Runtime is complete.
 
