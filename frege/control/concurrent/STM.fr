@@ -1,0 +1,156 @@
+{--
+ - Software Transactional Memory (STM)
+ -
+ - This STM implements an optimisitc concurrentcy control for Frege.
+ - It is based on 
+ -     Harris, Tim, Simon Marlow, Simon Peyton-Jones, and Maurice Herlihy (2005).
+ -     “Composable Memory Transactions”. In: Proceedings of the Tenth ACM SIG-
+ -     PLAN Symposium on Principles and Practice of Parallel Programming. PPoPP
+ -     ’05. 551050. Chicago, IL, USA: ACM, pp. 48–60. isbn: 1-59593-080-9.
+ -     doi: http://dx.doi.org/10.2200/S00272ED1V01Y201006CAC011. url:
+ -     http://doi.acm.org/10.1145/1065944.1065952
+ -
+ - An STM action is called transaction.
+ -}
+{-
+ -}
+module frege.control.concurrent.STM where
+
+data STMWorld = pure native frege.runtime.Phantom.STM
+
+data STMResult α = Result α
+                 | Retry
+
+data STM α = STM (ST STMWorld (STMResult α))
+
+instance Monad STM where
+    (STM stm) >>= k = STM $ do
+                r <- stm
+                case r of
+                    Result v -> do
+                            case k v of
+                                (STM ks) -> ks
+                    Retry    -> return Retry
+    pure x = STM $ return $ Result x
+
+instance MonadZero STM where
+    mzero = retry
+
+instance MonadPlus STM where
+    mplus = orElse
+
+instance MonadOr STM where
+    orElse :: STM α -> STM α -> STM α
+    orElse (STM stm1) (STM stm2) = STM $ do
+            startNested ()
+            r1 <- stm1 `catch` (\(e::Throwable) -> return Retry)
+            case r1 of
+                Result v1 -> do
+                        mergeNested ()
+                        return $ Result v1
+                Retry -> do
+                        retryNested ()
+                        startNested ()
+                        r2 <- stm2
+                        case r2 of
+                            Result v2 -> do
+                                    mergeNested ()
+                                    return $ Result v2
+                            Retry -> do
+                                    retryNested ()
+                                    return Retry
+
+--- Container for shared mutable data.
+data TVar α = private TVar (Mutable STMWorld (NativeTVar α)) where
+        new :: α -> STM (TVar α)
+        new x = STM $ do
+            ref <- NativeTVar.new x
+            return $ Result (TVar ref)
+
+        read :: TVar α -> STM α
+        read (TVar tvar) = STM $ do
+            v <- readTVar_ tvar
+            return $ Result v
+
+        write :: TVar α -> α -> STM ()
+        write (TVar tvar) x = STM $ do
+            writeTVar_ tvar x
+            return $ Result ()
+
+private data NativeTVar α = native frege.runtime.STM.NativeTVar where
+        native new :: α -> STMutable STMWorld (NativeTVar α)
+
+private native readTVar_ "frege.runtime.STM.Functions.readTVar" :: Mutable STMWorld (NativeTVar α) -> ST STMWorld α
+private native writeTVar_ "frege.runtime.STM.Functions.writeTVar" :: Mutable STMWorld (NativeTVar α) -> α -> ST STMWorld ()
+
+newTVar = TVar.new
+readTVar = TVar.read
+writeTVar = TVar.write
+
+private native commit "frege.runtime.STM.Functions.commit" :: () -> IO Bool
+private native resetLog "frege.runtime.STM.Functions.resetLog" :: () -> IO ()
+private native block "frege.runtime.STM.Functions.block" :: () -> IO () throws InterruptedException
+
+private native startNested "frege.runtime.STM.Functions.startNested" :: () -> ST STMWorld ()
+private native retryNested "frege.runtime.STM.Functions.retryNested" :: () -> ST STMWorld ()
+private native mergeNested "frege.runtime.STM.Functions.mergeNested" :: () -> ST STMWorld ()
+
+retry :: STM α
+retry = STM $ return Retry
+
+private liftSTM :: ST STMWorld a -> IO a
+private liftSTM stm = stm >>= return
+
+check :: Bool -> STM ()
+check True  = return ()
+check False = retry
+
+--- Executes an STM action.
+atomically :: STM α -> IO α
+atomically (s@(STM stm)) = do
+        () <- resetLog ()
+        r <- liftSTM stm
+        case r of
+            Result x -> do
+                    v <- commit ()
+                    if v
+                        then return x
+                        else atomically s
+            Retry -> do
+                    block ()
+                    atomically s
+
+
+---
+--- TMVars are MVars implemented using STM
+
+type TMVar α = TVar (Maybe α)
+
+newEmptyTMVar :: STM (TMVar α)
+newEmptyTMVar = newTVar Nothing
+
+newTMVar :: α -> STM (TMVar α)
+newTMVar x = newTVar (Just x)
+
+takeTMVar :: TMVar α -> STM α
+takeTMVar var = do
+        v <- var.read
+        case v of
+            Just x  = do
+                        var.write Nothing
+                        return x
+            Nothing = retry
+
+putTMVar :: TMVar α -> α -> STM ()
+putTMVar var x = do
+        v <- var.read
+        case v of
+            Just _  = retry
+            Nothing = var.write (Just x)
+
+pollTMVar :: TMVar α -> STM (Maybe α)
+pollTMVar var = tryTake `orElse` return Nothing
+    where
+        tryTake = do
+                v <- takeTMVar var
+                return (Just v)
