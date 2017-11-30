@@ -211,6 +211,7 @@ Related Projects
 * [sbt Frege plugin](https://github.com/earldouglas/sbt-frege), by James Douglas
 * [An efficient Frege Ray-Tracer](https://github.com/mchav/Frege-RayTracer), by Michael Chavinda
 * [Frege Chat](https://github.com/Dierk/FregeChat), Winner at JavaOne 2016 language competition, Dierk König
+* [ProB Parser Library](https://github.com/bendisposto/probparsers) by Jens Bendisposto, University Düsseldorf
 
 Contributions
 -------------
@@ -220,6 +221,7 @@ If you are interested in contributing, here are some hot topics:
 * Write Frege code to support more of the Java API.
 * Port Haskell [libraries](https://github.com/Frege/frege/wiki/Libraries) or tools.
 * Open issues in the issues tracker if you find bugs, errors in documentation, etc.
+* [Open issues](https://github.com/Frege/frege-gradle-plugin/issues) in the tooling like [this one](https://github.com/Frege/frege-gradle-plugin/issues/41)
 * Help make Frege popular by writing code for projects like [Rosetta Code](http://rosettacode.org/wiki/Rosetta_Code), or [PLEAC](http://pleac.sourceforge.net).
 * Contribute to the related projects mentioned above, or make your own.
 
