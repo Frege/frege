@@ -211,7 +211,7 @@ Related Projects
 * [sbt Frege plugin](https://github.com/earldouglas/sbt-frege), by James Douglas
 * [An efficient Frege Ray-Tracer](https://github.com/mchav/Frege-RayTracer), by Michael Chavinda
 * [Frege Chat](https://github.com/Dierk/FregeChat), Winner at JavaOne 2016 language competition, Dierk König
-* [ProB Parser Library](https://github.com/bendisposto/probparsers) by Jens Bendisposto, University Düsseldorf
+* [ProB Parser Library](https://github.com/bendisposto/probparsers) by Markus Brenneis (@mabre) and Jens Bendisposto (editor), University Düsseldorf
 
 Contributions
 -------------
