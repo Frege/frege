@@ -109,7 +109,7 @@ public abstract class Fun$n<X> extends Lambda {
      * when evaluated, invokes the {\@link Fun$n#eval} method of this
      * function.</p>
      *
-     * Use of this method is preferrable compared
+     * Use of this method is preferable compared
      * to repeated invokation of the single argument form since intermediate
      * closure creation is saved.
      *
