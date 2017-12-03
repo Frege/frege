@@ -11,7 +11,7 @@ import java.util.regex.Pattern;
  * <p> Helper functions for PreludeBase and PreludeRegex </p>
  * 
  * <p> The methods here help us to hide the {@link java.util.regex.Matcher} type, 
- * which is impure, and cannot made pure, because copying is effectifely impossible
+ * which is impure, and cannot made pure, because copying is effectively impossible
  * at least from JDK9 on. </p>
  * <p> Instead, all Frege code will work with {@link java.util.regex.MatchResult}, which is
  * a pure interface, and since JDK9 apparently backed by an immutable class. </p>
