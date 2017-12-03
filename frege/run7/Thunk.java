@@ -71,7 +71,7 @@ import frege.runtime.BlackHole;
  * <li>
  * <p>  Thunk arguments of data constructors or functions. Take the following example: </p>
  * <pre><code>
- * -- the list of fibonacci numbers
+ * -- the list of Fibonacci numbers
  * fibs = 0:1:zipWith (+) fibs (tail fibs)
  * </code></pre>
  *
