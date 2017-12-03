@@ -1,7 +1,7 @@
 package tests.comp;
 
 /**
- * <p>Test calss to demonstrate that $ in method names and member names work.</p>
+ * <p>Test class to demonstrate that $ in method names and member names work.</p>
  * @author ingo
  *
  */
