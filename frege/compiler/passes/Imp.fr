@@ -199,7 +199,7 @@ importHere (imp@ImpDcl {pos,imports}) = do
                         --            docWarning pos ("module " ++ g.unpack pack)
                         --                            (Just fp.doc) 
                         --    nothing  -> return ()
-                        liftStG (importEnvSilent pos env as imports)
+                        liftStG (importEnvSilent pos env as pack imports)
                     Nothing -> return ()      -- importClass did the error logging
         oldns imp pack as oldp = do
                 g <- getST
@@ -212,16 +212,16 @@ importHere (imp@ImpDcl {pos,imports}) = do
                     -- g <- getST
 
                     case g.packages.lookup pack of
-                        Just env -> importEnvSilent pos env as imports
+                        Just env -> importEnvSilent pos env as pack imports
                         Nothing -> E.fatal pos (text ("module " ++ g.unpack pack ++ " should be here?"))
                 stio ()
 importHere d = liftStG $ E.fatal d.pos (text ("must be an import definition, not " ++ show (constructor d)))
 
 
 --- Avoid warnings when we resolve items in the imported package
-importEnvSilent pos env ns imps = do
+importEnvSilent pos env ns pack imps = do
     changeST Global.{options <- Options.{flags <- flagSet NODOCWARNINGS}}
-    importEnv pos env ns imps
+    importEnv pos env ns pack imps
     changeST Global.{options <- Options.{flags <- flagClr NODOCWARNINGS}}
      
 {--
@@ -230,8 +230,8 @@ importEnvSilent pos env ns imps = do
     An export list with except list is equivalent to one that names all public
     top level symbols whose name does not appear in the list.
 -}
-importEnv :: Position -> Symtab -> NSName -> ImportList -> StG ()
-importEnv pos env ns (imp@Imports {except=true, items}) = do
+importEnv :: Position -> Symtab -> NSName -> Pack -> ImportList -> StG ()
+importEnv pos env ns pack (imp@Imports {except=true, items}) = do
         g <- getST
         let xs = [ withNS ns.unNS  (ImportItem.name e) | e <- items ]
         exss <- mapSt (resolve (VName g.thisPack) pos) xs
@@ -249,29 +249,29 @@ importEnv pos env ns (imp@Imports {except=true, items}) = do
             nomem (SymC {}) = Just []
             -- nomem (SymT {}) = Just []
             nomem _         = Nothing
-        importEnv pos env ns imp.{except=false, items=nitems}
+        importEnv pos env ns pack imp.{except=false, items=nitems}
 
 --- A public import list is equivalent to one without public but public specified for all items.
-importEnv pos env ns (imp@Imports {publik=true, items})
-    = importEnv pos env ns imp.{publik = false, items <- map ImportItem.export}
+importEnv pos env ns pack (imp@Imports {publik=true, items})
+    = importEnv pos env ns pack imp.{publik = false, items <- map ImportItem.export}
 --- All items in the list are processed one by one
-importEnv pos env ns (Imports {items}) = foreach items (linkItem ns.unNS)
+importEnv pos env ns pack (Imports {items}) = foreach items (linkItem ns.unNS pack)
 
 --- a symbolic link is dereferenced and the link goes to the target
-linkHere ns (item@Item {alias=itema}) (link@SymL {name, alias}) = do
+linkHere ns pack (item@Item {alias=itema}) (link@SymL {name, alias}) = do
     let pos = Pos item.name.id item.name.id
     g <- getST
     case g.findit alias of
-        Just sym -> linkHere ns item sym
+        Just sym -> linkHere ns pack item sym
         Nothing -> E.fatal (pos) (text (link.name.nice g ++ " points to non-existing " ++ link.alias.nice g))
 
 -- an alias of Nothing is replaced by the base name of the item linked to
--- linkHere ns (item@Item {alias=Nothing}) sym = linkHere ns item.{alias = Just sym.name.base} sym
+-- linkHere ns pack (item@Item {alias=Nothing}) sym = linkHere ns pack item.{alias = Just sym.name.base} sym
 
--- linkHere ns (item@Item {alias=Just ""}) sym = E.fatal item.pos ("bad alias for " ++ item.name ++ ", must be at least 1 char")
+-- linkHere ns pack (item@Item {alias=Just ""}) sym = E.fatal item.pos ("bad alias for " ++ item.name ++ ", must be at least 1 char")
 
 -- otherwise the alias is checked for correctness
-linkHere ns (item@Item {publik,name,members,alias=newn}) sym = do
+linkHere ns pack (item@Item {publik,name,members,alias=newn}) sym = do
     let pos   = Pos name.id name.id
     let conid = (newn.charAt 0).isUpperCase
         conidOk
@@ -301,11 +301,14 @@ linkHere ns (item@Item {publik,name,members,alias=newn}) sym = do
                     ++ " name, not  `" ++ newn ++ "'"))
                 stio ()
 
-    -- take note of this item
-    let noteWhy (TName {pack}) = changeST _.{sub <- _.{packWhy <- insertWith (flip const) pack (NSX ns)}}
-        noteWhy (VName {pack}) = changeST _.{sub <- _.{packWhy <- insertWith (flip const) pack (NSX ns)}}
-        noteWhy (MName {tynm}) = noteWhy tynm
-        noteWhy (Local{})      = stio ()
+    -- if the 'item' belongs to a different packages from 'pack', it means it is a re-exported item.
+    -- in that case, take note of the item
+    let noteWhy (TName {pack=p}) = noteReExported p
+        noteWhy (VName {pack=p}) = noteReExported p
+        noteWhy (MName {tynm})   = noteWhy tynm
+        noteWhy (Local{})        = stio ()
+        noteReExported p | p /= pack = changeST _.{sub <- _.{packWhy <- insert p (NSX ns)}}
+                         | otherwise = stio ()
     noteWhy sym.name
 
     errors 
@@ -316,10 +319,10 @@ linkHere ns (item@Item {publik,name,members,alias=newn}) sym = do
                                     members = Nothing,
                                     alias = mem.name.base, publik = false}
                                 | mem@SymD {} <- values env, mem.vis == Public ]
-                foreach cons (linkItem ns)
+                foreach cons (linkItem ns pack)
             | Just ms <- members = do
                 let nms = map  ImportItem.{name <- (`qBy` item.name) • SName.id} ms
-                foreach nms (linkItem ns)
+                foreach nms (linkItem ns pack)
         SymC {env}
             | Nothing <- members =  do        -- link class methods
                 let meth = [  item.{name <- (pos.first.{tokid=VARID, value=sym.name.base} `qBy`),
@@ -329,27 +332,27 @@ linkHere ns (item@Item {publik,name,members,alias=newn}) sym = do
                                   not (defined sym.name.base) ]     -- import only yet undefined class members
                     -- here = g.thisTab
                     defined s = isJust (g.find (VName g.thisPack s))
-                foreach meth (linkItem ns)
+                foreach meth (linkItem ns pack)
             | Just ms <- members = do
                 let nms = map  ImportItem.{name <- (`qBy` item.name) • SName.id} ms
-                foreach nms (linkItem ns)
+                foreach nms (linkItem ns pack)
         _ -> if isNothing members then stio ()
              else do
                 E.error pos (msgdoc ("Member list not allowed for " ++ show name))
                 stio ()
 
-linkItem ns (item@Item {publik,name,members,alias}) = do
+linkItem ns pack (item@Item {publik,name,members,alias}) = do
     g <- getST
     let pos = Pos name.id name.id
     res <- resolve (VName g.thisPack) pos (withNS ns name)
     case mapMaybe g.findit res of
         [] -> stio ()       -- got error message from resolve or excluded
-        [sym] -> linkHere ns item sym
+        [sym] -> linkHere ns pack item sym
         syms                -- look for a type name
             | (tsym:_) <- [ x | x <- syms, TName{} <- Just x.name] 
-            = linkHere ns item tsym
+            = linkHere ns pack item tsym
             | otherwise = do        -- by taking the first result, we resolve NS.x
-                linkHere ns item (head syms)
+                linkHere ns pack item (head syms)
 
 
 
