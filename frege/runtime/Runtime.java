@@ -48,7 +48,7 @@ import java.nio.charset.StandardCharsets;
 
 
 /**
- * Miscellanous functions and methods needed in frege.
+ * Miscellaneous functions and methods needed in frege.
  * 
  * @author ingo
  *

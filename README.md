@@ -192,7 +192,7 @@ See the [Getting Started](https://github.com/Frege/frege/wiki/Getting-Started) p
 getting started at the command-line or read the [Eclipse plugin](https://github.com/Frege/eclipse-plugin) page.
 You can develop [Frege inside Intellij IDEA](https://github.com/Frege/frege/wiki/Using-Frege-in-Intellij-IDEA)
 and there is build automation support for
-Maven, Gradle, Leinigen, SBT, and Bazel.
+Maven, Gradle, Leiningen, SBT, and Bazel.
 
 The awesome QuickCheck library for advanced unit testing comes bundled with the language.
 

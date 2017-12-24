@@ -109,7 +109,7 @@ public abstract class Fun$n<X> extends Lambda {
      * when evaluated, invokes the {\@link Fun$n#eval} method of this
      * function.</p>
      *
-     * Use of this method is preferrable compared
+     * Use of this method is preferable compared
      * to repeated invokation of the single argument form since intermediate
      * closure creation is saved.
      *
@@ -123,7 +123,7 @@ public abstract class Fun$n<X> extends Lambda {
     
 	/**
      * <p>Force the Java typechecker to accept sensible substitutions.</p>
-     * <p>The Java typechecker won't accept a function that promisses 
+     * <p>The Java typechecker won't accept a function that promises 
      * to return X in place of a function that promises to return {\@link Object},
      * though this should be completely save, shouldn't it?</p>
      * <p>It also refuses to accept any frege type, when {\@link Lazy} is demanded,

@@ -102,7 +102,7 @@ public class RunTM {
 	}
 	
 	/** 
-	 * <p> Comamnd line arguments </p>
+	 * <p> Command line arguments </p>
 	 * 
 	 * <p>When a Frege program is run by evaluating <b>main</b>, the command line
 	 * arguments will be saved here and can be retrieved with
