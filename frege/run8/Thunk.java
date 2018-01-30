@@ -63,7 +63,7 @@ import frege.runtime.BlackHole;
  * would most likely cause even the simplest program to perform unacceptably bad.
  * </p>
 
- * <h3> Introduction of lazyness in frege compiled code </h3>
+ * <h3> Introduction of laziness in frege compiled code </h3>
  *
  * <p> Thunk values are introduced at only 2 occasions: </p>
  *
@@ -71,7 +71,7 @@ import frege.runtime.BlackHole;
  * <li>
  * <p>  Thunk arguments of data constructors or functions. Take the following example: </p>
  * <pre><code>
- * -- the list of fibonacci numbers
+ * -- the list of Fibonacci numbers
  * fibs = 0:1:zipWith (+) fibs (tail fibs)
  * </code></pre>
  *
@@ -332,7 +332,7 @@ public class Thunk<R> implements Lazy<R> {
 	 * 
 	 * <pre>return Thunk.«B»nested( (Lazy«Lazy«Boolean»») (() -> even(n-1)) );</pre>
 	 * 
-	 * <p>thereby lowering the compile type lazyness of the result by one level.</p>
+	 * <p>thereby lowering the compile type laziness of the result by one level.</p>
 	 * <p>Furthermore, odd() can now be seen as a tail-call safe function, since it doesn't
 	 * actually do a tail call, but just constructs the thunk.
 	 * 

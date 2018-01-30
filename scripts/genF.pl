@@ -115,7 +115,7 @@ public abstract class Fun$n<$ctargs> extends $ext {
      * when evaluated, invokes the {\@link Fun$n#r} method of this
      * function.</p>
      *
-     * Use of this method is preferrable if all arguments are known compared
+     * Use of this method is preferable if all arguments are known compared
      * to repeated invokation of the single argument form since intermediate
      * closure creation is saved.
      *

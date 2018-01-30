@@ -2,7 +2,7 @@ What is Frege?
 ==============
 
 [![Build Status](https://travis-ci.org/Frege/frege.svg)](https://travis-ci.org/Frege/frege)
-[![Join the chat at https://gitter.im/Frege/frege](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/Frege/frege?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
+[![Join the chat at https://gitter.im/Frege/frege](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/Frege/frege?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge) **Winner of the JavaOne Emerging Languages Bowl 2015, 2016, 2017**
 
 <img width="450" height="450" src="resources/Frege_logo.png"/>
 
@@ -192,7 +192,7 @@ See the [Getting Started](https://github.com/Frege/frege/wiki/Getting-Started) p
 getting started at the command-line or read the [Eclipse plugin](https://github.com/Frege/eclipse-plugin) page.
 You can develop [Frege inside Intellij IDEA](https://github.com/Frege/frege/wiki/Using-Frege-in-Intellij-IDEA)
 and there is build automation support for
-Maven, Gradle, Leinigen, SBT, and Bazel.
+Maven, Gradle, Leiningen, SBT, and Bazel.
 
 The awesome QuickCheck library for advanced unit testing comes bundled with the language.
 
@@ -211,6 +211,7 @@ Related Projects
 * [sbt Frege plugin](https://github.com/earldouglas/sbt-frege), by James Douglas
 * [An efficient Frege Ray-Tracer](https://github.com/mchav/Frege-RayTracer), by Michael Chavinda
 * [Frege Chat](https://github.com/Dierk/FregeChat), Winner at JavaOne 2016 language competition, Dierk König
+* [ProB Parser Library](https://github.com/bendisposto/probparsers) by Markus Brenneis (@mabre) and Jens Bendisposto (editor), University Düsseldorf
 
 Contributions
 -------------
@@ -220,6 +221,7 @@ If you are interested in contributing, here are some hot topics:
 * Write Frege code to support more of the Java API.
 * Port Haskell [libraries](https://github.com/Frege/frege/wiki/Libraries) or tools.
 * Open issues in the issues tracker if you find bugs, errors in documentation, etc.
+* [Open issues](https://github.com/Frege/frege-gradle-plugin/issues) in the tooling like [this one](https://github.com/Frege/frege-gradle-plugin/issues/41)
 * Help make Frege popular by writing code for projects like [Rosetta Code](http://rosettacode.org/wiki/Rosetta_Code), or [PLEAC](http://pleac.sourceforge.net).
 * Contribute to the related projects mentioned above, or make your own.
 
@@ -280,6 +282,7 @@ Links
 Recommended reading
 
 * [John Hughes: Why functional programming matters](http://www.cs.kent.ac.uk/people/staff/dat/miranda/whyfp90.pdf)
+* [Book: Haskell Programming from first principles](http://haskellbook.com)
 * [Book: Real-World Haskell](http://book.realworldhaskell.org/read/) (free online)
 * [Book: Learn you a Haskell](http://learnyouahaskell.com/chapters) (free online)
 * [Book: Programming in Haskell](http://www.amazon.com/Programming-Haskell-Graham-Hutton/dp/0521692695/)
