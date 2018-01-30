@@ -1,4 +1,4 @@
-package frege.runtime;
+package frege.run;
 
 public final class STM {
 
