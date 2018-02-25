@@ -1072,6 +1072,11 @@ datainit:
                                         newt = false,
                                         vars=[], ctrs=alts, defs=[], doc=Nothing}
     }
+    | DATA CONID {
+        \dat\d -> DatDcl {pos=yyline d, vis=Public, name=Token.value d,
+                                        newt = false,
+                                        vars=[], ctrs=[], defs=[], doc=Nothing}
+    }
     | NEWTYPE CONID dvars '=' dalt {
         \dat\d\ds\docu\alt -> DatDcl {pos=yyline d, vis=Public, name=Token.value d,
                                         newt = true,
