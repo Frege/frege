@@ -142,7 +142,7 @@ fregec7.jar:: savejava
 #
 #	Avoid recompilation of everything, just remake the compiler with itself
 #
-rebuild:
+rebuild: $(FREGE_COMPILER)/grammar/Frege.fr
 	@echo "[1;43mMaking $@[0m"
 	$(FREGEC2) -make frege.compiler.Main frege.ide.Utilities
 
