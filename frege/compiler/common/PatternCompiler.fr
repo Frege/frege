@@ -73,7 +73,7 @@ ccExpr    = U.mapEx true caseComp
 
     We can achieve this by transforming like this, where @v@ resembles a new name.
 
-    > p@pat  → ex                               cononicPatEx u pat (case u of p -> ex)
+    > p@pat  → ex                               cononicPatEx u pat (ex[p/u])
     > !p     → ex                               canonicPatEx u v | !p ← v          = ex,   if trimmed p is a variable
     >                                           canonicPatEx u p ex,        otherwise
     > (p::t) → ex                               canonicPatEx u v | (p∷t) ← v       = ex,   if trimmed p is a variable
@@ -82,13 +82,16 @@ ccExpr    = U.mapEx true caseComp
     The first argument *must be* a 'Vbl'!
 -}
 canonicPatEx :: Expr → Pattern → Expr → StG (Pattern, Expr)
-canonicPatEx u complex ex = case complex  of
+canonicPatEx u complex ex = 
+    let -- construct | pat ← x = ex  or case x of { pat → ex }
+        p |<- x = Case{ckind=CWhen, ex=x, alts=[CAlt{pat=p, ex}], typ=Nothing}
+    in case complex  of
         PVar{} →  pure (complex, ex)
         PCon{} →  pure (complex, ex)
         PLit{} →  pure (complex, ex)
         PMat{} →  pure (complex, ex)
-        PAt{pos, uid, var, pat} →  canonicPatEx u pat (p |<- u)  where
-                                        p   = PVar{pos, uid, var}
+        PAt{pos, uid, var, pat} →  do
+            changeSID uid u.name ex >>= canonicPatEx u pat   
         PUser{pat}
             | PVar{} ← trimmed pat →  do
                     vp ← freshVar (getrange complex)
@@ -108,9 +111,8 @@ canonicPatEx u complex ex = case complex  of
                     )
                 canonicPatEx u pat ex
         PConFS{} →  error "canonicPatEx: PCon not allowed here"
-    where
-        -- construct | pat <- x = ex
-        p |<- x = Case{ckind=CWhen, ex=x, alts=[CAlt{pat=p, ex}], typ=Nothing}
+        
+        
 
 --- make the first pattern of a definition canonic
 mkCanonic ∷ ExprT → ([Pattern],ExprT) → StG ([Pattern],ExprT)
@@ -231,10 +233,93 @@ match pos ck us ys = do
                             -- let gys = groupBy (using (getLit . head . fst)) (sortlit ys')
                             alts ← mapM (mkLits xs) ys'
                             mkCase u alts
-                        -- the non-uniform case
-                        -- first check if we have an irrefutable constructor plus some variables/underscores
-                        | all (irrefutableConOrVar . head . fst) ys' = do
-                            let con = head [ x | y ← ys', let x = head (fst y), irrefutableCon x]
+                        {- 
+                            Here come the non-uniform cases.
+                            Non-uniform means we have a bunch of constructors or literals
+                            and at least one variable (or underscore, which is just an anonymous variable).
+                            This tends to generate more complex code, and what is worse, 
+                            the generated code may trigger unjustified "incomplete pattern" warnings.
+                            
+                            For example:
+                            
+                                general Nothing  []    = 42
+                                general _        (_:_) = 43
+                                general (Just _) []    = 44
+                            
+                            will generate:
+                            
+                                general a b = case a of 
+                                    Nothing | []  ← b   = 42
+                                    _   | _:_ ← b   = 43
+                                        | otherwise = case a of
+                                                        Just _ → case b of [] -> 44
+                            
+                            which works for the most general case. However, in the process the 
+                            knowledge that the first argument cannot be Nothing anymore in the
+                            3rd equation has been lost.
+                            Hence you get a warning on the 3rd equation that Nothing is missing.
+                            And in addition you get a warning that (_:_) is missing, though this
+                            would have been catched by the 2nd equation, too.
+                            
+                            However, we can generate good code that doesn't trigger unjustified 
+                            "incomplete pattern" warnings in several cases nonetheless:
+                            
+                            1. when the constructor reveals that we have a product type. then we can 
+                               replace all the variables with that same constructor with all the 
+                               subpatterns as underscores, i.e. in
+                               
+                                  tuple (1,x) (_:_) = x
+                                  tuple _     _     = 42
+                               the second clause becomes:
+                                  tuple (_,_) _     = 42
+                               and then this can be handled by the constructor rule.
+                               
+                            2. We cannot reorder clauses, since then the result of the program may
+                               be difficult. But we can relax the left to right rule, since it will
+                               invariably find the same right hand side (if any) than strict left to
+                               right matching. However, what could change is the strictness of the 
+                               function. Take for example the function "general" from above.
+                               With strict left to right matching, it would be strict in the first 
+                               argument since we need to check whether it is Nothing. That is, the
+                               application
+                                    general undefined [1,2,3]
+                               would be undefined. However, consider the almost equivalent function
+                               
+                                   lareneg []    Nothing  = 42
+                                   lareneg (_:_) _        = 43
+                                   lareneg []    (Just _) = 44
+                            
+                               Now we can reorder the equations (since the first patterns are all refutable):
+                               
+                                   lareneg []    Nothing  = 42
+                                   lareneg []    (Just _) = 44
+                                   lareneg (_:_) _        = 43
+                            
+                               It becomes quite clear that the patterns are indeed complete. Anyway, if we
+                               let
+                               
+                                    general' a b = lareneg b a
+                               
+                               we see that the application
+                                    general' undefined [1,2,3]
+                               is now 43, since the second argument will be checked first and then there
+                               is no need to evaluate the first argument.
+                               
+                               Because we can generate much better code and avoid incomplete 
+                               pattern warnings for function "lareneg" we will check the patterns in a 
+                               further right column first, when that row is uniform but the 
+                               first row is not, UNLESS the compiler option "-strict-pats" 
+                               is in effect. 
+                               We'll also give a hint about it, so the user can 
+                                - leave things as they are, not caring about lazy/strict semantics
+                                - leave things as they are but insist on Haskell 2010 semantics
+                                  by using -strict-pats
+                                - improve the definition. In fact, such a situation as in "general"
+                                  is seldom unavoidable and may indicate sloppy or confused thinking. 
+                                   
+                        -}
+                        | all (productConOrVar . head . fst) ys' = do
+                            let con = head [ x | y ← ys', let x = head (fst y), singleCon x]
                                 -- make [ v, ...] = ex   into [Con _ _ _, ...] = ex'
                                 -- where v is substituted with u in ex'
                                 v2con (alt@(PVar{pos, uid, var}:_, ex)) = do
@@ -244,9 +329,16 @@ match pos ck us ys = do
                                 v2con sonst = pure sonst
                             ys'' ← mapM v2con ys'
                             match pos ck us ys''
-                        | false, Flags.isOff g.options.flags STRICTLRPATS,
+                        | Flags.isOff g.options.flags STRICTLRPATS,
                           (i:_) ← [ i | i ← [0..length us-1], uniform i ys' ] = do
-                            pure undefined
+                            let toppat = head . pick i . fst . head $ ys'
+                            unless (isPVar toppat) do 
+                                E.hint (getpos toppat ) (
+                                    text "The column of patterns whose top is "
+                                    <+> nicest g toppat 
+                                    </> text "will be matched out of order for efficiency reasons."
+                                    </> text "If you insist on Haskell semantics, use compiler flag -strict-pats")
+                            match pos ck (pick i us) [ (pick i ps,x) | (ps,x) ← ys' ]
                         | otherwise =  do
                             let diese = takeWhile (func ys' . head . fst) ys'
                                 jene  = drop (length diese) ys'
@@ -254,13 +346,21 @@ match pos ck us ys = do
                             e2 ← match pos ck    us jene
                             add e2 e1 
               where
-                uniform a b = false
-                -- is this an irrefutable constructor?
-                irrefutableCon (con@PCon{}) = not (patternRefutable g con)
-                irrefutableCon _            = false
+                uniform ∷ Int → [([Pattern],ExprT)] → Bool
+                uniform a ys = or (map is [isBool, isPVar, isPCon, isPLit])
+                    where
+                        is f = all f ps
+                        ps   = map ((!!a) . fst) ys
+                pick ∷ Int → [a] → [a]
+                pick i xs = case drop i xs of
+                    (y:ys) → y:(take i xs ++ ys)
+                    []     → error ("pick " ++ show i ++ " " ++ show (zipWith const [0..] xs))
+                -- is this a product constructor pattern?
+                singleCon PCon{qname} = productCon qname g
+                singleCon _           = false
                 -- is this an irrefutable constructor or a variable?
-                irrefutableConOrVar PVar{}  = true
-                irrefutableConOrVar con     = irrefutableCon con
+                productConOrVar PVar{}  = true
+                productConOrVar con     = singleCon con
                 mkCase u alts = case ck of 
                     CNormal → do
                         let ex = Case{ckind=CNormal, ex=u, alts, typ=Nothing} 
@@ -349,9 +449,10 @@ match pos ck us ys = do
         logit pos xs ys = do
             g ← getST
             E.logmsg TRACE7 pos (
-                    text "MATCH " <+> text "[" <+> PP.spread (map (nicet g) xs)  <+> text "]"
+                    text "MATCH " <+> text (if ck==CWhen then "when" else "case") 
+                                  <+> text "[" <> PP.sep "," (map (nicet g) xs)  <> text "]"
                     </> PP.stack (
-                        map (\(ps,x) -> text "[" <+> PP.spread (map (nicet g) ps)  <+> text "]"
+                        map (\(ps,x) -> text "[" <> PP.sep "," (map (nicet g) ps)  <> text "] →"
                                         <+> nicet g x)
                             ys
                     ) 
