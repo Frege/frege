@@ -390,7 +390,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 %token PACKAGE IMPORT INFIX INFIXR INFIXL NATIVE NEWTYPE DATA WHERE CLASS
 %token INSTANCE ABSTRACT TYPE TRUE FALSE IF THEN ELSE CASE OF DERIVE
 %token LET IN DO FORALL PRIVATE PROTECTED PUBLIC PURE THROWS MUTABLE
-%token INTCONST STRCONST LONGCONST FLTCONST DBLCONST CHRCONST REGEXP BIGCONST
+%token INTCONST STRCONST LONGCONST FLTCONST DBLCONST DECCONST CHRCONST REGEXP BIGCONST
 %token ARROW DCOLON GETS EARROW DOTDOT
 %token LOP1 LOP2 LOP3 LOP4 LOP5 LOP6 LOP7 LOP8 LOP9 LOP10 LOP11 LOP12 LOP13 LOP14 LOP15 LOP16
 %token ROP1 ROP2 ROP3 ROP4 ROP5 ROP6 ROP7 ROP8 ROP9 ROP10 ROP11 ROP12 ROP13 ROP14 ROP15 ROP16
@@ -1243,6 +1243,7 @@ literal:
     | LONGCONST                     { \x ->  Lit (yyline x) LLong   (Token.value x) }
     | FLTCONST                      { \x ->  Lit (yyline x) LFloat  (Token.value x) }
     | DBLCONST                      { \x ->  Lit (yyline x) LDouble (Token.value x) }
+    | DECCONST                      { \x ->  Lit (yyline x) LDouble (Token.value x) }
     | REGEXP                        { \x ->  do litregexp x }
     ;
 
