@@ -49,7 +49,8 @@ package frege.compiler.common.Desugar where
 import frege.Prelude hiding(<+>, break)
 import frege.control.monad.State(State)
 
-import Lib.PP       (group, break, msgdoc, stack, text)
+import Lib.PP       (group, break, msgdoc, stack, text, <+>, </>, <>)
+import Data.Dec64   (parseDecimal)
 import frege.compiler.common.Tuples(tuple)
 
 import  Compiler.enums.TokenID(TokenID)
@@ -630,9 +631,49 @@ litchar tok = case val of
         val  = Token.value tok
         char = YYM.pure (Lit (yyline tok) LChar val)  -- single char
 
---- extract the value of a 'BIGCONST' literal without the trailing N
-bignum :: Token -> String
-bignum x = strhead x.value (x.value.length-1)
+--- Check an 'Int' literal.
+--- If it is too big, make it a 'Long' literal.
+litint tok = case val of
+        '^0[Xx]'    | length val > 10 = litlong tok     -- i.e. 0x00FFEEDDCC is probably *meant* as long
+                    | otherwise       = int
+        '^0+[123]'  | length val > 12 = litlong tok     -- i.e. 0037777777777 is taken as long
+        '^0+[4567]' | length val > 11 = litlong tok     -- i.e.  047777777777 is a long
+        '^0'                          = int
+        _ = case val.int of 
+            Left  _                   = litlong tok     -- probably too big for an int, but what about minBound?
+            Right _                   = int  
+    where
+        val = (Token.value tok).replaceAll ´_´ ""
+        int = YYM.pure (Lit (yyline tok) LInt val)
+
+litlong tok = case val of
+        '^0'    → long                                  -- the java compiler will check the bounds
+        _       → case val.long of
+                    Left  x | longIndicated = do 
+                                E.error (yyline tok) (text "illegal long literal" <+> text tok.value
+                                    </> text x.getMessage)
+                                long
+                            | otherwise     = litbig tok
+                    Right _                 = long
+    where
+        longIndicated = tok.value ~ '[Ll]$'                 -- Long required by user
+        val = (Token.value tok).replaceAll ´[_Ll]´ ""       -- just the digits, plz
+        long = YYM.pure (Lit (yyline tok) LLong (val++"L"))
+
+litbig tok = big
+    where
+        val = (Token.value tok).replaceAll ´[_Nn]´ ""       -- just the digits, plz
+        big = YYM.pure (Lit (yyline tok) LBig val)
+
+litdec tok = case Dec64.parseDecimal val of
+        Left  nfx   → do
+                        E.error (yyline tok) (text "illegal decimal literal" <+> text tok.value
+                            </>   text nfx.getMessage)
+                        dec val
+        Right d     →  dec (show d.toBits ++ "L")           -- keep the long constant in the literal value
+    where
+        val = (Token.value tok).replaceAll ´[_Zz]´ ""       -- just the digits, plz
+        dec = pure . Lit (yyline tok) LDec 
 
 classContext :: String -> [ContextS] -> String -> StG [SName]
 classContext clas ctxs cvar = do

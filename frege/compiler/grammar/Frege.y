@@ -1238,12 +1238,12 @@ literal:
     | FALSE                         { \x ->  Lit (yyline x) LBool "false"}
     | CHRCONST                      { \x ->  do litchar x }
     | STRCONST                      { \x ->  Lit (yyline x) LString (Token.value x) }
-    | INTCONST                      { \x ->  Lit (yyline x) LInt    (Token.value x) }
-    | BIGCONST                      { \x ->  Lit (yyline x) LBig    (bignum x)      }
-    | LONGCONST                     { \x ->  Lit (yyline x) LLong   (Token.value x) }
+    | INTCONST                      { \x ->  do litint x  }
+    | BIGCONST                      { \x ->  do litbig x  }      
+    | LONGCONST                     { \x ->  do litlong x }
     | FLTCONST                      { \x ->  Lit (yyline x) LFloat  (Token.value x) }
     | DBLCONST                      { \x ->  Lit (yyline x) LDouble (Token.value x) }
-    | DECCONST                      { \x ->  Lit (yyline x) LDouble (Token.value x) }
+    | DECCONST                      { \x ->  do litdec x    }
     | REGEXP                        { \x ->  do litregexp x }
     ;
 
