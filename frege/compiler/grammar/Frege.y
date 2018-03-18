@@ -1519,4 +1519,4 @@ exprSS:
     the parser pass
  -};
 pass :: [Token] -> StG (Maybe ParseResult); -- Global -> IO (Maybe ParseResult, Global);
-pass = yyparse . substQQ;
+pass !toks = (yyparse . substQQ) toks;
