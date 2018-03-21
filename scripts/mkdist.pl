@@ -22,6 +22,8 @@ system (qq{find$exe}.q{ build/frege -name "*.java" -exec rm "{}" ";"});
 my $version = qx{java$exe -cp build frege.compiler.Main -version | head -1};
 chomp $version;
 $version =~ s/\s//g;
+my $latest  = $version;
+$latest =~ s/^(3\.\d+)\.\d+(.*)/$1-latest$2/;
 print "making dist for version: '$version'\n";
 
 #   make "executable" frege*.jar
@@ -39,4 +41,7 @@ system qq{jar$exe -cfe dist/frege$version.jar frege.compiler.Main  -C build freg
 #
 my @frsrcs = grep { $_ !~ m{frege/(contrib|compiler|rt)/|frege/Scrap} }
                 (split /\s+/, qx{find$exe frege -name "*.fr" -print});
-system qq{jar$exe -uf dist/frege$version.jar @frsrcs}
+system qq{jar$exe -uf dist/frege$version.jar @frsrcs};
+system qq{ln$exe -f dist/frege$version.jar dist/frege$latest.jar};
+my $pwd = `pwd$exe`; chomp $pwd;
+print "you can reference this also with $pwd/dist/frege$latest.jar\n";
