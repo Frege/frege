@@ -1,7 +1,7 @@
 --- support for 'Decimal' numbers
 
 module frege.data.Dec64 
-    -- inline (minCoefficient, maxCoefficient)
+        inline (positive, Positive.isNaN, Positive.isZero, Positive.coefficient, Positive.exponent)
     where
 
 
@@ -16,9 +16,8 @@ protected (¦)   = (.|.)
 protected (^)   = (.^.)
 protected (~)   = Bits.complement
 
-foo = 3 ^ 7
 
-
+--- unsigned division by 10, using only 8 additions and 10 bit shifts
 divu10 :: Long -> Long
 divu10 n = result
     where
@@ -44,40 +43,136 @@ divu10 n = result
 
 -}
 
+--- unsigned modulus 10, using only multiplication, addition and bit shifts
 remu10 :: Long -> Long
 remu10 n = (0x0988776554332210L >> (i.int<<2)) & 0x0fL
     where
         i = (0x1999999999999999L*n + (n>>>1) + (n>>>3)) >>> 60
 
+--- We will do the real work with positive 'Decimal's only and afterwards negate the result if need be
+--- This will reduce the cases to be considered and ease overflow detection
+data Positive = pure native "long" where
+    {-- 
+        Interpret the bits of the 'Long' value as a 'Positive'
+        This is a no-operation, as 'Positive's *are*  'Long's and every 'Long' value is a valid 'Positive'
+        (though it might not be a number, see also 'Positive.nan').
+    -} 
+    pure native fromBits "(long)" :: Long    → Positive
+    {-- 
+        Interpret the bits of a 'Positive' as 'Long' value.
+        The result will look like this
+        
+        > mmmm mmmm mmmm mmmm mmmm mmmm mmmm mmmm mmmm mmmm mmmm mmmm mmmm mmmm eeee eeee
+        >         54        48        40        32        24        16        8 7        0
+        - The 8  e bits 0..7  are the exponent in 2's complement encoding
+        - The 56 m bits 8..63 are the unsigned coefficient.
+        - an exponent of -128 (0x80) signals not-a-number (NaN)
+        - the value of a number that is not NaN is coefficient*(exp^10)
+        
+        Note that there are usually several encodings for one and the same value.
+        1, for example, could be 0x100 or 0xAFF (10E-1)
+        Likewise 5 could be represented as 5e0, 50e-1, 0.5e1 and so forth.
+        
+        This is a no-operation, as 'Positive's *are* 'Long's. 
+        However, the Frege compiler sees them as totally unrelated types (and rightly so). 
+    -}
+    pure native toBits   "(long)" :: Positive → Long
+    
+    --- the smalles possible coefficient is 0
+    pure native minCoefficient " 0L" :: Long
+    
+    --- the largest possible coefficient is 72\_057\_594\_037\_927\_935
+    pure native maxCoefficient " 72057594037927935L" :: Long
+    
+    --- the smallest exponent is -127
+    pure native minExponent " 0xffffff81" :: Int
+    
+    --- the largest exponent is 127
+    pure native maxExponent " 127" :: Int
+    
+    --- The canonical _not a number_ value.
+    --- Note that there are 2^56 NaN values, all comparing equal.
+    pure native nan " 128L" :: Positive
+    
+    --- The canonical 'Positive' 0
+    pure native zero " 0L" :: Positive
+    
+    --- The canonical 'Positive' 1
+    pure native one  " 0x100L" :: Positive
+    
+    --- tell if a 'Positive' is not a number. This works for all 2^56 NaN values.
+    isNaN d = (toBits d) & 0xffL == 128
+    
+    --- tell if a 'Positive' is 0. This works for all 255 0 values.
+    isZero d = not (isNaN d) && d.coefficient == 0
+    
+    --- extract the coefficient from a 'Positive'
+    --- This is simply an unsigned right shift by 8
+    coefficient d = toBits d  >>>  8
 
-parseDecimal s = case s of
-    m~'^(-)?(\d+)(\.\d+)?([eE]([+-]?)(\d+))?$' → let
-                minus = maybe false (=="-") (m.group 1)
-                sign  = if minus then (-1L) else 1L
-                ipart = fromMaybe "?" (m.group 2)           -- must be there, since no ?
-                fpart = maybe "" tail (m.group 3)           -- skip '.' if there at all
-                esign = case m.group 5 of
-                    Just "-" → (-1)
-                    Just "+" → 1
-                    nothing  → 1
-                epart = maybe (Right 0) String.int (m.group 6)
-            in case ipart.replaceFirst '^0*' "" of                              -- cut leading 0 
-                ipart -> case fpart.replaceFirst '0*$' "" of                    -- cut trailing 0
-                    fpart -> case ipart of
-                                ""  | null fpart = Right Decimal.zero
-                                _   = do                            -- we have abc.000xyz
-                                        e ← epart
-                                        let effe = e * esign - length fpart
-                                        co ← (ipart ++ fpart).long
-                                        let ecoff = co * sign
-                                        if ecoff > Decimal.maxCoefficient 
-                                            then Left (NumberFormatException.new "coefficient too big")
-                                        else if ecoff < Decimal.minCoefficient
-                                            then Left (NumberFormatException.new "coefficient too small")
-                                        else if effe > Decimal.maxExponent
-                                            then Left (NumberFormatException.new "exponent too big")
-                                        else if effe < Decimal.minExponent
-                                            then Left (NumberFormatException.new "exponent too small")
-                                        else pure (Decimal.pack (co*sign) effe)
-    _ → Left (NumberFormatException.new ("'" ++ s ++  "'" ++ "  doesn't match  ^(-)?(\\d+)(\\.\\d+)?([eE]([+-]?)(\\d+))?$"))
-                                
+    --- extract the exponent, sign extended in an 'Int'
+    exponent d = ((toBits d & 0xffL).int Int.`shiftL` 24) Int.`shiftR` 24         -- sign extend
+    
+    {-- 
+        construct a 'Positive' from a coefficient and an exponent
+        
+        This will be 'Positive.nan' if the coefficient is not in the range 'minCoefficient' .. 'maxCoefficient'
+        or the exponent is not in the range 'minExponent' .. 'maxExponent', *even if* the value could be 
+        represented. Thus:
+        
+        > Positive.pack 72057594037927935 0     == 72057594037927935z
+        > Positive.pack 720575940379279350 (-1) == nan
+        
+         
+    --}
+    pack coeff !exp | coeff < minCoefficient = nan
+                    | coeff > maxCoefficient = nan
+                    | exp   < minExponent    = nan
+                    | exp   > maxExponent    = nan
+                    | otherwise              = fromBits ((coeff << 8) ¦ (exp .&. 0xFF).long) 
+
+instance Show Positive where
+        show d  | d.isNaN         = "NaN"
+                | d.exponent == 0 = show d.coefficient ++ warn
+                | otherwise       = show d.coefficient ++ "e" ++ show d.exponent ++ warn
+                where warn = if d.coefficient > Decimal.maxCoefficient then "!" else ""
+
+
+--- a coeficient cannot be multiplied by 10 if it is greater than 922_337_203_685_477_580
+pure native expansionMax " 922337203685477580L" :: Long
+
+--- a number greater than this, multiplied by 10, wouldn't fit anymore in the 56 coefficient bits
+pure native coeffExpansionMax " 7205759403792793L" :: Long
+
+--- get the absolute value of a 'Decimal' as 'Positive' 
+positive ∷ Decimal → Positive
+positive d = Positive.pack (abs d.coefficient) d.exponent
+
+--- convert a 'Positive' back to a 'Decimal' with the sign indicated by the first argument
+decimal ∷ Int → Positive → Decimal
+decimal sign p | sign < 0  = Decimal.pack (negate p.coefficient) p.exponent
+               | otherwise = Decimal.pack p.coefficient p.exponent
+
+--- find the representation of a 'Positive' with the smallest coefficient
+--- NaN and 0 come out in their canonical forms
+normRight ∷ Positive → Positive
+normRight p | p.isNaN   = Positive.nan
+            | p.isZero  = Positive.zero 
+            | otherwise = go p.coefficient p.exponent
+    where
+        go :: Long → Int → Positive
+        go c !e | remu10 c != 0 || e >= Positive.maxExponent 
+                            = Positive.pack c e     -- can't shift right unless there are trailing zeroes
+                                                    -- and exp allows it
+                | otherwise = go (divu10 c) (e+1)
+
+--- find the representation of a 'Positive' with the greatest coefficient
+--- NaN and 0 come out in their canonical forms
+normLeft ∷ Positive → Positive
+normLeft p  | p.isNaN   = Positive.nan
+            | p.isZero  = Positive.zero
+            | otherwise = go p.coefficient p.exponent
+    where
+        go :: Long → Int → Positive
+        go !c e | e > Positive.minExponent, c <= coeffExpansionMax = go (c*10) (e-1)
+                | otherwise = Positive.pack c e
