@@ -31,6 +31,7 @@ import  Compiler.common.SymbolTable(enter, changeSym)
 import  Compiler.common.Binders
 import  Compiler.types.Patterns
 import  Compiler.enums.Literals
+import  Compiler.common.Types as T(unifySigma)
 import  Compiler.common.Errors as E()
 -- import  Compiler.types.Expression
 
@@ -390,7 +391,7 @@ classMethodOfInstMethod pos inst base = do
 
     This is done as long as the lambda body has still function type.
 
-    This will remove points free stype from definitions like
+    This will remove points free style from definitions like
 
     > sum = fold (+) 0
 
@@ -412,46 +413,62 @@ etaExpand (x@Ann {}) = do                   -- eta (x :: y) = (eta x :: y)
             nex <- etaExpand x.ex
             stio x.{ex=nex}
 
-etaExpand x = case x.typ of                 -- all other expressions
-    Just (ForAll [] (RhoTau ctx tau))
-        | Just (farg, fret) <- tau.getFun = do
-            uniq <- uniqid
-            let var = "η" ++ show uniq
-                pos  = (getpos x).change VARID var
-                arg = ForAll [] (RhoTau [] farg)
-                res = RhoTau [] fret
-                sym = U.patLocal pos uniq var
-                app = App x (Vbl {pos, name=sym.name, typ = Just arg}) (Just (ForAll [] res))
-                pat = PVar {pos=pos, uid=uniq, var}
-                -- env = insert Nil pat.var (U.patLocal pos pat.var).{sid=uniq}
-            enter sym.{state=Typechecked, typ=arg}
-            body <- etaExpand app
-            stio  Lam {pat, ex=body, typ = Just (ForAll [] (RhoFun ctx arg res))}
-        | otherwise = stio x
-    Just (ForAll [] (RhoFun ctx arg res)) = do
-            uniq <- uniqid
-            sarg <- TCU.skolemise arg
-            let pos = (getpos x).change VARID name
-                name = "η" ++ show uniq
-                pat = PVar{pos=getpos x, uid=uniq, var=name}
-                sym = U.patLocal pos uniq name
-                iarg = ForAll [] (snd sarg)     -- Num t42#a => t42#a -> t42#a
-                app = App x (Vbl {pos, name=sym.name, typ = Just iarg}) (Just (ForAll [] res))
-            -- sym <- U.mkLocal pat
-            enter sym.{state=Typechecked, typ=arg}
-            body <- etaExpand app
-            stio  Lam {pat, ex=body, typ = x.typ}
+   
 
-    Just sig = do
-        g <- getST
-        E.warn (getpos x) (msgdoc ("can't do eta expansion for an expression of type " ++ nice sig g))
-        E.hint (getpos x) (msgdoc ("try to write the surrounding binding in a eta expanded form"))
-        stio x
-    Nothing -> do
-        g <- getST
-        E.fatal (getpos x) (msgdoc ("eta expansion must be done after type check for "
-             ++ nice x g))
-        stio x
+etaExpand x = case x.typ of                 -- all other expressions
+        Just (ForAll [] (RhoTau ctx tau))
+            | Just (farg, fret) <- tau.getFun = do
+                g ← getST
+                uniq <- uniqid
+                let var = "η" ++ show uniq
+                    pos  = (getpos x).change VARID var
+                    arg = ForAll [] (RhoTau [] farg)
+                    res = RhoTau [] fret
+                    sym = U.patLocal pos uniq var
+                    y = cleanVarType g x
+                    app = App y (Vbl {pos, name=sym.name, typ = Just arg}) (Just (ForAll [] res))
+                    pat = PVar {pos=pos, uid=uniq, var}
+                    -- env = insert Nil pat.var (U.patLocal pos pat.var).{sid=uniq}
+                enter sym.{state=Typechecked, typ=arg}
+                body <- etaExpand app
+                stio  Lam {pat, ex=body, typ = Just (ForAll [] (RhoFun ctx arg res))}
+            | otherwise = stio x
+        Just (ForAll [] (RhoFun ctx arg res)) = do
+                g ← getST
+                uniq <- uniqid
+                sarg <- TCU.skolemise arg
+                let pos = (getpos x).change VARID name
+                    name = "η" ++ show uniq
+                    pat = PVar{pos=getpos x, uid=uniq, var=name}
+                    sym = U.patLocal pos uniq name
+                    iarg = ForAll [] (snd sarg)     -- Num t42#a => t42#a -> t42#a
+                    y = cleanVarType g x
+                    app = App y (Vbl {pos, name=sym.name, typ = Just iarg}) (Just (ForAll [] res))
+                -- sym <- U.mkLocal pat
+                enter sym.{state=Typechecked, typ=arg}
+                body <- etaExpand app
+                stio  Lam {pat, ex=body, typ = x.typ}
+    
+        Just sig = do
+            g <- getST
+            E.warn (getpos x) (msgdoc ("can't do eta expansion for an expression of type " ++ nice sig g))
+            E.hint (getpos x) (msgdoc ("try to write the surrounding binding in a eta expanded form"))
+            stio x
+        Nothing -> do
+            g <- getST
+            E.fatal (getpos x) (msgdoc ("eta expansion must be done after type check for "
+                 ++ nice x g))
+            stio x
+    where
+        -- clean unwanted contexts from the type of a variable
+        cleanVarType g (v@Vbl{pos, name, typ = Just sigma}) | not (null sigma.rho.context) = 
+            case g.findit name of
+                Just sym → v.{typ = Just vtyp} 
+                    where
+                        subst = unifySigma g sym.typ sigma
+                        vtyp = ForAll [b | b ← sym.typ.bound, not (TM.member b.var subst)] (T.substRho subst sym.typ.rho)
+                other → error ("etaExpand: variable not found:" ++  nicer name g)
+        cleanVarType g novar = novar
 
 
 
