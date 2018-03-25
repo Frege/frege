@@ -1089,10 +1089,11 @@ wrapHigher rflg ex binds tctxs sigma  = do
         jfunc    = sigmaJT g sigma
         innerjt  = lazy (funcResult jfunc)     -- rhoJT g sigma.rho.{context = []}
         fakesym  = (U.patLocal (getpos ex) 0 "\\rankN").{depth = 0, typ = sigma}
-    E.logmsg TRACEG (getpos ex) (text"genExpr: wrapping " 
+    E.logmsg TRACEG (getpos ex) (text "wrapHigher: " 
         <+> text (nicer ex g)
         <+/> text " :: " <+> text (nice sigma g)
-        <+/> text " @@ " <+> text (show jfunc))
+        <+/> text " @@ " <+> text (show jfunc)
+        <+/> text (nicerctx tctxs g))
     body <- compiling fakesym (genExpr rflg innerjt ex binds)
     let eval     = JLambda{fargs, code = Right JBlock{stmts=map JLocal assigns ++ [JReturn body.jex]}}
     pure (newBind g sigma (JCast jfunc eval)).{jtype = jfunc}  
@@ -1128,8 +1129,30 @@ genExpr rflg rm ex binds = do
             <+> text " @@ "
             <+> text (show rm))
     let 
-        genArgBind ∷ JType → ExprT → StG Binding
-        genArgBind arm aex = genExpr false arm aex binds
+        genArgBind ∷ Sigma → JType → ExprT → StG Binding
+        genArgBind sig arm aex
+            | not (null sig.bound), 
+              not (null sig.rho.context),                -- argument is expected to be higher ranked
+              Just ft ← aex.typ = case aex of
+                (exx@Vbl{name = Local{uid}}) | 
+                        Just bind <- lookup uid binds,
+                        Nothing <- g.findit exx.name >>= _.expr,              -- pattern bound
+                        not bind.ftype.bound.null,        -- forall a. ....
+                        -- make sure the contexts are in the right order
+                        -- we can't pass forall a b. (Num a, Num b) =>
+                        -- when (Num b, Num a) is expected
+                        uni <- substRho (unifySigma g bind.ftype ft) bind.ftype.rho,
+                        and (zipWith TU.sameCtx uni.context ft.rho.context)
+                            = do
+                                E.logmsg TRACEG (getpos exx) (text(
+                                    "genExpr: passing on "
+                                    ++ nice exx g
+                                    ++ " :: " ++ nice bind.ftype g
+                                    ++ " @@ " ++ nice ft g
+                                    ))
+                                exprResult arm aex bind             -- just pass on function
+                other    = wrapHigher false aex binds ft.rho.context ft >>= exprResult arm aex
+            | otherwise  = genExpr    false arm aex binds
 
         rigidContext :: Context -> Bool
         rigidContext = (any (not . _.isFlexi) . TU.ctxTvs g)
@@ -1174,7 +1197,7 @@ genExpr rflg rm ex binds = do
             that we are compiling a symbol with constraint @Num t3244#@, it will find it and 
             pass it on to the symbol that is instantiated.
 
-        -}
+        - }
         exx 
             |  tctxs@(_:_) ← filter rigidContext ft.rho.context,    -- there are rigid constraints
                null (resolvableCtxs g tctxs)                        -- none are resolvable
@@ -1197,10 +1220,20 @@ genExpr rflg rm ex binds = do
                                     ++ " @@ " ++ nice ft g
                                     ))
                                 result bind             -- just pass on function
-                _other  =  wrapHigher rflg ex binds tctxs ft >>= result 
+                _other  =  wrapHigher rflg ex binds tctxs ft >>= result
+        -} 
         -- Local Variables are being looked up in the bindings
         Vbl{name=Local{uid, base}, pos, typ}
-            | Just b    ← lookup uid binds = case b.ftype of
+            | Just b    ← lookup uid binds = do
+                --E.logmsg TRACEG pos (text "genExpr bound at " <+> nicest g b.ftype)
+                --E.logmsg TRACEG pos (text "not (null bound) " <+> (text . show) (not (null b.ftype.bound)))
+                --let mbsym = g.findit ex.name
+                --E.logmsg TRACEG pos (text "g.findit ex.name " <+> (text . show . fmap (const ())) mbsym)
+                --let cond = case mbsym of
+                --        Just sym -> not (isJust sym.expr && sym.depth > 0 && RMethod `member` sym.rkind)
+                --        _        -> false
+                --E.logmsg TRACEG pos (text "not local method " <+> (text . show) cond)
+                case b.ftype of
                     ForAll{bound, rho}
                         | not (null bound),
                           Just sym ← g.findit ex.name,
@@ -1210,6 +1243,11 @@ genExpr rflg rm ex binds = do
                                 then b.{jex ← JX.invoke []}     -- evaluate method CAFs
                                 else b
                         = instPatternBound pos b' ft >>= result
+                        
+                    ForAll{bound, rho}
+                        | not (null bound),
+                          Nothing ←  g.findit ex.name >>= _.expr,       -- pattern bound
+                        = instPatternBound pos b ft >>= result
                     _
                         | Func{} ← b.jtype,
                           Just sym  ← g.findit ex.name,
@@ -1432,7 +1470,7 @@ genExpr rflg rm ex binds = do
                                 -- resolve the contexts, if any
                                 ctxs    ←  mapM (resolveConstraint pos) contexts
                                 -- arguments
-                                abinds  ←  sequence (zipWith genArgBind argjts args)
+                                abinds  ←  sequence (zipWith3 genArgBind sigs argjts args)
                                 let arguments   =  ctxs ++ map  _.jex  abinds
 
                                 let cons = symJavaName g sym
@@ -1484,7 +1522,7 @@ genExpr rflg rm ex binds = do
                                             --xs  → Func xs
                                         _           → Something  -- ??  
                         rhoctx      =  substRho subst symtyp.rho
-                        (res, sigs)    =  U.returnType rhoctx
+                        (res, sigs) =  U.returnType rhoctx
                         -- sigs        =  map (unJust . _.typ) args
                         argjts      =  zipWith ($) 
                                             (if lambdaBound || innerFun
@@ -1507,7 +1545,7 @@ genExpr rflg rm ex binds = do
                                 fun ← genExpr false subrm vbl binds
                                 case fun.jtype of
                                     Func [ajty, rjty] → do
-                                        arg ← genArgBind (lazy ajty) (head args)
+                                        arg ← genArgBind (head sigs) (lazy ajty) (head args)
                                         let call0   = newBind g ret
                                                (JX.invoke [arg.jex] . JX.xmem "apply" $ fun.jex)
                                             call    =  call0.{jtype = lazy rjty}
@@ -1551,7 +1589,7 @@ genExpr rflg rm ex binds = do
                       -- resolve the contexts, if any
                       ctxs    ←  mapM (resolveConstraint pos) contexts
                       -- arguments
-                      abinds  ←  sequence (zipWith genArgBind argjts args)
+                      abinds  ←  sequence (zipWith3 genArgBind sigs argjts args)
                       let   abxs        =  map _.jex abinds
                             arguments   =  ctxs ++ abxs
                             --apply x [] args  = JX.invoke args . JX.xmem "apply" $ x
