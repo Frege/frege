@@ -88,7 +88,7 @@ all: runtime compiler fregec.jar
 	@echo "[1;42mMaking $@[0m"
 
 fetch-fregec.jar:
-	curl -H 'Accept: application/vnd.github.v3.raw' -kL -o fregec.jar `grep curl .travis.yml | sed 's/.*https:/http:/'`
+	curl -H 'Accept: application/vnd.github.v3.raw' -kL -o fregec.jar `grep curl .travis.yml | sed 's/.*https:/http:/' | sed 's/\s*$$//'`
 
 shadow-prelude:
 	@echo "[1;43mMaking $@[0m"
