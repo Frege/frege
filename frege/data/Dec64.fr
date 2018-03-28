@@ -2,7 +2,7 @@
 
 module frege.data.Dec64 
         inline (positive, Positive.isNaN, Positive.isZero, Positive.coefficient, Positive.exponent,
-                Decimal.hashCode)
+                Decimal.hashCode, mulu10)
     where
 
 
@@ -49,6 +49,10 @@ remu10 :: Long -> Long
 remu10 n = (0x0988776554332210L >> (i.int<<2)) & 0x0fL
     where
         i = (0x1999999999999999L*n + (n>>>1) + (n>>>3)) >>> 60
+
+--- multiplication by 10, with shift and add
+--- this will be inlined, so onyl use a variable as argument
+mulu10 n = ((n<<2)+n)<<1        -- ((n*4)+1)*2
 
 --- We will do the real work with positive 'Decimal's only and afterwards negate the result if need be
 --- This will reduce the cases to be considered and ease overflow detection
@@ -151,8 +155,19 @@ positive d = Positive.pack (abs d.coefficient) d.exponent
 
 --- convert a 'Positive' back to a 'Decimal' with the sign indicated by the first argument
 decimal ∷ Int → Positive → Decimal
-decimal sign p | sign < 0  = Decimal.pack (negate p.coefficient) p.exponent
-               | otherwise = Decimal.pack p.coefficient p.exponent
+decimal !sign !p
+    | p.isNaN   = Decimal.nan
+    | p.isZero  = Decimal.zero
+    | otherwise = go p.coefficient p.exponent
+    where
+        go ∷ Long → Int → Decimal
+        go !c !x
+            | if sign <0 then c > abs Decimal.minCoefficient else c > Decimal.maxCoefficient, 
+              x < Decimal.maxExponent = go (divu10 (c+5)) (x+1)
+            | x > Decimal.maxExponent, c <= coeffExpansionMax = go (mulu10 c) (x-1)
+            | x < Decimal.minExponent = go (divu10 (c+5)) (x+1) 
+            | sign < 0  = Decimal.pack (negate c) x
+            | otherwise = Decimal.pack c x
 
 --- find the representation of a 'Positive' with the smallest coefficient
 --- NaN and 0 come out in their canonical forms
@@ -175,7 +190,7 @@ normLeft p  | p.isNaN   = Positive.nan
             | otherwise = go p.coefficient p.exponent
     where
         go :: Long → Int → Positive
-        go !c e | e > Positive.minExponent, c <= coeffExpansionMax = go (c*10) (e-1)
+        go !c e | e > Positive.minExponent, c <= coeffExpansionMax = go (mulu10 c) (e-1)
                 | otherwise = Positive.pack c e
 
 compareP ∷ Positive → Positive → Ordering
@@ -190,7 +205,8 @@ compareP a b
 
 
 compareD ∷ Decimal → Decimal → Ordering
-compareD a b | a.isNaN    = if b.isNaN then EQ else LT
+compareD a b
+            | a.isNaN    = if b.isNaN then EQ else LT
             | b.isNaN    = LT
             | a.sign < 0 = if b.sign < 0 then compareP (positive b) (positive a) else LT
             | b.sign < 0 = GT
@@ -203,3 +219,89 @@ instance Ord Decimal where
 instance Ord Positive where
     (<=>) = compareP
     hashCode x = x.toBits.hashCode
+
+
+--- tell the number of significant digits
+sigDigits ∷ Positive → Int
+sigDigits z
+        | p > Positive.zero = 17 + (normLeft p).exponent    --  exp will be -n, where n is 
+        | otherwise = 0                                     --  the number of places shifted left
+    where
+        p = Positive.pack z.coefficient 0
+
+--- Pack an arithmetic result by dividing the coefficient by 10 until it fits.
+--- This will loose precision if the coefficient came out larger than 56 bits.
+packResult !c !x
+    | c > Positive.maxCoefficient = packResult (divu10 c) (x+1)
+    | otherwise = Positive.pack c x
+
+--- add 2 'Positive' numbers
+--- both numbers must not be NaN
+addP :: Positive → Positive → Positive
+addP !a !b
+    | a.isZero = b
+    | b.isZero = a
+    | a.exponent == b.exponent = Positive.pack (a.coefficient + b.coefficient) a.exponent
+    | a.exponent >  b.exponent = go a.coefficient a.exponent b.coefficient b.exponent
+    | otherwise                = go b.coefficient b.exponent a.coefficient a.exponent
+    where
+        -- try to make the exponents equal, first by multiplying the left operand by 10 until it would
+        -- overflow a Long. Afterwards, shift the right operand to the right, which may loose precision.
+        -- (The lost digits of the second operand are the ones that cannot be represented in the result.)
+        -- Eventually, the exponents match, or b becomes 0, and the algorithm terminates
+        -- The operand with the greater exponent must be on the left.
+        go :: Long → Int → Long → Int → Positive
+        go ac ax bc bx 
+            | bc == 0 = packResult ac ax
+            | ax > bx = if ac <= expansionMax 
+                            then go (mulu10 ac) (ax-1) bc bx    -- coeff times 10
+                            else go ac ax (divu10 bc) (bx+1)    -- loose precision on b
+            | otherwise = packResult (ac + bc) ax
+
+--- difference between 2 'Positive' numbers, where the first one must be >= the second one
+--- both numbers must not be NaN
+diffP :: Positive → Positive → Positive
+diffP !a !b
+    | b.isZero                  = a      -- just in case ...
+    | a.exponent == b.exponent  = Positive.pack (a.coefficient - b.coefficient) a.exponent
+    | a.exponent >  b.exponent  = go a.coefficient a.exponent b.coefficient b.exponent
+    | otherwise                 = go b.coefficient b.exponent a.coefficient a.exponent
+    where
+        -- try to make the exponents equal, first by multiplying the left operand by 10 until it would
+        -- overflow a Long. Afterwards, shift the right operand to the right, which may loose precision.
+        -- (The lost digits of the second operand are the ones that cannot be represented in the result.)
+        -- Eventually, the exponents match, or b becomes 0, and the algorithm terminates
+        -- The operand with the greater exponent must be on the left.
+        go :: Long → Int → Long → Int → Positive
+        go ac ax bc bx 
+            | bc == 0 = packResult ac ax
+            | ax > bx = if ac <= expansionMax 
+                            then go (mulu10 ac) (ax-1) bc bx    -- coeff times 10
+                            else go ac ax (divu10 bc) (bx+1)    -- loose precision on b
+            | otherwise = packResult (ac - bc) ax
+
+
+instance Num Decimal where
+    negate d = Decimal.pack (negate d.coefficient) d.exponent
+    (+) :: Decimal → Decimal → Decimal
+    !a + !b 
+        | a.isNaN = a
+        | b.isNaN = b
+        | a.sign < 0 = if b.sign < 0 then decimal (-1) (addP (positive a) (positive b))
+                                     else mixed (positive a) (positive b) 
+        | b.sign < 0 = mixed (positive b) (positive a)
+        | otherwise = decimal 1 (addP (positive a) (positive b))
+        where
+            mixed ∷ Positive → Positive → Decimal
+            mixed neg pos = if neg > pos 
+                                then decimal (-1) (diffP neg pos)   -- (-5 + 3) = -(5-3)
+                                else decimal 1    (diffP pos neg)   -- (-3 + 5) = +(5-3)
+
+    !a - !b
+        | a.isNaN = a
+        | b.isNaN = b
+        | otherwise = a + (negate b)
+        
+    !a * !b = error "decimal multiplication not yet implemented"
+    fromInt i     = Decimal.pack i.long 0
+    fromInteger n = Decimal.pack (fromInteger n) 0
