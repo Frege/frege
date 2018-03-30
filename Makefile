@@ -155,6 +155,13 @@ test: compiler
 	$(FREGECC) -d $(BUILD_TEST) tests/qc
 	$(JAVA) -Xss4m -cp $(BUILD) frege.tools.Quick -v $(BUILD_TEST)
 
+regression: 
+	@echo We assume we have a compiler.
+	$(JAVAC) -d $(BUILD) tests/comp/*.java
+	$(FREGECC) -make tests/comp/*.fr
+	@echo Now we check whether all difficult code that had an issue earlier will still run
+	for i in `echo tests/comp/*.fr | sed 's/\//./g' | sed 's/\.fr//g'` ;do  echo; echo $$i -------------------;if $(JAVA) -cp build $$i ;then echo $$i OK; else echo $$i FAILED; exit 1;fi; done 
+
 # 	$(BUILD_FREGE_TOOLS)/Doc.class $(BUILD_FREGE_TOOLS)/YYgen.class $(BUILD_FREGE_TOOLS)/LexConvt.class
 tools: $(BUILD_FREGE_COMPILER)/Main.class
 	$(FREGECC) -make frege/StandardTools.fr
