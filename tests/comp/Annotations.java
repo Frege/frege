@@ -20,6 +20,7 @@ import frege.runtime.Meta;
 	java version "9-ea"
 	Java(TM) SE Runtime Environment (build 9-ea+99-jigsaw-nightly-h4279-20160114)
 	Java HotSpot(TM) 64-Bit Server VM (build 9-ea+99-jigsaw-nightly-h4279-20160114, mixed mode)
+	ingo@freguntu:~/dev/test$ java -cp build tests.comp.Annotations
 	annotation present: true
 	ingo@freguntu:~/dev/test$ j9 -cp build tests.comp.Annotations
 	Exception in thread "main" java.lang.annotation.AnnotationFormatError: java.lang.IllegalArgumentException: Constant pool index out of bounds
