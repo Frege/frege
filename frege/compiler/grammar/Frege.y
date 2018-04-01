@@ -1234,15 +1234,15 @@ funhead:
 
 
 literal:
-    TRUE                            { \x ->  Lit (yyline x) LBool "true" }
-    | FALSE                         { \x ->  Lit (yyline x) LBool "false"}
+    TRUE                            { \x ->  Lit (yyline x) LBool "true" false}
+    | FALSE                         { \x ->  Lit (yyline x) LBool "false" false}
     | CHRCONST                      { \x ->  do litchar x }
-    | STRCONST                      { \x ->  Lit (yyline x) LString (Token.value x) }
+    | STRCONST                      { \x ->  Lit (yyline x) LString (Token.value x) false}
     | INTCONST                      { \x ->  do litint x  }
     | BIGCONST                      { \x ->  do litbig x  }      
     | LONGCONST                     { \x ->  do litlong x }
-    | FLTCONST                      { \x ->  Lit (yyline x) LFloat  (Token.value x) }
-    | DBLCONST                      { \x ->  Lit (yyline x) LDouble (Token.value x) }
+    | FLTCONST                      { \x ->  Lit (yyline x) LFloat  (Token.value x) false}
+    | DBLCONST                      { \x ->  Lit (yyline x) LDouble (Token.value x) false}
     | DECCONST                      { \x ->  do litdec x    }
     | REGEXP                        { \x ->  do litregexp x }
     ;
