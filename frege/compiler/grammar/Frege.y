@@ -122,10 +122,10 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type word            String
 //%type words           [String]
 //%type varid           Token
-//%type fldid           (Position, String, Visibility, Bool)
-//%type strictfldid     (Position, String, Visibility, Bool)
-//%type plainfldid      (Position, String, Visibility, Bool)
-//%type fldids          [(Position, String, Visibility, Bool)]
+//%type fldid           (SigmaS -> ConField SName)
+//%type strictfldid     (SigmaS -> ConField SName)
+//%type plainfldid      (SigmaS -> ConField SName)
+//%type fldids          [SigmaS -> ConField SName]
 //%type qvarid          SName
 //%type qvarop          SName
 //%type qvarids         [SName]
@@ -216,6 +216,8 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type confld          [ConField SName]
 //%type conflds         [ConField SName]
 //%type contypes        [ConField SName]
+//%type contype         (ConField SName)
+//%type strictcontype   (ConField SName)
 //%type dalt            DConS
 //%type simpledalt      DConS
 //%type strictdalt      DConS
@@ -354,7 +356,9 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%explain strictdalt   a variant of an algebraic datatype
 //%explain visdalt      a variant of an algebraic datatype
 //%explain dalts        an algebraic datatype
-//%explain contypes     constructor types
+//%explain contypes     constructor fields represented by types
+//%explain contype      constructor field represented by a type
+//%explain strictcontype constructor field represented by a type
 //%explain conflds      constructor fields
 //%explain confld       a constructor field
 //%explain calt         case alternative
@@ -1130,13 +1134,21 @@ simpledalt:
     ;
 
 contypes:
-    simpletypes                 { \taus -> do
-                                    g <- getST
-                                    let field  = Field Position.null Nothing Nothing Public false
-                                                    • toSig
-                                        toSig (TSig s) = s
-                                        toSig tau      = (ForAll [] . RhoTau []) tau
-                                    pure (map field taus)
+    strictcontype               { single }
+    | strictcontype contypes    { (:)    }
+    ;
+
+strictcontype:
+    contype
+    | '!' contype               { const ConField.{strict=true}  }
+    | '?' contype               { const ConField.{strict=false} }
+    ;    
+
+contype:
+    simpletype                  { \tau -> case tau of 
+                                    TSig s -> Field Position.null Nothing Nothing Public false s
+                                    _      -> Field Position.null Nothing Nothing Public false 
+                                                (ForAll [] (RhoTau [] tau))
                                 }
     ;
 
@@ -1155,9 +1167,7 @@ conflds:
 
 confld:
     docsO fldids DCOLON sigma    { \(d::Maybe String)\vs\_\t ->
-                                        map ConField.{doc=d}
-                                            [Field pos (Just name) Nothing vis strict t |
-                                                (pos,name,vis,strict) <- vs ]
+                                        map (ConField.{doc=d} . ($t)) vs
                                   }
     ;
 
@@ -1168,21 +1178,18 @@ fldids:
 
 fldid:
     strictfldid
-    | PUBLIC  strictfldid        { \_ \(pos,name,vis,strict) -> (pos,name,Public, strict) }
-    | PRIVATE strictfldid        { \_ \(pos,name,vis,strict) -> (pos,name,Private,strict) }
+    | PUBLIC  strictfldid        { const (ConField.{vis=Public}  .) }
+    | PRIVATE strictfldid        { const (ConField.{vis=Private} .) }
     ;
 
 strictfldid:
     plainfldid
-    | '!' plainfldid            { \_ \(pos,name,vis,strict) -> (pos,name,vis, true) }
-    | '?' plainfldid            { \_ \(pos,name,vis,strict) -> (pos,name,vis, false) }
+    | '!' plainfldid            { const (ConField.{strict=true}  .) }
+    | '?' plainfldid            { const (ConField.{strict=false} .) }
     ;
 
 plainfldid:
-    varid                       { \v -> do
-                                    g <- getST
-                                    pure (yyline v, v.value, Public, false)
-                                }
+    varid                       { \v -> Field (yyline v) (Just v.value) Nothing Public false }
     ;
 
 typedef:
