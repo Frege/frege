@@ -48,19 +48,19 @@ TIMEPROG = `which gtime || which time || false`
 FREGE    = ${TIME} $(JAVA) -Xss4m -Xmx2222m -cp $(BUILD)
 
 #	compile using the fregec.jar in the working directory
-FREGECJ  = $(FREGE) -jar fregec.jar -d $(BUILD) -hints
+FREGECJ  = $(FREGE) -jar fregec.jar -d $(BUILD) -hints -ascii
 
 #	compile compiler1 with fregec.jar, uses prelude sources from shadow/
-FREGEC0  = $(FREGECJ) -nocp -prefix a -sp "shadow$(PATHSEP)."  -target 1.7
+FREGEC0  = $(FREGECJ) -nocp -prefix a -sp "shadow$(PATHSEP)."  -target 1.7 
 
 #	compile compiler2 with compiler1
-FREGEC1  = $(FREGE) afrege.compiler.Main -d $(BUILD) -hints -inline -prefix b -target $(TARGET)
+FREGEC1  = $(FREGE) afrege.compiler.Main -d $(BUILD) -hints -greek -inline -prefix b -target $(TARGET)
 
 #	compile final compiler with compiler2
-FREGEC2  = $(FREGE) bfrege.compiler.Main -d $(BUILD) -hints  -O -target $(TARGET)
+FREGEC2  = $(FREGE) bfrege.compiler.Main -d $(BUILD) -hints -fraktur  -O -target $(TARGET)
 
 #	final compiler
-FREGECC  = $(FREGE) frege.compiler.Main -d $(BUILD) -hints  -O -target $(TARGET)
+FREGECC  = $(FREGE) frege.compiler.Main -d $(BUILD) -hints -O -target $(TARGET)
 
 #	Prelude files in the order they must be compiled
 PRELUDE  = \
