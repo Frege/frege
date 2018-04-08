@@ -33,7 +33,8 @@ system qq{jar$exe -xf ../lib/jline-2.13.jar} if -f "../lib/jline-2.13.jar" && -d
 system qq{rm -rf META-INF};
 
 #   make "executable" frege*.jar
-system qq{jar$exe -cfe ../dist/frege$version.jar frege.compiler.Main  frege/ jline/ org/};
+my entrypoint = -f 'frege/Starter.class' ? "frege.Starter" : "frege.compiler.Main";
+system qq{jar$exe -cfe ../dist/frege$version.jar  $entrypoint  frege/ jline/ org/};
 chdir "..";
 
 #   ship documentation
