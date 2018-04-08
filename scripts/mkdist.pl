@@ -26,8 +26,15 @@ my $latest  = $version;
 $latest =~ s/^(3\.\d+)\.\d+(.*)/$1-latest$2/;
 print "making dist for version: '$version'\n";
 
+
+# copy jline stuff
+chdir "./build";
+system qq{jar$exe -xf ../lib/jline-2.13.jar} if -f "../lib/jline-2.13.jar" && -d "frege/repl";
+system qq{rm -rf META-INF};
+
 #   make "executable" frege*.jar
-system qq{jar$exe -cfe dist/frege$version.jar frege.compiler.Main  -C build frege};
+system qq{jar$exe -cfe ../dist/frege$version.jar frege.compiler.Main  frege/ jline/ org/};
+chdir "..";
 
 #   ship documentation
 #   sometimes it's good to have it offline

@@ -79,6 +79,12 @@ PRELUDE  = \
 		frege/prelude/Math.fr \
 		frege/java/lang/Math.fr
 
+#	command to compile the interpreter
+COMPILEREPL=$(TIME) java8 -Xss2m -cp build:$(JLINE) frege.compiler.Main -d build -make  -sp .:$(REPLSOURCEPATH):$(INTERPRETERSOURCEPATH) frege.repl.FregeRepl
+REPLSOURCEPATH=../frege-repl/frege-repl-core/src/main/frege:../frege-repl/frege-repl-nativedeps/src/main/java/
+INTERPRETERSOURCEPATH=../frege-interpreter/frege-interpreter-core/src/main/frege:../frege-interpreter/frege-interpreter-java-support/src/main/java/
+JLINE=lib/jline-2.13.jar
+
 #	shadow Prelude files in the order they must be compiled
 SPRELUDE  = $(addprefix shadow/, $(PRELUDE))
 
@@ -114,6 +120,7 @@ sanitycheck:
 
 dist: fregec.jar
 	@echo "[1;42mMaking $@[0m"
+	test -d ../frege-interpreter/ && test -d ../frege-repl/ && $(COMPILEREPL)
 	perl scripts/mkdist.pl
 
 fregec.jar: test
