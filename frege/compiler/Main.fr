@@ -41,7 +41,7 @@ package frege.compiler.Main
     where
 
 import  frege.Prelude hiding(<+>)
-import  Lib.PP(msgdoc, text, <+>)
+import  Lib.PP(msgdoc, text, <+>, <>)
 import  Control.monad.State
 import  Data.TreeMap as TM(TreeMap, each, values, keys, insert, delete)
 import  Data.List (sort, uniq)
@@ -351,6 +351,25 @@ javacs files = do
                         (msgdoc "java compiler errors are most likely caused by erroneous native definitions")
     return ("source file", length files)
 
+--- compile a java file
+javacJava single = do
+    g <- getSTT
+    let command   = maybe ["javac"] ´\s+´.splitted  (System.getProperty "frege.javac")
+        target | g.options.target != thisTarget
+                    = ["-nowarn", "-source", (show g.options.target),
+                                  "-target", (show g.options.target)]
+               | otherwise = []
+        arguments = target ++ ["-cp", joined pathSep (ourPath g.options),
+                    "-d",  g.options.dir,
+                    "-sourcepath", joined pathSep g.options.sourcePath,
+                    "-encoding", "UTF-8",
+                    ] ++ [single]
+    
+    rc <- liftIO (JArray.genericFromList (command ++ arguments) >>= runJavac)
+    when (rc != 0) do
+        liftStG $ E.error (packageEnd g) 
+                (msgdoc "java compiler errors are most likely caused by erroneous native definitions")
+    pure rc
 
 runpass :: (StIO (String, Int), String) -> StIO  ()
 runpass (pass,description) = do
@@ -453,11 +472,15 @@ walk file = do
         then return [name]
         else return [] 
 
---- look up an external package name in source path
+--- look up an external package name in source path, check frege and java files
 resolvePackSP :: Global -> String -> IO (Maybe String)
 resolvePackSP g pack = do
-    let path = (magicPack pack).replaceAll ´\.´  "/" ++ ".fr"
-    resolveSP g path
+    let frpath = (magicPack pack).replaceAll ´\.´  "/" ++ ".fr"
+        jpath  = frpath.replaceFirst 'fr$' "java"
+    s ← resolveSP g frpath
+    case s of
+        Just _ → pure s
+        Nothing → resolveSP g jpath 
 
 --- Look up a (relative) file name in source path
 resolveSP :: Global -> String -> IO (Maybe String)
@@ -534,10 +557,13 @@ data Todo =
         reason      :: Maybe Pack   --- required by or commandline
         because     :: String       --- specific cause
     }
-    -- | --- needs java compilation
-    -- JavacMe {
-    --     global      :: Global       --- state
-    -- }
+    | --- possible dependency needs java compilation
+    JavacMe {
+        pack        ∷ Pack          --- what to compile
+        reason      ∷ Maybe Pack    --- required from package (or commandline)
+    }
+    | --- javac was successful (for 'JavacMe')
+    JavaCompiled
 
 instance Show Todo where
     show x = case x  of
@@ -555,10 +581,12 @@ instance Show Todo where
         ParseMe{source}     → "parse " ++ source 
         Parsed{}            → "parsed"
         Compiled{global}    → "compiled"
+        JavaCompiled        → "compiled"
         CompileMe{global, reason, because} -> "compilation needed because " ++ because
                                 ++ ", required by "
                                 ++ maybe "user" (unmagicPack . Pack.raw) reason
-        -- JavacMe{global}     → "ready for java compilation"
+        JavacMe{pack, reason} → "java compilation, required by " 
+                                ++ maybe "user" (unmagicPack . Pack.raw) reason 
 
 --- build tree
 type TodoList = TreeMap Pack Todo 
@@ -579,7 +607,9 @@ switchState new = do
 -}
 createTodo :: [Either (Pack, String) String] -> TodoList
 createTodo xs = fold todoItem empty xs
-    where 
+    where
+        todoItem tree (Left (p, '\.java$')) 
+                                    = TreeMap.insert tree p JavacMe{pack=p, reason=Nothing}
         todoItem tree (Left (p, _)) = TreeMap.insert tree p CheckUpdate{pack=p, reason=Nothing}
         todoItem tree (Right s)     = TreeMap.insert tree (Pack.new s) ParseMe{source=s}
 
@@ -591,7 +621,7 @@ running _         = false
 --- Predicate to tell if the argument represents a successful state
 successful NoRebuild{because} = true
 successful Compiled{global}   = true
--- successful JavacMe{global}    = true
+successful JavaCompiled       = true
 successful _                  = false
 
 complete NoRebuild{} = true
@@ -607,12 +637,16 @@ failed _         = false
     Add dependencies of a parsed module to a 'TodoList' 
 -}
 addDepsOf :: Global -> TodoList -> TodoList
-addDepsOf gc tree = fold checkUpdate tree deps
+addDepsOf gc tree = fold javacme (fold checkUpdate tree deps) jdeps
     where
         deps = Imp.dependsOn gc
+        jdeps = Imp.dependsOnNative gc
         checkUpdate t p = case t.lookup p of
             Just _ -> t 
-            _      -> t.insert p CheckUpdate{pack=p, reason=Just gc.thisPack}   
+            _      -> t.insert p CheckUpdate{pack=p, reason=Just gc.thisPack}
+        javacme t p = case t.lookup p of
+            Just _ → t
+            _      → t.insert p JavacMe{pack=p, reason=Just gc.thisPack}   
 
 --- parse all files in parallel first
 parseAll :: C.MVar (Pack, Todo) → TodoList → StIO TodoList
@@ -750,6 +784,8 @@ makeone mvar tree (p, todo) = do
             NoRebuild{} → return tree
             Waiting{}   → return tree
             Compiled{}  → return tree
+            JavaCompiled  → pure tree
+            JavacMe{pack, reason} → async (javacMe g pack reason)
     where
         async :: StIO Todo -> StIO TodoList
         async method = do
@@ -815,6 +851,21 @@ compileAfterDeps tree global reason = do
 
 
 
+javacMe g pack reason = do
+    src  ← liftIO $ resolvePackSP g (Pack.raw pack)
+    case src of
+        Just s | s ~ '\.java$' → do
+            rc ← javacJava s
+            if rc > 0 
+                then pure Failed{because="of bad java code"}
+                else pure JavaCompiled
+        Just wat → do
+            liftStG $ E.warn Position.null (
+                text "expected java source file, found '" 
+                    <> text wat 
+                    <> text "' in source path.")
+            pure NoRebuild{because="no java source found", compiletime=0}
+        Nothing → pure NoRebuild{because="no java source found", compiletime=0}
 
 {-
 javacMe :: TodoList → Global → StIO Todo
