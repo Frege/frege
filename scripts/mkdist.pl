@@ -27,14 +27,18 @@ $latest =~ s/^(3\.\d+)\.\d+(.*)/$1-latest$2/;
 print "making dist for version: '$version'\n";
 
 
-# copy jline stuff
-chdir "./build";
-system qq{jar$exe -xf ../lib/jline-2.13.jar} if -f "../lib/jline-2.13.jar" && -d "frege/repl";
-system qq{rm -rf META-INF};
+# system qq{jar$exe -xf ../lib/jline-2.13.jar} if -f "../lib/jline-2.13.jar" && -d "frege/repl";
+# system qq{rm -rf META-INF};
 
 #   make "executable" frege*.jar
 my $entrypoint = -f 'frege/Starter.class' ? "frege.Starter" : "frege.compiler.Main";
-system qq{jar$exe -cfe ../dist/frege$version.jar  $entrypoint  frege/ jline/ org/};
+chdir "./build";
+open  MANI, ">manifest.txt";
+print MANI "Manifest-Version: 1.0\n";
+print MANI "Main-Class: $entrypoint\n";
+print MANI "Class-Path: jline-2.13.jar\n";
+close MANI;
+system qq{jar$exe -cfm ../dist/frege$version.jar  manifest.txt frege/ };
 chdir "..";
 
 #   ship documentation
