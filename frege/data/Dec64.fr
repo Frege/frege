@@ -52,7 +52,8 @@ remu10 n = (0x0988776554332210L >> (i.int<<2)) & 0x0fL
 
 --- multiplication by 10, with shift and add
 --- this will be inlined, so onyl use a variable as argument
-mulu10 n = ((n<<2)+n)<<1        -- ((n*4)+1)*2
+mulu10 :: Long → Long
+mulu10 !n = ((n<<2)+n)<<1        -- ((n*4)+1)*2
 
 --- We will do the real work with positive 'Decimal's only and afterwards negate the result if need be
 --- This will reduce the cases to be considered and ease overflow detection
@@ -287,7 +288,10 @@ sigDigits z
 --- Pack an arithmetic result by dividing the coefficient by 10 until it fits.
 --- This will loose precision if the coefficient came out larger than 56 bits.
 packResult !c !x
-    | c > Positive.maxCoefficient = packResult (divu10 c) (x+1)
+    | c > Positive.maxCoefficient   = packResult (divu10 c) (x+1)
+    | x < Positive.minExponent      = packResult (divu10 c) (x+1)
+    | x > Positive.maxExponent,
+      c <= coeffExpansionMax        = packResult (c*10)     (x-1) 
     | otherwise = Positive.pack c x
 
 --- add 2 'Positive' numbers
@@ -306,7 +310,7 @@ addP !a !b
         -- Eventually, the exponents match, or b becomes 0, and the algorithm terminates
         -- The operand with the greater exponent must be on the left.
         go :: Long → Int → Long → Int → Positive
-        go ac ax bc bx 
+        go ac ax bc !bx 
             | bc == 0 = packResult ac ax
             | ax > bx = if ac <= expansionMax 
                             then go (mulu10 ac) (ax-1) bc bx    -- coeff times 10
@@ -328,7 +332,7 @@ diffP !a !b
         -- Eventually, the exponents match, or b becomes 0, and the algorithm terminates
         -- The operand with the greater exponent must be on the left.
         go :: Long → Int → Long → Int → Positive
-        go ac ax bc bx
+        go ac ax bc !bx
             -- traceLn ("diffP.go a=%d,%d b=%d,%d".format ac ax bc bx) = Positive.nan 
             | bc == 0 = packResult ac ax
             | ax > bx = if ac <= expansionMax 
@@ -337,6 +341,24 @@ diffP !a !b
             | otherwise = packResult (abs (ac - bc)) ax
 
 
+mulP !a !b 
+    | a.isZero = Positive.zero
+    | b.isZero = Positive.zero
+    | otherwise = case (normRight a, normRight b) of
+        (!a, !b) → mulP' a.coefficient a.exponent b.coefficient b.exponent
+    where
+        mulP' ∷ Long → Int → Long → Int → Positive
+        mulP' ac ax bc bx 
+            -- traceLn ("mulP' a=%d,%d b=%d,%d".format ac ax bc bx) = Positive.nan
+            | prod ← ac*bc, prod >= ac, prod >= bc = packResult prod (ax+bx)
+            | even ac, 
+              even bc = case mulP' (ac >>> 1) ax (bc >>> 1) bx of 
+                            p → case addP p p of p2 → addP p2 p2  
+            | even ac = case mulP' (ac >>> 1) ax bc bx of p → addP p p
+            | even bc = case mulP' ac ax (bc >>> 1) bx of p → addP p p
+            | traceLn ("mulP' cannot compute fast a=%de%d b=%de%d".format ac ax bc bx) = Positive.nan
+            | otherwise = Positive.nan
+        
 instance Num Decimal where
     negate d = Decimal.pack (negate d.coefficient) d.exponent
     (+) :: Decimal → Decimal → Decimal
@@ -358,6 +380,12 @@ instance Num Decimal where
         | b.isNaN = b
         | otherwise = a + (negate b)
         
-    !a * !b = error "decimal multiplication not yet implemented"
+    !a * !b 
+        | a.isZero = a
+        | b.isZero = b
+        | a.isNaN  = a
+        | b.isNaN  = b
+        | otherwise = decimal (if a.sign == b.sign then 1 else (-1)) (mulP (positive a) (positive b))
+        
     fromInt i     = Decimal.pack i.long 0
     fromInteger n = Decimal.pack (fromInteger n) 0
