@@ -306,20 +306,55 @@ writeTv tv _ = do
     E.fatal Position.null (text ("write to rigid tyvar " ++ tv.nice g))
 
 skolemise :: Sigma -> StG ([MetaTv], Rho)
-skolemise (ForAll [] ty) = stio ([], ty)
+skolemise (ForAll [] ty) = (,) [] <$> instWildRho ty
 skolemise (ForAll ns ty) = do
     tvs <- mapSt newRigidTyVar ns
     let tree = TreeMap.fromList (zip (map _.var ns) (map Meta tvs))
-        rho  = substRho tree ty
+    rho  ←  instWildRho (substRho tree ty)
     pure (tvs, rho)
 
+--- replace all 'TVar' with flexible 'Meta' type variables.
+--- Wild card conctructs are taken care of (through 'instWild')
 instantiate :: Sigma -> StG Rho
-instantiate (ForAll [] ty) = stio ty
+instantiate (ForAll [] ty) = instWildRho ty
 instantiate (ForAll ns ty) = do
     tvs <- mapSt newMeta ns
     let tree = TreeMap.fromList (zip (map _.var ns) tvs)
-    pure (substRho tree ty)
+    instWildRho (substRho tree ty)
 
+--- Substitute all wild cards with flexible Meta types
+--- This cannot be done with 'substRho' and friends, since wild cards are unnamed.
+--- Every wild card gets its own meta type var.
+instWildRho RhoFun{context, sigma, rho} = do
+    c  ← mapM instWildCtx context
+    s  ← instWildSigma sigma
+    r  ← instWildRho rho
+    pure RhoFun{context=c, sigma=s, rho=r}
+instWildRho RhoTau{context, tau} = do
+    c  ← mapM instWildCtx context
+    t  ← instWildTau tau
+    pure RhoTau{context=c, tau=t}
+
+--- see 'instWildRho'
+--- don't descend into higher rank types yet (or should we?) 
+instWildSigma (sigma@ForAll{bound, rho})
+    | null bound = ForAll bound <$> instWildRho rho
+    | otherwise  = pure sigma
+
+instWildCtx (ctx@Ctx{pos, cname, tau}) = ctx.{tau=} <$> instWildTau tau
+
+instWildTau (tv@TVar{pos, kind, var})  = case tv.wildTau of
+    Just _ | KGen tau ← kind = instWildTau tau >>= newMeta . tv.{kind=} . KGen
+    other                    = pure tv  -- ordinary TVars must not be instantiated/skolemised here
+instWildTau (TApp t1 t2) = do
+    t1'  ← instWildTau t1
+    t2'  ← instWildTau t2
+    pure (TApp t1' t2')
+instWildTau (tcon@TCon{pos, name}) = pure tcon
+instWildTau (tsig@TSig s)          = TSig <$> instWildSigma s
+instWildTau (meta@Meta m)          = case m.kind of
+    KGen tau = instWildTau tau >>= pure . Meta . m.{kind=} . KGen
+    other    = pure meta
 {--
  * like instantiate, but give the tvs back
  -}
@@ -544,7 +579,9 @@ zonkTau (TApp a b)       = liftM2 TApp (zonkTau a)   (zonkTau b)
 zonkTau (m@Meta tv)      = do
         mbtau <- readTv tv
         case mbtau of
-            Nothing -> stio m
+            Nothing | Just x ← m.wildTau,
+                      KGen tau ← tv.kind = zonkTau tau >>= pure . (\k → TVar{pos=getpos m, kind=KGen k, var=x})
+                    | otherwise = pure m
             Just ty -> do      -- short out multiple hops
                             ty <- zonkTau ty
                             writeTv tv ty
@@ -597,6 +634,7 @@ quantifiedExcept exc rhos = do
             allTvs = unique [ tv | tvs <- rhosTvs,
                                         tv <- tvs,
                                         MetaTv.isFlexi tv,
+                                        isNothing (Meta tv).wildTau,
                                         tv `notElem` eTvs ]
             -- select a type variable name for each tv
             newvars = filter (`notElem` used) (allBinders g)
