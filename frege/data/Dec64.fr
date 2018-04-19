@@ -2,7 +2,7 @@
 
 module frege.data.Dec64 
         inline (positive, Positive.isNaN, Positive.isZero, Positive.coefficient, Positive.exponent,
-                Decimal.hashCode, mulu10)
+                Decimal.hashCode, mulu10, relevantBits)
     where
 
 
@@ -51,7 +51,7 @@ remu10 n = (0x0988776554332210L >> (i.int<<2)) & 0x0fL
         i = (0x1999999999999999L*n + (n>>>1) + (n>>>3)) >>> 60
 
 --- multiplication by 10, with shift and add
---- this will be inlined, so onyl use a variable as argument
+--- this will be inlined, so only use strict variables as argument
 mulu10 :: Long → Long
 mulu10 !n = ((n<<2)+n)<<1        -- ((n*4)+1)*2
 
@@ -98,7 +98,7 @@ data Positive = pure native "long" where
     
     --- The canonical _not a number_ value.
     --- Note that there are 2^56 NaN values, all comparing equal.
-    pure native nan " 128L" :: Positive
+    pure native nan " 0xDeadBeef80L" :: Positive
     
     --- The canonical 'Positive' 0
     pure native zero " 0L" :: Positive
@@ -159,15 +159,15 @@ decimal ∷ Int → Positive → Decimal
 decimal !sign !p
     | p.isNaN   = Decimal.nan
     | p.isZero  = Decimal.zero
-    | otherwise = go p.coefficient p.exponent
+    | otherwise = go sign p.coefficient p.exponent
     where
-        go ∷ Long → Int → Decimal
-        go !c !x
+        go ∷ Int → Long → Int → Decimal
+        go !sign !c !x
             -- traceLn ("decimal.go %d %d".format c x) = Decimal.nan 
             | if sign <0 then c > abs Decimal.minCoefficient else c > Decimal.maxCoefficient, 
-              x < Decimal.maxExponent = go (divu10 (c+5)) (x+1)
-            | x > Decimal.maxExponent, c <= coeffExpansionMax = go (mulu10 c) (x-1)
-            | x < Decimal.minExponent = go (divu10 (c+5)) (x+1) 
+              x < Decimal.maxExponent = go sign (divu10 (c+5)) (x+1)
+            | x > Decimal.maxExponent, c <= coeffExpansionMax = go sign (mulu10 c) (x-1)
+            | x < Decimal.minExponent = go sign (divu10 (c+5)) (x+1) 
             | sign < 0  = Decimal.pack (negate c) x
             | otherwise = Decimal.pack c x
 
@@ -194,6 +194,46 @@ normLeft p  | p.isNaN   = Positive.nan
         go :: Long → Int → Positive
         go !c e | e > Positive.minExponent, c <= coeffExpansionMax = go (mulu10 c) (e-1)
                 | otherwise = Positive.pack c e
+
+--- represent a 'Decimal' with the greatest valid coefficient
+--- NaN and 0 come out in their canonical forms
+normLeftDecimal ∷ Decimal → Decimal
+normLeftDecimal d | d.isNaN  = Decimal.nan
+                  | d.isZero = Decimal.zero
+                  | otherwise = go d.coefficient d.exponent
+  where
+    go :: Long → Int → Decimal
+    go m x = case  m*10 of
+        m'  | x  >  Decimal.minExponent, 
+              m' >= Decimal.minCoefficient, 
+              m' <= Decimal.maxCoefficient = go m' (x-1)
+            | otherwise = Decimal.pack m x  
+
+--- represent a 'Positive' with the greatest valid coefficient
+--- NaN and 0 come out in their canonical forms
+normLeftPositive ∷ Positive → Positive
+normLeftPositive p | p.isNaN = Positive.nan
+                   | p.isZero = Positive.zero
+                   | otherwise = go p.coefficient p.exponent
+  where
+    go :: Long → Int → Positive
+    go m x = case  mulu10 m of
+        m'  | x  >  Positive.minExponent, 
+              m' <= Positive.maxCoefficient = go m' (x-1)
+            | otherwise = Positive.pack m x  
+
+ulpP p = case normLeftPositive p of
+    n ->  Positive.pack 1 n.exponent
+ 
+--- find the smallest number that makes a difference when adding it to the given number
+ulp d = case normLeftDecimal d of
+    n -> Decimal.pack 1 n.exponent
+
+--- given a 'Decimal' x find a 'Decimal' y such that there is no 'Decimal' z with x < z < y
+nextUp d = d + ulp d
+
+--- given a 'Decimal' x find a 'Decimal' y such that there is no 'Decimal' z with x > z > y
+nextDown d = d - ulp d  
 
 compareP ∷ Positive → Positive → Ordering
 compareP a b 
@@ -279,17 +319,18 @@ instance Ord Positive where
 
 --- tell the number of significant digits
 sigDigits ∷ Positive → Int
-sigDigits z
-        | p > Positive.zero = 17 + (normLeft p).exponent    --  exp will be -n, where n is 
-        | otherwise = 0                                     --  the number of places shifted left
+sigDigits z = go p 1 0 
     where
-        p = Positive.pack z.coefficient 0
+        p = (normRight z).coefficient
+        go ∷ Long → Long → Int → Int
+        go p x a | p < x = a
+                 | otherwise = go p (mulu10 x) (a+1) 
 
 --- Pack an arithmetic result by dividing the coefficient by 10 until it fits.
 --- This will loose precision if the coefficient came out larger than 56 bits.
 packResult !c !x
-    | c > Positive.maxCoefficient   = packResult (divu10 c) (x+1)
-    | x < Positive.minExponent      = packResult (divu10 c) (x+1)
+    | c > Positive.maxCoefficient   = packResult (divu10 (c+5)) (x+1)
+    | x < Positive.minExponent      = packResult (divu10 (c+5)) (x+1)
     | x > Positive.maxExponent,
       c <= coeffExpansionMax        = packResult (c*10)     (x-1) 
     | otherwise = Positive.pack c x
@@ -300,7 +341,7 @@ addP :: Positive → Positive → Positive
 addP !a !b
     | a.isZero = b
     | b.isZero = a
-    | a.exponent == b.exponent = Positive.pack (a.coefficient + b.coefficient) a.exponent
+    | a.exponent == b.exponent = packResult (a.coefficient + b.coefficient) a.exponent
     | a.exponent >  b.exponent = go a.coefficient a.exponent b.coefficient b.exponent
     | otherwise                = go b.coefficient b.exponent a.coefficient a.exponent
     where
@@ -340,6 +381,8 @@ diffP !a !b
                             else go ac ax (divu10 bc) (bx+1)    -- loose precision on b
             | otherwise = packResult (abs (ac - bc)) ax
 
+pure native leadingZeroes java.lang.Long.numberOfLeadingZeros :: Long -> Int
+relevantBits long = 64 - leadingZeroes long
 
 mulP !a !b 
     | a.isZero = Positive.zero
@@ -348,19 +391,60 @@ mulP !a !b
         (!a, !b) → mulP' a.coefficient a.exponent b.coefficient b.exponent
     where
         mulP' ∷ Long → Int → Long → Int → Positive
-        mulP' ac ax bc bx 
+        mulP' !ac !ax !bc !bx 
             -- traceLn ("mulP' a=%d,%d b=%d,%d".format ac ax bc bx) = Positive.nan
-            | prod ← ac*bc, prod >= ac, prod >= bc = packResult prod (ax+bx)
+            -- fast multiplication
+            | relevantBits ac + relevantBits bc < 64 = packResult (ac*bc) (ax+bx)
+            -- try to make the coefficients as small as possible
+            | remu10 ac == 0, ax < Positive.maxExponent = mulP' (divu10 ac) (ax+1) bc bx
+            | remu10 bc == 0, bx < Positive.maxExponent = mulP' ac ax (divu10 bc) (bx+1)
             | even ac, 
               even bc = case mulP' (ac >>> 1) ax (bc >>> 1) bx of 
-                            p → case addP p p of p2 → addP p2 p2  
-            | even ac = case mulP' (ac >>> 1) ax bc bx of p → addP p p
-            | even bc = case mulP' ac ax (bc >>> 1) bx of p → addP p p
-            | traceLn ("mulP' cannot compute fast a=%de%d b=%de%d".format ac ax bc bx) = Positive.nan
-            | otherwise = Positive.nan
+                            p | not p.isNaN → case addP p p of 
+                                    p2 | not p2.isNaN → addP p2 p2
+                                       | otherwise    → Positive.nan 
+                              | otherwise → Positive.nan  
+            | even ac = case mulP' (ac >>> 1) ax bc bx of 
+                            p | not p.isNaN → addP p p
+                              | otherwise   → Positive.nan
+            | even bc = case mulP' ac ax (bc >>> 1) bx of
+                            p | not p.isNaN → addP p p
+                              | otherwise   → Positive.nan 
+            -- traceLn ("mulP' cannot compute fast a=%de%d b=%de%d".format ac ax bc bx) = Positive.nan
+            -- 456eX * 123eY = 456ex*3eY + 456eX*12e(Y+1)
+            -- apply the distributive law, take care of multiplications that are NaN!
+            | ac < bc, !p1 ← mulP' bc bx (remu10 ac) ax, !pr ← mulP' bc bx (divu10 ac) (ax+1)
+                        = if p1.isNaN || pr.isNaN then Positive.nan else addP p1 pr 
+            | !p1 ← mulP' ac ax (remu10 bc) bx, !pr ← mulP' ac ax (divu10 bc) (bx+1) 
+                        = if p1.isNaN || pr.isNaN then Positive.nan else addP p1 pr
+
+recipP ∷ Positive → Positive → Positive
+recipP !a !b
+    | a.isZero = Positive.nan
+    | a.isNaN  = Positive.nan
+    | a >= Positive.pack 1 127 = Positive.pack 1 (-127)   
+    | otherwise = case sigDigits a of
+        !d → case normRight a of
+            !a → case go (Positive.pack (normRight a).coefficient 0) (Positive.pack 1 (-d))  of
+                !r | r.isNaN   → r
+                   | otherwise → mulP (mulP r (Positive.pack 1 (negate a.exponent))) b -- a/ 1Eexp  --> a * 1e-exp
+    where
+        !two = Positive.pack 2 0
+        go b x0 
+          | traceLn ("b=" ++ show b ++ ", x0=" ++ show x0 ++ ", b*x0=" ++ show (mulP b x0)) = undefined
+          | mulP b x0 >= two = error "bad guess"
+          | otherwise = case mulP x0 (diffP two (mulP b x0)) of
+            x1 | x1 == x0  = case addP x1 (ulpP x1) of
+                                next | mulP next b == mulP x1 b = next
+                                     | otherwise = x1
+               -- the approximation should normally become greater, as 1e-Z is the lower bound 
+               | x1 < x0, one ← x1 `mulP` b, one <= Positive.one = if one == Positive.one 
+                                then x1
+                                else ((x0 `diffP` x1) `mulP` positive 0.5z) `addP` x1
+               | otherwise = go b x1            
         
 instance Num Decimal where
-    negate d = Decimal.pack (negate d.coefficient) d.exponent
+    negate d = Decimal.fromBits ((negate d.coefficient << 8) ¦ (d.exponent.long & 255))
     (+) :: Decimal → Decimal → Decimal
     !a + !b 
         | a.isNaN = a
@@ -389,3 +473,9 @@ instance Num Decimal where
         
     fromInt i     = Decimal.pack i.long 0
     fromInteger n = Decimal.pack (fromInteger n) 0
+
+reciprocal d 
+    | d.isNaN = d
+    | d.isZero = Decimal.nan
+    | otherwise = decimal (sign d) (recipP (positive d) Positive.one)
+    
