@@ -329,10 +329,12 @@ sigDigits z = go p 1 0
 --- Pack an arithmetic result by dividing the coefficient by 10 until it fits.
 --- This will loose precision if the coefficient came out larger than 56 bits.
 packResult !c !x
+    -- traceLn ("packResult c=%d x=%d".format c x) = Positive.nan
     | c > Positive.maxCoefficient   = packResult (divu10 (c+5)) (x+1)
     | x < Positive.minExponent      = packResult (divu10 (c+5)) (x+1)
     | x > Positive.maxExponent,
-      c <= coeffExpansionMax        = packResult (c*10)     (x-1) 
+      c <= coeffExpansionMax        = packResult (c*10)     (x-1)
+    -- traceLn ("packResult result=" ++ show (Positive.pack c x)) = Positive.nan 
     | otherwise = Positive.pack c x
 
 --- add 2 'Positive' numbers
@@ -352,10 +354,11 @@ addP !a !b
         -- The operand with the greater exponent must be on the left.
         go :: Long → Int → Long → Int → Positive
         go ac ax bc !bx 
+            -- traceLn ("addPgo a=%dE%d b=%dE%d".format ac ax bc bx) = Positive.nan
             | bc == 0 = packResult ac ax
-            | ax > bx = if ac <= expansionMax 
-                            then go (mulu10 ac) (ax-1) bc bx    -- coeff times 10
-                            else go ac ax (divu10 bc) (bx+1)    -- loose precision on b
+            | ax > bx = if ac <= coeffExpansionMax 
+                            then go (mulu10 ac) (ax-1) bc bx        -- coeff times 10
+                            else go ac ax (divu10 (bc+5)) (bx+1)    -- loose precision on b
             | otherwise = packResult (ac + bc) ax
 
 --- difference between 2 'Positive' numbers, where the first one must be >= the second one
@@ -376,9 +379,9 @@ diffP !a !b
         go ac ax bc !bx
             -- traceLn ("diffP.go a=%d,%d b=%d,%d".format ac ax bc bx) = Positive.nan 
             | bc == 0 = packResult ac ax
-            | ax > bx = if ac <= expansionMax 
-                            then go (mulu10 ac) (ax-1) bc bx    -- coeff times 10
-                            else go ac ax (divu10 bc) (bx+1)    -- loose precision on b
+            | ax > bx = if ac <= coeffExpansionMax 
+                            then go (mulu10 ac) (ax-1) bc bx        -- coeff times 10
+                            else go ac ax (divu10 (bc+5)) (bx+1)    -- loose precision on b
             | otherwise = packResult (abs (ac - bc)) ax
 
 pure native leadingZeroes java.lang.Long.numberOfLeadingZeros :: Long -> Int
@@ -392,7 +395,7 @@ mulP !a !b
     where
         mulP' ∷ Long → Int → Long → Int → Positive
         mulP' !ac !ax !bc !bx 
-            -- traceLn ("mulP' a=%d,%d b=%d,%d".format ac ax bc bx) = Positive.nan
+            -- traceLn ("mulP' a=%dE%d b=%dE%d".format ac ax bc bx) = Positive.nan
             -- fast multiplication
             | relevantBits ac + relevantBits bc < 64 = packResult (ac*bc) (ax+bx)
             -- try to make the coefficients as small as possible
@@ -425,23 +428,54 @@ recipP !a !b
     | a >= Positive.pack 1 127 = Positive.pack 1 (-127)   
     | otherwise = case sigDigits a of
         !d → case normRight a of
-            !a → case go (Positive.pack (normRight a).coefficient 0) (Positive.pack 1 (-d))  of
+            !a → case go (Positive.pack a.coefficient 0) (Positive.pack 1 (-d))  of
                 !r | r.isNaN   → r
                    | otherwise → mulP (mulP r (Positive.pack 1 (negate a.exponent))) b -- a/ 1Eexp  --> a * 1e-exp
-    where
-        !two = Positive.pack 2 0
+    where        
+        go ∷ Positive → Positive → Positive
         go b x0 
-          | traceLn ("b=" ++ show b ++ ", x0=" ++ show x0 ++ ", b*x0=" ++ show (mulP b x0)) = undefined
-          | mulP b x0 >= two = error "bad guess"
-          | otherwise = case mulP x0 (diffP two (mulP b x0)) of
-            x1 | x1 == x0  = case addP x1 (ulpP x1) of
-                                next | mulP next b == mulP x1 b = next
-                                     | otherwise = x1
-               -- the approximation should normally become greater, as 1e-Z is the lower bound 
-               | x1 < x0, one ← x1 `mulP` b, one <= Positive.one = if one == Positive.one 
-                                then x1
-                                else ((x0 `diffP` x1) `mulP` positive 0.5z) `addP` x1
-               | otherwise = go b x1            
+            -- traceLn ("b=" ++ show b ++ ", x0=" ++ show x0 ++ ", b*x0=" ++ show (mulP b x0)) = undefined
+            | mulP b x0 >= twoP = error "bad guess"
+            | otherwise = case mulP x0 (diffP twoP (mulP b x0)) of
+                x1 | x1 == x0  = case addP x1 (ulpP x1) of
+                                    next | mulP next b == mulP x1 b = next
+                                         | otherwise = x1
+                   | otherwise = case x1 `mulP` b of
+                     one 
+                        | traceLn ("b=" ++ show b 
+                             ++ ", x0=" ++ show x0 ++ ", b*x0=" ++ show (mulP b x0) 
+                             ++ ", x1=" ++ show x1 ++ ", b*x1=" ++ show (mulP b x1)) = undefined
+                        -- the approximation should normally become greater, as 1e-Z is the lower bound 
+                        | x1 < x0,
+                          one <= Positive.one = if one == Positive.one 
+                                    then x1
+                                    else if x0.coefficient > Decimal.maxCoefficient
+                                        -- x0 is slightly too big, but last digit gets rounded away anyway
+                                        -- So we better chop it lest we get even further away through rounding
+                                        then Positive.pack (divu10 x0.coefficient) (x0.exponent+1) 
+                                        else down b x0 (err b x0)
+                        | x1 < x0 = -- both x0 and x1 are too big, but x1 is better
+                            if x1.coefficient > Decimal.maxCoefficient 
+                                then  Positive.pack (divu10 x1.coefficient) (x1.exponent+1)
+                                else  down b x1 (err b x1)    -- oscillation between 2 too great values  
+                        | otherwise = go b x1
+            where
+                err ∷ Positive → Positive → Positive
+                err b x = case b `mulP` x of
+                    o → if o > Positive.one then o `diffP` Positive.one else Positive.one `diffP` o
+                down ∷ Positive → Positive → Positive → Positive
+                down b x e
+                         | x.coefficient > 1, 
+                           x' ← Positive.pack (x.coefficient-1) x.exponent,
+                           e' ← err b x', e' <= e = down b x' e' 
+                         | otherwise = x
+twoP ∷ Positive
+!twoP = Positive.pack 2 0
+
+recipCheck from to = [(n,r,d*r) | n ← [from .. to], 
+                                let d = fromIntegral n, 
+                                let r = reciprocal d,
+                                abs (1-d*r) > 2e-16z ]
         
 instance Num Decimal where
     negate d = Decimal.fromBits ((negate d.coefficient << 8) ¦ (d.exponent.long & 255))
@@ -477,5 +511,7 @@ instance Num Decimal where
 reciprocal d 
     | d.isNaN = d
     | d.isZero = Decimal.nan
+    | d == Decimal.one = d
+    | even d.coefficient = 0.5z * reciprocal (Decimal.pack (d.coefficient >> 1) d.exponent)
     | otherwise = decimal (sign d) (recipP (positive d) Positive.one)
     
