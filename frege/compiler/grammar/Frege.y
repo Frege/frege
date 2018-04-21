@@ -522,7 +522,7 @@ topdefinition:
 
 moduledefinition:
     NATIVE PACKAGE typeclause interfaces wheretokens 
-                                        { \_\m\t\i\js -> ModDcl {pos = yyline m, extends=t, implements=i, code=js }}
+                                        { \_\m\t\i\js -> ModDcl {pos = yyline m, extending=t, implementing=i, code=js }}
     ;
 
 typeclause:
@@ -901,11 +901,11 @@ simpletype:
 
 
 tyvar:
-    VARID                           { \n         -> TVar (yyline n) KVar (Token.value n)  }
-    | '('  VARID DCOLON kind ')'    { \_\n\_\k\_ -> TVar (yyline n) k    (Token.value n)  }
-    | '('  VARID EXTENDS tapp  ')'  { \_\v\x\k\_ -> TVar (yyline v) (KGen k) (v.value)    } 
-    | '('  EXTENDS tapp ')'         { \_\x\k\_   -> TVar (yyline x) (KGen k) ("<")        }
-    | '('  SUPER tapp ')'           { \_\x\k\_   -> TVar (yyline x) (KGen k) (">")        }
+    VARID                           { \n          -> TVar (yyline n) KVar (Token.value n)  }
+    | '('  VARID DCOLON kind ')'    { \_\n\_\k\_  -> TVar (yyline n) k    (Token.value n)  }
+    | '('  VARID EXTENDS tauSC ')'  { \_\v\x\ks\_ -> TVar (yyline v) (KGen ks) (v.value)   } 
+    | '('  EXTENDS tauSC ')'        { \_\x\ks\_   -> TVar (yyline x) (KGen ks) ("<")       }
+    | '('  SUPER tapp ')'           { \_\x\k\_    -> TVar (yyline x) (KGen [k]) (">")      }
     ;
 
 

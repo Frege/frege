@@ -344,7 +344,7 @@ instWildSigma (sigma@ForAll{bound, rho})
 instWildCtx (ctx@Ctx{pos, cname, tau}) = ctx.{tau=} <$> instWildTau tau
 
 instWildTau (tv@TVar{pos, kind, var})  = case tv.wildTau of
-    Just _ | KGen tau ← kind = instWildTau tau >>= newMeta . tv.{kind=} . KGen
+    Just _ | KGen tau ← kind = mapM instWildTau tau >>= newMeta . tv.{kind=} . KGen
     other                    = pure tv  -- ordinary TVars must not be instantiated/skolemised here
 instWildTau (TApp t1 t2) = do
     t1'  ← instWildTau t1
@@ -353,7 +353,7 @@ instWildTau (TApp t1 t2) = do
 instWildTau (tcon@TCon{pos, name}) = pure tcon
 instWildTau (tsig@TSig s)          = TSig <$> instWildSigma s
 instWildTau (meta@Meta m)          = case m.kind of
-    KGen tau = instWildTau tau >>= pure . Meta . m.{kind=} . KGen
+    KGen tau = mapM instWildTau tau >>= pure . Meta . m.{kind=} . KGen
     other    = pure meta
 {--
  * like instantiate, but give the tvs back
@@ -480,8 +480,9 @@ unifyVar ex tv lrtau = do
             Right tau -> unified ex ty tau
         Nothing -> either unbound unbound lrtau
   where
-    unbound (t2@Meta tv2)
-	    | Just tau1 ← (Meta tv).bounds, Just tau2 ← t2.bounds = do
+    unbound (t2@Meta tv2) 
+        -- TODO: work out unification of proper union types
+        | (tau1:_) ← (Meta tv).bounds, (tau2:_) ← t2.bounds = do
                 u ← unified ex tau1 tau2
                 when (u) do
                     writeTv tv t2
@@ -490,7 +491,7 @@ unifyVar ex tv lrtau = do
                             ++ show tv.uid ++ " " 
                             ++ tv.nice g
                             ++ " :: " ++ show tv.kind))
-                pure u  
+                pure true  
         | Nothing ← KI.unifyKind tv.kind tv2.kind = do
             g ← getST
             E.error (getpos ex) (text "Kind error in unification of "
@@ -528,7 +529,7 @@ unifyVar ex tv lrtau = do
 --- substitute MetaTV with given UID in a Tau
 substMeta ∷ Int → Tau → Tau → StG Tau
 substMeta uid rep tau = case tau of
-    TVar{kind=KGen t}  = substMeta uid rep t >>= pure . tau.{kind=} . KGen
+    TVar{kind=KGen ts} = mapM (substMeta uid rep) ts >>= pure . tau.{kind=} . KGen
     TApp a b           = liftM2 TApp (substMeta uid rep a) (substMeta uid rep b)
     TCon{}             = pure tau
     Meta tv | uid == tv.uid = pure rep
@@ -537,7 +538,7 @@ substMeta uid rep tau = case tau of
         case bound of 
             Just ty -> substMeta uid rep ty      -- skip enclosing Metas
             Nothing -> case tv.kind of
-                KGen ty ->  substMeta uid rep ty >>= pure . Meta . tv.{kind=} . KGen
+                KGen ts ->  mapM (substMeta uid rep) ts >>= pure . Meta . tv.{kind=} . KGen
                 other   ->  pure tau
     other              = pure tau
 
@@ -579,8 +580,9 @@ zonkTau (TApp a b)       = liftM2 TApp (zonkTau a)   (zonkTau b)
 zonkTau (m@Meta tv)      = do
         mbtau <- readTv tv
         case mbtau of
-            Nothing | Just x ← m.wildTau,
-                      KGen tau ← tv.kind = zonkTau tau >>= pure . (\k → TVar{pos=getpos m, kind=KGen k, var=x})
+            Nothing | Just x ← m.wildTau = do
+                                        k ← zonkKind tv.kind
+                                        pure TVar{pos=getpos m, kind=k, var=x}
                     | otherwise = pure m
             Just ty -> do      -- short out multiple hops
                             ty <- zonkTau ty
@@ -589,7 +591,7 @@ zonkTau (m@Meta tv)      = do
 zonkTau other = stio other      -- TVar and TCon
 
 zonkKind ∷ Kind → StG Kind
-zonkKind (KGen t) = KGen <$> zonkTau t
+zonkKind (KGen t) = KGen <$> mapM zonkTau t
 zonkKind other    = pure other
 
 
@@ -657,7 +659,7 @@ quantifiedExcept exc rhos = do
         bind (var,tv) = case tv.kind of
             KGen t → do
                         writeTv tv (TVar {pos, var, kind=KVar})
-                        t' ← zonkTau t
+                        t' ← mapM zonkTau t
                         writeTv tv (TVar {pos, var, kind=KGen t'})
             other  → writeTv tv (TVar {pos, var, kind=tv.kind})
             

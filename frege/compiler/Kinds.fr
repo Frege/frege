@@ -150,7 +150,7 @@ kiSigmaC name kind sigma = do
     g <- getST
     E.logmsg TRACEK (getpos sigma) (text ("kind check " ++ nice sigma g))
     let se = Tau.kind <$> sigma.extendEnv empty
-        e  = if kind `keq` KVar then se else insert name kind se
+        e  = case kind of KVar -> se ; _ -> insert name kind se
     -- the sub rho is checked with an extended env, i.e. one that is 1 longer than the
     -- one passed in.
     -- If kiRho always returns an env with the same length as passed,
@@ -240,24 +240,35 @@ type Envs = [TreeMap String Kind]
     [returns]  The 'Kind' detected and an updated environment.
     
     When a type constructor is encountered whose 'QName' appears in the list,
-    the 'Global' state will be updated to remember the inferred type.
+    the 'Global' state will be updated to remember the inferred kind.
     
     If kind errors are detected, error messages will be written.  
     -}
 unifyTauKind :: [QName] -> Envs -> Tau -> Kind -> StG (Kind, Envs)
 unifyTauKind names env (tvar@TVar{}) exp 
-    | Just _ ← tvar.wildTau, KGen tau ← tvar.kind = unifyTauKind names env tau exp 
+    | Just _ ← tvar.wildTau, 
+      KGen taus ← tvar.kind = do  
+              env' ← foldM (\env t ->  snd <$> unifyTauKind names env t KType) env taus
+              case unifyKind tvar.kind exp of
+                Nothing → do 
+                    g ← getST
+                    E.error tvar.pos (text ("kind error, wildcard `" 
+                                        ++ "` has kind " 
+                                        ++ nicer tvar.kind g
+                                        ++ ", expected was " ++ nicer exp g))
+                    pure (tvar.kind, env')
+                Just _ → pure (tvar.kind, env')                   
 unifyTauKind names env (TVar{pos,var,kind}) exp = do
         g <- getST
         E.logmsg TRACEK pos (text ("unifyTauKind: " ++ var
             ++ "  initial "  ++ nicer varkind g 
             ++ "  expected " ++ nicer exp g))
         case unifyKind varkind exp of
-            Just (KGen t) → do
+            Just (KGen ts) → do
                 let subst = fold (\tm tv -> TreeMap.insert tm tv.var tv.{var,pos,kind=KVar}) empty
-                                (U.freeTVars [] (RhoTau [] t))
-                    t'    = T.substTau subst t
-                pure (KGen t', updenv env var (KGen t'))
+                                [ftv | t ← ts, ftv ← U.freeTVars [] (RhoTau [] t)]
+                    ts'    = map (T.substTau subst) ts
+                pure (KGen ts', updenv env var (KGen ts'))
             Just k  -> do
                 -- let k = unVar kn
                 E.logmsg TRACEK pos (text ("unifyTauKind: " ++ var ++ "  result " ++ nicer k g))
@@ -368,10 +379,19 @@ findenv [] k = Nothing
 
 unifyKind :: Kind -> Kind -> Maybe Kind
 unifyKind (a@KGen{}) KType = Just a
-unifyKind (a@KGen x) (b@KGen y) = if  x'.textualEq y then Just a else Nothing
-    where
-        subst = T.unifyTau empty x y
-        x'    = T.substTau subst x 
+--- take care that @extends T1 & T2@ and @extends T2 & T1@ match
+unifyKind (a@KGen xs) (b@KGen ys) = if matches xs ys then Just a else Nothing
+    where 
+        matches (x:xs) ys = case filter (eq x) ys of
+            [y] → matches xs (filter (not . eq y) ys)
+            _   → false
+        matches [] ys = null ys
+        
+        eq x y = x'.textualEq y
+            where
+                subst = T.unifyTau empty x y
+                x'    = T.substTau subst x
+ 
 unifyKind KType KType = Just KType
 unifyKind KType (b@KGen{}) = Just b
 unifyKind KVar x = Just x
