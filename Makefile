@@ -45,7 +45,7 @@ RM       = rm -rf
 MKDIR    = mkdir -p
 TIME     = time -f "%E %Mk"       
 TIMEPROG = `which gtime || which time || false`
-FREGE    = ${TIME} $(JAVA) -Xss4m -Xmx2222m -cp $(BUILD)
+FREGE    = $(TIME) $(JAVA) -Xss4m -Xmx2222m -cp $(BUILD)
 
 #	compile using the fregec.jar in the working directory
 FREGECJ  = $(FREGE) -jar fregec.jar -d $(BUILD) -hints -ascii
@@ -80,9 +80,9 @@ PRELUDE  = \
 		frege/java/lang/Math.fr
 
 #	command to compile the interpreter
-COMPILEREPL=$(TIME) java8 -Xss2m -cp build:$(JLINE) frege.compiler.Main -d build -make  -sp .:$(REPLSOURCEPATH):$(INTERPRETERSOURCEPATH) frege.Starter
-REPLSOURCEPATH=../frege-repl/frege-repl-core/src/main/frege:../frege-repl/frege-repl-nativedeps/src/main/java/
-INTERPRETERSOURCEPATH=../frege-interpreter/frege-interpreter-core/src/main/frege:../frege-interpreter/frege-interpreter-java-support/src/main/java/
+COMPILEREPL=$(TIME) $(JAVA) -Xss2m -cp build:$(JLINE) frege.compiler.Main -d build -O -target $(TARGET) -make  -sp .:$(REPLSP):$(INTERPRETERSP) frege.Starter
+REPLSP=../frege-repl/frege-repl-core/src/main/frege:../frege-repl/frege-repl-nativedeps/src/main/java/
+INTERPRETERSP=../frege-interpreter/frege-interpreter-core/src/main/frege:../frege-interpreter/frege-interpreter-java-support/src/main/java/
 JLINE=lib/jline-2.13.jar
 
 #	shadow Prelude files in the order they must be compiled
@@ -120,7 +120,7 @@ sanitycheck:
 
 dist: fregec.jar
 	@echo "[1;42mMaking $@[0m"
-	test -d ../frege-interpreter/ && test -d ../frege-repl/ && $(COMPILEREPL)
+	test -d ../frege-interpreter/ && test -d ../frege-repl/ && test -f $(JLINE) && $(COMPILEREPL)
 	perl scripts/mkdist.pl
 
 fregec.jar: test
