@@ -165,10 +165,10 @@ test: compiler
 
 regression: 
 	@echo We assume we have a compiler.
-	$(RM) -rf $(BUILD_REGRESSION)
+	$(RM)     $(BUILD_REGRESSION)
 	$(MKDIR)  $(BUILD_REGRESSION)
-	$(JAVAC)   -d $(BUILD_REGRESSION) tests/comp/*.java
-	$(FREGECC) -d $(BUILD_REGRESSION) -make tests/comp/*.fr
+	# $(JAVAC)   -d $(BUILD_REGRESSION) tests/comp/*.java
+	$(FREGECC) -d $(BUILD_REGRESSION) -make -v tests/comp/*.fr
 	@echo Now we check whether all difficult code that had an issue earlier will still run
 	for i in `echo tests/comp/*.fr | sed 's/\//./g' | sed 's/\.fr//g'` ;do  echo; echo $$i -------------------;if $(JAVA) -cp $(BUILD_REGRESSION):$(BUILD) $$i ;then echo $$i OK; else echo $$i FAILED; exit 1;fi; done 
 
