@@ -103,23 +103,6 @@ nativeCall g (sym@SymV {nativ = Just item, gargs}) subst aexs = newBind g bsig (
              NIExtends ->
                let evalStG :: Global -> StG a -> a
                    evalStG g st = fst $ st.run g
-                   callthis jex = JInvoke { args = [], jex = JExMem { jex, name = "call", targs = [] } }
-                   mkMethod irjt nativsi nativnm fldnm retlazy =
-                     let nativargs = argDefs attrFinal (nativsi.{ argSigs <- tail, argJTs <- tail }) (getArgs g)
-                         call = if retlazy then callthis else id
-                     in
-                     JMethod
-                     { attr = attrs [JPublic]
-                     , gvars = []
-                     , jtype = nativsi.returnJT
-                     , name = nativnm
-                     , args = nativargs
-                     , body = JBlock $ pure $ JReturn $ call $ JInvoke
-                       -- TODO detect argument laziness, stop using JAtom "Thunk..."
-                       { args = head args : [ JAtom x | (_, _, _, s) <- nativargs, x = "Thunk.lazy(" ++ s ++ ")" ]
-                       , jex = JStMem { jt = irjt, name = fldnm, targs = [] }
-                       }
-                     }
                    x = do g <- getST
                           si <- symInfo sym
                           let name  = (head si.argSigs).rho.tau.name
@@ -131,10 +114,7 @@ nativeCall g (sym@SymV {nativ = Just item, gargs}) subst aexs = newBind g bsig (
                               nativnm <- nativsym.nativ
                               let nativsi = evalStG g $ symInfo nativsym
                               fldsym <- TreeMap.lookup fldnm irsym.env
-                              retlazy <- case fldsym.strsig of
-                                Strictness.S xs | not $ null xs -> Just $ not $ (last xs).isStrict
-                                _ -> Nothing
-                              pure $ mkMethod (head si.argJTs) nativsi nativnm fldnm retlazy
+                              pure $ wrapIRMethod g (head args) (head si.argJTs) nativsi nativnm fldnm fldsym
                in JNewClass jrty [] (evalStG g x)
              NICast -> case args of
                  [a] -> JInvoke (JAtom item) args    -- was: JCast (Ref (JName "" item) []) a
@@ -320,4 +300,39 @@ wildReturn g (symv@SymV{})  = [ v | v@TVar{} ← values (U.freeTauTVars [] TreeM
 wildReturn _ _ = []
 
 
+wrapIRMethod :: Global -> JExpr -> JType -> SymInfo8 -> String -> String -> Symbol -> JDecl
+wrapIRMethod g this irjt nativsi nativnm fldnm fldsym =
+  let nativargs = argDefs attrFinal (nativsi.{ argSigs <- tail, argJTs <- tail }) (getArgs g)
+      fldstri = case fldsym.strsig of
+        Strictness.S xs -> tail xs
+        _               -> []
+      -- how to detect strictness of result value?
+      retstrict = all (_.isStrict) fldstri
+      -- retlazy = if not (null fldstri) then (last fldstri).isStrict else False
+      callit jex = JInvoke { args = [], jex = JExMem { jex, name = "call", targs = [] } }
+      call = if retstrict then id else callit
+  in
+  JMethod
+  { attr = attrs [JPublic]
+  , gvars = []
+  , jtype = nativsi.returnJT
+  , name = nativnm
+  , args = nativargs
+  , body = JBlock $ pure $ JReturn $ call $ invokeIR irjt fldnm this $
+      zipWith (\(_, _, _, x) s -> StriArg x s.isStrict) nativargs fldstri
+  }
 
+data StriArg = StriArg { name :: String, strict :: Bool }
+
+striArgExpr :: StriArg -> JExpr
+striArgExpr (StriArg{name, strict}) =
+  let thunkjt = Ref { jname = JName { qual = "", base = "Thunk" }, gargs = [] }  -- TODO use the proper JType
+      lazy s = JInvoke { args = [JAtom s], jex = JStMem { jt = thunkjt, name = "lazy", targs = [] } }
+  in
+  if strict then JAtom name else lazy name
+
+invokeIR :: JType -> String -> JExpr -> [StriArg] -> JExpr
+invokeIR jt name this args = JInvoke
+  { args = this : map striArgExpr args
+  , jex = JStMem { jt, name, targs = [] }
+  }
