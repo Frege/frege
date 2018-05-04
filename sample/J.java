@@ -4,4 +4,5 @@ public interface J {
     public boolean getBool();
 
     public int add(int x, int y);
+    public int add(int x, int y, int z);
 }
