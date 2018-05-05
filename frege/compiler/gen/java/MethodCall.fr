@@ -302,6 +302,16 @@ wildReturn g (symv@SymV{})  = [ v | v@TVar{} ← values (U.freeTauTVars [] TreeM
 wildReturn _ _ = []
 
 
+--- Generates a method that overrides an interface method and wraps a call to an IR method.
+---
+--- Parameters:
+--- - global
+--- - The expression of the instance of the implementation record (i.e. the receiver).
+--- - The Java type of the implementation record.
+--- - Information on the overridden method.
+--- - The name of the overriden method.
+--- - The name of the invoked field of the implementation record.
+--- - The symbol of the invoked field of the implementation record.
 wrapIRMethod :: Global -> JExpr -> JType -> SymInfo8 -> String -> String -> Symbol -> JDecl
 wrapIRMethod g this irjt nativsi nativnm fldnm fldsym =
   let nativargs = argDefs attrFinal (nativsi.{ argSigs <- tail, argJTs <- tail }) (getArgs g)
@@ -310,17 +320,35 @@ wrapIRMethod g this irjt nativsi nativnm fldnm fldsym =
         _               -> []
       -- how to detect strictness of result value?
       retstrict = all (_.isStrict) fldstri
-      -- retlazy = if not (null fldstri) then (last fldstri).isStrict else False
+      -- add ".call()" after jex
       callit jex = JInvoke { args = [], jex = JExMem { jex, name = "call", targs = [] } }
-      call = if retstrict then id else callit
+      -- the return type of the overridden method
+      methretjt = case unST irrettau of
+        Just (_, a)
+          | isJust $ U.isUnit a -> nativ "void" []
+          | otherwise           -> tauJT g a
+        Nothing -> nativsi.returnJT
+      -- box JType, except boxes void into Short
+      boxedv (v@Nativ{typ="void"}) = boxed (v.{typ = "short"})
+      boxedv jt = boxed jt
+      -- the tau of the result type of IR field
+      irrettau = fst $ U.returnType fldsym.typ.rho
+      -- is the Frege result type ST?
+      isST = isJust $ unST irrettau
+      -- run an ST, force a Lazy, otherwise as-is
+      call = if isST then tstRun (boxedv methretjt) else if retstrict then id else callit
+      isVoid Nativ{typ="void"} = true
+      isVoid _                 = false
+      -- "return" unless the return type is not void
+      ret = if isVoid methretjt then JEx else JReturn
   in
   JMethod
   { attr = attrs [JPublic]
   , gvars = []
-  , jtype = nativsi.returnJT
+  , jtype = methretjt
   , name = nativnm
   , args = nativargs
-  , body = JBlock $ pure $ JReturn $ call $ invokeIR irjt fldnm this $
+  , body = JBlock $ pure $ ret $ call $ invokeIR irjt fldnm this $
       zipWith (\(_, _, _, x) s -> StriArg x s.isStrict) nativargs fldstri
   }
 
@@ -333,8 +361,24 @@ striArgExpr (StriArg{name, strict}) =
   in
   if strict then JAtom name else lazy name
 
+--- Invokes a method of an implementation record.
+---
+--- Parameters
+--- - The Java type of the implementation record.
+--- - The name of the invoked field of the implementation record.
+--- - The expression of the instance of the implementation record (i.e. the receiver).
+--- - The arguments of the method, excluding the receiver.
 invokeIR :: JType -> String -> JExpr -> [StriArg] -> JExpr
 invokeIR jt name this args = JInvoke
   { args = this : map striArgExpr args
   , jex = JStMem { jt = rawType jt, name, targs = [] }
   }
+
+tstRun :: JType -> JExpr -> JExpr
+tstRun retjt jex =
+  let call jex = JInvoke { args = [], jex = JExMem { jex, name = "call", targs = [] } }
+      -- TODO use canonical JTypes?
+      run retjt = JExMem { jex = JAtom "PreludeBase.TST", name = "run", targs = [retjt] }
+      cast jex = JInvoke { jex = JAtom "RunTM.cast", args = [jex] }
+  in
+  call $ JInvoke { jex = run retjt, args = [cast jex] }
