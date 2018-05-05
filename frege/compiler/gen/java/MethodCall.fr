@@ -116,7 +116,7 @@ nativeCall g (sym@SymV {nativ = Just item, gargs}) subst aexs = newBind g bsig (
                               nativnm <- nativsym.nativ
                               let nativsi = evalStG g $ symInfo nativsym
                               fldsym <- TreeMap.lookup fldnm irsym.env
-                              pure $ wrapIRMethod g (head args) (head si.argJTs) nativsi nativnm fldnm fldsym
+                              pure $ wrapIRMethod g (head args) (head si.argJTs) fldsym fldnm nativsi nativnm
                in JNewClass jrty [] (evalStG g x)
              NICast -> case args of
                  [a] -> JInvoke (JAtom item) args    -- was: JCast (Ref (JName "" item) []) a
@@ -306,41 +306,42 @@ wildReturn _ _ = []
 ---
 --- Parameters:
 --- - global
---- - The expression of the instance of the implementation record (i.e. the receiver).
---- - The Java type of the implementation record.
---- - Information on the overridden method.
---- - The name of the overriden method.
---- - The name of the invoked field of the implementation record.
---- - The symbol of the invoked field of the implementation record.
-wrapIRMethod :: Global -> JExpr -> JType -> SymInfo8 -> String -> String -> Symbol -> JDecl
-wrapIRMethod g this irjt nativsi nativnm fldnm fldsym =
-  let nativargs = argDefs attrFinal (nativsi.{ argSigs <- tail, argJTs <- tail }) (getArgs g)
+--- - The expression of the instance of the IR (i.e. the receiver).
+--- - The Java type of the IR.
+--- - The symbol of the invoked IR method.
+--- - The name of the invoked IR method.
+--- - The symbol information on the native member function.
+--- - The "java item" of the native member function.
+wrapIRMethod :: Global -> JExpr -> JType -> Symbol -> String -> SymInfo8 -> String -> JDecl
+wrapIRMethod g this irjt fldsym fldnm nativsi nativnm =
+  let -- collect the FormalArgs of the native member function, excluding the receiver
+      nativargs = argDefs attrFinal (nativsi.{ argSigs <- tail, argJTs <- tail }) (getArgs g)
+      -- collect the strictness of the IR field, excluding the receiver
       fldstri = case fldsym.strsig of
         Strictness.S xs -> tail xs
         _               -> []
       -- how to detect strictness of result value?
       retstrict = all (_.isStrict) fldstri
-      -- add ".call()" after jex
-      callit jex = JInvoke { args = [], jex = JExMem { jex, name = "call", targs = [] } }
+      -- the tau of the result type of the IR field
+      fldrettau = fst $ U.returnType fldsym.typ.rho
       -- the return type of the overridden method
-      methretjt = case unST irrettau of
+      methretjt = case unST fldrettau of
         Just (_, a)
           | isJust $ U.isUnit a -> nativ "void" []
           | otherwise           -> tauJT g a
         Nothing -> nativsi.returnJT
-      -- box JType, except boxes void into Short
-      boxedv (v@Nativ{typ="void"}) = boxed (v.{typ = "short"})
-      boxedv jt = boxed jt
-      -- the tau of the result type of IR field
-      irrettau = fst $ U.returnType fldsym.typ.rho
-      -- is the Frege result type ST?
-      isST = isJust $ unST irrettau
       -- run an ST, force a Lazy, otherwise as-is
-      call = if isST then tstRun (boxedv methretjt) else if retstrict then id else callit
-      isVoid Nativ{typ="void"} = true
-      isVoid _                 = false
-      -- "return" unless the return type is not void
-      ret = if isVoid methretjt then JEx else JReturn
+      call = if isST then tstRun (boxedv methretjt) else if retstrict then id else callit where
+        isST = isJust $ unST fldrettau
+        -- add ".call()" after jex
+        callit jex = JInvoke { args = [], jex = JExMem { jex, name = "call", targs = [] } }
+        -- box JType, but box void into Short
+        boxedv (v@Nativ{typ="void"}) = boxed (v.{typ = "short"})
+        boxedv jt = boxed jt
+      -- "return" unless the return type is not the primitive void
+      ret = if isVoid methretjt then JEx else JReturn where
+        isVoid Nativ{typ="void"} = true
+        isVoid _                 = false
   in
   JMethod
   { attr = attrs [JPublic]
@@ -363,11 +364,11 @@ striArgExpr (StriArg{name, strict}) =
 
 --- Invokes a method of an implementation record.
 ---
---- Parameters
---- - The Java type of the implementation record.
---- - The name of the invoked field of the implementation record.
---- - The expression of the instance of the implementation record (i.e. the receiver).
---- - The arguments of the method, excluding the receiver.
+--- Parameters:
+--- - The Java type of the IR.
+--- - The name of the invoked IR method.
+--- - The expression of the instance of the IR (i.e. the receiver).
+--- - The arguments of the invoked IR method, excluding the receiver.
 invokeIR :: JType -> String -> JExpr -> [StriArg] -> JExpr
 invokeIR jt name this args = JInvoke
   { args = this : map striArgExpr args
