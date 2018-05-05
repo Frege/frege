@@ -8,10 +8,6 @@ run: build/Main.class
 
 .PHONY: all clean run
 
-build/Main.class: Main.fr build/J.class
+build/Main.class: Main.fr
 	mkdir -p build
-	java -cp ../build frege.compiler.Main -d build -ascii Main
-
-build/J.class: J.java
-	mkdir -p build
-	javac -d build J.java
+	java -cp ../build frege.compiler.Main -d build -ascii -make Main
