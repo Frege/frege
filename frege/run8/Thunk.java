@@ -201,7 +201,6 @@ public class Thunk<R> implements Lazy<R> {
 		
 		Thunk<R> that;
 		R rx;
-		Lazy<R> rl;
 		// algebraic datatypes are instances of Lazy, but their call() is the identity
 		// hence we know when to finish if either 
 		// * the result is not Lazy 
@@ -229,12 +228,9 @@ public class Thunk<R> implements Lazy<R> {
 			// At this point we have a Lazy that is not a Thunk at all
 			// So here is where Frege code actually may execute.
 			rx = eval.call();
-			if (rx instanceof Lazy) {
-				rl = (Lazy<R>)(Object) rx;
-				if (rl != eval) {
-					eval = rl;
-					continue;						// it returned a different Lazy
-				}
+			if (rx != eval && rx instanceof Lazy) {
+				eval = (Lazy<R>)(Object) rx;
+				continue;
 			}
 			// at this point, we have a value in rx that is either
 			// - not a Lazy, so it is a value
