@@ -624,6 +624,11 @@ successful Compiled{global}   = true
 successful JavaCompiled       = true
 successful _                  = false
 
+--- Predicate to tell whether the state means something was indeed compiled 
+compiled  JavaCompiled       = true
+compiled  Compiled{global}   = true
+compiled  _                  = false
+
 complete NoRebuild{} = true
 complete Compiled{}  = true
 complete x           = failed x
@@ -804,11 +809,14 @@ makeone mvar tree (p, todo) = do
             ex.printStackTrace
             mvar.put (p, Aborted{because = ex.show}) 
 
+--- Interpret the argument as path name and return the last modification time of the corresponding 'File'
+--- Should be 0 if the file doesn't exist.
+lastMod s = liftIO $ (File.new s >>= _.lastModified)                        
 
 --- The action that re-builds a source if needed 
 compileAfterDeps :: TodoList -> Global -> Maybe Pack -> StIO Todo
 compileAfterDeps tree global reason = do
-    let deps    = Imp.dependsOn global
+    let deps    = Imp.dependsOn global ++ Imp.dependsOnNative global
         results = mapMaybe tree.lookup deps
         dr      = zip deps results
     if length results != length deps
@@ -824,8 +832,7 @@ compileAfterDeps tree global reason = do
                     -- the list of failed prereq's is empty and the list of
                     -- not successful prereq's is also empty, this means we
                     -- can go on!
-                    let lastMod s = liftIO $ (File.new s >>= _.lastModified)
-                        me = global.unpack global.thisPack
+                    let me = global.unpack global.thisPack
                     smod    ← lastMod global.options.source
                     xmod    ← lastMod (targetPath global ".class")
                     xp      ← Imp.getFP me
@@ -839,11 +846,11 @@ compileAfterDeps tree global reason = do
                             because=if cmod > 0 then "class file outdated with respect to source file" 
                                                 else "class file doesn't exist"}
                     else do
-                        let compiled = [ p | (p, Compiled{}) <- dr ] -- ++ [ p | (p, JavacMe{}) <- dr ]
-                        if not (null compiled)
+                        let compiledPacks = [ p | (p, s) <- dr, compiled s ]
+                        if not (null compiledPacks)
                         then do
                             return CompileMe{global, reason, 
-                                because = unmagicPack (global.unpack (head compiled))
+                                because = unmagicPack (global.unpack (head compiledPacks))
                                     ++ " was compiled."}
                         else do
                             let outdt = [ p | (p, NoRebuild{compiletime}) ← dr,
@@ -861,10 +868,14 @@ javacMe g pack reason = do
     src  ← liftIO $ resolvePackSP g (Pack.raw pack)
     case src of
         Just s | s ~ '\.java$' → do
-            rc ← javacJava s
-            if rc > 0 
-                then pure Failed{because="of bad java code"}
-                else pure JavaCompiled
+            smod ← lastMod s
+            cmod ← lastMod (classForPack g.{options ← _.{prefix=""}} pack)
+            if smod >= cmod then do
+                rc ← javacJava s
+                if rc > 0 
+                    then pure Failed{because="of bad java code"}
+                    else pure JavaCompiled
+            else pure NoRebuild{because="target class file is up to date", compiletime=0}
         Just wat → do
             liftStG $ E.warn Position.null (
                 text "expected java source file, found '" 
@@ -903,7 +914,7 @@ javacMe tree global = do
                     else return Compiled{global}
 -}
 
---- The action that checks if a package must be rebuilded
+--- The action that checks if we need to rebuild a package
 checkUpdate :: Pack -> Maybe Pack -> StIO Todo
 checkUpdate pack reason = do
     g <- getSTT  
