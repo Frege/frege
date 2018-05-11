@@ -108,7 +108,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type rawnativename   String
 //%type nativespec      (String, Maybe [TauS])
 //%type gargs           [TauS]
-//%type nativepur       (Bool, Bool)
+//%type nativepur       Bool
 //%type docs            String
 //%type docsO           (Maybe String)
 //%type opstring        String
@@ -1035,9 +1035,8 @@ datadef:
     ;
 
 nativepur:
-    PURE NATIVE         { \_\_ -> (true, false)  }
-    | MUTABLE NATIVE    { \_\_ -> (false, true)  }
-    | NATIVE            { \_   -> (false, false) }
+    PURE NATIVE         { \_\_ -> true  }
+    | NATIVE            { \_   -> false }
     ;
 
 nativespec:
@@ -1056,14 +1055,14 @@ datainit:
         \dat\d\docu\pur\(jt,gargs) -> JavDcl {pos=yyline d, vis=Public, name=Token.value d,
                                     jclas=jt, vars=[], defs=[],
                                     gargs,  
-                                    isPure = fst pur, isMutable = snd pur, 
+                                    isPure = pur, 
                                     doc=Nothing}
     }
     | DATA CONID dvars '=' nativepur nativespec {
         \dat\d\ds\docu\pur\(jt,gargs) -> JavDcl {pos=yyline d, vis=Public, name=Token.value d,
                                     jclas=jt, vars=ds, defs=[],
                                     gargs, 
-                                    isPure = fst pur, isMutable = snd pur,
+                                    isPure = pur,
                                     doc=Nothing}
     }
     | DATA CONID dvars '=' dalts {

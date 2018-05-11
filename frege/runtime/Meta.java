@@ -298,7 +298,6 @@ public class Meta {
         boolean  newt()         default false;  // whether this is a new type (1-tuple)
         boolean  publik()       default true;   // will it be imported by default
         int      kind()			default 0;		// index of kind
-        boolean  mutable()		default false;	// indicates IO mutability
         int[]	 gargs()		default {};		// generic type argument tau indexes
     }
     
