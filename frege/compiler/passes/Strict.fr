@@ -249,6 +249,8 @@ returnKind _ _ = stio ()     -- abstract methods
 --- the default state of a class member
 classMemberState = RState.fromList [RSafeTC, RValue]
 
+--- 'RValue' and 'RSafeTC'
+defaultRKind = RState.fromList [RSafeTC, RValue]
 
 {--
  * [usage] @returnExprKind syms symbol x@
@@ -270,8 +272,8 @@ classMemberState = RState.fromList [RSafeTC, RValue]
  *   it's lazy.
  * - Unsaturated applications are boxed (function types)
  -}
-returnExprKind syms sym (x@Lit {pos}) = stio (RState.fromList [RSafeTC, RValue])
-returnExprKind syms sym (x@Con {pos}) = stio (RState.fromList [RSafeTC, RValue])
+returnExprKind syms sym (x@Lit {pos}) = stio defaultRKind
+returnExprKind syms sym (x@Con {pos}) = stio defaultRKind
 returnExprKind syms sym (x@Ann {ex})  = returnExprKind syms sym ex
 
 returnExprKind syms sym (x@Vbl {name}) = do
@@ -279,12 +281,12 @@ returnExprKind syms sym (x@Vbl {name}) = do
     g    <- getST
     case symv.gExpr g of
         Nothing -> case symv.name of
-            Local{} -> stio (RState.fromList [RSafeTC, RValue])
+            Local{} -> stio defaultRKind
             _ -> case U.returnType symv.typ.rho of
                 (_,[]) -> stio (BitSet.union (RState.singleton RSafeTC) symv.rkind)
-                _      -> stio (RState.fromList [RSafeTC, RValue])      -- global function
-        Just (Lam {})  -> stio (RState.fromList [RSafeTC, RValue])      -- return a local function
-        Just vx -> stio (RState.fromList [RSafeTC, RValue])
+                _      -> stio defaultRKind      -- global function
+        Just (Lam {})  -> stio defaultRKind      -- return a local function
+        Just vx -> stio defaultRKind
 
 returnExprKind syms sym (ex@App a b typ) = do
     returnExprKind syms sym a
@@ -299,11 +301,7 @@ returnExprKind syms sym (ex@App a b typ) = do
             symf <- U.findV name
             g <- getST
             let ari = if isJust symf.expr then symf.depth else U.arity symf
-                rwa = if RSafeTC `member` symf.rkind 
-                        then if RValue `member` symf.rkind
-                            then RState.fromList [RSafeTC, RValue]
-                            else RState.fromList [RSafeTC]
-                        else RState.singleton RSafeTC
+                rwa = defaultRKind.intersection  symf.rkind 
                 rw  | MName tname _ <- symf.name,
                       Just SymC{} <- g.findit tname 
                     = rwa.unionE RValue   -- call class methods lazy
@@ -313,15 +311,15 @@ returnExprKind syms sym (ex@App a b typ) = do
                     then stio (rw.unionE RValue)     -- unsaturated function is a LAMBDA value
               else case symf.expr of
                     Nothing -> case name of
-                        Local{} -> stio (RState.fromList [RSafeTC])  -- application of lambda/case bound
-                        _       -> stio (rw)                        -- global fun
+                        Local{} -> stio (RState.singleton RSafeTC)   -- application of lambda/case bound
+                        _       -> stio (rw)                         -- global fun
                     Just _ -> do
                         g <- getST
                         if symf.sid == Symbol.sid sym               -- self recursive
-                            then stio (RState.fromList [RSafeTC, RTailRec, RValue])
+                            then stio (defaultRKind.unionE RTailRec)
                             else if (symf.sid `elem` syms)
                                 then if isOn g.options.flags PROPERTC
-                                    then stio  (RState.fromList [RSafeTC, RValue])        -- just like not recursive
+                                    then stio  defaultRKind        -- just like not recursive
                                     else
                                         -- Call of a function in the dependency group
                                         -- This makes this one not tail safe ...
@@ -332,14 +330,12 @@ returnExprKind syms sym (ex@App a b typ) = do
                                         then stio (RState.empty)    
                                         else stio (RState.singleton RSafeTC)
                                 else return rw                          -- this is safe tc and value
-        Con {name}
-          {-| newtypeCon name g = pure bek
-            | otherwise-}       = pure (RState.fromList [RSafeTC, RValue])
+        Con {name} -> pure defaultRKind
         _ -> do
                 n <- references syms f
                 if n > 0
                     then stio (RState.empty)       -- better safe than sorry
-                    else stio (RState.fromList [RSafeTC, RValue])
+                    else stio defaultRKind
 
 
 returnExprKind syms sym (Ifte c t e typ) = do
@@ -362,7 +358,7 @@ returnExprKind syms sym (x@Case {ex, alts}) = do
     wsalts <- mapSt (altExprKind syms sym) alts
     let m = foldl1 minRkind wsalts
     stio m
-returnExprKind syms sym _ = error "returnExprKindbad epr."
+returnExprKind syms sym _ = error "returnExprKind bad expr."
 
 
 altExprKind syms sym (alt@CAlt {ex}) = returnExprKind syms sym ex
