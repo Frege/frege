@@ -316,12 +316,6 @@ wrapIRMethod :: Global -> JExpr -> JType -> Symbol -> String -> SymInfo8 -> Stri
 wrapIRMethod g this irjt fldsym fldnm nativsi nativnm =
   let -- collect the FormalArgs of the native member function, excluding the receiver
       nativargs = argDefs attrFinal (nativsi.{ argSigs <- tail, argJTs <- tail }) (getArgs g)
-      -- collect the strictness of the IR field, excluding the receiver
-      fldstri = case fldsym.strsig of
-        Strictness.S xs -> tail xs
-        _               -> []
-      -- how to detect strictness of result value?
-      retstrict = all (_.isStrict) fldstri
       -- the tau of the result type of the IR field
       fldrettau = fst $ U.returnType fldsym.typ.rho
       -- the return type of the overridden method
@@ -330,15 +324,15 @@ wrapIRMethod g this irjt fldsym fldnm nativsi nativnm =
           | isJust $ U.isUnit a -> nativ "void" []
           | otherwise           -> tauJT g a
         Nothing -> nativsi.returnJT
-      -- run an ST, force a Lazy, otherwise as-is
-      call = if isST then tstRun (boxedv methretjt) else if retstrict then id else callit where
+      -- run an ST, or force a pure expression
+      call = if isST then tstRun (boxedv methretjt) else callit where
         isST = isJust $ unST fldrettau
         -- add ".call()" after jex
         callit jex = JInvoke { args = [], jex = JExMem { jex, name = "call", targs = [] } }
         -- box JType, but box void into Short
         boxedv (v@Nativ{typ="void"}) = boxed (v.{typ = "short"})
         boxedv jt = boxed jt
-      -- "return" unless the return type is not the primitive void
+      -- "return" if the return type is not the primitive void
       ret = if isVoid methretjt then JEx else JReturn where
         isVoid Nativ{typ="void"} = true
         isVoid _                 = false
@@ -350,17 +344,15 @@ wrapIRMethod g this irjt fldsym fldnm nativsi nativnm =
   , name = nativnm
   , args = nativargs
   , body = JBlock $ pure $ ret $ call $ invokeIR irjt fldnm this $
-      zipWith (\(_, _, _, x) s -> StriArg x s.isStrict) nativargs fldstri
+      map (\(_, _, _, x) -> x) nativargs
   }
 
-data StriArg = StriArg { name :: String, strict :: Bool }
-
-striArgExpr :: StriArg -> JExpr
-striArgExpr (StriArg{name, strict}) =
+asLazy :: String -> JExpr
+asLazy name =
   let thunkjt = Ref { jname = JName { qual = "", base = "Thunk" }, gargs = [] }
       lazy s = JInvoke { args = [JAtom s], jex = JStMem { jt = thunkjt, name = "lazy", targs = [] } }
   in
-  if strict then JAtom name else lazy name
+  lazy name
 
 --- Invokes a method of an implementation record.
 ---
@@ -369,9 +361,9 @@ striArgExpr (StriArg{name, strict}) =
 --- - The name of the invoked IR method.
 --- - The expression of the instance of the IR (i.e. the receiver).
 --- - The arguments of the invoked IR method, excluding the receiver.
-invokeIR :: JType -> String -> JExpr -> [StriArg] -> JExpr
+invokeIR :: JType -> String -> JExpr -> [String] -> JExpr
 invokeIR jt name this args = JInvoke
-  { args = this : map striArgExpr args
+  { args = this : map asLazy args
   , jex = JStMem { jt = rawType jt, name, targs = [] }
   }
 
