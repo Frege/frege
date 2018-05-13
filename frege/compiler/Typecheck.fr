@@ -1309,11 +1309,13 @@ literalType _ x = return (Left x)
 
 --- Resolve the x.m finally
 --- Resolve overloaded methods
+resolveHas ∷ ExprT → ExprD Global
 resolveHas expr = do
         ctxs  <- collectConstrs expr
         mems  <- foldEx true countMem 0 expr    -- count how many mems we have
         mapEx true (literalType ctxs) expr >>= resolveHas' mems
     where
+        resolveHas' ∷ Int → ExprT → ExprD Global
         resolveHas' 0 ex = mapEx true (rHas true) ex
         resolveHas' n ex = do
             E.logmsg TRACET (getpos ex) (text("TDNR for  " ++ show n ++ " expressions"))
@@ -1322,131 +1324,146 @@ resolveHas expr = do
             if m < n        -- something has been resolved
             then resolveHas' m nex
             else resolveHas' 0 nex  -- finish with error messages
-        -- count number of Mem constructs 
-        countMem acc Mem{}  = return . Left $! (acc+1)
-        countMem acc _      = return . Left $ acc
-        -- the first argument tells if we flag errors or not
-        -- whether to flag them is controlled by resolveHas'
-        rHas flagerr (x@Mem{ex, member, typ = Just sigma}) = do
-            app <- checkRho x.{typ = Nothing} sigma.rho -- now type of ex should be known
-            case app of
-                Mem{}
-                    | not flagerr = return (Left x)
-                    | Just sigma <- ex.typ,
-                      RhoTau{tau=taut} <- sigma.rho = do
-                        g <- getST 
-                        let tau = reduced taut g
-                        case tau.flat of
-                            TCon{}:_   = do
-                                E.error (getpos x) (text "can't find a type for " 
-                                    <+/> text (x.nicer g)
-                                    <+/> text "`" <> text member.value <> text "`"
-                                    <+/> text "is neither an overloaded function nor a member of "
-                                    <+/> text (sigma.rho.nicer g))
-                                return (Left x)
-                            unknown = badsigma sigma
-                    | Just sigma <- ex.typ = badsigma sigma
-                    | otherwise = badsigma pSigma
-                    where
-                        badsigma sigma =  do
-                                g <- getST 
-                                E.error (getpos x) (text "can't find a type for " 
-                                    <+/> text (x.nicer g) 
-                                    <+/> text " because " 
-                                    <+/> (text (ex.nicer g)
-                                            <+> text "::" 
-                                            <+> text (nicer sigma g))
-                                    <+/> text " does not have a definite type.")
-                                return (Left x)
-                other -> return (Left app)      -- Mem resolved (or not flagged)
-        rHas _ (x@Mem{ex, member, typ = Nothing}) = do
-            g <- getST
-            error ("expression  " ++ x.nicer g ++ "  is untyped")
-        rHas true (v@Vbl{pos, name, typ}) | not name.isLocal = do
-            sym <- U.findV name
-            case sym.over of
-                [] -> return (Right v)
-                _  -> resolveOver v sym
-        rHas _ x = return (Left x)
-
---- resolve overloaded variable
-resolveOver :: Expr -> Symbol -> StG (Expr|Expr)
-resolveOver v sym = do
-        g <- getST
-        let sigma = (unJust v.typ)
-        E.logmsg TRACET v.pos (text ("overloaded " ++ nice v.name g 
-                                    ++ " :: " ++ nice sigma g))
-                                            
-        let candidates = overloads g sym
-            groups 
-                | MName{} <- sym.name = groupBy (using (QName.tynm . Symbol.name)) candidates
-                | otherwise = [candidates]
+        -- count number of Mem constructs plus overloaded vars 
+        countMem ∷ Int → ExprT → StG (Int | Int)
+        countMem !acc Mem{}  = return . Left $! (acc+1)
+        countMem !acc Vbl{name} 
+            | not name.isLocal    =  do
+                    sym <- U.findV name
+                    case sym.over of
+                        [] ->  return . Right $! acc            -- not overloaded
+                        _  ->  return . Right $! (acc+1)        -- overloaded
+        countMem !acc _      = return . Left $! acc
         
-        E.logmsg TRACET v.pos (text ("by " 
-            ++ joined ", " (map (flip nice g . Symbol.name) candidates)))
-            
-        checked <- mapM (resolve v.pos sigma) groups
-        case filter (not . null) checked of
-            [] -> do
-                E.error v.pos (text "overloaded " <+> text (nicer v g) 
-                    <+> text " cannot be resolved at type "
-                    <+/> text (nicer sigma g))
-                return (Right v)
-            ms:_ -> case sortBy (comparing arity) ms of                     -- compare b arity to find 
-                                                                            --       the one that fits
-                cs  → case filter ((arity (head cs) ==) . arity) cs of      -- remove the ones that don't
-                    some -> do
-                        when (length some > 1) do
-                            E.warn v.pos (text "overloaded `" <> text (nicer v g) 
-                                <>  text "´ is ambiguous at type "
-                                <+/> text (nicer sigma g)
-                                </>  text "It could mean one of "
-                                </>  stack [ text (nicer (Symbol.name s) g) 
-                                                <+> text " :: " 
-                                                <+> text (nicer s.typ g)
-                                        | s <- some ]) 
-                        let s = head some
-                            diag = if length some > 1 then E.warn else E.explain
-                        diag v.pos (msgdoc ("overloaded " ++ nicer v.name g 
-                                        ++ " :: " ++ nicer sigma g
-                                        ++ "  resolved to  "
-                                        ++ nicer s.name g))
-                        x <- checkSigma Vbl{pos=v.pos, name=s.name, typ=Nothing} sigma
-                        changeST Global.{sub <- SubSt.{
-                                    idKind <- insert (KeyTk v.pos.first) (Right s.name)}}
-                        return (Right x)
+--- try to resolve an overloaded name or a member expression
+--- the first argument tells if we flag errors or not
+rHas ∷ Bool → ExprT → StG (ExprT | ExprT)
+rHas flagerr (x@Mem{ex, member, typ = Just sigma}) = do
+    g ← getST
+    E.logmsg TRACET (getpos x) (text "[TDNR" <+> text (show flagerr) <> text "]" 
+        <+> nicest g x )
+    app <- checkRho x.{typ = Nothing} sigma.rho -- now type of ex should be known
+    case app of
+        Mem{}
+            | not flagerr = return (Left x)
+            | Just sigma <- ex.typ,
+              RhoTau{tau=taut} <- sigma.rho = do
+                g <- getST 
+                let tau = reduced taut g
+                case tau.flat of
+                    TCon{}:_   = do
+                        E.error (getpos x) (text "can't find a type for " 
+                            <+/> text (x.nicer g)
+                            <+/> text "`" <> text member.value <> text "`"
+                            <+/> text "is neither an overloaded function nor a member of "
+                            <+/> text (sigma.rho.nicer g))
+                        return (Left x)
+                    unknown = badsigma sigma
+            | Just sigma <- ex.typ = badsigma sigma
+            | otherwise = badsigma pSigma
+            where
+                badsigma sigma =  do
+                        g <- getST 
+                        E.error (getpos x) (text "can't find a type for " 
+                            <+/> text (x.nicer g) 
+                            <+/> text " because " 
+                            <+/> (text (ex.nicer g)
+                                    <+> text "::" 
+                                    <+> text (nicer sigma g))
+                            <+/> text " does not have a definite type.")
+                        return (Left x)
+        other -> return (Left app)      -- Mem resolved (or not flagged)
+
+rHas _ (x@Mem{ex, member, typ = Nothing}) = do
+    g <- getST
+    error ("expression  " ++ x.nicer g ++ "  is untyped")
+
+rHas flagerr (v@Vbl{pos, name, typ}) | not name.isLocal = do
+        sym <- U.findV name
+        case sym.over of
+            [] -> return (Right v)
+            _  -> resolveOver v sym
     where
-        resolve pos sigma [] = return []
-        resolve pos sigma (sym:syms) = do
-            g1 <- getST
-            changeST Global.{options <- Options.{flags <- flagSet OVERLOADING}}
-            -- let tvs = sigmaTvs g1 sigma
-            x <- checkSigma Vbl{pos, name=Symbol.name sym, typ=Nothing} sigma
-            -- foreach tvs unBind
-            -- changeST Global.{options <- Options.{flags <- flip U.clrFlag OVERLOADING}}
-            g <- getST
-            -- changeST Global.{sub <- SubSt.{numErrors = g1.sub.numErrors}}
-            putST g1
-            if (g.errors > g1.errors)
-            then resolve pos sigma syms
-            else do
-                rs <- resolve pos sigma syms
-                return (sym:rs)
-        -- unBind (Flexi{ref}) = doio (ref.put Nothing)
-        -- unBind Rigid{} = return ()    
-        overloads g sym = case sym of
-            SymV{over=[]} -> [sym]
-            SymV{pos, name = MName{tynm, base}, over=(_:_)}
-                | Just SymT{nativ = Just this} <- g.findit tynm,
-                  ov <- [ sy | m <- sym.over, sy <- g.findit m ],
-                  syms <- [ sy | s  <- U.supersOfNativ this g, 
-                                 q  <- U.typesOfNativ s g, 
-                                 h  <- g.findit (MName q base),
-                                 sy <- overloads g h] 
-                = ov++syms
-            SymV{} -> [ sy | m <- sym.over, sy <- g.findit m]
-            _ -> []
-            
+        -- resolve overloaded variable
+        resolveOver :: Expr -> Symbol -> StG (Expr|Expr)
+        resolveOver v sym = do
+                g <- getST
+                let sigma = (unJust v.typ)
+                E.logmsg TRACET v.pos (text ("resolve overloaded " ++ nice v.name g 
+                                            ++ " :: " ++ nice sigma g))
+                                                    
+                let candidates = overloads g sym
+                    groups 
+                        | MName{} <- sym.name = groupBy (using (QName.tynm . Symbol.name)) candidates
+                        | otherwise = [candidates]
+                
+                E.logmsg TRACET v.pos (text ("by " 
+                    ++ joined ", " (map (flip nice g . Symbol.name) candidates)))
+                    
+                checked <- mapM (resolve v.pos sigma) groups
+                case filter (not . null) checked of
+                    [] | not flagerr = do
+                        E.logmsg TRACET v.pos (text "overloaded " <+> text (nicer v g) 
+                            <+> text " cannot yet be resolved at type "
+                            <+/> text (nicer sigma g))
+                        return (Right v)
+                    [] -> do
+                        E.error v.pos (text "overloaded " <+> text (nicer v g) 
+                            <+> text " cannot be resolved at type "
+                            <+/> text (nicer sigma g))
+                        return (Right v)
+                    ms:_ -> case sortBy (comparing arity) ms of                     -- compare b arity to find 
+                                                                                    --       the one that fits
+                        cs  → case filter ((arity (head cs) ==) . arity) cs of      -- remove the ones that don't
+                            some -> do
+                                when (length some > 1) do
+                                    E.warn v.pos (text "overloaded `" <> text (nicer v g) 
+                                        <>  text "´ is ambiguous at type "
+                                        <+/> text (nicer sigma g)
+                                        </>  text "It could mean one of "
+                                        </>  stack [ text (nicer (Symbol.name s) g) 
+                                                        <+> text " :: " 
+                                                        <+> text (nicer s.typ g)
+                                                | s <- some ]) 
+                                let s = head some
+                                    diag = if length some > 1 then E.warn else E.explain
+                                diag v.pos (msgdoc ("overloaded " ++ nicer v.name g 
+                                                ++ " :: " ++ nicer sigma g
+                                                ++ "  resolved to  "
+                                                ++ nicer s.name g))
+                                x <- checkSigma Vbl{pos=v.pos, name=s.name, typ=Nothing} sigma
+                                changeST Global.{sub <- SubSt.{
+                                            idKind <- insert (KeyTk v.pos.first) (Right s.name)}}
+                                return (Right x)
+            where
+                resolve ∷ Position → Sigma → [Symbol] → StG [Symbol]
+                resolve pos sigma [] = return []
+                resolve pos sigma (sym:syms) = do
+                    g1 <- getST
+                    changeST Global.{options <- Options.{flags <- flagSet OVERLOADING}}
+                    x <- checkSigma Vbl{pos, name=Symbol.name sym, typ=Nothing} sigma
+                    g <- getST
+                    putST g1
+                    if (g.errors > g1.errors)
+                    then resolve pos sigma syms
+                    else do
+                        rs <- resolve pos sigma syms
+                        return (sym:rs)
+                overloads ∷ Global → Symbol → [Symbol]
+                overloads g sym = case sym of
+                    SymV{over=[]} -> [sym]
+                    SymV{pos, name = MName{tynm, base}, over=(_:_)}
+                        | Just SymT{nativ = Just this} <- g.findit tynm,
+                          ov <- [ sy | m <- sym.over, sy <- g.findit m ],
+                          syms <- [ sy | s  <- U.supersOfNativ this g, 
+                                         q  <- U.typesOfNativ s g, 
+                                         h  <- g.findit (MName q base),
+                                         sy <- overloads g h] 
+                        = ov++syms
+                    SymV{} -> [ sy | m <- sym.over, sy <- g.findit m]
+                    _ -> []
+
+rHas _ x = pure (Left x)             
 
 --- collect all class constraints
 collectConstrs = U.foldEx true collC []
@@ -1456,6 +1473,7 @@ collectConstrs = U.foldEx true collC []
                             where cs = map Context.{pos=getpos x} sigma.rho.context 
             Nothing    -> return (Left cxs)  
             
+        rHas _ x = return (Left x)
 
 
 --- Inform about unused imports.             
