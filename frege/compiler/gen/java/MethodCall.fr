@@ -13,7 +13,6 @@ import Compiler.types.Types(unST, Sigma, Tau, TauT, ForAll, RhoTau, RhoFun)
 import Compiler.types.Symbols(SymbolT)
 import Compiler.types.Global
 import Compiler.types.JNames(JName, memberOf)
-import Compiler.types.Strictness()
 
 import Compiler.common.Types as CT
 import Compiler.common.JavaName
@@ -66,16 +65,23 @@ nativeCall ∷ Global → Symbol → TreeMap String Tau → [JExpr] → Binding
 nativeCall g (sym@SymV {nativ = Just item, gargs}) subst aexs = newBind g bsig (call jrty args)
     where
         (rty, sigmas) = U.returnType sym.typ.rho
+        -- The types of the arguments
         taus  = [ tau | Just tau <- map U.sigmaAsTau sigmas ]
+        -- The base return type of the method
+        -- e.g. @b@ in @ST s (a|Maybe b)@
         brty  = substTau subst (baserty rty)
         bsig  = U.tauAsSigma brty
+        -- The java type arguments (generics arguments)
         targs = map (boxed . tauJT g . substTau subst) gargs 
         args | [tau] <- taus, Just _ <- U.isUnit tau = []   -- no arguments
              | otherwise = zipWith (argEx g)  aexs taus
         bjt  = tauJT g brty
+        -- The java type of the result
         jrty = strict  bjt
         -- retmode = maxStrict jrty         
         
+        -- a Java expression for an argument e.g. putting @.call()@, marshalling @Maybe@, etc.
+        argEx :: Global -> JExpr -> Tau -> JExpr
         argEx g arg tau
              | Just x <- U.isMaybe tau = JQC checknothing (JAtom "null") evex
              -- Just x <- arrayTau g tau = JCast x bind.jex
@@ -103,21 +109,20 @@ nativeCall g (sym@SymV {nativ = Just item, gargs}) subst aexs = newBind g bsig (
              NIExtends ->
                let evalStG :: Global -> StG a -> a
                    evalStG g st = fst $ st.run g
-                   x = do g <- getST
-                          si <- symInfo sym
-                          -- IR stands for a Implementation Record
-                          let irsym = unJust $ g.findit irname where
-                                irname = (head irtau.flat).name
-                                irtau  = (head si.argSigs).rho.tau
-                              nms = mapMaybe (_.name) [ fld | x@SymD{} <- values irsym.env, fld <- x.flds ]
-                          return $ flip mapMaybe nms $ \fldnm -> do
-                              nativrsym <- g.findit $ si.retSig.rho.tau.name
-                              nativsym <- TreeMap.lookup fldnm nativrsym.env
-                              nativnm <- nativsym.nativ
-                              let nativsi = evalStG g $ symInfo nativsym
-                              fldsym <- TreeMap.lookup fldnm irsym.env
-                              pure $ wrapIRMethod g (head args) (head si.argJTs) fldsym fldnm nativsi nativnm
-               in JNewClass jrty [] (evalStG g x)
+                   x = -- IR stands for an Implementation Record
+                       let irsym = unJust $ g.findit irname where
+                             irname = (head irtau.flat).name
+                             irtau  = (head sigmas).rho.tau
+                           nms = mapMaybe (_.name) [ fld | x@SymD{} <- values irsym.env, fld <- x.flds ]
+                       in
+                       flip mapMaybe nms $ \fldnm -> do
+                           nativrsym <- g.findit $ rty.name -- TODO take care of TApp
+                           nativsym <- TreeMap.lookup fldnm nativrsym.env
+                           nativnm <- nativsym.nativ
+                           let nativsi = evalStG g $ symInfo nativsym
+                           fldsym <- TreeMap.lookup fldnm irsym.env
+                           pure $ wrapIRMethod g (head args) (tauJT g $ head taus) fldsym fldnm nativsi nativnm
+               in JNewClass jrty [] x
              NICast -> case args of
                  [a] -> JInvoke (JAtom item) args    -- was: JCast (Ref (JName "" item) []) a
                  _   -> JAtom "null"
@@ -348,7 +353,7 @@ wrapIRMethod g this irjt fldsym fldnm nativsi nativnm =
       map (\(_, _, _, x) -> x) nativargs
   }
 
---- Wraps an expression into Thunk.lazy:
+--- Wraps an expression into Thunk.lazy, without generics arguments:
 --- > Thunk.lazy(expr)
 asLazy :: JExpr -> JExpr
 asLazy expr =
