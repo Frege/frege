@@ -84,6 +84,8 @@ PRELUDE  = \
 COMPILEREPL=$(TIME) $(JAVA) -Xss2m -cp build:$(JLINE) frege.compiler.Main -d build -O -target $(TARGET) -make  -sp .:$(REPLSP):$(INTERPRETERSP) frege.Starter
 REPLSP=../frege-repl/frege-repl-core/src/main/frege:../frege-repl/frege-repl-nativedeps/src/main/java/
 INTERPRETERSP=../frege-interpreter/frege-interpreter-core/src/main/frege:../frege-interpreter/frege-interpreter-java-support/src/main/java/
+
+# from  https://oss.sonatype.org/content/groups/public/jline/jline/2.14.6/jline-2.14.6.jar
 JLINE=lib/jline-2.14.6.jar
 
 #	shadow Prelude files in the order they must be compiled
