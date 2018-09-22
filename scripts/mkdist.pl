@@ -34,9 +34,9 @@ my $entrypoint = -f 'frege/Starter.class' ? "frege.Starter" : "frege.compiler.Ma
 # open  MANI, ">manifest.txt";
 # print MANI "Manifest-Version: 1.0\n";
 # print MANI "Main-Class: $entrypoint\n";
-# print MANI "Class-Path: jline-2.13.jar\n";
+# print MANI "Class-Path: jline-2.14.6.jar\n";
 # close MANI;
-system qq{jar$exe -xf ../lib/jline-2.13.jar} if -f "../lib/jline-2.13.jar" && -d "frege/repl";
+system qq{jar$exe -xf ../lib/jline-2.14.6.jar} if -f "../lib/jline-2.14.6.jar" && -d "frege/repl";
 unlink "META-INF/MANIFEST.MF";
 system qq{jar$exe -cfe ../dist/frege$version.jar $entrypoint frege/ jline/ org/ META-INF/};
 chdir "..";
