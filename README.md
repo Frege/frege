@@ -212,6 +212,7 @@ Related Projects
 * [An efficient Frege Ray-Tracer](https://github.com/mchav/Frege-RayTracer), by Michael Chavinda
 * [Frege Chat](https://github.com/Dierk/FregeChat), Winner at JavaOne 2016 language competition, Dierk König
 * [ProB Parser Library](https://github.com/bendisposto/probparsers) by Markus Brenneis (@mabre) and Jens Bendisposto (editor), University Düsseldorf
+* [Conduit in Frege](https://github.com/matil019/frege-conduit) a port of the Haskell conduit library.
 
 Contributions
 -------------
