@@ -253,6 +253,9 @@ some project members and Frege users hang out. You can use any IRC client
 you like or Freenode's [WebChat interface](https://webchat.freenode.net)
 if you don't want to install IRC software.
 
+The [Frege Gitter channel](https://gitter.im/Frege/frege) is also a way
+tool to connect to the community.
+
 **Staying up to date**
 
 * [YouTube playlist](https://www.youtube.com/watch?v=S-4sYwGY3Sk&list=PL14crhrjkk-lbdn4Yg85_QRk9r_uiX1yh)
