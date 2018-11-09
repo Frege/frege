@@ -286,7 +286,7 @@ Links
 Recommended reading
 
 * [John Hughes: Why functional programming matters](http://www.cs.kent.ac.uk/people/staff/dat/miranda/whyfp90.pdf)
-* [Book: Haskell Programming from first principles](http://haskellbook.com)
+* [Book: Haskell Programming from first principles](http://haskellbook.com) with [book examples in Frege](https://github.com/elrocqe/frege_programming)
 * [Book: Real-World Haskell](http://book.realworldhaskell.org/read/) (free online)
 * [Book: Learn you a Haskell](http://learnyouahaskell.com/chapters) (free online)
 * [Book: Programming in Haskell](http://www.amazon.com/Programming-Haskell-Graham-Hutton/dp/0521692695/)
