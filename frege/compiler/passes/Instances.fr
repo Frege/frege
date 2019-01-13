@@ -39,18 +39,23 @@ import  frege.compiler.gen.java.Common(sigmaJT)
  -}
 pass () = do
     g <- getST
-    let insdrv = filter isInstOrDerive g.sub.sourcedefs
+    -- not sure if including InsDcl here is needed; if ordering doesn't matter,
+    -- it shouldn't be needed
+    let insdrv = flip mapMaybe g.sub.sourcedefs $ \d ->
+          case d of
+            DefinitionS.Ins ins -> Just $ Left ins
+            DefinitionS.Drv drv -> Just $ Right drv
+            otherwise -> Nothing
         normal = filter (not • isInstOrDerive) g.sub.sourcedefs
-    derived <- mapSt deriveInst insdrv
+    derived <- mapSt (fmap DefinitionS.Ins . either pure deriveInst) insdrv
     enter (VName g.thisPack) derived
     -- change state so that derived instances will be transdef'ed later
     changeST Global.{sub <- SubSt.{sourcedefs = normal ++ derived}}
     stio ("instances", length derived)
 
---- make an instance definition from a derive definition, identity for instance definitions
-deriveInst :: DefinitionS -> StG DefinitionS
-deriveInst (d@InsDcl {pos}) = return d
-deriveInst (d@DrvDcl {pos}) = do
+--- make an instance definition from a derive definition
+deriveInst :: DrvDcl -> StG InsDcl
+deriveInst (d@DrvDcl{pos}) = do
         g <- getST
         clas <- defaultXName pos (TName pPreludeBase "Eq") d.clas
         typ  <- U.transSigma d.typ
@@ -81,10 +86,6 @@ deriveInst (d@DrvDcl {pos}) = do
             where
                 context = [ Ctx pos klasse (TVar pos KVar v) | v <- U.freeTVnames [] rho ]
         withDerivedContext pos sigma _ _ = sigma
-
-deriveInst d = do
-    E.fatal d.pos (text ("deriveInst got definition with constructor "
-                    ++ show (constructor d)))
 
 --- List of derivable classes
 --- Note that special classes like 'Exceptional' and 'JavaType' are not listed here.
@@ -204,11 +205,12 @@ deriveClass pos clas forty ctrs instrho g toderive = deriveClass toderive
                     hfun a b = mkop (mkop (int 31) opMul a) opAdd b
                     hashex = fold hfun (int 1) (c:hs)  
 
+        deriveClass :: String -> [DefinitionS]
         -- derive Hashable
-        deriveClass "Hashable" = [publicfun "hashCode" [parg1] hash]
+        deriveClass "Hashable" = [DefinitionS.Fun $ publicfun "hashCode" [parg1] hash]
 
         -- derive Eq
-        deriveClass "Eq" = [publicfun "==" [parg1,parg2] ifx, publicfun "hashCode" [parg1] hash] where
+        deriveClass "Eq" = map DefinitionS.Fun [publicfun "==" [parg1,parg2] ifx, publicfun "hashCode" [parg1] hash] where
             ifx   = if length ctrs == 1 then eex else Ifte cond eex vFalse
             eex   = if isEnum then vTrue else Case CNormal (vtup varg1 varg2) alts
             alts  = map mkequalalt ctrs ++ deflt
@@ -232,10 +234,10 @@ deriveClass pos clas forty ctrs instrho g toderive = deriveClass toderive
                     andit (x:xs) = nApp (nApp (gvar "PreludeBase" "&&") x) (andit xs)
         -- derive Ord
         deriveClass "Ord"
-            | [prod] <- ctrs = [publicfun "<=>"
+            | [prod] <- ctrs = [DefinitionS.Fun $ publicfun "<=>"
                                           [conpat prod "a", conpat prod "b"]
                                           (ordex (arity prod) 0)]
-            | otherwise = [publicfun  "<=>" [parg1, parg2] outercase]
+            | otherwise = [DefinitionS.Fun $ publicfun "<=>" [parg1, parg2] outercase]
             where
                 --* case a1 <=> b1 of { Eq -> case a2 <=> b2 of { ...
                 ordex a n
@@ -270,13 +272,13 @@ deriveClass pos clas forty ctrs instrho g toderive = deriveClass toderive
                     sex     = Case CNormal (var "r") [(mktupshowalt con)]
                     show    = publicfun "show"     [var "r"]  sex
                     -- showsub = publicfun "showsub"  []          (var "show")
-                in [show]
+                in [DefinitionS.Fun show]
             | otherwise = let
                     sex =   Case CNormal (var "r") (mkshowalts ctrs)
                     subex = Case CNormal (var "r") (mkshowsubalts ctrs)
                     show    = publicfun "show"      [var "r"]  sex
                     showsub = publicfun "showsub"   [var "r"]  subex
-                in [show, showsub]
+                in map DefinitionS.Fun [show, showsub]
             where
                 mkshowalts    constr = map mkshowalt constr
                 mkshowsubalts constr = map mkshowsubalt constr
@@ -306,7 +308,7 @@ deriveClass pos clas forty ctrs instrho g toderive = deriveClass toderive
                     joinit s [v] = showsv s v ")"
                     joinit s (a:b:c) = joinit (showsv s a ", ") (b:c)
 
-        deriveClass "Enum" = [ord, from, succ, pred,
+        deriveClass "Enum" = map DefinitionS.Fun [ord, from, succ, pred,
                                 eFromThenTo, eFromThen]  -- , eq]
             where
                 -- eq      = publicfun "=="    [pvar "a", pvar "b"]  eqex
@@ -345,7 +347,7 @@ deriveClass pos clas forty ctrs instrho g toderive = deriveClass toderive
                     | otherwise = singleton min
                 eFTex   = fold nApp (var "enumFromThenTo") [varg1, varg2, minmax]
 
-        deriveClass "Bounded" = [minval, maxval]
+        deriveClass "Bounded" = map DefinitionS.Fun [minval, maxval]
             where
                 ctup    = sortBy (comparing Symbol.cid) ctrs
                 ctdn    = reverse ctup
@@ -355,6 +357,7 @@ deriveClass pos clas forty ctrs instrho g toderive = deriveClass toderive
                 minval  = publicfun "minBound" [] min
 
         deriveClass "Exceptional" =  [
+                DefinitionS.Nat $
                 NatDcl{pos, vis=Public, name="javaClass", 
                     txs = [(ForAll [] (RhoTau [] tapp), [])], 
                     meth = fromMaybe (rawName jt) forty.nativ ++ ".class", 

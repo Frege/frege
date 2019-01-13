@@ -34,22 +34,27 @@ import  frege.compiler.Utilities  as  U(vSym)
  -}
 pass = do
     g <- getST
-    definitions <- mapSt chgddef g.sub.sourcedefs
-    changeST Global.{sub <- SubSt.{sourcedefs = definitions}}
-    return ("fields", (count definitions - count g.sub.sourcedefs ) `quot` 4)
+    (count, newDefsRev) <- foldSt
+        (\(count, newDefs) oldDef ->
+          case oldDef of
+            DefinitionS.Dat d -> do
+                newDef <- chgddef d
+                pure (count + 1, DefinitionS.Dat newDef:newDefs)
+            other -> pure (count, other:newDefs)
+        )
+        (0, [])
+        g.sub.sourcedefs
+    changeST Global.{sub <- SubSt.{sourcedefs = reverse newDefsRev}}
+    return ("fields", count)
 
-count :: [DefinitionS] -> Int
-count = sum . map subdefs
-    where
-        subdefs d | d.{defs?} = length d.defs
-                  | otherwise = 0
 
-
+chgddef :: DatDcl -> StG DatDcl
 chgddef (d@DatDcl {pos}) = do
         g <- getST
         let dname = TName g.thisPack d.name
         dsym <- U.findT dname
-        let (newdefs,_) = work g dsym
+        let (newdefs',_) = work g dsym
+            newdefs = map DefinitionS.Fun newdefs'
         enter (MName dname) newdefs
         -- inlining chg$field and upd$field tends to break binary compatibility,
         -- because the caller's java code will use the constructor directly.
@@ -58,7 +63,7 @@ chgddef (d@DatDcl {pos}) = do
         -- changeST _.{sub <- _.{toExport <- (exports++)}}
         stio d.{defs <- (++ newdefs)}
     where
-        work :: Global -> Symbol -> ([DefinitionS], [SName])
+        work :: Global -> Symbol -> ([FunDcl], [SName])
         work g (dsym@SymT {env}) =
                 let cons   = [ sym | sym@SymD {sid} <- values env ]
                     fields = (uniqBy (using fst) • sort) [ (f,p) | con <- cons, Field {pos = p, name = Just f} <- Symbol.flds con ]
@@ -69,7 +74,7 @@ chgddef (d@DatDcl {pos}) = do
                                                                         s <- ["chg$", "upd$"]]
                         else [])
         work _ _ = error "work: need a SymT"
-        gen :: Global -> Position -> QName -> [Symbol] -> String -> [DefinitionS]
+        gen :: Global -> Position -> QName -> [Symbol] -> String -> [FunDcl]
         gen g fpos tname cons f = let
                 pos   = fpos.{first <- Token.{offset <- succ}}
                 model = FunDcl {vis = Public, positions = [fpos.first], 
@@ -150,5 +155,3 @@ chgddef (d@DatDcl {pos}) = do
                                                         | con <- cons, v <- occurs con f]
                 last = CAlt {pat=var "_", ex = vFalse}
             in [symf, symu, symc, symh]
-chgddef d = stio d      -- leave others unchanged
-

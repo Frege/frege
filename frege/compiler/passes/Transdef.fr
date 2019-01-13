@@ -91,7 +91,7 @@ pass = do
     g <- getSTT
 
     -- before we start, we must have operator information
-    forM_ g.sub.sourcedefs (liftStG . fixity) 
+    mapM_ (liftStG . fixity) [x | DefinitionS.Fix x <- g.sub.sourcedefs]
 
     -- do the main part
     forsome g.sub.sourcedefs (liftStG . transdef [] (VName g.thisPack))
@@ -108,6 +108,7 @@ pass = do
 
 
 --- change 'Symbol.op' field according to @infix@ definitions.
+fixity :: FixDcl -> StG ()
 fixity (d@FixDcl{pos, opid, ops}) = foreach ops changeop
     where
         changeop op = do
@@ -133,9 +134,7 @@ fixity (d@FixDcl{pos, opid, ops}) = foreach ops changeop
                 changeSym sym.{op=opid}
             else do
                 E.error pos (text (nicer sym g ++ " cannot have a precedence"))
-                
 
-fixity _ = return ()
 
 --- translate inline candidates from exporting package clause to QNames and set exported flag in corresponding symbols
 inlineCandidates = do
@@ -193,23 +192,29 @@ varcon _ = Nothing
 
 
 transdef ∷ [QName] → (String→QName) → DefinitionS → StG ()
-transdef env fname def = case def  of
-    ImpDcl{} →  pure ()     -- nothing to do here
-    FixDcl{} →  pure ()     -- nothing to do here
-    DocDcl{} →  pure ()     -- nothing to do here
-    TypDcl{} →  pure ()     -- already done in TypeAlias pass
-    ClaDcl{} →  transClaDcl env fname def
-    InsDcl{} →  transInsDcl env fname def
-    DrvDcl{} →  pure ()     -- already done in Instances pass
-    AnnDcl{} →  transAnnDcl env fname def
-    NatDcl{} →  transNatDcl env fname def
-    FunDcl{} →  transFunDcl env fname def
-    DatDcl{} →  transDatDcl env fname def
-    JavDcl{} →  transJavDcl env fname def
-    ModDcl{} →  transModDcl env fname def
+transdef env fname def' = case def' of
+    DefinitionS.Imp _   -> pure ()     -- nothing to do here
+    DefinitionS.Fix _   -> pure ()     -- nothing to do here
+    DefinitionS.Doc _   -> pure ()     -- nothing to do here
+    DefinitionS.Typ _   -> pure ()     -- already done in TypeAlias pass
+    DefinitionS.Cla def -> transClaDcl env fname def
+    DefinitionS.Ins def -> transInsDcl env fname def
+    DefinitionS.Drv _   -> pure ()     -- already done in Instances pass
+    DefinitionS.Ann def -> transAnnDcl env fname def
+    DefinitionS.Nat def -> transNatDcl env fname def
+    DefinitionS.Fun def -> transFunDcl env fname def
+    DefinitionS.Dat def -> transDatDcl env fname def
+    DefinitionS.Jav def -> transJavDcl env fname def
+    DefinitionS.Mod def -> transModDcl env fname def
 
-transFunDcl env fname (d@FunDcl {positions}) = do 
-        let dname = defname d
+transLetMemberS :: [QName] -> (String -> QName) -> LetMemberS -> StG ()
+transLetMemberS env fname def' = case def' of
+    LetMemberS.Ann def -> transAnnDcl env fname def
+    LetMemberS.Fun def -> transFunDcl env fname def
+
+transFunDcl :: [QName] -> (String -> QName) -> FunDcl -> StG ()
+transFunDcl env fname (d@FunDcl {positions}) = do
+        let dname = defname $ LetMemberS.Fun d
             aname = if null env then fname dname else findLocal env dname
         case funbinding d of
             Just _  -> common aname d
@@ -268,7 +273,6 @@ transFunDcl env fname (d@FunDcl {positions}) = do
                         othr -> changeSym sym.{expr = Just (return x)}
                 | otherwise = E.fatal pos (text ("expected function, found " ++ sym.nice g))
             nothing -> do E.fatal pos (text ("Cannot happen, function " ++ aname.nice g ++ " missing"))
-transFunDcl _ _ d = E.fatal d.pos (text "not a fun dcl") 
 
 {-
     AnnDcl    {pos::Line, vis::Visibility, name::String, typ::SigmaT t, doc::Maybe String}
@@ -276,6 +280,7 @@ transFunDcl _ _ d = E.fatal d.pos (text "not a fun dcl")
                  typ::Sigma, expr::Maybe Expr, nativ::Maybe String,
                  pur::Bool, anno::Bool} /// variable
 -}
+transAnnDcl :: [QName] -> (String -> QName) -> AnnDcl -> StG ()
 transAnnDcl env fname (d@AnnDcl {pos}) = do
         g <- getST
         let aname = if null env then fname d.name else findLocal env d.name
@@ -292,8 +297,8 @@ transAnnDcl env fname (d@AnnDcl {pos}) = do
                         ++ ". Place this annotation before line " ++ show dpos.line
                         ++ " to prevent this error.")) 
                 | otherwise = E.fatal pos (text ("expected function, found " ++ sym.nice g))
-transAnnDcl _ _ d = E.fatal d.pos (text "not a ann dcl")
 
+transNatDcl :: [QName] -> (String -> QName) -> NatDcl -> StG ()
 transNatDcl env fname (d@NatDcl {pos}) = do
         g <- getST
         let aname = fname d.name
@@ -311,7 +316,7 @@ transNatDcl env fname (d@NatDcl {pos}) = do
                         changeSym sym.{typ = ovlsigma, over}
                 | otherwise = E.fatal pos (text ("expected function, found " ++ sym.nice g))
                 where
-                    overload ∷ DefinitionS → Symbol → SigmaS → [TauS] → StG QName
+                    overload :: NatDcl -> Symbol -> SigmaS -> [TauS] -> StG QName
                     overload def sym sig exs = do
                         g <- getST
                         let name = U.unusedASCIIName sym.name g
@@ -321,7 +326,7 @@ transNatDcl env fname (d@NatDcl {pos}) = do
                         enter sym.{sid=0, name, typ = t, throwing = thrs, vis = Protected, gargs}
                         return name
                     -- extract and translate generic type arguments
-                    mkGargs ∷ Bool → Symbol → DefinitionS → Sigma → StG [Tau]
+                    mkGargs ∷ Bool → Symbol → NatDcl → Sigma → StG [Tau]
                     mkGargs ovld sym d sig = do
                         g   ← getST
                         dgargs ← case d.gargs of
@@ -421,8 +426,7 @@ transNatDcl env fname (d@NatDcl {pos}) = do
                                 <> text "} for" <+> text (nicer sym.name g))   
                         return gargs
 
-transNatDcl _ _ d = E.fatal d.pos (text "not a nat dcl")
-
+transInsDcl :: [QName] -> (String -> QName) -> InsDcl -> StG ()
 transInsDcl env fname (d@InsDcl {pos}) = do
         g <- getST
         let iname = TName g.thisPack (Enter.insName d)
@@ -435,15 +439,19 @@ transInsDcl env fname (d@InsDcl {pos}) = do
                     changeSym sym.{clas,typ}
                     foreach d.defs (transdef [] (MName iname))
             nothing -> do E.fatal pos (text ("Cannot happen, instance " ++ iname.nice g ++ " missing"))
-transInsDcl _ _ d = E.fatal d.pos (text "not a ins dcl")
 
 
-private refreshType ∷ DefinitionS → Symbol → StG Symbol
-private refreshType d sym = do
+private refreshTypeDatDcl :: DatDcl -> Symbol -> StG Symbol
+private refreshTypeDatDcl DatDcl{name, pos, vars} = refreshType name pos vars
+private refreshTypeJavDcl :: JavDcl -> Symbol -> StG Symbol
+private refreshTypeJavDcl JavDcl{name, pos, vars} = refreshType name pos vars
+
+private refreshType :: String -> Position -> [TauS] -> Symbol -> StG Symbol
+private refreshType name pos vars sym = do
     g ← getST
-    vars  ← mapM (\t → transTau t >>= forceTau) d.vars
-    let !dname = TName g.thisPack d.name
-        dtcon  = TCon {pos=d.pos, name=dname}
+    vars <- mapM (\t -> transTau t >>= forceTau) vars
+    let !dname = TName g.thisPack name
+        dtcon  = TCon {pos, name=dname}
         dtau  = dtcon.mkapp vars :: Tau
         !dsig  = ForAll vars (RhoTau [] dtau)
         !kind  = foldr KApp KType dsig.kinds :: Kind
@@ -451,12 +459,13 @@ private refreshType d sym = do
     changeSym newsym
     pure newsym
 
+transDatDcl :: [QName] -> (String -> QName) -> DatDcl -> StG ()
 transDatDcl env fname (d@DatDcl {pos}) = do
         g <- getST
         let tname = TName g.thisPack d.name
         case g.findit tname of
             Just sym | SymT {pos} <- sym = do
-                sym ← refreshType d sym
+                sym ← refreshTypeDatDcl d sym
                 foreach d.ctrs (transCon sym.typ (MName tname))
                 foreach d.defs (transdef [] (MName tname))
                 polymorphicFields tname
@@ -606,8 +615,8 @@ transDatDcl env fname (d@DatDcl {pos}) = do
                     -- when (con.strsig.isStrict) (foreach nfs (strictFieldsCheck cname))
                     changeSym con.{typ=sig}.{flds=nfs . snd . U.returnType $ sig.rho}
                 _ -> E.fatal pos (text ("constructor `" ++ cname.nice g ++ "` vanished."))
-transDatDcl _ _ d = E.fatal d.pos (text "not a data dcl")
 
+transJavDcl :: [QName] -> (String -> QName) -> JavDcl -> StG ()
 transJavDcl env fname (d@JavDcl {pos}) = do
         g <- getST
         let tname = TName g.thisPack d.name
@@ -615,7 +624,7 @@ transJavDcl env fname (d@JavDcl {pos}) = do
             Just sym 
                 | SymT {nativ = Just nativ} <- sym = do
                     -- Redo types
-                    sym ← refreshType d sym
+                    sym ← refreshTypeJavDcl d sym
                     -- extract and translate generic type arguments
                     let doit (Just gs) = mapM transTau gs >>= mapM forceTau
                         doit Nothing   = pure sym.typ.tvars
@@ -650,8 +659,8 @@ transJavDcl env fname (d@JavDcl {pos}) = do
                         E.warn pos (text (nativ ++ ": this way of declaring array types is strongly discouraged."))
                 | otherwise = E.fatal pos (text ("Cannot happen, native type " ++ tname.nice g ++ " is not native?"))
             nothing -> do E.fatal pos (text ("Cannot happen, data " ++ tname.nice g ++ " missing"))
-transJavDcl _ _ d = E.fatal d.pos (text "not a java dcl")
 
+transClaDcl :: [QName] -> (String -> QName) -> ClaDcl -> StG ()
 transClaDcl env fname (d@ClaDcl {pos}) = do
         g <- getST
         let tname = TName g.thisPack d.name
@@ -663,13 +672,14 @@ transClaDcl env fname (d@ClaDcl {pos}) = do
                 | SymC {pos} <- sym = do transclass d sym -- ; stio (Just d)
                 | otherwise = do
                     E.fatal pos (text ("expected class, found " ++ sym.nice g))
-transClaDcl _ _ d = E.fatal d.pos (text "not a class dcl")
 
 -- record the super type and super interfaces of the module in Options.
+transModDcl :: [QName] -> (String -> QName) -> ModDcl -> StG ()
 transModDcl env fname ModDcl{pos, extending, implementing, code} = do
     g ← getST 
-    case length (filter _.{code?} g.sub.sourcedefs) of
-        1 = do
+    case [m | DefinitionS.Mod m <- g.sub.sourcedefs] of
+        -- exactly one element
+        [_] = do
             ext ← case extending of
                 Just t  → Just <$> (transTau t >>= starSigma)
                 _       → return Nothing
@@ -678,8 +688,6 @@ transModDcl env fname ModDcl{pos, extending, implementing, code} = do
           where 
             starSigma sig = fst <$> kiSigmaX sig KType
         _ = E.error pos (msgdoc ("There may be at most one native module definition."))
-
-transModDcl _ _ d = E.fatal d.pos (text "not a mod dcl")
 
 --- Type for overloaded functions
 ovlsigma :: Sigma
@@ -856,15 +864,23 @@ fName env fname nm = case findLocal env nm of
     Local 0 _ -> fname nm
     local     -> local 
 
-defname (d@FunDcl{})
+defname :: LetMemberS -> String
+defname (LetMemberS.Fun d)
     | Just t <- funbinding d = t.value
     | not (patbinding d),
       Vbl{name=Simple excl} <- d.lhs,
       excl.value == "!" || excl.value=="?",
       [pat] <- d.pats,
       Just t <- funbinding d.{lhs=pat, pats=[]} = t.value 
-defname AnnDcl{name} = name
-defname x = error ("defname: no FunDcl: " ++ show (constructor x))
+    | otherwise = error "defname: neither funbinding nor patbinding"
+defname (LetMemberS.Ann AnnDcl{name}) = name
+
+annosLast :: [LetMemberS] -> [LetMemberS]
+annosLast defs = funs ++ annos
+  where
+    (annos, funs) = DL.partition isAnno defs
+    isAnno (LetMemberS.Ann _) = true
+    isAnno _                  = false
 
 
 transExpr :: [QName] -> (String -> QName) -> ExprS -> StG D.Expr
@@ -922,9 +938,9 @@ transExpr env fname ex = do
                         b <- transExpr env fname b
                         return (D.Ifte c a b Nothing)
         Let {defs,ex} -> do
-                        defs <- Fix.fixdefs defs
-                        nenv <- foldM enterlocal [] (Enter.annosLast defs)
-                        foreach defs (transdef (nenv++env) fname)
+                        defs <- fmap (mapMaybe LetMemberS.fromDefinitionS) $ Fix.fixdefs $ map LetMemberS.toDefinitionS defs
+                        nenv <- foldM enterlocal [] (annosLast defs)
+                        foreach defs (transLetMemberS (nenv++env) fname)
                         ex   <- transExpr (nenv++env) fname ex
                         syms <- mapSt U.findV nenv
                         foreach (syms) checkDefined
@@ -932,14 +948,14 @@ transExpr env fname ex = do
                     where
                         checkDefined (SymV {expr = Just _}) = stio ()
                         checkDefined sym = E.error sym.pos (msgdoc (nice sym g ++ " is annotated but not defined."))
-                        enterlocal :: [QName] -> DefinitionS -> StG [QName]
+                        enterlocal :: [QName] -> LetMemberS -> StG [QName]
                         enterlocal env def = case findLocal env (defname def) of
                             Local 0 _ = do      -- not yet entered
                                 uid <- uniqid
-                                Enter.enter1 (Local uid) def
+                                Enter.enter1 (Local uid) def.toDefinitionS
                                 return  (Local uid (defname def):env)
                             Local u _ = do
-                                Enter.enter1 (Local u) def
+                                Enter.enter1 (Local u) def.toDefinitionS
                                 return env
                             _ = error "onlyLocal possible"
         Lam {pat=spat,ex,fromDO}  -> do
@@ -1150,11 +1166,11 @@ assoc t
     | otherwise = error ("no precedence for operator: " ++ show t)
 
 
-transclass :: DefinitionS -> Symbol -> StG ()
+transclass :: ClaDcl -> Symbol -> StG ()
 transclass def sym = do
         supers <- liftM (map unJust • filter isJust)
                         (mapSt (resolveXName def.pos sym) def.supers)
         changeSym sym.{supers = unique supers}
         g <- getST
-        foreach def.defs  (transdef [] (MName sym.name))
+        foreach def.members  (transdef [] (MName sym.name) . _.toDefinitionS)
 

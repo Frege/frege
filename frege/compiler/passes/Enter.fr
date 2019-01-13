@@ -55,9 +55,10 @@ oneSym sym
     | otherwise  = 1
 
 
-isInstOrDerive (InsDcl {pos}) = true
-isInstOrDerive (DrvDcl {pos}) = true
-isInstOrDerive _              = false
+isInstOrDerive :: DefinitionS -> Bool
+isInstOrDerive (DefinitionS.Ins _) = true
+isInstOrDerive (DefinitionS.Drv _) = true
+isInstOrDerive _                   = false
 
 
 private transTVar :: TauS -> Tau
@@ -81,10 +82,11 @@ link sym = do
 
 
 --- reorder definitions so that annotations come last
+annosLast :: [DefinitionS] -> [DefinitionS]
 annosLast defs = nannos ++ annos where
     (annos, nannos) = DL.partition isAnno defs
-    isAnno (AnnDcl {pos}) = true
-    isAnno _              = false
+    isAnno (DefinitionS.Ann _) = true
+    isAnno _                   = false
 
 
 {--
@@ -92,12 +94,30 @@ annosLast defs = nannos ++ annos where
     Takes care that annotations are processed after their implementations
     so that 'changeSym' will work.
     -}
+enter :: (String -> QName) -> [DefinitionS] -> StG ()
 enter fname defs = foreach (annosLast defs) (enter1 fname)
 
 
 {-- create provisional symbol for 1 definition in the symbol table -}
 enter1 :: (String -> QName) -> DefinitionS -> StG ()
-enter1 fname (d@FunDcl {positions}) = case funbinding d of
+enter1 fname d =
+  case d of
+    DefinitionS.Fun x -> enter1FunDcl fname x
+    DefinitionS.Nat x -> enter1NatDcl fname x
+    DefinitionS.Ann x -> enter1AnnDcl fname x
+    DefinitionS.Cla x -> enter1ClaDcl fname x
+    DefinitionS.Ins x -> enter1InsDcl fname x
+    DefinitionS.Drv x -> E.fatal x.pos (text "FATAL: cannot enter a derive definition")
+    DefinitionS.Dat x -> enter1DatDcl fname x
+    DefinitionS.Jav x -> enter1JavDcl fname x
+    DefinitionS.Typ x -> enter1TypDcl fname x
+    DefinitionS.Imp _ -> stio ()
+    DefinitionS.Fix _ -> stio ()
+    DefinitionS.Doc _ -> stio ()
+    DefinitionS.Mod _ -> stio ()
+
+enter1FunDcl :: (String -> QName) -> FunDcl -> StG ()
+enter1FunDcl fname (d@FunDcl {positions}) = case funbinding d of
         Just name -> do
             let qname = fname name.value
             foreach positions (register qname)
@@ -123,15 +143,18 @@ enter1 fname (d@FunDcl {positions}) = case funbinding d of
                          changeST Global.{
                             sub <- SubSt.{
                             idKind <- insert (KeyTk tok) (Right qname)}}
-        
-enter1 fname (d@NatDcl {pos}) = do
+
+enter1NatDcl :: (String -> QName) -> NatDcl -> StG ()
+enter1NatDcl fname (d@NatDcl {pos}) = do
         let !qname = fname d.name
         changeST Global.{
           sub <- SubSt.{
           idKind <- insert (KeyTk pos.first) (Right qname)}}
         ST.enter (vSym pos qname).{vis=d.vis, doc=d.doc,
                                                 nativ=Just d.meth, pur=d.isPure}
-enter1 fname (d@AnnDcl {pos}) = do
+
+enter1AnnDcl :: (String -> QName) -> AnnDcl -> StG ()
+enter1AnnDcl fname (d@AnnDcl {pos}) = do
         g <- getST
         let qname = fname d.name
             merge Nothing _ b _ = b
@@ -162,8 +185,8 @@ enter1 fname (d@AnnDcl {pos}) = do
                     sub <- SubSt.{
                         idKind <- insert (KeyTk pos.first) (Right qname)}}
 
-
-enter1 fname (d@ClaDcl {pos}) = do
+enter1ClaDcl :: (String -> QName) -> ClaDcl -> StG ()
+enter1ClaDcl fname (d@ClaDcl {pos}) = do
         g <- getST
         let tname = TName g.thisPack d.name
         changeST Global.{sub <-
@@ -171,16 +194,25 @@ enter1 fname (d@ClaDcl {pos}) = do
         ST.enter (SymC {sid=0, pos=d.pos, vis=d.vis, doc=d.doc, name=tname,
                        tau=transTVar d.clvar, supers=[], insts=[], env=empty})
 
-        let vdefs = map DefinitionS.{vis <- max d.vis} d.defs
-            xdefs = filter ((>d.vis) • DefinitionS.vis) d.defs
+        let vdefs = map (\def -> def.chgVis $ max d.vis) d.members
+            xdefs = filter ((>d.vis) . _.vis) d.members
 
         -- complain about class members that are more visible than the class
-        foreach xdefs (\(def::DefinitionS) -> E.error def.pos (msgdoc (
-                                d.name ++ "."  ++ def.name ++ " is " ++ show def.vis
-                                ++ " while the enclosing class is only "
-                                ++ show d.vis)))
+        foreach xdefs $ \def ->
+            let emitError name pos =
+                    E.error pos $ msgdoc $
+                        d.name ++ "." ++ name ++ " is " ++ show def.vis
+                        ++ " while the enclosing class is only "
+                        ++ show d.vis
+            in
+            case def of
+                -- a bare FunDcl (a function definition without annotation) is
+                -- assumed absent
+                ClassMemberS.Ann x -> emitError x.name x.pos
+                ClassMemberS.Nat x -> emitError x.name x.pos
+                ClassMemberS.Fun _ -> pure ()
 
-        enter (MName tname) vdefs
+        enter (MName tname) $ map (_.toDefinitionS) vdefs
         {-
             all entries from the env of the symbol that is named by 'tname'
             except those whose name is found in the global package and the
@@ -198,7 +230,8 @@ enter1 fname (d@ClaDcl {pos}) = do
         E.logmsg TRACE3 pos (text ("enter1: ClaDcl: vs=" ++ show (map (flip nice g) vs)))
         foreach (vs) link
 
-enter1 !fname (!d@InsDcl {pos = !pos}) = do
+enter1InsDcl :: (String -> QName) -> InsDcl -> StG ()
+enter1InsDcl !fname (!d@InsDcl {pos = !pos}) = do
         g <- getST
 
         let tname = TName g.thisPack (insName d)
@@ -224,8 +257,15 @@ enter1 !fname (!d@InsDcl {pos = !pos}) = do
                             ++ ", there is no type constructor."))
     where
         mklinkd !tname !mname !d
-            | Just t <- funbinding d = mklink tname mname t.value
-            | d.{name?}              = mklink tname mname d.name
+            | DefinitionS.Fun f <- d
+            , Just t <- funbinding f = mklink tname mname t.value
+            -- enumerated all possibilities; some cases may be redundant
+            | DefinitionS.Typ t <- d = mklink tname mname t.name
+            | DefinitionS.Cla t <- d = mklink tname mname t.name
+            | DefinitionS.Ann t <- d = mklink tname mname t.name
+            | DefinitionS.Nat t <- d = mklink tname mname t.name
+            | DefinitionS.Dat t <- d = mklink tname mname t.name
+            | DefinitionS.Jav t <- d = mklink tname mname t.name
             | otherwise = error ("function binding expected: " ++ tname.base)
         mklink  !tname !mname !nm = do
             g <- getST
@@ -237,9 +277,8 @@ enter1 !fname (!d@InsDcl {pos = !pos}) = do
                     Nothing -> linkq rem sym
                 Nothing  -> E.fatal d.pos (text ("FATAL, can't find " ++ mem.nice g ++ " again"))
 
-enter1 fname (d@DrvDcl {pos}) = E.fatal pos (text "FATAL: cannot enter a derive definition")
-
-enter1 fname (d@DatDcl {pos}) = do
+enter1DatDcl :: (String -> QName) -> DatDcl -> StG ()
+enter1DatDcl fname (d@DatDcl {pos}) = do
         g <- getST
         -- dkinds ← mapM U.transKind dsig.kinds
         let dname = TName g.thisPack d.name
@@ -302,8 +341,8 @@ enter1 fname (d@DatDcl {pos}) = do
                     " must occur only once."))
             stio ()
 
-
-enter1 fname (d@JavDcl {pos}) = do
+enter1JavDcl :: (String -> QName) -> JavDcl -> StG ()
+enter1JavDcl fname (d@JavDcl {pos}) = do
         g <- getST
         let !dname = TName g.thisPack d.name
             dtcon = TCon {pos=d.pos, name=dname}
@@ -322,7 +361,8 @@ enter1 fname (d@JavDcl {pos}) = do
                 idKind <- insert (KeyTk pos.first) (Right dname)}}
         enter (MName dname) d.defs
 
-enter1 fname (d@TypDcl {pos}) = do
+enter1TypDcl :: (String -> QName) -> TypDcl -> StG ()
+enter1TypDcl fname (d@TypDcl {pos}) = do
         g <- getST
         let !dname = TName g.thisPack d.name
             kind = KVar
@@ -334,14 +374,15 @@ enter1 fname (d@TypDcl {pos}) = do
                        vars = map transTVar d.vars})
 
 
-enter1 fname (ImpDcl {pos})   = stio ()
-enter1 fname (FixDcl {pos})   = stio ()
-enter1 fname (DocDcl {pos})   = stio ()
-enter1 fname (ModDcl {pos})   = stio ()
+class IsInstanceDcl a where
+  typ :: a -> SigmaS
+  clas :: a -> SName
 
+instance IsInstanceDcl InsDcl
+instance IsInstanceDcl DrvDcl
 
-insName :: DefinitionS -> String
-insName idcl | idcl.{clas?}, idcl.{typ?} = clas ++ "_" ++ tcon idcl.typ where
+insName :: IsInstanceDcl a => a -> String
+insName idcl = clas ++ "_" ++ tcon idcl.typ where
     clas = idcl.clas.id.value
     tcon (ForAll _ rho) = rhoTcon rho
     rhoTcon (RhoFun _ _ _)  = "->"
@@ -357,4 +398,3 @@ insName idcl | idcl.{clas?}, idcl.{typ?} = clas ++ "_" ++ tcon idcl.typ where
     tauTcon (TVar {var})   = var     -- undefined
     tauTcon (Meta _)       = "meta"  -- undefined
     tauTcon TSig{}         = "forall"
-insName _ = error "not an instance"
