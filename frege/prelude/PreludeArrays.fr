@@ -62,7 +62,7 @@ type ArrayOf s a = Mutable s (JArray a)
     Note that there are really two different APIs: 
 
     1. With the 'JArray.getElemAt', 'JArray.getAt', 'JArray.setAt', 'JArray.setElemAt',
-    'JArray.itemAt' and 'JArray.elemAt' it is possible to work on Java objects with
+    'JArray.genericItemAt' and 'JArray.genericElemAt' it is possible to work on Java objects with
     java compile time type  @X[]@ for some (non primitive!) java type @X@.
 
     2. With the 'newArray', 'getElemAt', 'getAt', 'setAt', 
@@ -87,10 +87,10 @@ type ArrayOf s a = Mutable s (JArray a)
     >             Array type            Argument/    Description
     >                                   Result
 
-    > setAt       Mutable (JArray s X)  Maybe X     set null or data element
-    > setElemAt   Mutable (JArray s X)  X           set data element
-    > getAt       Mutable (JArray s X)  Maybe X     get null or data element
-    > getElemAt   Mutable (JArray s X)  X           get data element (unsafe)
+    > setAt       Mutable s (JArray X)  Maybe X     set null or data element
+    > setElemAt   Mutable s (JArray X)  X           set data element
+    > getAt       Mutable s (JArray X)  Maybe X     get null or data element
+    > getElemAt   Mutable s (JArray X)  X           get data element (unsafe)
     > itemAt      JArray s X            Maybe X     get null or data element (pure)
     > elemAt      JArray s X            X           get data element (pure, unsafe)
 
@@ -168,6 +168,24 @@ data JArray a = native "java.lang.Object" where
     -}
     native       genericSetAt  java.lang.reflect.Array.set {} :: Mutable s (JArray a) -> Int -> Maybe a -> ST s ()
 
+    {--
+        Modify the element at a certain index of a mutable array by
+        function application.
+
+        This will throw an
+        'IndexOutOfBoundsException' if the index is lower than 0 or
+        greater or equal to the length of the array.
+
+        Because in general, an array may contain @null@s. The values
+        passed to the function are wrapped in 'Maybe's, as usual.
+
+        Can not be used with arrays of primitive values.
+     -}
+    genericModifyAt :: Mutable s (JArray a) -> Int -> (Maybe a -> Maybe a) -> ST s ()
+    genericModifyAt this i f =
+        this.genericGetAt i >>= \a ->
+        this.genericSetAt i (f a)
+
     {-- 
         Get the array element at a certain index of a mutable array and
         return it in the 'ST' monad.
@@ -176,7 +194,7 @@ data JArray a = native "java.lang.Object" where
         'IndexOutOfBoundsException' if the index is lower than 0 or
         greater or equal to the length of the array.
 
-        Unlike with 'JArray.getAt' the element *must not be @null@*.
+        Unlike with 'JArray.genericGetAt' the element *must not be @null@*.
 
         The user is expected to prove that the
         element cannot be @null@ or else risk a @NullPointerException@.
@@ -197,60 +215,124 @@ data JArray a = native "java.lang.Object" where
     native   genericSetElemAt  java.lang.reflect.Array.set {} :: Mutable s (JArray a) -> Int -> a -> ST s ()
 
     {--
+        Modify the element at a certain index of a mutable array by
+        function application.
+
+        This will throw an
+        'IndexOutOfBoundsException' if the index is lower than 0 or
+        greater or equal to the length of the array.
+
+        Unlike with 'JArray.genericModifyAt' the element *must not be @null@*.
+
+        The user is expected to prove that the
+        element cannot be @null@ or else risk a @NullPointerException@.
+
+        Can not be used with arrays of primitive values.
+     -}
+    genericModifyElemAt :: Mutable s (JArray a) -> Int -> (a -> a) -> ST s ()
+    genericModifyElemAt this i f =
+        this.genericGetElemAt i >>= \a ->
+        this.genericSetElemAt i (f a)
+
+    {--
         Create a mutable array from a finite list.
 
         Can not be used with arrays of primitive values.
     -}
-    genericFromList :: ArrayElement α => [α] -> STMutable β (JArray α)
-    genericFromList xs = do
-        let !len = xs.length 
-        arr <- newArray len
-        zipWithM_ (ArrayElement.setElemAt arr) [0..len-1] xs
-        pure arr
-    {--
-        Create a mutable array from a finite index/value list.
+    genericFromList :: JavaType α => [α] -> STMutable β (JArray α)
+    genericFromList = genericFromIndexList . zip [0..]
 
-        Indexes not mentioned in the list remain @null@ for 
-        non primitive array elements and 0 otherwise.
+    {--
+        Create a mutable array from a finite list.
+
+        @Nothing@s become @null@s in the array.
 
         Can not be used with arrays of primitive values.
     -}
---    genericFromIndexList :: ArrayElement α => [(Int,α)] -> STMutable β (JArray α)
---    genericFromIndexList xs = do
---        let !len = L.fold max 0 (L.map fst xs) 
---        arr <- newArray (if null xs then 0 else len+1)
---        mapM_ (\(i,a) -> ArrayElement.setElemAt arr i a)  xs
---        pure arr
---
---
---    {--
---        Create a mutable generic array from a finite index/value list.
---
---        Indexes not mentioned in the list remain @null@ for 
---        non primitive array elements and 0 otherwise.
---
---    -}
+    genericFromMaybeList :: JavaType a => [Maybe a] -> STMutable s (JArray a)
+    genericFromMaybeList xs =
+        flip genericFromIndexListLength (L.length xs)
+        $ mapMaybe (\(idx, m) -> fmap (\a -> (idx, a)) m)
+        $ zip [0..]
+        $ xs
+
+    {--
+        Create a mutable array from a finite index/value list.
+
+        Indexes not mentioned in the list remain @null@.
+        Negative indexes are ignored.
+
+        Can not be used with arrays of primitive values.
+    -}
     genericFromIndexList :: JavaType α => [(Int,α)] -> STMutable β (JArray α)
-    genericFromIndexList xs = do
-        let !len = L.fold max 0 (L.map fst xs) 
-        arr <- JArray.new javaClass (if null xs then 0 else len+1)
-        mapM_ (uncurry (JArray.genericSetElemAt arr))  xs
+    genericFromIndexList = flip genericFromIndexListLength 0
+
+    {--
+        Create a mutable array from a finite index/value list.
+
+        The array will have the specified length at least.
+
+        Indexes not mentioned in the list remain @null@.
+        Negative indexes are ignored.
+
+        Can not be used with arrays of primitive values.
+    -}
+    genericFromIndexListLength :: JavaType α => [(Int,α)] -> Int -> STMutable β (JArray α)
+    genericFromIndexListLength xs' minLen = do
+        let xs = L.filter (\(i, _) -> i >= 0) xs'
+            maxIdx = L.fold max 0 (L.map fst xs)
+            len = max minLen $ if null xs then 0 else maxIdx + 1
+        arr <- JArray.new javaClass len
+        mapM_ (uncurry (JArray.genericSetElemAt arr)) xs
         return arr
 
+    {--
+        Modify a mutable array by applying a function to all its elements.
 
-    --- Modify a mutable array by applying a function to all its elements.
-    --- Can not be used with arrays of primitive values.
-    genericModify :: ArrayElement α => (α->α) -> ArrayOf β α -> ST β ()
-    genericModify f dest = do
-            max <- dest.getLength
-            mapM_ (modifyAt f dest) [0..max-1]
+        @null@ values are represented as 'Nothing', as usual.
 
-    --- Equivalent of 'fold' for mutable arrays.
-    --- Can not be used with arrays of primitive values.
-    genericFold :: ArrayElement α => (β->α->β) -> β -> ArrayOf γ α -> ST γ β
-    genericFold f acc arr = arr.getLength >>= foldM collect acc . enumFromTo 0 . pred
+        Can not be used with arrays of primitive values.
+    -}
+    genericModify :: ArrayOf s a -> (Maybe a -> Maybe a) -> ST s ()
+    genericModify this f = do
+        max <- this.getLength
+        mapM_ (\i -> this.genericModifyAt i f) [0..max-1]
+
+    {--
+        Modify a mutable array by applying a function to all its elements.
+
+        @null@ elements are skipped.
+
+        Can not be used with arrays of primitive values.
+    -}
+    genericModifyElem :: ArrayOf s a -> (a -> a) -> ST s ()
+    genericModifyElem this f = do
+        max <- this.getLength
+        mapM_ (\i -> this.genericModifyAt i $ fmap f) [0..max-1]
+
+    {--
+        Equivalent of 'fold' for mutable arrays.
+
+        @null@ values are represented as 'Nothing', as usual.
+
+        Can not be used with arrays of primitive values.
+    -}
+    genericFold :: ArrayOf s a -> (b -> Maybe a -> b) -> b -> ST s b
+    genericFold this f acc = this.getLength >>= foldM collect acc . enumFromTo 0 . pred
         where
-            collect acc i = ArrayElement.getAt arr i >>= (return . maybe acc (f acc))
+            collect acc i = this.genericGetAt i >>= return . f acc
+
+    {--
+        Equivalent of 'fold' for mutable arrays.
+
+        @null@ elements are skipped.
+
+        Can not be used with arrays of primitive values.
+      -}
+    genericFoldElem :: ArrayOf s a -> (b -> a -> b) -> b -> ST s b
+    genericFoldElem this f acc = this.getLength >>= foldM collect acc . enumFromTo 0 . pred
+        where
+            collect acc i = this.genericGetAt i >>= return . maybe acc (f acc)
 
 
 
@@ -321,9 +403,9 @@ genericArrayFold !f !acc arr = go acc 0
 class JavaType a => ArrayElement a where
     --- Create a one dimensional array with elements of the instantiated type.
     native newArray "new[]"   :: Int -> ST s (ArrayOf s a)
-    --- Get item at index from immutable array, see 'JArray.itemAt'
+    --- Get item at index from immutable array, see 'JArray.genericItemAt'
     pure native itemAt  "[i]"   :: JArray a -> Int -> Maybe a
-    --- Get non-null element at index from immutable array, see 'JArray.elemAt'
+    --- Get non-null element at index from immutable array, see 'JArray.genericElemAt'
     pure native elemAt  "[i]"   :: JArray a -> Int -> a
     --- Get item at index from mutable array, see 'JArray.getAt'
     native getAt        "[i]"   :: Mutable s (JArray a) -> Int -> ST s (Maybe a)

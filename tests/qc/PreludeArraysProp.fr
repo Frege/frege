@@ -1,0 +1,176 @@
+{--
+ - Test properties of the 'frege.prelude.PreludeArrays' module.
+ -}
+module tests.qc.PreludeArraysProp where
+
+import frege.data.List (sortBy)
+import frege.data.Traversable (traverse)
+import frege.test.QuickCheck as Q (Arbitrary)
+
+--- The non-primitive wrapper of 'Int'
+data RInt = RInt Int
+derive Eq RInt
+derive Show RInt
+derive JavaType RInt
+
+instance Arbitrary RInt where
+  arbitrary = RInt <$> arbitrary
+
+--- A pair of a non-empty list and an index in the bound of it
+data ListAndIndex a = LI [a] Int
+derive Eq (ListAndIndex a)
+derive Show (ListAndIndex a)
+
+instance Arbitrary a => Arbitrary (ListAndIndex a) where
+  arbitrary = do
+      Q.NonEmptyList.NonEmpty xs <- arbitrary
+      i <- Q.choose (0, length xs - 1)
+      pure $ LI xs i
+
+shuffle :: [a] -> Q.Gen [a]
+shuffle xs = do
+    ixs <- traverse (\x -> arbitrary >>= \i -> pure (i :: Int, x)) xs
+    pure $ map snd $ sortBy (comparing fst) ixs
+
+--- A list of pairs of an index and an element
+data IndexedList a = IndexL [(Int, a)]
+derive Eq (IndexedList a)
+derive Show (IndexedList a)
+
+instance Arbitrary a => Arbitrary (IndexedList a) where
+  arbitrary = do
+      -- from an arbitrary [Maybe a], put indexes,
+      -- take @Just@s (so that some indexes will be missing),
+      -- and shuffle them
+      indexed <-
+        flip fmap arbitrary
+        $ mapMaybe (\(idx, m) -> fmap (\x -> (idx, x)) m)
+        . zip [0..]
+      fmap IndexL $ shuffle indexed
+
+newtype Small = Small Int
+derive Eq Small
+derive Show Small
+
+instance Arbitrary Small where
+  arbitrary = fmap (\(Q.NonNegative.NonNegative x) -> Small $ x `mod` 10) $ arbitrary
+
+modifyListAt :: Int -> (a -> a) -> [a] -> [a]
+modifyListAt _ _ [] = []
+modifyListAt i f (a:as)
+  | i == 0 = f a:as
+  | i <  0 = as
+  | otherwise =
+      let (prefix, suffix) = splitAt i (a:as)
+      in
+      prefix ++ modifyListAt 0 f suffix
+
+p_JArray_genericModifyAt = Q.property $ \(LI xs idx, i) -> ST.run (st xs idx i)
+  where
+    st :: [Maybe RInt] -> Int -> Int -> ST s Bool
+    st xs idx i = do
+        marr <- JArray.genericFromMaybeList xs
+        let f = fmap $ \(RInt x) -> RInt $ x + i
+        marr.genericModifyAt idx f
+        readonly (\parr -> genericToMaybeList parr == modifyListAt idx f xs) marr
+
+p_JArray_genericModifyElemAt = Q.property $ \(LI xs idx, i) -> ST.run (st xs idx i)
+  where
+    st :: [RInt] -> Int -> Int -> ST s Bool
+    st xs idx i = do
+        marr <- JArray.genericFromList xs
+        let f = \(RInt x) -> RInt $ x + i
+        marr.genericModifyElemAt idx f
+        readonly (\parr -> toList parr == modifyListAt idx f xs) marr
+
+p_JArray_genericFromList = Q.property $ \xs -> ST.run (st xs)
+  where
+    st :: [RInt] -> ST s Bool
+    st xs = do
+        marr <- JArray.genericFromList xs
+        readonly (\parr -> toList parr == xs) marr
+
+p_JArray_genericFromMaybeList = Q.property $ \xs -> ST.run (st xs)
+  where
+    st :: [Maybe RInt] -> ST s Bool
+    st xs = do
+        marr <- JArray.genericFromMaybeList xs
+        readonly (\parr -> genericToMaybeList parr == xs) marr
+
+{--
+ - Checks if a given Java array is equivalent to an indexed list.
+ -
+ - The list doesn't need to be sorted.
+ - @null@ elements in the Java array must be missing in the list.
+ - All of the non-@null@ elements must be present in the list.
+ -}
+checkIndexList :: Eq a => [(Int, a)] -> JArray a -> Bool
+checkIndexList ixs arr =
+  flip all (zip [0..] $ genericToMaybeList arr) $ \(arrIdx, arrElem) ->
+    case arrElem of
+      Just a  -> (arrIdx, a) `elem` ixs
+      Nothing -> all (\(i, _) -> arrIdx /= i) ixs
+
+p_JArray_genericFromIndexList = Q.property $ \(IndexL ixs) -> ST.run (st ixs)
+  where
+    st :: [(Int, RInt)] -> ST s Bool
+    st ixs = do
+        marr <- JArray.genericFromIndexList ixs
+        readonly (checkIndexList ixs) marr
+
+p_JArray_genericFromIndexList_negative = Q.once $ ST.run st
+  where
+    st :: ST s Bool
+    st = do
+        marr <- JArray.genericFromIndexList [(-1, RInt 1), (1, RInt 2)]
+        readonly (\parr -> genericToMaybeList parr == [Nothing, Just (RInt 2)]) marr
+
+p_JArray_genericFromIndexListLength = Q.property $ \(IndexL ixs, Small n) ->
+    ST.run (st ixs n)
+  where
+    st :: [(Int, RInt)] -> Int -> ST s Bool
+    st ixs n = do
+        marr <- JArray.genericFromIndexListLength ixs n
+        flip readonly marr $ \parr ->
+            parr.length >= n && checkIndexList ixs parr
+
+p_JArray_genericModify = Q.property $ \(xs, i) -> ST.run (st xs i)
+  where
+    st :: [Maybe RInt] -> Int -> ST s Bool
+    st xs i = do
+        marr <- JArray.genericFromMaybeList xs
+        let f = fmap $ \(RInt x) -> RInt $ x + i
+        marr.genericModify f
+        readonly (\parr -> genericToMaybeList parr == map f xs) marr
+
+p_JArray_genericModifyElem = Q.property $ \(xs, i) -> ST.run (st xs i)
+  where
+    -- use Maybe RInt to make sure that genericModifyElem skips nulls
+    st :: [Maybe RInt] -> Int -> ST s Bool
+    st xs i = do
+        marr <- JArray.genericFromMaybeList xs
+        let f = \(RInt x) -> RInt $ x + i
+        marr.genericModifyElem f
+        readonly (\parr -> genericToMaybeList parr == map (fmap f) xs) marr
+
+p_JArray_genericFold = Q.property $ \xs -> ST.run (st xs)
+  where
+    st :: [Maybe RInt] -> ST s Bool
+    st xs = do
+        marr <- JArray.genericFromMaybeList xs
+        arrFolded <- marr.genericFold addJustCountNothing (0, 0)
+        pure $ arrFolded == fold addJustCountNothing (0, 0) xs
+    addJustCountNothing :: (Int, Int) -> Maybe RInt -> (Int, Int)
+    addJustCountNothing (sums, nothings) mx =
+      case mx of
+        Just (RInt x) -> (sums + x, nothings)
+        Nothing       -> (sums, nothings + 1)
+
+p_JArray_genericFoldElem = Q.property $ \xs -> ST.run (st xs)
+  where
+    -- use Maybe RInt to make sure that genericFoldElem skips nulls
+    st :: [Maybe RInt] -> ST s Bool
+    st xs = do
+        marr <- JArray.genericFromMaybeList xs
+        arrSum <- marr.genericFoldElem (\acc (RInt x) -> acc + x) 0
+        pure $ arrSum == sum [x | Just (RInt x) <- xs]
