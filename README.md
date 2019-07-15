@@ -177,7 +177,7 @@ A number of tools are **written in Frege**:
 * the Frege compiler itself,
 * the Frege [standard library]( http://www.frege-lang.org/doc/frege/Prelude.html),
 * the Frege [command-line REPL](https://github.com/Frege/frege-repl),
-* the Frege web-based, full-stack [interactive online REPL](http://try.frege-lang.org/),
+* the Frege web-based, full-stack [interactive online REPL (currently disabled since we have to move the server)](http://try.frege-lang.org/),
 * the [FregeFX REPL](https://github.com/Dierk/frepl-gui/blob/master/README.adoc) - a JavaFX view on the REPL,
 * the Frege [Eclipse plugin](https://github.com/Frege/eclipse-plugin), 
 * and the documentation tool.
@@ -200,7 +200,7 @@ Related Projects
 ----------------
 
 * [Hoogle for Frege](http://hoogle.haskell.org:8081/), a Frege API search engine, by Neil Mitchell and Marimuthu Madasamy
-* The REPL projects, consisting of [core JSR 223 scripting support](https://github.com/Frege/frege-interpreter), [interface for the command-line](https://github.com/Frege/frege-repl) and [online REPL](https://github.com/Frege/try-frege), all written and maintained by Marimuthu Madasamy, and the [FregeFX REPL](https://github.com/Dierk/frepl-gui/blob/master/README.adoc) with a JavaFX view by Dierk König
+* The REPL projects, consisting of [core JSR 223 scripting support](https://github.com/Frege/frege-interpreter), [interface for the command-line](https://github.com/Frege/frege-repl) and [online REPL (currently disabled since we have to move the server)](https://github.com/Frege/try-frege), all written and maintained by Marimuthu Madasamy, and the [FregeFX REPL](https://github.com/Dierk/frepl-gui/blob/master/README.adoc) with a JavaFX view by Dierk König
 * Support for [web applications and web services](https://github.com/Frege/frege/wiki/Frege-for-Web-Applications) 
 * [Maven Compiler Plugin for the Frege language](https://github.com/Frege/frege-maven-plugin), by Mark Derricut 
 * [Frege compiler/library as an OSGi bundle](https://github.com/talios/frege-bundle), by Mark Derricut 
