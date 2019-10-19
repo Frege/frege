@@ -275,7 +275,7 @@ checkgroup7 nms = do
     g <- getST
     E.logmsg TRACEZ Position.null (text ("typechecking group: " ++ joined " " (map (flip QName.nice g) nms)))
     unless (null g.typEnv) do
-        mapSt findV nms >>= mapM_ renameSigma
+        mapSt findV nms >>= mapM_ (renameSigma . SymbolT.V)
     -- we set up typEnv with the names of the group members so that 'envTvs' will find them
     changeST Global.{typEnv <- (nms ++)}
 
@@ -284,8 +284,7 @@ checkgroup7 nms = do
         -- foreach syms (\sym -> U.linkq (Local (show (Symbol.sid sym))) sym)
     -- foreach nms verbose
     foreach nms checkName
-    let unsafeToSymV s = case s of { SymbolT.V x -> x; }
-    syms <- mapSt (fmap unsafeToSymV . findV) nms
+    syms <- mapSt findV nms
     when (length syms > 1 || any ((==Recursive) . _.state) syms)
             (foreach nms checkName)
     changeST Global.{typEnv <- drop (length nms)}
@@ -304,14 +303,13 @@ checkgroup7 nms = do
   where
     verbose nm = do
         g <- getST
-        let unsafeToSymV s = case s of { SymbolT.V x -> x; }
-        sym <- unsafeToSymV <$> findV nm
+        sym <- findV nm
         let sig = sym.typ
         E.explain sym.pos (text (sym.nice g ++ " :: " ++ sig.nicer g))
     typeSanity nm = do
         sym <- findV nm
         let unsafeToSymV s = case s of { SymbolT.V x -> x; }
-        sym <- unsafeToSymV <$> checkKind sym
+        sym <- unsafeToSymV <$> checkKind (SymbolT.V sym)
         checkAmbiguous (SymbolT.V sym) sym.typ
         checkReturn    (SymbolT.V sym) sym.typ
         case sym.name of
@@ -339,8 +337,7 @@ checkgroup7 nms = do
                             Nothing -> return Nothing
                         changeSym $ SymbolT.V it.{typ=sig, expr = nex}
                     removeCtx (it@Let{env}) = do
-                        let unsafeToSymV s = case s of { SymbolT.V x -> x; }
-                        syms <- mapM (fmap unsafeToSymV . U.findV) env
+                        syms <- mapM U.findV env
                         foreach syms scrapCtx
                         return (Left it)
                     removeCtx x = return (Left x)
@@ -364,7 +361,7 @@ checkKind sym = fmap SymbolT.V $ correctK empty $ unsafeToSymV sym
         return new
 
     correctKind subst Let{env, ex, typ} = do
-        syms <- mapM (fmap unsafeToSymV . U.findV) env
+        syms <- mapM U.findV env
         mapM_ (correctK subst) syms
         ex'  <-  mapEx false (correctKind subst) ex
         pure $ Right Let{env, ex = ex', typ = fmap (substSigma subst) typ }
@@ -451,8 +448,7 @@ substInstMethod :: QName -> StG ()
 substInstMethod qname = do
         g <- getST
         -- when (U.isOn g.options.flags OPTIMIZE) do
-        let unsafeToSymV s = case s of { SymbolT.V x -> x; }
-        sym <- unsafeToSymV <$> findV qname
+        sym <- findV qname
         case sym.expr of
             Nothing -> stio ()
             Just dx -> do
@@ -469,14 +465,12 @@ substInst (vbl@Vbl {pos, name = MName tn bs, typ = Just (ForAll [] rho)})
         let tau = reducedTau g ctau
         case instTauSym tau g of
             Just symt -> do           -- we have a type name
-                let unsafeToSymC s = case s of { SymbolT.C x -> x; }
-                symc <- unsafeToSymC <$> findC tn      -- must be a class because it appears in a contexts cname
+                symc <- findC tn      -- must be a class because it appears in a contexts cname
                 case filter ((view SymbolT.name symt ==) • fst) symc.insts of    -- find instance
                     [] -> E.fatal pos (text (symc.nice g ++ " has no instance for " ++ symt.nice g))
                     [(_,iname)]
                         {- | MName iname bs != qname -} -> do
-                            let unsafeToSymV s = case s of { SymbolT.V x -> x; }
-                            mem  <- unsafeToSymV <$> findV vbl.name
+                            mem  <- findV vbl.name
                             case g.findit (MName iname bs) of
                                 Just imem -> do 
                                     let nrho = rho.{context <- filter (not • sameCtx ctx)}
@@ -526,7 +520,7 @@ substInst x = stio (Left x)
 renameSigma ∷ Symbol -> StG ()
 renameSigma sym' | sym.name.isLocal && sym.anno = do
     g   ← getST
-    outer <- mapSt (fmap unsafeToSymV . findV) g.typEnv
+    outer <- mapSt findV g.typEnv
     let avoid  = \c → c `elem` concatMap (Sigma.vars . _.typ) outer
                     || (any (null . Sigma.vars . _.typ) outer && avoidBinders g c)
         newsym = sym.{typ ← avoidSigma avoid }
@@ -546,13 +540,12 @@ renameSigma other = pure ()
 
 checkName nm = do
     g       <- getST
-    let unsafeToSymV s = case s of { SymbolT.V x -> x; }
-    sym     <- unsafeToSymV <$> findV nm
+    sym     <- findV nm
     E.logmsg TRACEZ sym.pos (text ("checkName:  " ++ sym.name.nice g ++ " :: " ++ sym.typ.nice g))
     sigma   <- checkSym sym
     unless (nm.isLocal) do
         sym     <- findV nm
-        resolveConstraints sym
+        resolveConstraints $ SymbolT.V sym
   where
     checkSym sym = do
         g <- getST
@@ -589,8 +582,7 @@ checkName nm = do
                         RhoFun{} -> do
                             changeSym $ SymbolT.V sym.{state=Typechecking, typ = ForAll [] rho0}
                             checkRho x rho0
-                    let unsafeToSymV s = case s of { SymbolT.V x -> x; }
-                    sym <- unsafeToSymV <$> findV sym.name       -- refresh, might be updated meanwhile
+                    sym <- findV sym.name       -- refresh, might be updated meanwhile
                     let newstate = if sym.state != Recursive then Typechecked else Recursive
                     newsig <- maybe (error "untyped after checkRho") pure ex.typ
                     changeSym $ SymbolT.V sym.{typ = newsig, expr=Just (return ex), state = newstate}
@@ -611,8 +603,7 @@ checkName nm = do
                     x <- dx
                     (rho, ex) <- inferRho x
                     rho <- zonkRho rho
-                    let unsafeToSymV s = case s of { SymbolT.V x -> x; }
-                    sym <- unsafeToSymV <$> findV sym.name       -- refresh, might be updated meanwhile
+                    sym <- findV sym.name       -- refresh, might be updated meanwhile
                     let newsig   = ForAll [] rho
                     changeSym $ SymbolT.V sym.{typ = newsig, expr=Just (return ex), state = Typechecked}
                     stio newsig
@@ -624,11 +615,11 @@ checkName nm = do
 quantifyOne nms = do
         g <- getST
         let unsafeToSymV s = case s of { SymbolT.V x -> x; }
-        sym <- unsafeToSymV <$> U.findV (head nms)
+        sym <- U.findV (head nms)
         lsyms <- mapSt U.findV g.typEnv
         let rec = [ sym.typ
                   | sym <- lsyms
-                  , sym <- unsafeToSymV <$> g.follow sym    -- follow aliases
+                  , sym <- unsafeToSymV <$> g.follow (SymbolT.V sym)    -- follow aliases
                   , sym.state == Recursive]
         when (false && null sym.typ.rho.context && not (TH.isFun sym.typ g) && null rec) do
             quantifyWith (quantifiedExcept sym.sid) nms
@@ -636,8 +627,7 @@ quantifyOne nms = do
 
 quantifyMany = quantifyWith quantified
 quantifyWith f nms = do
-        let unsafeToSymV s = case s of { SymbolT.V x -> x; }
-        syms <- mapSt (fmap unsafeToSymV . findV) nms     -- unquantified symbols
+        syms <- mapSt findV nms     -- unquantified symbols
         g <- getST
         unless (null syms) do
             E.logmsg TRACET (head syms).pos (text ("quantify " ++ joined ", " (map (flip QName.nice g) nms)))
@@ -658,8 +648,7 @@ quantifyWith f nms = do
         foreach asyms changeSig
     where
         changeSig (qnm, sigm) = do
-            let unsafeToSymV s = case s of { SymbolT.V x -> x; }
-            sym <- unsafeToSymV <$> findV qnm
+            sym <- findV qnm
             case sym of
                 SymV {expr = Just dx} -> do
                     x <- dx
@@ -679,7 +668,7 @@ zonkRigid bound ex = do
         -- g <- getST
         mapEx false zonk ex
     where
-        symWork (SymbolT.V (symv@SymV{expr, typ = sig})) = do
+        symWork (symv@SymV{expr, typ = sig}) = do
                         g <- getST
                         -- E.logmsg TRACEZ (getpos ex) (text ("symWork: " ++ show (bound ++ sig.vars) ++ " " ++ nice ex g))
                         rhoz ← zonkRho sig.rho
@@ -737,7 +726,7 @@ zonkExpr x = mapEx false zonk x
                 foreach syms symWork
                 stio (Left x.{typ = Just sig})
             where
-                symWork (SymbolT.V (symv@SymV{expr = Just dex, typ = sig})) = do
+                symWork (symv@SymV{expr = Just dex, typ = sig}) = do
                         sig <- zonkSigma sig
                         ex <- dex
                         ex  <- zonkExpr ex
@@ -967,8 +956,7 @@ tcRho' (x@Vbl {name})  ety = do
             true -> if symv.state == Unchecked
                 then do
                     checkName name
-                    let unsafeToSymV s = case s of { SymbolT.V x -> x; }
-                    sym <- unsafeToSymV <$> findV name
+                    sym <- findV name
                     rho <- instantiate sym.typ
                     instRho x rho ety
                 else if symv.state == Typechecking
@@ -981,8 +969,7 @@ tcRho' (x@Vbl {name})  ety = do
                             g <- getST
                             E.fatal (getpos x) (text ("tcRho: untyped " ++ x.nice g ++ ", state=" ++ show symv.state))
 tcRho' (x@Con {name}) ety = do
-    let unsafeToSymD s = case s of { SymbolT.D x -> x; }
-    sym <- unsafeToSymD <$> U.findD name
+    sym <- U.findD name
     rho <- instantiate sym.typ
     instRho x rho ety
 
@@ -1215,16 +1202,14 @@ tcPat' (p@PLit {pos,kind})  ety = case kind of
     LRegex  -> instPatSigma p (sigString) ety
 
 tcPat' (p@PVar {uid,var}) (ety@Check sig) = do
-    let unsafeToSymV s = case s of { SymbolT.V x -> x; }
-    sym <- unsafeToSymV <$> findV (Local{uid, base=var})
+    sym <- findV (Local{uid, base=var})
     case isPSigma sym.typ of
         true  -> do  changeSym $ SymbolT.V sym.{typ=sig, state=Typechecked}
                      instPatSigma p sig ety
         false -> instPatSigma p sym.typ ety
 
 tcPat' (p@PVar {uid,var}) ety = do
-    let unsafeToSymV s = case s of { SymbolT.V x -> x; }
-    sym <- unsafeToSymV <$> findV (Local{uid, base=var})
+    sym <- findV (Local{uid, base=var})
     case isPSigma sym.typ of
         true -> do
             sig <- newSigmaTyVar (var, KType)
@@ -1237,8 +1222,7 @@ tcPat' (p@PMat {pos,uid,var}) ety = do
     instPatSigma p sigString ety
 
 tcPat' (p@PCon {qname,pats}) ety = do
-    let unsafeToSymD s = case s of { SymbolT.D x -> x; }
-    sym <- unsafeToSymD <$> findD qname
+    sym <- findD qname
     rho <- instantiate sym.typ
     let spRho (RhoFun _ s r) = case spRho r of
             (args, ret) -> (s:args,ret)
@@ -1359,8 +1343,7 @@ resolveHas expr = do
         countMem !acc Mem{}  = return . Left $! (acc+1)
         countMem !acc Vbl{name} 
             | not name.isLocal    =  do
-                    let unsafeToSymV s = case s of { SymbolT.V x -> x; }
-                    sym <- unsafeToSymV <$> U.findV name
+                    sym <- U.findV name
                     case sym.over of
                         [] ->  return . Right $! acc            -- not overloaded
                         _  ->  return . Right $! (acc+1)        -- overloaded
@@ -1410,8 +1393,7 @@ rHas _ (x@Mem{ex, member, typ = Nothing}) = do
     error ("expression  " ++ x.nicer g ++ "  is untyped")
 
 rHas flagerr (v@Vbl{pos, name, typ}) | not name.isLocal = do
-        let unsafeToSymV s = case s of { SymbolT.V x -> x; }
-        sym <- unsafeToSymV <$> U.findV name
+        sym <- U.findV name
         case sym.over of
             [] -> return (Right v)
             _  -> resolveOver v $ SymbolT.V sym
