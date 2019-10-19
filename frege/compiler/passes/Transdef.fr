@@ -443,12 +443,12 @@ transInsDcl env fname (d@InsDcl {pos}) = do
             nothing -> do E.fatal pos (text ("Cannot happen, instance " ++ iname.nice g ++ " missing"))
 
 
-private refreshTypeDatDcl :: DatDcl -> Symbol -> StG Symbol
+private refreshTypeDatDcl :: DatDcl -> SymT Global -> StG (SymT Global)
 private refreshTypeDatDcl DatDcl{name, pos, vars} = refreshType name pos vars
-private refreshTypeJavDcl :: JavDcl -> Symbol -> StG Symbol
+private refreshTypeJavDcl :: JavDcl -> SymT Global -> StG (SymT Global)
 private refreshTypeJavDcl JavDcl{name, pos, vars} = refreshType name pos vars
 
-private refreshType :: String -> Position -> [TauS] -> Symbol -> StG Symbol
+private refreshType :: String -> Position -> [TauS] -> SymT Global -> StG (SymT Global)
 private refreshType name pos vars sym = do
     g ← getST
     vars <- mapM (\t -> transTau t >>= forceTau) vars
@@ -457,8 +457,8 @@ private refreshType name pos vars sym = do
         dtau  = dtcon.mkapp vars :: Tau
         !dsig  = ForAll vars (RhoTau [] dtau)
         !kind  = foldr KApp KType dsig.kinds :: Kind
-        newsym = set SymbolT.typ dsig $ set SymbolT.kind kind $ sym
-    changeSym newsym
+        newsym = sym.{typ=dsig, kind}
+    changeSym $ SymbolT.T newsym
     pure newsym
 
 transDatDcl :: [QName] -> (String -> QName) -> DatDcl -> StG ()
@@ -466,9 +466,9 @@ transDatDcl env fname (d@DatDcl {pos}) = do
         g <- getST
         let tname = TName g.thisPack d.name
         case g.findit tname of
-            Just sym | SymbolT.T _ <- sym = do
-                sym ← refreshTypeDatDcl d sym
-                foreach d.ctrs (transCon (unsafePartialView SymbolT.typ sym) (MName tname))
+            Just sym | SymbolT.T symt <- sym = do
+                sym <- refreshTypeDatDcl d symt
+                foreach d.ctrs (transCon sym.typ (MName tname))
                 foreach d.defs (transdef [] (MName tname))
                 polymorphicFields tname
                 U.findT tname >>= newtCheck . SymbolT.T
@@ -623,10 +623,9 @@ transJavDcl env fname (d@JavDcl {pos}) = do
         let tname = TName g.thisPack d.name
         case g.findit tname of
             Just sym 
-                | SymbolT.T SymT{nativ = Just nativ} <- sym = do
+                | SymbolT.T (symt@SymT{nativ = Just nativ}) <- sym = do
                     -- Redo types
-                    let unsafeToSymT s = case s of { SymbolT.T x -> x; }
-                    sym <- unsafeToSymT <$> refreshTypeJavDcl d sym
+                    sym <- refreshTypeJavDcl d symt
                     -- extract and translate generic type arguments
                     let doit (Just gs) = mapM transTau gs >>= mapM forceTau
                         doit Nothing   = pure sym.typ.tvars
@@ -671,7 +670,7 @@ transClaDcl env fname (d@ClaDcl {pos}) = do
                                     ++ tname.nice g ++ " missing."))
                           -- stio Nothing
             Just sym
-                | SymbolT.C _ <- sym = do transclass d sym -- ; stio (Just d)
+                | SymbolT.C symc <- sym = transclass d symc
                 | otherwise = do
                     E.fatal pos (text ("expected class, found " ++ sym.nice g))
 
@@ -1168,9 +1167,8 @@ assoc t
     | otherwise = error ("no precedence for operator: " ++ show t)
 
 
-transclass :: ClaDcl -> Symbol -> StG ()
-transclass def sym' = do
-        let sym = case sym' of { SymbolT.C x -> x; }
+transclass :: ClaDcl -> SymC Global -> StG ()
+transclass def sym = do
         supers <- liftM (map unJust • filter isJust)
                         (mapSt (resolveXName def.pos $ SymbolT.C sym) def.supers)
         changeSym $ SymbolT.C sym.{supers = unique supers}
