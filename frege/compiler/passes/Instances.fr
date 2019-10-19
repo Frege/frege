@@ -5,8 +5,6 @@ module frege.compiler.passes.Instances where
 import  Data.List  as  DL(uniqBy, sort, sortBy)
 import  frege.lib.PP(text, msgdoc)
 
-import  frege.compiler.common.Lens (unsafePartialView, view)
-
 -- import  Compiler.enums.Flags  as  Compilerflags(TRACE3, TRACE4)
 import  Compiler.enums.TokenID
 import  Compiler.enums.Visibility
@@ -62,7 +60,7 @@ deriveInst (d@DrvDcl{pos}) = do
         clas <- defaultXName pos (TName pPreludeBase "Eq") d.clas
         typ  <- U.transSigma d.typ
         case instTSym typ g of
-            Just (sym@(SymbolT.T SymT{env})) | ctrs <- map SymbolT.D $ U.envConstructors env,
+            Just (SymbolT.T (sym@SymT{env})) | ctrs <- U.envConstructors env,
                                     not (null ctrs)
                                     || inPrelude clas.pack g && clas.base == "ArrayElement" 
                                     || inPrelude clas.pack g && clas.base == "JavaType" 
@@ -95,19 +93,15 @@ deriveInst (d@DrvDcl{pos}) = do
 derivable = ["Hashable", "Eq", "Ord", "Enum", "Bounded", "Show", "Exceptional"]
 
 --- arity of a constructor
-arity ∷ Symbol → Int
-arity sym = length (unsafeGetFlds sym)
-  where
-  unsafeGetFlds (SymbolT.D SymD{flds}) = flds
+arity :: SymD Global -> Int
+arity sym = length sym.flds
 
-deriveClass :: Position → QName → Symbol → [Symbol] → RhoT SName -> Global → String → [DefinitionS]
-deriveClass pos clas forty ctrs' instrho g toderive = deriveClass toderive
+deriveClass :: Position -> QName -> SymT Global -> [SymD Global] -> RhoT SName -> Global -> String -> [DefinitionS]
+deriveClass pos clas forty ctrs instrho g toderive = deriveClass toderive
     where
-        ctrs = flip map ctrs' $ \x -> case x of
-            SymbolT.D c -> c
         con = head ctrs
         isEnum ∷ Bool
-        isEnum = all (0==) (map (arity . SymbolT.D) ctrs)
+        isEnum = all (0==) (map arity ctrs)
         -- displayed name of a constructor
         cname :: SymD Global -> SName
         cname sym = case sym.name of
@@ -123,7 +117,7 @@ deriveClass pos clas forty ctrs' instrho g toderive = deriveClass toderive
         conpat con s = Term app -- PCon {qname=cname con, pos=pos.change QCONID con.name.base, pats}
             where
                 app  = fold App Con{name=cname con} pats 
-                pats = take ((arity . SymbolT.D) con) (subpats s)
+                pats = take (arity con) (subpats s)
         -- construct simple (pattern) variables
         
         var :: String -> ExprS
@@ -203,7 +197,7 @@ deriveClass pos clas forty ctrs' instrho g toderive = deriveClass toderive
         halts = map hashalt ctrs
         hashalt con = calt p hashex
                 where
-                    a = (arity . SymbolT.D) con
+                    a = arity con
                     p = conpat con "a"
                     vs = take a (subvars "a")
                     c = nApp (gvar "PreludeBase" "constructor") varg1
@@ -228,7 +222,7 @@ deriveClass pos clas forty ctrs' instrho g toderive = deriveClass toderive
             -- (C,C) -> true, (C1 a1 a2, C1 b1 b2) -> a1 == b1 && a2==b2
             mkequalalt con = calt (ptup peq1 peq2) eqex
                 where
-                    a = (arity . SymbolT.D) con
+                    a = arity con
                     peq1 = conpat con "a"
                     peq2 = conpat con "b"
                     sub1 = take a (subvars "a")
@@ -242,7 +236,7 @@ deriveClass pos clas forty ctrs' instrho g toderive = deriveClass toderive
         deriveClass "Ord"
             | [prod] <- ctrs = [DefinitionS.Fun $ publicfun "<=>"
                                           [conpat prod "a", conpat prod "b"]
-                                          (ordex ((arity . SymbolT.D) prod) 0)]
+                                          (ordex (arity prod) 0)]
             | otherwise = [DefinitionS.Fun $ publicfun "<=>" [parg1, parg2] outercase]
             where
                 --* case a1 <=> b1 of { Eq -> case a2 <=> b2 of { ...
@@ -260,7 +254,7 @@ deriveClass pos clas forty ctrs' instrho g toderive = deriveClass toderive
                 --*  (C ai, C bi) -> ordex ai bi
                 mkeqcase con = calt (ptup peq1 peq2) oex
                     where
-                        a = (arity . SymbolT.D) con
+                        a = arity con
                         peq1 = conpat con "a"    -- C a1 a2 .. an
                         peq2 = conpat con "b"    -- C b1 b2 .. bn
                         oex  = ordex a 0
@@ -274,7 +268,7 @@ deriveClass pos clas forty ctrs' instrho g toderive = deriveClass toderive
                 eqexs     = (map mkeqcase ctrs) ++ [default_]
                 default_  = calt (var "_") vEq
         deriveClass "Show"
-            | (view SymbolT.name forty).base ~ ´^\(,+\)´ = let             -- tuple
+            | forty.name.base ~ ´^\(,+\)´ = let             -- tuple
                     sex     = Case CNormal (var "r") [(mktupshowalt con)]
                     show    = publicfun "show"     [var "r"]  sex
                     -- showsub = publicfun "showsub"  []          (var "show")
@@ -292,7 +286,7 @@ deriveClass pos clas forty ctrs' instrho g toderive = deriveClass toderive
                 mkshowalt con = calt (conpat con "a") sx
                     where
                         scon = string (con.name.base)
-                        sub  = take ((arity . SymbolT.D) con) (subvars "a")
+                        sub  = take (arity con) (subvars "a")
                         sx   = joinit scon sub
                         blanked s  = s `mkapp` string " "
                         showit v   = gvar "PreludeText" "showsub" `nApp` v
@@ -303,11 +297,11 @@ deriveClass pos clas forty ctrs' instrho g toderive = deriveClass toderive
                     let
                         salt = mkshowalt con
                         subx = (string "(" `mkapp` salt.ex) `mkapp` string ")"
-                    in if (arity . SymbolT.D) con == 0 then salt
+                    in if arity con == 0 then salt
                         else salt.{ex=subx}
                 mktupshowalt con = calt (conpat con "a") sx where
                     scon = string "("
-                    sub  = take ((arity . SymbolT.D) con) (subvars "a")
+                    sub  = take (arity con) (subvars "a")
                     sx = joinit scon sub
                     showsv s v d = (s `mkapp` showit v) `mkapp` string d
                     joinit s [] = s `mkapp` string ")"
@@ -339,7 +333,7 @@ deriveClass pos clas forty ctrs' instrho g toderive = deriveClass toderive
                 sex     = Case CNormal (var "r") (mkalts "succ " ctup)
                 pex     = Case CNormal (var "r") (mkalts "pred " ctdn)
                 last    = calt (var "_") (nApp vError msg)        -- _ -> error ...
-                msg     = (string ((view SymbolT.name forty).nice g)
+                msg     = (string (forty.name.nice g)
                           `mkapp` string ".from ")
                           `mkapp` showit (var "r")                  -- "X" ++ ".from " ++ show r
                 fromalt ctr = calt (int (SymD.cid ctr)) (Con {name=cname ctr})
@@ -366,20 +360,20 @@ deriveClass pos clas forty ctrs' instrho g toderive = deriveClass toderive
                 DefinitionS.Nat $
                 NatDcl{pos, vis=Public, name="javaClass", 
                     txs = [(ForAll [] (RhoTau [] tapp), [])], 
-                    meth = fromMaybe (rawName jt) (unsafePartialView SymbolT.nativ forty) ++ ".class", 
+                    meth = fromMaybe (rawName jt) forty.nativ ++ ".class",
                     isPure = true, gargs = Nothing,
                     doc = Nothing}]
             where
                 tapp = TApp pClass this
                 this | RhoTau{tau} <- instrho = tau
                      | otherwise = error ("Cannot derive for non type: " ++ nicer forty g)
-                jt = sigmaJT g (unsafePartialView SymbolT.typ forty)
+                jt = sigmaJT g forty.typ
         deriveClass "JavaType" = deriveClass "Exceptional"
         deriveClass "ArrayElement" = deriveClass "Exceptional"
         deriveClass s = error ("can't deriveClass " ++ s)
 
 
-deriveDcls :: Position -> QName -> Symbol -> [Symbol] -> RhoT SName -> StG [DefinitionS]
+deriveDcls :: Position -> QName -> SymT Global -> [SymD Global] -> RhoT SName -> StG [DefinitionS]
 deriveDcls pos clas forty ctrs instrho = do
     g <- getST
     -- E.logmsg TRACE4 pos (text ("derive " ++ QName.nice clas g ++ " for " ++ Symbol.nice forty g))
@@ -389,7 +383,7 @@ deriveDcls pos clas forty ctrs instrho = do
                         ccc `elem` ["Enum", "Bounded"] -> if all (0==) (map arity ctrs)
             then stio (dC ccc)
             else do
-                let bad = [ (view SymbolT.name c).nice g | c <- ctrs, arity c != 0 ]
+                let bad = [ c.name.nice g | c <- ctrs, arity c != 0 ]
                 E.error pos (msgdoc ("Can't derive " ++ clas.nice g
                     ++ " for " ++ forty.nice g ++ " because "
                     ++ (if length bad == 1 then head bad ++ " is not a nullary constructor"
@@ -400,7 +394,7 @@ deriveDcls pos clas forty ctrs instrho = do
         TName ppp "ArrayElement"
             | inPrelude ppp g = return (dC "ArrayElement")
         TName ppp "Exceptional" 
-            | inPrelude ppp g = if isJust (unsafePartialView SymbolT.nativ forty)
+            | inPrelude ppp g = if isJust forty.nativ
                 then return (dC "Exceptional")
                 else do
                     E.error pos (msgdoc ("Can't derive Exceptional for " ++ forty.nicer g
