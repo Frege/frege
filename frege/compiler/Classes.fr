@@ -228,8 +228,8 @@ passC = do
                     when (isJust msym.nativ) do
                         T.subsCheck (SymbolT.V msym) msym.typ osym.typ
                     case g.findit osym.name.tynm of
-                        Just (ssym@(SymbolT.C _)) -> do
-                                mkanno (SymbolT.C symc) (SymbolT.V msym) (SymbolT.V osym) ssym
+                        Just (SymbolT.C ssym) -> do
+                                mkanno symc (SymbolT.V msym) osym ssym
                                 return ()
                         nothing -> E.fatal pos (text ("methodcheck: class " ++ osym.name.tynm.nice g ++ " vanished."))
                 _ -> E.fatal pos (text (msym.name.nice g ++ " occurs in more than one super class of " ++ symc.name.nice g))
@@ -244,8 +244,8 @@ passC = do
                 [osym] | Just (SymbolT.V ali) <- g.findit msym.alias,
                          ali.anno,
                          -- symc.name == same,
-                         Just (ssym@(SymbolT.C _)) <- g.findit osym.name.tynm = do
-                                    sig <- mkanno (SymbolT.C symc) (SymbolT.L msym) (SymbolT.V osym) ssym
+                         Just (SymbolT.C ssym) <- g.findit osym.name.tynm = do
+                                    sig <- mkanno symc (SymbolT.L msym) osym ssym
                                     T.subsCheck (SymbolT.V ali) ali.typ sig
                        | otherwise = E.error pos (msgdoc (nicer msym g 
                             ++ " may only point to a value whose type is known through annotation or import."))  
@@ -262,35 +262,35 @@ passC = do
          * t is the class variable of this class and n is a new name
          * that replaces accidental occurrences of t in the annotation of the super method
          -}
-        mkanno :: Symbol -> Symbol -> Symbol -> Symbol -> StG Sigma
-        mkanno csym' msym osym ssym' = do
+        mkanno :: SymC Global -> Symbol -> SymV Global -> SymC Global -> StG Sigma
+        mkanno csym msym osym ssym = do
             g <- getST
             i <- uniqid
-            let csym = case csym' of { SymbolT.C x -> x; }
-                ssym = case ssym' of { SymbolT.C x -> x; }
             let newvar = TVar {pos=view SymbolT.pos msym, var=noClashIdent ("t" ++ show i), kind = KVar}
                 oldvar = ssym.tau.var
                 thsvar = csym.tau.var
                 tree1   = TreeMap.insert empty oldvar csym.tau
                 tree | oldvar != thsvar = tree1.insert thsvar newvar
                      | otherwise        = tree1
-            case isPSigma (unsafePartialView SymbolT.typ osym) of
+            case isPSigma osym.typ of
                 false -> do
                     let
-                        rho1 = substRho tree (unsafePartialView SymbolT.typ osym).rho
+                        rho1 = substRho tree osym.typ.rho
                         rep (ctx@Ctx {cname, tau = TVar {var=x}})
                             | cname == ssym.name, x == thsvar = ctx.{pos=view SymbolT.pos msym, cname=csym.name}
                         rep ctx = ctx
                         rho = rho1.{context <- map rep}
                         repv tv = TM.lookupDefault tv tv.var tree
-                        memtyp = ForAll (map repv (unsafePartialView SymbolT.typ osym).bound) rho
-                    when (isJust $ preview SymbolT.typ msym) $ do
-                        case msym of
-                          SymbolT.V msymv ->
-                            changeSym $ SymbolT.V msymv.{typ = memtyp, anno = true}
+                        memtyp = ForAll (map repv osym.typ.bound) rho
+                    case msym of
+                      SymbolT.V msymv ->
+                        changeSym $ SymbolT.V msymv.{typ = memtyp, anno = true}
+                      SymbolT.L _ -> pure ()
+                      -- msym can only be SymT or SymV
+                      -- TODO express this in type
                     return memtyp
                 true -> 
-                    E.fatal (view SymbolT.pos osym) (text ("mkanno:: untyped " ++ osym.nice g))
+                    E.fatal osym.pos (text ("mkanno:: untyped " ++ osym.nice g))
 
         checklink (symm@SymV {name=MName cls base}) = do
             g <- getST
@@ -412,7 +412,7 @@ instForClass alien c iname = do
 
                 csyms <- mapSt U.findC (csym.name:csym.supers)
                 isym  <- U.findI isym.name
-                when (not alien || g.our isym.name) do tcInstMethods csyms $ SymbolT.I isym
+                when (not alien || g.our isym.name) do tcInstMethods csyms  isym
             mu -> E.fatal isym.pos (text ("instForClass: bad instance type " ++ isym.typ.nice g))
 
 {--
@@ -705,13 +705,13 @@ implemented (SymbolT.V vsym) = isJust vsym.expr || isJust vsym.nativ
 {--
     check for each method in an instance if the type is more specific than the class type
     -}
-tcInstMethods :: [SymC Global] -> Symbol -> StG ()
-tcInstMethods supers inst = foreach (values (unsafePartialView SymbolT.env inst)) (tcInstMethod supers inst)
+tcInstMethods :: [SymC Global] -> SymI Global -> StG ()
+tcInstMethods supers inst = foreach (values inst.env) (tcInstMethod supers inst)
 
 {--
     check if the type of an instance method is more specific than the type of the class method
     -}
-tcInstMethod :: [SymC Global] -> Symbol -> Symbol -> StG ()
+tcInstMethod :: [SymC Global] -> SymI Global -> Symbol -> StG ()
 tcInstMethod [] isym msym = do
         g <- getST
         E.error (view SymbolT.pos msym) (msgdoc (msym.nice g ++ " is not a class member function"))
@@ -733,7 +733,7 @@ tcInstMethod (sc:scs) isym msym
                     ++ " class method type: " ++ s.nicer g
                     ++ " own type: " ++ mtnice))
                 -- forall i. S i => I i   ==> S 42 => I 42
-                rhotau <- T.instantiate (unsafePartialView SymbolT.typ isym)
+                rhotau <- T.instantiate isym.typ
                 case tauRho rhotau of
                     RhoTau ctx tau -> do    -- must be RhoTau, see Enter
                         -- C c => c a -> c b   ==> forall a b.C (I 42) => I 42 a -> I 42 b
@@ -771,7 +771,7 @@ tcInstMethod (sc:scs) isym msym
                                 case msym of
                                   SymbolT.V msymv -> changeSym $ SymbolT.V msymv.{typ = msig, anno = true}
                                   _ -> pure ()
-                    other -> E.fatal (view SymbolT.pos isym) (msgdoc ("RhoTau expected, got " ++ rhotau.nicer g))
+                    other -> E.fatal isym.pos (msgdoc ("RhoTau expected, got " ++ rhotau.nicer g))
             Just (SymbolT.V (symv@SymV {typ=sig})) | isPSigma sig -> do
                     E.fatal symv.pos (text (symv.nice g ++ " of " ++ sc.nice g ++ " is not annotated"))
             -- Some class has a default method that links somewhere else
@@ -784,10 +784,10 @@ tcInstMethod (sc:scs) isym msym
     isSymL (SymbolT.L _) = true
     isSymL _ = false
 
-tcInstMethod (sc:scs) isym (msym@SymbolT.V (SymV{pos, typ=s})) | not (isPSigma s) = do
+tcInstMethod _ _ (msym@SymbolT.V (SymV{pos, typ=s})) | not (isPSigma s) = do
         g <- getST
         E.fatal pos (text ("tcInstMethod: " ++ msym.nice g ++ " annotated with " ++ s.nicer g))
 
-tcInstMethod (sc:scs) isym msym = do
+tcInstMethod _ _ msym = do
         g <- getST
         E.fatal (view SymbolT.pos msym) (text ("tcInstMethod: strange symbol " ++ msym.nice g))
