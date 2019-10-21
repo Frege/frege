@@ -4,13 +4,15 @@ module frege.compiler.gen.java.MethodCall where
 import Data.TreeMap(TreeMap, values)
 import Data.List(elemBy)
 
+import frege.compiler.common.Lens (unsafePartialView, view)
+
 import Compiler.Utilities as U()
 
 import Compiler.classes.Nice(nice, nicer)
 
 import Compiler.types.AbstractJava
 import Compiler.types.Types(unST, Sigma, Tau, TauT, ForAll, RhoTau, RhoFun)
-import Compiler.types.Symbols(SymbolT)
+import Compiler.types.Symbols(SymD, SymV, SymbolT)
 import Compiler.types.Global
 import Compiler.types.JNames(JName, memberOf)
 import Compiler.types.Strictness()
@@ -37,35 +39,36 @@ niSpecial g ty
  
 
 --- Tells if a native symbol is wrapped 
-wrapped g (sym@SymV {nativ = Just item, throwing}) = not (null throwing) 
-                                                        || niSpecial g rty
-                                                        || not (null (wildReturn g sym))
+wrapped :: Global -> Symbol -> Bool
+wrapped g (SymbolT.V (sym@SymV{nativ = Just item, throwing})) =
+    not (null throwing)
+    || niSpecial g rty
+    || not (null (wildReturn g $ SymbolT.V sym))
      where
          (rty, _) = U.returnType sym.typ.rho
-wrapped g SymV {} = false
-wrapped g SymD {} = false
-wrapped g _ = error "wrapped: no symv"
- 
+wrapped _ (SymbolT.V _) = false
+wrapped _ (SymbolT.D _) = false
+wrapped _ _ = error "wrapped: no symv"
+
 {--
     Tell if a native function must be called through its wrapper.
   
     This is the case when it is wrapped for some other reason
     than that the return type is 'Maybe'.
   -}
-wrappedOnly g (sym@SymV {nativ = Just _, throwing}) 
+wrappedOnly g (SymbolT.V (symv@SymV {nativ = Just _, throwing}))
         = not (null throwing) 
             || niSpecial g rty && isNothing (U.isMaybe rty)
-            || not (null (wildReturn g sym))
+            || not (null (wildReturn g $ SymbolT.V symv))
     where
-        (rty, _) = U.returnType sym.typ.rho
-wrappedOnly g sym = error "wrappedOnly - no native function"
--- 
--- 
+        (rty, _) = U.returnType symv.typ.rho
+wrappedOnly _ sym = error "wrappedOnly - no native function"
+
 --- returns a binding for a direct call of a native method
 nativeCall ∷ Global → Symbol → TreeMap String Tau → [JExpr] → Binding
-nativeCall g (sym@SymV {nativ = Just item, gargs}) subst aexs = newBind g bsig (call jrty args)
+nativeCall g (SymbolT.V (symv@SymV{nativ = Just item, gargs})) subst aexs = newBind g bsig (call jrty args)
     where
-        (rty, sigmas) = U.returnType sym.typ.rho
+        (rty, sigmas) = U.returnType symv.typ.rho
         taus  = [ tau | Just tau <- map U.sigmaAsTau sigmas ]
         brty  = substTau subst (baserty rty)
         bsig  = U.tauAsSigma brty
@@ -104,16 +107,16 @@ nativeCall g (sym@SymV {nativ = Just item, gargs}) subst aexs = newBind g bsig (
                let evalStG :: Global -> StG a -> a
                    evalStG g st = fst $ st.run g
                    x = do g <- getST
-                          si <- symInfo sym
+                          si <- symInfo $ SymbolT.V symv
                           let name  = (head si.argSigs).rho.tau.name
                               irsym = unJust $ g.findit name
-                              nms = mapMaybe (_.name) [ fld | x@SymD{} <- values irsym.env, fld <- x.flds ]
+                              nms = mapMaybe (_.name) [ fld | SymbolT.D x <- values (unsafePartialView SymbolT.env irsym), fld <- x.flds ]
                           return $ flip mapMaybe nms $ \fldnm -> do
                               nativrsym <- g.findit $ si.retSig.rho.tau.name
-                              nativsym <- TreeMap.lookup fldnm nativrsym.env
-                              nativnm <- nativsym.nativ
+                              nativsym <- TreeMap.lookup fldnm (unsafePartialView SymbolT.env nativrsym)
+                              nativnm <- unsafePartialView SymbolT.nativ nativsym
                               let nativsi = evalStG g $ symInfo nativsym
-                              fldsym <- TreeMap.lookup fldnm irsym.env
+                              fldsym <- TreeMap.lookup fldnm (unsafePartialView SymbolT.env irsym)
                               pure $ wrapIRMethod g (head args) (head si.argJTs) nativsi nativnm fldnm fldsym
                in JNewClass jrty [] (evalStG g x)
              NICast -> case args of
@@ -148,10 +151,11 @@ nativeCall g (sym@SymV {nativ = Just item, gargs}) subst aexs = newBind g bsig (
                 [a,b,c] -> JBin (JArrayGet a b) "=" c
                 _     -> JAtom "bad array set"      -- error was flagged before 
 nativeCall g sym subst aexs = error ("nativeCall: no function " 
-    ++ show sym.pos.first.line
+    ++ show (view SymbolT.pos sym).first.line
     ++ ", " ++ nicer sym g)
--- 
-wrapCode g jreturn rtau (sym@SymV {nativ = Just item, throwing}) subst aexs
+
+wrapCode :: Global -> (JExpr -> JStmt) -> Tau -> Symbol -> TreeMap String Tau -> [JExpr] -> [JStmt]
+wrapCode g jreturn rtau (sym@(SymbolT.V SymV{nativ = Just item, throwing})) subst aexs
     | Just (stau, atau) <- unST rtau = let
             sjt     = tauJT g stau          -- type #1 for parameterization of ST s a
             ajt     = tauJT g atau          -- return type of the ST action
@@ -224,9 +228,9 @@ wrapCode g jreturn rtau sym _ _ = error "wrapCode: no SymV"
     code for native functions and/or members
   -}
 methCode :: Global -> Symbol -> SymInfo8 -> [JDecl]
-methCode g (sym@SymV {nativ = Just item}) si = [
-        JComment ((nice sym g) ++ "  " ++ show sym.strsig ++ "  " ++ show sym.rkind),
-        JComment (nicer sym.typ g),
+methCode g (sym@(SymbolT.V (symv@SymV {nativ = Just item}))) si = [
+        JComment ((nice sym g) ++ "  " ++ show symv.strsig ++ "  " ++ show symv.rkind),
+        JComment (nicer symv.typ g),
         JComment ("the following type variables are probably wildcards: " ++ joined ", " (map _.var wildr)),
         JComment item] ++
                 (if arity then defs 
@@ -239,7 +243,7 @@ methCode g (sym@SymV {nativ = Just item}) si = [
         wArgs       = argDefs attrFinal si (getArgs g)
         wildr       = wildReturn g sym
         name        = symJavaName g sym                        -- X.foo
-        ftargs      = targs g sym.typ                                -- <a,b,c>
+        ftargs      = targs g symv.typ                                -- <a,b,c>
         args        = if haswrapper then wArgs else rArgs
         haswrapper  = arity && wrapped g sym -- (not (null bnds))
         jreturn     = if arity  then JReturn else JEx
@@ -267,10 +271,10 @@ methCode g (sym@SymV {nativ = Just item}) si = [
                           name = (symJavaName g sym).base,
                           init = Just (unex wcode)}
  
-        (rty, atys) = U.returnType sym.typ.rho
-        arity       = not (null atys) || not (null sym.typ.bound)
+        (rty, atys) = U.returnType symv.typ.rho
+        arity       = not (null atys) || not (null symv.typ.bound)
  
-methCode g sym _ = Prelude.error ("line " ++ show sym.pos.first.line 
+methCode g sym _ = Prelude.error ("line " ++ show (view SymbolT.pos sym).first.line
                     ++ ": can not compile " ++ nice sym g)
 
 {--
@@ -284,11 +288,12 @@ methCode g sym _ = Prelude.error ("line " ++ show sym.pos.first.line
     and we need to cast the result. 
 -}
 wildReturn ∷ Global → Symbol → [Tau]
-wildReturn g (symv@SymV{})  = [ v | v@TVar{} ← values (U.freeTauTVars [] TreeMap.empty ret),
-                                    not (stvar v.var),
-                                    not (elemBy (using _.var) v sigvars),
-                                    not (elemBy (using _.var) v itemvars)
-                            ]
+wildReturn g (SymbolT.V symv) =
+    [ v | v@TVar{} ← values (U.freeTauTVars [] TreeMap.empty ret)
+    , not (stvar v.var)
+    , not (elemBy (using _.var) v sigvars)
+    , not (elemBy (using _.var) v itemvars)
+    ]
     where
         (ret, sigs) = U.returnType symv.typ.rho
         -- identify ST phantom type variable, if any
@@ -303,7 +308,7 @@ wildReturn _ _ = []
 wrapIRMethod :: Global -> JExpr -> JType -> SymInfo8 -> String -> String -> Symbol -> JDecl
 wrapIRMethod g this irjt nativsi nativnm fldnm fldsym =
   let nativargs = argDefs attrFinal (nativsi.{ argSigs <- tail, argJTs <- tail }) (getArgs g)
-      fldstri = case fldsym.strsig of
+      fldstri = case unsafePartialView SymbolT.strsig fldsym of
         Strictness.S xs -> tail xs
         _               -> []
       -- how to detect strictness of result value?

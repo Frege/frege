@@ -5,6 +5,7 @@ import  frege.Prelude  hiding(<+>)
 import  frege.data.TreeMap  as  TM(TreeMap, TreeSet, lookup, insert, keys, values, each, fromKeys, including, contains, union)
 import  frege.data.List  as  DL(uniq, sort, sortBy, groupBy, partitioned, elemBy)
 import  frege.data.Graph(stronglyConnectedComponents tsort)
+import  frege.compiler.common.Lens (view)
 import  frege.compiler.enums.Flags
 import  frege.compiler.enums.Visibility
 import  frege.compiler.types.Positions
@@ -29,14 +30,17 @@ import  frege.compiler.common.PatternCompiler
 pass = do
     g <- getST
 
+    let unsafeToSymV s = case s of { SymbolT.V x -> x; }
+    let allourvars' g = map unsafeToSymV (allourvars g)
+
     -- unroll let expressions
-    let collectedvars = allourvars g
+    let collectedvars = allourvars' g
     foreach collectedvars unrollSym
 
     -- simplify let expressions by lifting local function bindings to the top
     -- or inlining variables
     g <- getST
-    let collectedvars = allourvars g
+    let collectedvars = allourvars' g
     foreach collectedvars unLetSym
 
     -- make multi-equation definitions ready for type check
@@ -50,21 +54,21 @@ pass = do
 unrollSym (vsym@SymV {pos})
     | Just x <- vsym.expr = do
         nx <- x >>= unrollExpr 
-        changeSym vsym.{expr = Just (return nx)}
+        changeSym $ SymbolT.V vsym.{expr = Just (return nx)}
     | otherwise = stio ()       -- do nothing
 unrollSym sym = do
     g <- getST
-    E.fatal sym.pos (text ("unrollSym no SymV : " ++ sym.nice g))
+    E.fatal sym.pos (text ("unrollSym no SymV : " ++ (SymbolT.V sym).nice g))
 
 
 unLetSym (vsym@SymV {pos})
     | Just x <- vsym.expr = do
         nx <- x >>= unLetExpr
-        changeSym vsym.{expr = Just (return nx)}
+        changeSym $ SymbolT.V vsym.{expr = Just (return nx)}
     | otherwise = stio ()       -- do nothing
 unLetSym sym = do
     g <- getST
-    E.fatal sym.pos (text ("unLetSym no SymV : " ++ sym.nice g))
+    E.fatal sym.pos (text ("unLetSym no SymV : " ++ (SymbolT.V sym).nice g))
 
 unrollExpr    = U.mapEx true unrollLet
 
@@ -79,13 +83,14 @@ unrollLet (x@Let {env,ex}) = do
         -- first do the subexpressions
         let mapsub (sy@SymV {expr=Just x}) = do
                     x <- x >>= unrollExpr
-                    changeSym sy.{expr=Just (return x)}
+                    changeSym $ SymbolT.V sy.{expr=Just (return x)}
             mapsub sy = error "mapsub: no var"
         ex  <- unrollExpr ex
-        syms <- mapSt U.findV env
+        let unsafeToSymV s = case s of { SymbolT.V x -> x; }
+        syms <- mapSt (fmap unsafeToSymV . U.findV) env
         foreach syms mapsub
         let -- kvs =  each env
-            xdep k = do sym <- U.findV k; ldep (k, sym)
+            xdep k = do sym <- unsafeToSymV <$> U.findV k; ldep (k, sym)
             ldep (k, SymV {expr=Nothing}) = stio (k, [])
             ldep (k, SymV {expr=Just ex}) = do
                     deps <- ex >>= letlocals
@@ -136,12 +141,13 @@ unusedLet (x@Let {env,ex}) = do
         down <- references (map QName.uid env) ex
         if down == 0
             then do
-                syms <- mapSt U.findV env
+                let unsafeToSymV s = case s of { SymbolT.V x -> x; }
+                syms <- mapSt (fmap unsafeToSymV . U.findV) env
                 g <- getST
-                foreach syms (\(sym::Symbol) ->
+                foreach syms (\sym ->
                     unless (sym.name.base ~ ´^_´) do
-                        E.hint (getrange sym) (msgdoc (
-                            nicer sym g ++ " is not used anywhere."))
+                        E.hint (getrange $ SymbolT.V sym) (msgdoc (
+                            nicer (SymbolT.V sym) g ++ " is not used anywhere."))
                     )
                 stio (Left ex)
             else stio (Left x)
@@ -151,67 +157,59 @@ unusedLet x = stio (Left x)
 --- lift mutual recursive let functions to the top level
 unLet (x@Let {env,ex}) 
     | length env > 1 = do
-        vals <- mapSt U.findV env
+        let unsafeToSymV s = case s of { SymbolT.V x -> x; }
+        vals <- mapSt (fmap unsafeToSymV . U.findV) env
         g <- getST
-        if (any Symbol.anno vals)
+        if (any _.anno vals)
             then unLetMutual g vals x
             else return (Left x) 
   where
-    unLetMutual :: Global -> [Symbol] -> Expr -> StG (Either Expr Expr)
+    unLetMutual :: Global -> [SymV Global] -> Expr -> StG (Either Expr Expr)
     unLetMutual g vals (x@Let {env,ex}) = do
         freevbls <- toPass
         case freevbls of
             [] -> do
                 gsyms  <- mapSt globalize vals
-                foreach gsyms enter
+                foreach gsyms (enter . SymbolT.V)
                 let vgs = zip vals gsyms
                 syms   <- mapSt (mkGlobal vgs) vgs
                 newlet <- foldSt replsym ex vgs
                 E.logmsg TRACE7 pos (text ("changed  " ++ nice newlet g))
-                foreach syms changeSym
-                foreach (map Symbol.name syms) unLetName
+                foreach syms (changeSym . SymbolT.V)
+                foreach (map _.name syms) unLetName
                 stio (Left newlet)
-            xs -> do
-                -- let part1 = msgdoc ("implementation restriction: mutual recursive local functions"
-                --         ++ " that use variables bound in enclosing lexical scopes"
-                --         ++ " are currently not supported.")
-                --     part2 = text "functions: " <+> sep "," (map (text • flip nicer g • Symbol.name) vals)
-                --     part3 = text "variables: " <+> sep "," (map (text • flip nicer g • Symbol.name) freevbls)
-                --     part4 = text "There are two possible workarounds:"
-                --     part5 = text "- If possible, make" <+> lit (length vals - 1) <+> text "functions local to the remaining one."
-                --     part6 = text "- Pass the variables as arguments."
-                -- E.error (getpos x) (part1 </> nest 4 (part2 </> part3 </> part4 </> part5 </> part6))
-                stio (Left x)
+            xs -> stio (Left x)
       where
         pos = getpos x
 
-        exprs :: [Expr]
-        exprs = map (unJust • flip Symbol.gExpr g) vals
+        unsafeToSymV s = case s of { SymbolT.V x -> x; }
 
-        freeSym :: Expr -> StG [Symbol]             -- free variables in expression
+        exprs :: [Expr]
+        exprs = map (unJust . flip SymV.gExpr g) vals
+
+        freeSym :: Expr -> StG [SymV Global]             -- free variables in expression
         freeSym x = do
                 used  <- U.localSyms x
                 inner <- innerSids   x
                 let uids = filter (not • (inner `contains`)) (keys used)
-                mapSt U.findV   [ Local uid "_" | uid <- uids ] 
-                
+                mapSt (fmap unsafeToSymV . U.findV) [ Local uid "_" | uid <- uids ]
 
-        toPass :: StG [Symbol]           -- symbols we must pass to each global val
+        toPass :: StG [SymV Global]           -- symbols we must pass to each global val
         toPass = do
             exsyms <- mapSt freeSym exprs
-            stio ((uniq • sort) [ s | ss <- exsyms, s <- ss, s `notElem` vals ])
+            stio $ (map unsafeToSymV . uniq . sort) [ SymbolT.V s | ss <- exsyms, s <- ss, SymbolT.V s `notElem` map SymbolT.V vals ]
 
-        globalize :: Symbol -> StG Symbol
+        globalize :: SymV Global -> StG (SymV Global)
         globalize sym = do
             g <- getST
             let name = U.unusedName (VName (Global.thisPack g) (sym.name.base)) g
             stio sym.{name, sid=0, expr = Nothing, vis = Private}
 
-        replsym :: Expr -> (Symbol, Symbol) -> StG Expr
+        replsym :: Expr -> (SymV Global, SymV Global) -> StG Expr
         replsym x (sym,gsym) = replName sym.sid gsym.name x
 
 
-        mkGlobal :: [(Symbol, Symbol)] -> (Symbol,Symbol) -> StG Symbol
+        mkGlobal :: [(SymV Global, SymV Global)] -> (SymV Global, SymV Global) -> StG (SymV Global)
         mkGlobal vgs (sym,gsym) = do
             let ex = unJust (sym.gExpr g)
             ex <- foldSt replsym ex vgs
@@ -225,7 +223,8 @@ unLet (x@Let {env,ex})
             stio gsym.{expr = Just (return ex), typ}
 
         unLetName nm = do
-            symv <- U.findV nm
+            let unsafeToSymV s = case s of { SymbolT.V x -> x; }
+            symv <- unsafeToSymV <$> U.findV nm
             unLetSym symv
     unLetMutual g vals x = error "unLetMutual"
 
@@ -233,7 +232,8 @@ unLet (xlet@Let {env=letenv,ex=letex,typ=lettyp})
         | [x] <- letenv = do                  -- let x = ... in ex
 
     g <- getST
-    sym <- U.findV x
+    let unsafeToSymV s = case s of { SymbolT.V x -> x; }
+    sym <- unsafeToSymV <$> U.findV x
 
     case sym.gExpr g of
         Just (Lam {pat,ex,typ}) = do           -- let x = \_ -> ... in ex
@@ -252,14 +252,14 @@ unLet (xlet@Let {env=letenv,ex=letex,typ=lettyp})
                 let lamx = Lam {pat,ex,typ}
                 let vks  = U.freeTVars [] sym.typ.rho
                 let typ  = ForAll vks sym.typ.rho
-                enter sym.{sid = 0, name, expr = Just (return lamx), vis = Private, typ}
+                enter $ SymbolT.V sym.{sid = 0, name, expr = Just (return lamx), vis = Private, typ}
                 changeST Global.{sub <- SubSt.{
                                 idKind <- insert (KeyTk sym.pos.first) (Right name)}}
                 E.logmsg TRACE7 sym.pos (text ("let " ++ nice x g ++ " = " ++ nice lamx g ++ " in ... replaced with " ++ nice letex2 g))
                 E.logmsg TRACE7 sym.pos (text ("new function is " ++ name.nice g))
                 unLet letex2       -- other opportunities possible here
               else do
-                changeSym sym.{expr = Just (return  Lam{pat,ex,typ})}
+                changeSym $ SymbolT.V sym.{expr = Just (return  Lam{pat,ex,typ})}
                 letex <- U.mapEx true unLet letex
                 stio (Right (Let {env=letenv,ex=letex,typ=lettyp}))
         -- a local non function stays local only if it uses other local symbols
@@ -269,7 +269,7 @@ unLet (xlet@Let {env=letenv,ex=letex,typ=lettyp})
             ulet <- U.mapEx true unLet letex
             cx   <- U.mapEx true unLet cx
             let e = isSimple g cx
-            changeSym sym.{expr = Just (return cx)}
+            changeSym $ SymbolT.V sym.{expr = Just (return cx)}
             self <- references [sym.sid] cx
             down <- references [sym.sid] ulet
             -- E.logmsg TRACE7 sym.pos (text ("UNLET: " ++ nice x g
@@ -301,7 +301,7 @@ unLet (xlet@Let {env=letenv,ex=letex,typ=lettyp})
                      letex2 <- replName sym.sid name ulet  -- in the inner of the lambda or the let ex
                      let vks  = U.freeTVars [] sym.typ.rho
                      let typ  = ForAll vks sym.typ.rho
-                     enter sym.{sid = 0, name, expr = Just (return ex), vis = Private, typ}
+                     enter $ SymbolT.V sym.{sid = 0, name, expr = Just (return ex), vis = Private, typ}
                      changeST Global.{sub <- SubSt.{
                                      idKind <- insert (KeyTk sym.pos.first) (Right name)}}
                      E.logmsg TRACE7 sym.pos (text ("let " ++ nice x g ++ " = " ++ nice cx g ++ " in ... replaced with " ++ nice letex2 g))

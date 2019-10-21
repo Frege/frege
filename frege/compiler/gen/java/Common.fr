@@ -4,6 +4,8 @@ module frege.compiler.gen.java.Common where
 
 import frege.Prelude hiding (<+>)
 
+import  frege.compiler.common.Lens (unsafePartialView, view)
+
 import Data.TreeMap(values, insert, lookup, TreeMap Map, fromList)
 import Data.Bits(BitSet.member)
 import Lib.PP(pretty, text, <+>, </>)
@@ -249,20 +251,20 @@ tauJT   g (TSig sig)            = sigmaJT g sig
 taujtApp g qname rest app
     | Just (sym@(SymbolT.T symt)) <- g.findit qname = case symt of
         SymT{product=true, kind, newt=true} ->
-             let sigmas = [ ConField.typ f | sym@SymD {flds} <- values sym.env, f <- flds ]
+             let sigmas = [ ConField.typ f | sym@(SymbolT.D SymD{flds}) <- values symt.env, f <- flds ]
              in case sigmas of
                  []     -> Prelude.error (nice sym g ++ " has no fields")
                  (s:_)  -> case (substJT subst . lambdaType . sigmaJT g) s of
                             other → other
                     where
                         -- k = kArity kind
-                        subst = fromList (zip sym.typ.vars  (map (boxed . tauJT g) rest ++ wilds))
+                        subst = fromList (zip symt.typ.vars  (map (boxed . tauJT g) rest ++ wilds))
                         -- rsig = ForAll [] (RhoTau [] app) 
         SymT {product,nativ,enum,pur}
               -- U.pri
               | Just s <- nativ = if s `elem` primitiveTypes
                                     then Nativ {typ=s, gargs=[], generic=true}
-                                    else if null sym.gargs
+                                    else if null symt.gargs
                                         then Nativ {typ=s, gargs=args, generic=false} 
                                         else Nativ {typ=s, gargs,    generic=true}
               | enum            = jtEnum
@@ -271,9 +273,9 @@ taujtApp g qname rest app
               | otherwise       = Ref {jname = symJavaName g sym, gargs = args}
               where 
                 restPlusWilds = (map (boxed . tauJT g) rest ++ wilds)
-                args = map fst (zip restPlusWilds sym.typ.bound)
-                subst = fromList (zip sym.typ.vars restPlusWilds)
-                gargs = mapMaybe (subst.lookup . _.var) sym.gargs     
+                args = map fst (zip restPlusWilds symt.typ.bound)
+                subst = fromList (zip symt.typ.vars restPlusWilds)
+                gargs = mapMaybe (subst.lookup . _.var) symt.gargs
         other -> undefined   -- can not happen because catched in U.findT
     | otherwise = Prelude.error (nice qname g ++ " not a type")
 
@@ -588,35 +590,35 @@ symInfo sym = do
     g <- getST
     case g.gen.symi8.lookup sym of
         Just si -> do
-                E.logmsg TRACEG sym.pos (
-                    text "got symInfo:" <+> text (nice sym g) <+> text (show sym.sid)
+                E.logmsg TRACEG (view SymbolT.pos sym) (
+                    text "got symInfo:" <+> text (nice sym g) <+> text (show (view SymbolT.sid sym))
                     </> text "si.returnJT" <+> annoG g si.returnJT
                     </> text "si.retSig  " <+> text (nice si.retSig g)
                     -- </> text "
                     )
                 return si
         other -> case sym of
-            SymV{} -> do
-                let (r, as) = U.returnTypeN sym.depth sym.typ.rho
+            SymbolT.V symv -> do
+                let (r, as) = U.returnTypeN symv.depth symv.typ.rho
                     rjt = lambdaType (rhoJT g r)
-                    sjts = zipWith (argType g) (strictFuns sym.strsig) as
+                    sjts = zipWith (argType g) (strictFuns symv.strsig) as
                     fjts = map lambdaType sjts
-                    si = SI8{returnJT = returnJType sym.rkind rjt, retSig = ForAll [] r, argJTs = fjts, argSigs = as}
+                    si = SI8{returnJT = returnJType symv.rkind rjt, retSig = ForAll [] r, argJTs = fjts, argSigs = as}
                 changeST Global.{gen <- GenSt.{symi8 <- insert sym si}}
-                E.logmsg TRACEG sym.pos (
-                    text "put symInfo:" <+> text (nice sym g) <+> text (show sym.sid)
+                E.logmsg TRACEG symv.pos (
+                    text "put symInfo:" <+> text (nice sym g) <+> text (show symv.sid)
                     </> text "si.returnJT" <+> annoG g si.returnJT
                     </> text "si.retSig  " <+> text (nice si.retSig g)
                     -- </> text "
                     )
-                zipWithM_ (\s j → E.logmsg TRACEG sym.pos (
+                zipWithM_ (\s j → E.logmsg TRACEG symv.pos (
                     text "arg :: " <+> text (nicer s g) <+> text " @@ " <+> text (show j)
                     )) si.argSigs si.argJTs
                 return si
-            SymD{} -> do
-                let (r, as) = U.returnType sym.typ.rho
+            SymbolT.D symd -> do
+                let (r, as) = U.returnType symd.typ.rho
                     rjt = lambdaType (tauJT g r)
-                    sjts = zipWith (argType g) (map (bool strict lazy . ConField.strict) sym.flds) as
+                    sjts = zipWith (argType g) (map (bool strict lazy . ConField.strict) symd.flds) as
                     fjts = map lambdaType sjts
                     si = SI8{returnJT = rjt, argJTs = fjts, argSigs = as,  retSig = ForAll [] (RhoTau [] r)}
                 changeST Global.{gen <- GenSt.{symi8 <- insert sym si}}     
@@ -654,7 +656,8 @@ memNames = xxxNames "mem"
 getArgs ∷ Global → [String]
 getArgs g = drop used argNames
     where 
-        used = sum (map _.depth g.genEnv)
+        used = sum (map unsafeGetDepth g.genEnv)
+        unsafeGetDepth (SymbolT.V SymV{depth}) = depth
     
 
 --- Compute a list of context names we can use for a new function
@@ -662,7 +665,7 @@ getArgs g = drop used argNames
 getCtxs ∷ Global -> [String]
 getCtxs g = drop used ctxNames
     where
-        used = sum . map (length . _.context . _.rho . _.typ) $ g.genEnv
+        used = sum . map (length . _.context . _.rho . unsafePartialView SymbolT.typ) $ g.genEnv
 
 {--
     @makeConstraintDef (Ctx cname tau) "ctx3"@ = final Ccname<tau> ctx3
@@ -835,8 +838,8 @@ isArrayClass SymC{name} = isArrayClassName name
 isArrayClass _          = false
 
 --- check if a type class is higher kinded
-isHigherKindedClass ∷ Symbols.SymbolT α → Bool
-isHigherKindedClass SymC{tau} = case tau.kind of 
+isHigherKindedClass :: SymbolT a -> Bool
+isHigherKindedClass (SymbolT.C SymC{tau}) = case tau.kind of
                                      KApp{} → true
                                      other  → false
 isHigherKindedClass other     = false
@@ -872,13 +875,13 @@ needsUnchecked which cmem jty =  case cmem `lookup` haveDoubleCast of
 
 --- check if this is an implementation for a class method, and must suppress unsafe cast warnings
 unsafeCast :: Global -> Symbol -> Bool
-unsafeCast g sym = case sym.name of
+unsafeCast g sym = case (view SymbolT.name sym) of
             MName{tynm, base}
-                | Just SymI{clas}   ←  g.findit tynm,
-                  Just SymC{supers} ←  g.findit clas,
-                  mems              ←  [ cmem | Just (symc@SymC{}) ← map g.findit (clas:supers),
-                                            cmem ← symc.env.lookupS base,
-                                            needsUnchecked snd cmem.name Something]
+                | Just (SymbolT.I SymI{clas})   <- g.findit tynm
+                , Just (SymbolT.C SymC{supers}) <- g.findit clas
+                , mems <- [ cmem | Just (SymbolT.C symc) <- map g.findit (clas:supers)
+                          , cmem <- symc.env.lookupS base
+                          , needsUnchecked snd (view SymbolT.name cmem) Something]
                 =  not (null mems)
             _   =  false
 

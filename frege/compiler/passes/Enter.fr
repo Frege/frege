@@ -5,6 +5,7 @@ import frege.Prelude hiding (<+>)
 
 import  frege.data.TreeMap as TM(TreeMap, keys, values, insert)
 import  frege.data.List  as  DL(uniqBy, sort, sortBy)
+import  frege.compiler.common.Lens (preview, unsafePartialView, view)
 import  frege.compiler.enums.Flags  as  Compilerflags(TRACE3, TRACE4, 
                                 isOn, isOff)
 import  frege.compiler.enums.TokenID(defaultInfix)
@@ -50,9 +51,7 @@ symbols tree = fold (+) 0 (map oneSym (values tree))
 
 
 oneSym :: Symbol -> Int
-oneSym sym
-    | sym.{env?} = 1 + symbols sym.env
-    | otherwise  = 1
+oneSym sym = 1 + maybe 0 symbols (preview SymbolT.env sym)
 
 
 isInstOrDerive :: DefinitionS -> Bool
@@ -76,9 +75,10 @@ private transKind kind = case kind  of
 link :: Symbol -> StG ()
 link sym = do
     g <- getST
-    E.logmsg TRACE3 sym.pos (text ("`" ++ sym.name.base ++ "` link to " ++ sym.nice g))
-    ST.enter (SymL {sid=0, pos=sym.pos, vis=sym.vis, -- doc=Nothing,
-                   name=VName g.thisPack sym.name.base, alias=sym.name})
+    E.logmsg TRACE3 (view SymbolT.pos sym) (text ("`" ++ (view SymbolT.name sym).base ++ "` link to " ++ sym.nice g))
+    ST.enter $ SymbolT.L
+             (SymL {sid=0, pos=view SymbolT.pos sym, vis=view SymbolT.vis sym, -- doc=Nothing,
+                   name=VName g.thisPack (view SymbolT.name sym).base, alias=view SymbolT.name sym})
 
 
 --- reorder definitions so that annotations come last
@@ -121,9 +121,11 @@ enter1FunDcl fname (d@FunDcl {positions}) = case funbinding d of
         Just name -> do
             let qname = fname name.value
             foreach positions (register qname)
-            ST.enter (vSym (positionOf name) qname).{vis=d.vis, doc=d.doc}
-            
-        sonst 
+            case vSym (positionOf name) qname of
+              SymbolT.V symv ->
+                ST.enter $ SymbolT.V symv.{vis=d.vis, doc=d.doc}
+
+        sonst
             | not (patbinding d),
               Vbl{name=Simple excl} <- d.lhs,
               excl.value == "!" || excl.value=="?",
@@ -131,8 +133,10 @@ enter1FunDcl fname (d@FunDcl {positions}) = case funbinding d of
               Just name <- funbinding d.{lhs=pat, pats=[]} -> do
                 let !qname = fname name.value
                 register qname name
-                ST.enter (vSym (positionOf name) qname).{vis=d.vis, doc=d.doc, 
-                    strsig = if excl.value == "!" then S[] else U}
+                case vSym (positionOf name) qname of
+                  SymbolT.V symv ->
+                    ST.enter $ SymbolT.V symv.{vis=d.vis, doc=d.doc,
+                      strsig = if excl.value == "!" then S[] else U}
             | otherwise = do
                 g <- getST
                 E.error (getpos d.lhs) (msgdoc ("Strange declaration: " 
@@ -150,8 +154,10 @@ enter1NatDcl fname (d@NatDcl {pos}) = do
         changeST Global.{
           sub <- SubSt.{
           idKind <- insert (KeyTk pos.first) (Right qname)}}
-        ST.enter (vSym pos qname).{vis=d.vis, doc=d.doc,
-                                                nativ=Just d.meth, pur=d.isPure}
+        case vSym pos qname of
+          SymbolT.V symv ->
+            ST.enter $ SymbolT.V
+              symv.{vis=d.vis, doc=d.doc, nativ=Just d.meth, pur=d.isPure}
 
 enter1AnnDcl :: (String -> QName) -> AnnDcl -> StG ()
 enter1AnnDcl fname (d@AnnDcl {pos}) = do
@@ -164,23 +170,26 @@ enter1AnnDcl fname (d@AnnDcl {pos}) = do
             merge a _ _ _ = a
 
         case g.findit qname of
-            Just (sym@SymV {nativ = Nothing, anno = false}) -> do
-                when (sym.vis != d.vis) do
+            Just (SymbolT.V (symv@SymV{nativ = Nothing, anno = false})) -> do
+                when (symv.vis != d.vis) do
                     E.error pos (msgdoc ("Visibility of annotation and implementation must match,"
-                        ++ " implementation was announced as " ++ show sym.vis
-                        ++ " at line " ++ show sym.pos))
-                ST.changeSym sym.{pos <- d.pos.merge,
-                                 doc = merge sym.doc sym.pos d.doc d.pos,
+                        ++ " implementation was announced as " ++ show symv.vis
+                        ++ " at line " ++ show symv.pos))
+                ST.changeSym $ SymbolT.V
+                             symv.{pos <- d.pos.merge,
+                                 doc = merge symv.doc symv.pos d.doc d.pos,
                                  anno = true}
                 changeST Global.{
                     sub <- SubSt.{
-                        idKind <- insert (KeyTk pos.first) (Right sym.name)}}
-            Just (sym@SymV {anno = true}) ->
+                        idKind <- insert (KeyTk pos.first) (Right symv.name)}}
+            Just (sym@(SymbolT.V SymV{anno = true})) ->
                 E.error pos (msgdoc ("cannot annotate " ++ sym.nice g ++ " again"))
             Just sym ->
                 E.error pos (msgdoc ("cannot annotate " ++ sym.nice g))
             Nothing -> do -- either class method or implementation missing.
-                ST.enter (vSym d.pos qname).{vis=d.vis, doc=d.doc, anno = true}
+                case vSym d.pos qname of
+                  SymbolT.V symv ->
+                    ST.enter $ SymbolT.V symv.{vis=d.vis, doc=d.doc, anno = true}
                 changeST Global.{
                     sub <- SubSt.{
                         idKind <- insert (KeyTk pos.first) (Right qname)}}
@@ -191,7 +200,8 @@ enter1ClaDcl fname (d@ClaDcl {pos}) = do
         let tname = TName g.thisPack d.name
         changeST Global.{sub <-
             SubSt.{idKind <- insert (KeyTk pos.first) (Right tname)}}
-        ST.enter (SymC {sid=0, pos=d.pos, vis=d.vis, doc=d.doc, name=tname,
+        ST.enter $ SymbolT.C
+                 (SymC {sid=0, pos=d.pos, vis=d.vis, doc=d.doc, name=tname,
                        tau=transTVar d.clvar, supers=[], insts=[], env=empty})
 
         let vdefs = map (\def -> def.chgVis $ max d.vis) d.members
@@ -223,10 +233,12 @@ enter1ClaDcl fname (d@ClaDcl {pos}) = do
             define a method with the same name.)
          -}
         g <- getST
-        let vs = (filter (maybe true (not • Symbol.{alias?})
-                                    • g.find • VName g.thisPack
-                                    • QName.base • Symbol.name)
-                            • values • maybe empty Symbol.env) (g.findit tname)
+        let isSymL (SymbolT.L _) = true
+            isSymL _ = false
+        let vs = (filter (maybe true (not . isSymL)
+                                    . g.find . VName g.thisPack
+                                    . QName.base . view SymbolT.name)
+                            . values . maybe empty (unsafePartialView SymbolT.env)) (g.findit tname)
         E.logmsg TRACE3 pos (text ("enter1: ClaDcl: vs=" ++ show (map (flip nice g) vs)))
         foreach (vs) link
 
@@ -235,7 +247,8 @@ enter1InsDcl !fname (!d@InsDcl {pos = !pos}) = do
         g <- getST
 
         let tname = TName g.thisPack (insName d)
-        ST.enter (SymI  {pos=d.pos, vis=d.vis, doc=d.doc, name=tname,
+        ST.enter $ SymbolT.I
+                 (SymI  {pos=d.pos, vis=d.vis, doc=d.doc, name=tname,
                  sid=0, clas=fname "", typ=pSigma, env=empty})
         enter (MName tname) d.defs
 
@@ -246,7 +259,7 @@ enter1InsDcl !fname (!d@InsDcl {pos = !pos}) = do
             Just (SymbolT.T SymT{name=typnm}) -> do
                  foreach d.defs (mklinkd typnm (MName tname))
                  case g.findit clas of
-                    Just (SymC {name,env}) -> do
+                    Just (SymbolT.C _) -> do
                         return ()
                         -- let cmeths = [ sym.name.base | sym@SymV{anno=true} <- values env ] 
                         -- foreach (map (QName.base • Symbol.name) (values env)) (mklink typnm (MName name))
@@ -323,16 +336,18 @@ enter1DatDcl fname (d@DatDcl {pos}) = do
                 register (p, n) = changeST Global.{sub <- SubSt.{
                     idKind <- insert (KeyTk (Position.first p)) (Right (mname n))}}
             foreach fnms (checkunique dcon.pos (mname dcon.name) fnms)
-            ST.enter (SymD {name = mname dcon.name, typ=pSigma, flds = fs,
+            ST.enter $ SymbolT.D
+                     (SymD {name = mname dcon.name, typ=pSigma, flds = fs,
                 cid=cid, sid=0, strsig = ssig, op = defaultInfix,
                 pos=dcon.pos, vis=dcon.vis, doc=dcon.doc})
             changeST Global.{
                 sub <- SubSt.{
                     idKind <- insert (KeyTk dcon.pos.first) (Right cqname)}}
             foreach fnps register 
-            when (dcon.vis == Public)
-                (ST.enter (SymL {name = VName g.thisPack dcon.name, alias = cqname,
-                    sid=0, pos=dcon.pos, vis=dcon.vis, {-doc=dcon.doc-}}))
+            when (dcon.vis == Public) $
+                ST.enter $ SymbolT.L
+                (SymL {name = VName g.thisPack dcon.name, alias = cqname,
+                    sid=0, pos=dcon.pos, vis=dcon.vis, {-doc=dcon.doc-}})
         checkunique :: Position -> QName -> [String] -> String -> StG ()
         checkunique pos con fs f = do
             when (1 < (length • filter (f==)) fs) do
@@ -370,7 +385,8 @@ enter1TypDcl fname (d@TypDcl {pos}) = do
         changeST Global.{
             sub <- SubSt.{
                 idKind <- insert (KeyTk pos.first) (Right dname)}}
-        ST.enter (SymA {sid=0, pos=d.pos, vis=d.vis, doc=d.doc,
+        ST.enter $ SymbolT.A
+                 (SymA {sid=0, pos=d.pos, vis=d.vis, doc=d.doc,
                        name = dname, typ = pSigma, kind,
                        vars = map transTVar d.vars})
 

@@ -41,6 +41,8 @@ module frege.compiler.Kinds where
 
 import frege.Prelude hiding(<+>, break)
 
+import  frege.compiler.common.Lens (set, unsafePartialView, view)
+
 import  Compiler.enums.Flags as Compilerflags(TRACEK)
 
 import  Compiler.types.Positions(Positioned)
@@ -71,47 +73,45 @@ kiTypes = do
     g <- getST
     let tsyms = typeSyms g
         deps  = map (typeDep g) tsyms
-        tdeps = zip (map Symbol.name tsyms) deps
+        tdeps = zip (map (view SymbolT.name) tsyms) deps
         groups = tsort tdeps
     foreach groups kiTypeGroup
     return ()
 
 --- do kind inference on a group of types 
 kiTypeGroup qns = do
-    types <- mapM U.findT qns
-    let vartypes = filter (varKind . Symbol.kind) types  -- with kinds that contain KVar
-        names    = map Symbol.name vartypes
-    foreach vartypes (kiTypeSym names)
+    let unsafeToSymT s = case s of { SymbolT.T x -> x; }
+    types <- mapM (fmap unsafeToSymT . U.findT) qns
+    let vartypes = filter (varKind . SymT.kind) types  -- with kinds that contain KVar
+        names    = map SymT.name vartypes
+    foreach vartypes (kiTypeSym names . SymbolT.T)
 
--- refresh :: Symbol -> StG Symbol
--- refresh sym = getST >>= (return . unJust . sym.name.findit)
-
- 
 
 kiTypeSym :: [QName] -> Symbol -> StG ()
 kiTypeSym names sym = do
     g <- getST
-    E.logmsg TRACEK (Symbol.pos sym) (text ("kind check for " ++ nice sym g))
+    E.logmsg TRACEK (view SymbolT.pos sym) (text ("kind check for " ++ nice sym g))
     -- kind check all constructor sigmas
-    let cons = [ con | con@SymD{typ} <- values sym.env ]
+    let cons = [ con | con@(SymbolT.D _) <- values $ unsafePartialView SymbolT.env sym ]
     foreach cons (kiConSym names)
     g ← getST
-    sym ← U.findT sym.name
+    let unsafeToSymT s = case s of { SymbolT.T x -> x; }
+    sym <- fmap unsafeToSymT $ U.findT $ view SymbolT.name sym
     let kflat (KApp k ks) = k : kflat ks
         kflat ks          = [ks]
         typ = ForAll (zipWith Tau.{kind=} (sym.typ.bound) (kflat sym.kind)) sym.typ.rho
         showbnds = text . joined " " . map (flip nice g)
-    changeSym sym.{typ}
-    E.logmsg TRACEK (Symbol.pos sym) (text "type is now ∀"
+    changeSym $ SymbolT.T sym.{typ}
+    E.logmsg TRACEK sym.pos (text "type is now ∀"
             <+> showbnds typ.bound <+> text "." <+> text (nicer typ.rho g)
         )
     
 
 kiConSym names con = do
     g <- getST
-    E.logmsg TRACEK (Symbol.pos con) (text ("kind check for " ++ nice con g))
-    (sigma,_) <- kiSigma names [] con.typ
-    changeSym con.{typ=sigma}
+    E.logmsg TRACEK (view SymbolT.pos con) (text ("kind check for " ++ nice con g))
+    (sigma,_) <- kiSigma names [] (unsafePartialView SymbolT.typ con)
+    changeSym $ set SymbolT.typ sigma con
 
 -- kind inference on a 'Sigma' type where something else than 'KType' is expected
 kiSigmaX :: Sigma -> Kind -> StG (Sigma, Kind)
@@ -221,11 +221,13 @@ kiRho names env (it@RhoFun{context,sigma,rho}) = do
 --- kind inference on a 'Ctx', takes into account kind checked classes only
 kiCtx names env Ctx{cname, tau} = do
     cls <- U.findC cname
-    case cls.tau.kind of
-        KVar -> return env          -- not yet kind checked
-        k    -> do
-            (_, env) <- unifyTauKind names env tau k
-            return env    
+    case cls of
+      SymbolT.C symc ->
+        case symc.tau.kind of
+            KVar -> return env          -- not yet kind checked
+            k    -> do
+                (_, env) <- unifyTauKind names env tau k
+                return env
 
 
 type Envs = [TreeMap String Kind]
@@ -293,24 +295,25 @@ unifyTauKind names env (TVar{pos,var,kind}) exp = do
 unifyTauKind names env (TCon{pos,name}) exp = do
     g <- getST
     sym <- U.findT name
-    
-    E.logmsg TRACEK pos (text ("unifyTauKind: " ++ nice name g
-        ++ "  initial "  ++ show sym.kind 
-        ++ "  expected " ++ show exp))
-    
-    case unifyKind sym.kind exp of
-        Just k -> do
-            when (! (k `keq` sym.kind) && sym.name `elem` names) do 
-                changeSym sym.{kind=k}
-            E.logmsg TRACEK pos (text ("unifyTauKind: " ++ nice name g ++ "  result " ++ show k))
-            return (k, env)
-        Nothing -> do
-            g <- getST
-            E.error pos (text ("kind error, type constructor `" ++ name.nice g 
-                                ++ "` has kind " 
-                                ++ show sym.kind
-                                ++ ", expected was " ++ show exp))
-            return (sym.kind, env)                                    
+    case sym of
+      SymbolT.T symt -> do
+        E.logmsg TRACEK pos (text ("unifyTauKind: " ++ nice name g
+            ++ "  initial "  ++ show symt.kind
+            ++ "  expected " ++ show exp))
+
+        case unifyKind symt.kind exp of
+            Just k -> do
+                when (! (k `keq` symt.kind) && symt.name `elem` names) do 
+                    changeSym $ SymbolT.T symt.{kind=k}
+                E.logmsg TRACEK pos (text ("unifyTauKind: " ++ nice name g ++ "  result " ++ show k))
+                return (k, env)
+            Nothing -> do
+                g <- getST
+                E.error pos (text ("kind error, type constructor `" ++ name.nice g
+                                    ++ "` has kind " 
+                                    ++ show symt.kind
+                                    ++ ", expected was " ++ show exp))
+                return (symt.kind, env)
 
 -- TCon b ~ exp  => check TCon for kb -> exp and b for kb
 unifyTauKind names env (it@TApp a b) exp = do
@@ -409,7 +412,7 @@ varKind (KApp a b) = varKind a || varKind b
 varKind _          = false
    
 --- find the 'Sigmas' of all constructors of the given type 'Symbol'
-conSigmas (SymbolT.T SymT{env}) = [ typ | SymD{typ} <- values env ] 
+conSigmas (SymbolT.T SymT{env}) = [ typ | SymbolT.D SymD{typ} <- values env ]
 conSigmas _ = []
 
 --- give the direct dependencies of a type symbol

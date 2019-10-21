@@ -13,6 +13,8 @@ import frege.Prelude hiding(apply, <+>)
 import Data.TreeMap as TM(TreeMap, values, keys, each, insert, lookup)
 import Data.List as DL(sortBy, partitioned)
 
+import  frege.compiler.common.Lens (unsafePartialView, view)
+
 import  Compiler.enums.Literals
 
 import  Compiler.types.Strictness
@@ -86,7 +88,8 @@ match :: Bool
             -> TreeMap Int Binding 
             -> StG (Binding, [JStmt])
 match assert (PVar {pos,uid,var}) bind cont binds = do
-         vsym <- U.findV local
+         let unsafeToSymV s = case s of { SymbolT.V x -> x; }
+         vsym <- unsafeToSymV <$> U.findV local
          g    ←  getST
 
          let strict = vsym.strsig.isStrict
@@ -108,7 +111,7 @@ match assert (PVar {pos,uid,var}) bind cont binds = do
          (rbind, code) <- if strict then realize (jname g) sbind else pure (sbind, [])
          let stmt
                     | var == "_" = code
-                    | otherwise  = sComment ("bind " ++ sls ++ " var " ++ nice (Symbol.name vsym) g
+                    | otherwise  = sComment ("bind " ++ sls ++ " var " ++ nice vsym.name g
                                          ++ "  to  " ++ show rbind) : code
              nbinds = insert uid rbind binds
          rest <- cont nbinds
@@ -124,7 +127,8 @@ match assert (p@PAt {pat,uid,var}) bind cont binds = do
          -- let patty = patternRMode g pat
         let local = Local uid var
             jname = (javaName g local).base
-        vsym <- U.findV local
+        let unsafeToSymV s = case s of { SymbolT.V x -> x; }
+        vsym <- unsafeToSymV <$> U.findV local
         let comment bind = sComment ("match " 
                         ++ nice p g ++ "::" ++ nicer vsym.typ g 
                         ++ "  with  " ++ show bind)
@@ -163,16 +167,17 @@ match assert (pat@PLit {kind=LBool, value}) bind cont binds = do
  
 match assert (pat@PCon {pos,qname,pats}) bind  cont binds = do
          -- g <- getST
-         symd <- U.findD qname                   -- forall a.a -> List a -> List a
+         let unsafeToSymD s = case s of { SymbolT.D x -> x; }
+         symd <- unsafeToSymD <$> U.findD qname  -- forall a.a -> List a -> List a
          symt' <- U.findT symd.name.tynm         -- forall a.List a
          case symt' of
            SymbolT.T symt ->
-             if symt.enum then matchEnum symd (SymbolT.T symt)
+             if symt.enum then matchEnum (SymbolT.D symd) (SymbolT.T symt)
                  else if symt.product
                      then if symt.newt
-                         then matchNew     symd (SymbolT.T symt)
-                         else matchProd    symd (SymbolT.T symt) -- pat bind cont binds
-                     else matchVariant symd (SymbolT.T symt) -- pat bind cont binds
+                         then matchNew     (SymbolT.D symd) (SymbolT.T symt)
+                         else matchProd    (SymbolT.D symd) (SymbolT.T symt) -- pat bind cont binds
+                     else matchVariant (SymbolT.D symd) (SymbolT.T symt) -- pat bind cont binds
      where
          unKindedStrict g lbnd = case strictBind g lbnd of
                     kbnd ->  case kbnd.jtype of
@@ -196,8 +201,8 @@ match assert (pat@PCon {pos,qname,pats}) bind  cont binds = do
          matchNew symd symt = do
             g <- getST
             let -- box0    = adaptSigma g bind
-                arg     = symd.typ.rho.sigma                  -- first arg of data con
-                tree    = unifySigma g symt.typ bind.ftype    -- instantiate type args a -> Int
+                arg     = (unsafePartialView SymbolT.typ symd).rho.sigma                  -- first arg of data con
+                tree    = unifySigma g (unsafePartialView SymbolT.typ symt) bind.ftype    -- instantiate type args a -> Int
                 sig     = substSigma tree arg                 -- substitute in arg
             E.logmsg TRACEG (getpos pat) (
                     text "matchNew:" <+> text (nicer pat g) </> PP.nest 4 (
@@ -211,7 +216,8 @@ match assert (pat@PCon {pos,qname,pats}) bind  cont binds = do
             match assert (head pats) box1 cont binds
 
          matchVariant :: Symbol -> Symbol -> StG (Binding, [JStmt])
-         matchVariant symd (SymbolT.T symt) = do
+         matchVariant symd' (SymbolT.T symt) = do
+            let symd = case symd' of { SymbolT.D x -> x; }
             g <- getST
             E.logmsg TRACEG (getpos pat) (text "match pattern "
                 <+> text (nicer pat g)
@@ -226,14 +232,14 @@ match assert (pat@PCon {pos,qname,pats}) bind  cont binds = do
                  cname = if symt.product then "" else conGetter qname   -- _DCons
                  vbind = if symt.product then boxd else
                             Bind boxd.stype boxd.ftype
-                                (variantType g boxd.jtype symd) 
+                                (variantType g boxd.jtype $ SymbolT.D symd)
                                 (JInvoke (JX.jexmem boxd.jex cname) [])
  
             (varb, code2) <- if symt.product then return (boxd, [])
                              else realize "$" vbind             -- TList.DCons $2 = $1._DCons()
 
             E.logmsg TRACEG pos (text "match constructor "
-                    <+> text (nicer symd g)
+                    <+> text (nicer (SymbolT.D symd) g)
                     </> text "realized at "
                     <+> text (show varb)
                     </> text "fields:"
@@ -375,7 +381,7 @@ match _ pat b c bs = do
 matchCon assert (PCon {pos,qname, pats}) con bexs cont binds = do
          g <- getST
          sym <- U.findD qname
-         if sym.sid != Symbol.sid con
+         if view SymbolT.sid sym != view SymbolT.sid con
              then do
                  E.fatal pos (text ("matchCon: " ++ nice qname g ++ " against " ++ nice con g))
              else do

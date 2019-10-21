@@ -47,6 +47,8 @@ import Data.TreeMap as TM(TreeMap, keys, insert, insertWith, each, values, looku
 import Data.List as DL(sortBy, zipWith4)
 import Data.Bits(BitSet.BitSet)
 
+import  frege.compiler.common.Lens (unsafePartialView, view)
+
 import  Compiler.enums.Flags
 import  Compiler.enums.TokenID(CONID, VARID, defaultInfix, ROP4)
 import  Compiler.enums.Visibility
@@ -243,20 +245,21 @@ importEnv pos env ns pack (imp@Imports {except=true, items}) = do
         g <- getST
         let xs = [ withNS ns.unNS  (ImportItem.name e) | e <- items ]
         exss <- mapSt (resolve (VName g.thisPack) pos) xs
+        let isSymD (SymbolT.D _) = true
+            isSymD _ = false
         let exs = fold (++) [] exss
-            nitems = [ protoItem.{ name = Simple pos.first.{tokid=VARID, value=(Symbol.name sym).base},
+            nitems = [ protoItem.{ name = Simple pos.first.{tokid=VARID, value=(view SymbolT.name sym).base},
                                       members = nomem csym,
-                                      alias   = (Symbol.name sym).base} |
+                                      alias   = (view SymbolT.name sym).base} |
                         sym <- sortBy (comparing constructor) (values env),         -- place SymL before SymC
-                        csym <- (g.findit sym.name),
-                        not (Symbol.{cid?} csym)                                    -- no constructors
-                            || (Symbol.name sym).base != (Symbol.name csym).base,   -- except renamed ones
-                        Symbol.name csym `notElem` exs,
-                        Symbol.vis sym == Public
+                        csym <- g.findit (view SymbolT.name sym),
+                        not (isSymD csym)                                           -- no constructors
+                            || (view SymbolT.name sym).base != (view SymbolT.name csym).base,   -- except renamed ones
+                        view SymbolT.name csym `notElem` exs,
+                        view SymbolT.vis sym == Public
                      ]
-            nomem (SymC {}) = Just []
-            -- nomem (SymT {}) = Just []
-            nomem _         = Nothing
+            nomem (SymbolT.C _) = Just []
+            nomem _ = Nothing
         importEnv pos env ns pack imp.{except=false, items=nitems}
 
 --- A public import list is equivalent to one without public but public specified for all items.
@@ -266,7 +269,8 @@ importEnv pos env ns pack (imp@Imports {publik=true, items})
 importEnv pos env ns pack (Imports {items}) = foreach items (linkItem ns.unNS pack)
 
 --- a symbolic link is dereferenced and the link goes to the target
-linkHere ns pack (item@Item {alias=itema}) (link@SymL {name, alias}) = do
+linkHere :: String -> Pack -> ImportItem -> Symbol -> StG ()
+linkHere ns pack (item@Item {alias=itema}) (SymbolT.L (link@SymL {name, alias})) = do
     let pos = Pos item.name.id item.name.id
     g <- getST
     case g.findit alias of
@@ -283,26 +287,26 @@ linkHere ns pack (item@Item {publik,name,members,alias=newn}) sym = do
     let pos   = Pos name.id name.id
     let conid = (newn.charAt 0).isUpperCase
         conidOk
-            | TName _ _ <- sym.name = true
-            | SymD {}   <- sym      = true
-            | otherwise             = false
+            | TName _ _ <- view SymbolT.name sym = true
+            | SymbolT.D _ <- sym = true
+            | otherwise = false
         vis = if publik then Public else Private
     g <- getST
     E.logmsg TRACE2 pos (text ("linkHere: " ++ ns ++ "." ++ newn ++ ", vis =" ++ show vis
         ++ " ==> " ++  nice sym g))
     changeST Global.{sub <- SubSt.{
-        idKind <- insert (KeyTk pos.first) (Right sym.name)}}
+        idKind <- insert (KeyTk pos.first) (Right (view SymbolT.name sym))}}
 
-    let !errors = case sym.name of
-          TName _ b
-            | newn == sym.name.base || conid = linkqvp (TName g.thisPack newn) sym vis pos
+    let !errors = case view SymbolT.name sym of
+          name@(TName _ b)
+            | newn == name.base || conid = linkqvp (TName g.thisPack newn) sym vis pos
             | otherwise = do
                 E.error pos (msgdoc ("Alias for " ++ nice sym g ++ " must be a type name, not `" ++ newn ++ "'"))
                 stio ()
-          _
-            | newn == sym.name.base || conid == conidOk = linkqvp (VName g.thisPack newn) sym vis pos
+          name
+            | newn == name.base || conid == conidOk = linkqvp (VName g.thisPack newn) sym vis pos
             -- allow variables that link to constructors
-            | SymD{} <- sym, !conid = linkqvp (VName g.thisPack newn) sym vis pos 
+            | SymbolT.D _ <- sym, !conid = linkqvp (VName g.thisPack newn) sym vis pos
             | otherwise = do
                 E.error pos (msgdoc ("Alias for " ++ nice sym g ++ " must be a "
                     ++ (if conidOk then "constructor" else "variable")
@@ -318,7 +322,7 @@ linkHere ns pack (item@Item {publik,name,members,alias=newn}) sym = do
         noteWhy (Local{})        = stio ()
         noteReExported p | p /= pack = changeST _.{sub <- _.{packWhy <- insertWith (++) p [NSX ns]}}
                          | otherwise = changeST _.{sub <- _.{packWhy <- insert p [NSX ns]}}
-    noteWhy sym.name
+    noteWhy (view SymbolT.name sym)
 
     errors 
     case sym of
@@ -327,18 +331,18 @@ linkHere ns pack (item@Item {publik,name,members,alias=newn}) sym = do
                 let cons = [ item.{name <- (pos.first.{tokid=CONID, value=mem.name.base} `qBy`),
                                     members = Nothing,
                                     alias = mem.name.base, publik = false}
-                                | mem@SymD {} <- values env, mem.vis == Public ]
+                                | SymbolT.D mem <- values env, mem.vis == Public ]
                 foreach cons (linkItem ns pack)
             | Just ms <- members = do
                 let nms = map  ImportItem.{name <- (`qBy` item.name) • SName.id} ms
                 foreach nms (linkItem ns pack)
-        SymC {env}
+        SymbolT.C SymC{env}
             | Nothing <- members =  do        -- link class methods
-                let meth = [  item.{name <- (pos.first.{tokid=VARID, value=sym.name.base} `qBy`),
-                                    members = Nothing, alias = sym.name.base}
-                                | sym@SymV {vis} <- values env,
+                let meth = [  item.{name <- (pos.first.{tokid=VARID, value=name.base} `qBy`),
+                                    members = Nothing, alias = name.base}
+                                | SymbolT.V SymV{vis, name} <- values env,
                                   vis == Public || vis == Abstract,
-                                  not (defined sym.name.base) ]     -- import only yet undefined class members
+                                  not (defined name.base) ]     -- import only yet undefined class members
                     -- here = g.thisTab
                     defined s = isJust (g.find (VName g.thisPack s))
                 foreach meth (linkItem ns pack)
@@ -358,7 +362,7 @@ linkItem ns pack (item@Item {publik,name,members,alias}) = do
         [] -> stio ()       -- got error message from resolve or excluded
         [sym] -> linkHere ns pack item sym
         syms                -- look for a type name
-            | (tsym:_) <- [ x | x <- syms, TName{} <- Just x.name] 
+            | (tsym:_) <- [ x | x <- syms, TName{} <- Just (view SymbolT.name x)] 
             = linkHere ns pack item tsym
             | otherwise = do        -- by taking the first result, we resolve NS.x
                 linkHere ns pack item (head syms)
@@ -501,7 +505,7 @@ importClassData pos why pack = do
                 
             let strMB "" = Nothing
                 strMB s  = Just s
-            let rbSymA n = SymA {sid=0, pos=mkpos sym.offset sym.name.base, vis, 
+            let rbSymA n = SymbolT.A SymA{sid=0, pos=mkpos sym.offset sym.name.base, vis,
                     doc  = strMB sym.doc,
                     name = rebuildQN sym.name,
                     typ = nSigma sym.typ,
@@ -510,7 +514,7 @@ importClassData pos why pack = do
                   where sym = elemAt fp.symas n
                         vis = if sym.publik then Public else Protected
                 rbSymV :: CT.SymVArr -> Int -> Symbol
-                rbSymV arr n = SymV {sid=0, pos=mkpos sym.offset sym.name.base, vis=v, doc=strMB sym.doc,
+                rbSymV arr n = SymbolT.V SymV{sid=0, pos=mkpos sym.offset sym.name.base, vis=v, doc=strMB sym.doc,
                     name = rebuildQN sym.name, typ = nSigma sym.sig, pur = sym.pur,
                     nativ = if sym.nativ == "" then Nothing else Just sym.nativ,
                     expr = rbExpr sym.expr,
@@ -524,7 +528,7 @@ importClassData pos why pack = do
                   where sym = elemAt arr n
                         v = if sym.abst then Abstract else if sym.publik then Public else Protected
                 rbSymD :: CT.SymDArr -> Int -> Symbol
-                rbSymD arr n = SymD {sid=0, pos=mkpos sym.offset sym.name.base, vis, doc=strMB sym.doc,
+                rbSymD arr n = SymbolT.D SymD{sid=0, pos=mkpos sym.offset sym.name.base, vis, doc=strMB sym.doc,
                     name = rebuildQN sym.name, cid = sym.cid,
                     typ = nSigma sym.typ,
                     flds = map mkfield fields,
@@ -544,12 +548,12 @@ importClassData pos why pack = do
                         vis = if sym.priv then Private else if sym.publik then Public else Protected
                         
                 rbSymL :: CT.SymLArr -> Int -> Symbol
-                rbSymL arr n = SymL {sid=0, pos=mkpos sym.offset sym.name.base, vis, -- doc=strMB sym.doc,
+                rbSymL arr n = SymbolT.L SymL{sid=0, pos=mkpos sym.offset sym.name.base, vis, -- doc=strMB sym.doc,
                     name = rebuildQN sym.name, alias = rebuildQN sym.alias}
                   where sym = elemAt arr n
                         vis = if sym.publik then Public else Protected
                 rbSymC :: CT.SymC -> Symbol
-                rbSymC sym = SymC {sid=0, pos=mkpos sym.offset sym.name.base, vis, doc=strMB sym.doc,
+                rbSymC sym = SymbolT.C SymC{sid=0, pos=mkpos sym.offset sym.name.base, vis, doc=strMB sym.doc,
                     name = rebuildQN sym.name,
                     tau  = nTau sym.tau, 
                     supers = sups,
@@ -566,7 +570,7 @@ importClassData pos why pack = do
                     foreach (enumFromTo 0 (sym.funs.length-1)) (enter • rbSymV sym.funs)
                     foreach (enumFromTo 0 (sym.lnks.length-1)) (enter • rbSymL sym.lnks)
                 rbSymI :: CT.SymI -> Symbol
-                rbSymI sym = SymI {sid=0, pos=mkpos sym.offset sym.name.base, 
+                rbSymI sym = SymbolT.I SymI{sid=0, pos=mkpos sym.offset sym.name.base,
                     vis=Public, doc=strMB sym.doc,
                     name = rebuildQN sym.name,
                     clas = rebuildQN sym.clas,
@@ -594,8 +598,8 @@ importClassData pos why pack = do
                     foreach (enumFromTo 0 (sym.cons.length-1)) (enter • rbSymD sym.cons)
                     foreach (enumFromTo 0 (sym.funs.length-1)) (enter • rbSymV sym.funs)
                     foreach (enumFromTo 0 (sym.lnks.length-1)) (enter • rbSymL sym.lnks)
-                    case rsym.nativ of
-                        Just nativ -> U.nativeType nativ rsym.name
+                    case unsafePartialView SymbolT.nativ rsym of
+                        Just nativ -> U.nativeType nativ (view SymbolT.name rsym)
                         nothing    -> return ()
 
 
@@ -636,10 +640,12 @@ preludeBasics = do
                 product = true, enum = true, pur = false, newt = false,
                 kind = KType, gargs = [],
                 sid=0, pos=Position.null, vis=Public, doc=Just "Unit type"})
-    enter (SymD {name = unitC, typ=unitTy, flds = [], cid = 0,
+    enter $ SymbolT.D
+          (SymD {name = unitC, typ=unitTy, flds = [], cid = 0,
                 sid=0, pos=Position.null, vis=Public, doc=Just "Unit value",
                 op = defaultInfix, strsig = U})
-    enter (SymL {name = unitCA, alias = unitC,
+    enter $ SymbolT.L
+          (SymL {name = unitCA, alias = unitC,
                 sid=0, pos=Position.null, vis=Public})
     -- [], a:as
     let listT    = TName pPreludeBase "[]"
@@ -660,17 +666,21 @@ preludeBasics = do
                 product = false, enum = false, pur = false, newt = false,
                 kind = Kind.unary, gargs = [],
                 sid=0, pos=Position.null, vis=Public, doc=Just "list type"})
-    enter (SymD {name = listNil, typ = listTy, flds = [], cid=0,
+    enter $ SymbolT.D
+          (SymD {name = listNil, typ = listTy, flds = [], cid=0,
                 sid=0, pos=Position.null, vis=Public, doc=Just "empty list",
                 op = defaultInfix, strsig = U})
-    enter (SymD {name = listCons, typ = consTy, cid=1,
+    enter $ SymbolT.D
+          (SymD {name = listCons, typ = consTy, cid=1,
                    flds = [ aField false (ForAll [] (RhoTau [] va)),
                             aField false (ForAll [] listRho)],
                    sid=0, pos=Position.null, vis=Public, doc=Just "list construction",
                    op = ROP4, strsig = U})
-    enter (SymL {name = VName pPreludeBase "[]", alias = listNil,
+    enter $ SymbolT.L
+          (SymL {name = VName pPreludeBase "[]", alias = listNil,
                    sid=0, pos=Position.null, vis=Public})
-    enter (SymL {name = VName pPreludeBase ":", alias = listCons,
+    enter $ SymbolT.L
+          (SymL {name = VName pPreludeBase ":", alias = listCons,
                    sid=0, pos=Position.null, vis=Public})
     foreach (enumFromTo 2 26) (tupletype false)
 
@@ -708,10 +718,12 @@ preludeBasics = do
                         product = true, enum = false, kind = Kind.kind n,
                         sid=0, pos=Position.null, vis=Public, doc=Just (show n ++ "-tuple"),
                         pur = false, newt = false, gargs = []})
-        enter (SymD {name = tupleC, typ = ForAll vks conRho, flds = flds, cid=0,
+        enter $ SymbolT.D
+              (SymD {name = tupleC, typ = ForAll vks conRho, flds = flds, cid=0,
                         sid=0, pos=Position.null, vis=Public, doc=Just (show n ++ "-tuple constructor"),
                         op = defaultInfix, strsig = U})
-        enter (SymL {name = VName pPreludeBase name, alias = tupleC,
+        enter $ SymbolT.L
+              (SymL {name = VName pPreludeBase name, alias = tupleC,
                         sid=0, pos=Position.null, vis=Public})
 
 mvar :: Tau

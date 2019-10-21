@@ -6,6 +6,7 @@ import  frege.Prelude hiding(break, <+>)
 import  frege.data.TreeMap as TM(TreeMap, lookup, each, insert, union, including, contains, keys, values, fromKeys)
 import  frege.data.List  as  DL(partitioned, sortBy, minimumBy)
 import  frege.lib.PP(break, fill, text, nest, msgdoc, <+>, <>, DOCUMENT)
+import  frege.compiler.common.Lens (preview, set, unsafePartialView, view)
 import  frege.compiler.enums.Flags
 import  frege.compiler.enums.Visibility
 import  frege.compiler.types.Positions
@@ -33,12 +34,12 @@ canonical g qname = case Global.findit g qname of
 
 
 -- access is forbidden to global private symbols from a different package
-accessforbidden we sym
-    | Local {}  <- Symbol.name sym = false
-    | VName p _ <- Symbol.name sym = sym.vis == Private && p != we
-    | TName p _ <- Symbol.name sym = sym.vis == Private && p != we
-    | MName (TName p _) _ <- Symbol.name sym = sym.vis == Private && p != we
-    | otherwise = Prelude.error ("Strange symbol")
+accessforbidden we sym = case view SymbolT.name sym of
+    Local {} -> false
+    VName p _ -> view SymbolT.vis sym == Private && p != we
+    TName p _ -> view SymbolT.vis sym == Private && p != we
+    MName (TName p _) _ -> view SymbolT.vis sym == Private && p != we
+    _ -> Prelude.error ("Strange symbol")
 
 
 protected resolve  :: (String -> QName) -> Position -> SName -> StG [QName]
@@ -58,18 +59,18 @@ protected resolve fname pos sname = do
                 foreach ss docWarningSym
                 foreach ss (traceSym sname)
                 foreach ss registerNS
-                stio (map Symbol.name ss) -- some public ones found
+                stio (map (view SymbolT.name) ss) -- some public ones found
             where
-                registerNS sym = weUse sym.name 
+                registerNS sym = weUse (view SymbolT.name sym)
                 docWarningSym :: Symbol -> StG ()
                 docWarningSym sym = do
                     g <- getST
-                    docWarning pos (sym.name.nicer g) sym.doc
+                    docWarning pos ((view SymbolT.name sym).nicer g) (unsafePartialView SymbolT.doc sym)
                      
                 traceSym :: SName -> Symbol -> StG ()
                 traceSym sname symbol = do
                     E.logmsg TRACE5 pos (text (show sname ++ " resolved to " ++ nice symbol g ++ " ("
-                        ++ QName.show symbol.name ++ ", " ++ show symbol.vis ++ ")"))
+                        ++ QName.show (view SymbolT.name symbol) ++ ", " ++ show (view SymbolT.vis symbol) ++ ")"))
 
 
 {-- Note in the state that we need the import that is associated
@@ -123,13 +124,15 @@ private resolve3 fname pos (Simple Token{value=qs}) = do
         rs -> stio rs
   where
     scope g (MName t _) | Just sym <- g.findit t
-                        = scopefrom [sym.env, g.thisTab]
+                        = scopefrom [unsafePartialView SymbolT.env sym, g.thisTab]
     scope g _ = scopefrom [g.thisTab]
     scopefrom envs = fold more [] envs
         where
             more :: [String] -> Symtab -> [String]
-            more acc env = foldr (:) acc [ v.name.base | v <- values env,
-                                    not (v::Symbol).{clas?} ]
+            more acc env = foldr (:) acc [ (view SymbolT.name v).base | v <- values env,
+                                    not (isSymI v) ]
+            isSymI (SymbolT.I _) = true
+            isSymI _ = false
 -- T.v  T.C  N.v  N.C N.T
 private resolve3 _ pos (snm@With1 Token{value=n} Token{value=qv}) = do
     g <- getST
@@ -137,7 +140,7 @@ private resolve3 _ pos (snm@With1 Token{value=n} Token{value=qv}) = do
     let tname   = TName g.thisPack n
         mname   = MName tname v         -- T.v or T.C
         member  = g.findit mname
-        mlist   = map (canonical g • Symbol.name) member.toList -- [MName _ _ ] or []
+        mlist   = map (canonical g . view SymbolT.name) member.toList -- [MName _ _ ] or []
         mbtsym  = g.findit tname
         msts | Just sym <- mbtsym = ms sym
              | otherwise          = []
@@ -160,7 +163,7 @@ private resolve3 _ pos (snm@With1 Token{value=n} Token{value=qv}) = do
                         case mbtsym of
                             -- re-register qualifier as type name
                             Just sym -> changeST Global.{sub <- SubSt.{
-                                idKind <- insert (KeyTk snm.ty) (Right sym.name)}}
+                                idKind <- insert (KeyTk snm.ty) (Right $ view SymbolT.name sym)}}
                             sonst -> return ()
                         stio mlist
                 (Just s, Nothing) -> do
@@ -179,8 +182,8 @@ private resolve3 _ pos (snm@With1 Token{value=n} Token{value=qv}) = do
             Just sym -> do
               -- register qualifier as type name
               changeST Global.{sub <- SubSt.{
-                    idKind <- insert (KeyTk snm.ty) (Right sym.name)}}
-              weUse sym.name
+                    idKind <- insert (KeyTk snm.ty) (Right $ view SymbolT.name sym)}}
+              weUse $ view SymbolT.name sym
               case member of
                 Just mem -> stio [mem]
                 Nothing -> do
@@ -191,12 +194,12 @@ private resolve3 _ pos (snm@With1 Token{value=n} Token{value=qv}) = do
     -- all known type and namespace names
     tsns :: Global -> [String]
     tsns g = [ n | NSX n <- keys g.namespaces ]
-          ++ [ s.name.base | (s::Symbol) <- values g.thisTab, isTName s.name]
+          ++ [ (view SymbolT.name s).base | (s::Symbol) <- values g.thisTab, isTName (view SymbolT.name s)]
     ms :: Symbol -> [String]
-    ms s | s.{env?} = map (QName.base • Symbol.name) (values s.env)
+    ms s | Just env <- preview SymbolT.env s = map (QName.base . view SymbolT.name) (values env)
          | otherwise = []
     es :: Symtab -> [String]
-    es e = map (QName.base • Symbol.name) (values e)
+    es e = map (QName.base . view SymbolT.name) (values e)
 
 private resolve3 _ pos (snm@With2 Token{value=n} Token{value=t} Token{value=qm}) = do
     g <- getST
@@ -217,8 +220,8 @@ private resolve3 _ pos (snm@With2 Token{value=n} Token{value=t} Token{value=qm})
                 Just sym -> do
                   -- register 2nd qualifier as type name
                   changeST Global.{sub <- SubSt.{
-                    idKind <- insert (KeyTk snm.ty) (Right sym.name)}}
-                  weUse sym.name
+                    idKind <- insert (KeyTk snm.ty) (Right $ view SymbolT.name sym)}}
+                  weUse $ view SymbolT.name sym
                   let mname = MName tname m
                   case g.findit mname of
                     Nothing -> do
@@ -238,13 +241,10 @@ private resolve3 _ pos (snm@With2 Token{value=n} Token{value=t} Token{value=qm})
     ns :: Global -> [String]
     ns g = [ n | NSX n <- keys g.namespaces ]
     ms :: Symbol -> [String]
-    ms s | s.{env?} = map (QName.base • Symbol.name) (values s.env)
+    ms s | Just env <- preview SymbolT.env s = map (QName.base . view SymbolT.name) (values env)
          | otherwise = []
-    -- es :: Symtab -> [String]
-    -- es e = map (QName.base • Symbol.name) (values e)
-    -- all type names from a given package
     ts :: Symtab -> [String]
-    ts e = [ x | TName _ x <- map Symbol.name (values e) ]
+    ts e = [ x | TName _ x <- map (view SymbolT.name) (values e) ]
 
 
 resolveVName fname pos name = do
@@ -258,11 +258,11 @@ resolveVName fname pos name = do
                 -- but only if it is linked from the global level.
                 | Simple{} <- name,                           -- simple name was resolved
                   MName iname op <- x,                        -- found member name
-                  Just (SymI{}) <- g.findit iname,            -- of an instance
+                  Just (SymbolT.I _) <- g.findit iname,       -- of an instance
                                                               -- same is known globally
-                  Just (SymV{name=cop}) <- g.findit (VName g.thisPack op),
+                  Just (SymbolT.V SymV{name=cop}) <- g.findit (VName g.thisPack op),
                   MName cname _ <- cop,                       -- and is linked to a member
-                  Just (SymC{}) <- g.findit cname = do        -- of a type class
+                  Just (SymbolT.C _) <- g.findit cname = do   -- of a type class
                     -- register id
                     changeST Global.{sub <- SubSt.{
                         idKind <- insert (KeyTk name.id) (Right cop)}}
@@ -332,9 +332,9 @@ checkXName pos sym name = do
         g <- getST
         case g.findit name of
             Nothing -> stio Nothing      -- error should have come from resolve
-            Just it | constructor sym == constructor it = stio (Just it.name)
+            Just it | constructor sym == constructor it = stio (Just $ view SymbolT.name it)
                     | otherwise = do
-                        E.error pos (fill ([text "expected", text ((Symbol.{name=name} sym).nice g) <> text ","]
+                        E.error pos (fill ([text "expected", text ((set SymbolT.name name sym).nice g) <> text ","]
                                     ++ break "but found " ++ [text (it.nice g)]))
                         stio Nothing
 
