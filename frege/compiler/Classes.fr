@@ -531,7 +531,7 @@ funForCIT cname iname tname (mname@MName _ base) = do
                     ++ ", inst: " ++ nicer iname g
                     ++ ", type: " ++ nicer tname g
                     ++ ", member: " ++ nicer mname g))
-        let ivmb = isym.env.lookup mname.key
+        let ivmb = isym.meth.lookup mname.key
             tvmb = tsym.env.lookup mname.key
             -- implemented vsym = isJust (Symbol.expr vsym) || isJust (Symbol.nativ vsym)
             inherit xname = do
@@ -561,7 +561,7 @@ funForCIT cname iname tname (mname@MName _ base) = do
                         enter $ SymbolT.V imem
                         linkq (MName tname base) $ SymbolT.V imem
         case ivmb of
-            Just (SymbolT.V (ivsym@SymV{name}))
+            Just (SymMeth.V (ivsym@SymV{name}))
                 | implemented (SymVal.V ivsym) || not (g.our iname) = case tvmb of
                     Just (SymbolT.L (tvsym@SymL{alias}))
                         | alias == name = changeSym $ SymbolT.V ivsym.{op=msym.op}  -- copy op
@@ -582,14 +582,14 @@ funForCIT cname iname tname (mname@MName _ base) = do
                         linkq (MName tname base) $ SymbolT.V ivsym
                         changeSym $ SymbolT.V ivsym.{op=msym.op}  -- copy op
                 | otherwise = E.error isym.pos (msgdoc ("implementation missing for " ++ ivsym.nice g))
-            Just (Symbol.L SymL{pos=ipos, name=member, alias})    -- imported instance with links to type methods? 
+            Just (SymMeth.L SymL{pos=ipos, name=member, alias})    -- imported instance with links to type methods? 
                 | not (g.our iname), alias.{tynm?}, alias.tynm == tname = stio ()
                 | otherwise = case g.findit alias of
                     Just symv' | SymbolT.V symv <- symv', not symv.anno && not (maybe false (const true) symv.nativ) = do
                         E.error ipos (msgdoc ("function `" ++ nicer alias g
                             ++ "` given as implementation of instance member `"
                             ++ nicer member g ++ "` must be annotated."))
-                        changeSym $ SymbolT.I isym.{ env <- delete member.key }
+                        changeSym $ SymbolT.I isym.{ meth <- delete member.key }
                     Just osym | not (g.ourSym osym) || implemented (unsafePartialView SymbolT._Val osym) = case tvmb of
                         Just (SymbolT.L (tsym@SymL{alias=same}))
                             | same == alias = changeSym $ set SymbolT.op msym.op osym  -- copy op
@@ -608,7 +608,6 @@ funForCIT cname iname tname (mname@MName _ base) = do
                     Just osym -> E.error ipos (text (nicer osym g ++ " is not implemented."))
                     Nothing -> do
                         E.fatal ipos (msgdoc (nicer member g ++ "  links to  " ++ alias.nicer g ++ ", but the latter doesn't exist."))
-            Just osym -> E.fatal isym.pos (text ("expected instance member, found " ++ osym.nice g))
             Nothing -> case tvmb of
                 Nothing -> inherit mname
                 Just (SymbolT.V tvsym)
@@ -699,29 +698,28 @@ implemented (SymVal.V vsym) = isJust vsym.expr || isJust vsym.nativ
     check for each method in an instance if the type is more specific than the class type
     -}
 tcInstMethods :: [SymC Global] -> SymI Global -> StG ()
-tcInstMethods supers inst = foreach (values inst.env) (tcInstMethod supers inst)
+tcInstMethods supers inst = foreach (values inst.meth) (tcInstMethod supers inst)
 
 {--
     check if the type of an instance method is more specific than the type of the class method
     -}
-tcInstMethod :: [SymC Global] -> SymI Global -> Symbol -> StG ()
-tcInstMethod [] isym msym = do
+tcInstMethod :: [SymC Global] -> SymI Global -> SymMeth Global -> StG ()
+tcInstMethod [] _ msym = do
         g <- getST
-        E.error (view SymbolT.pos msym) (msgdoc (msym.nice g ++ " is not a class member function"))
+        E.error (view SymMeth.pos msym) (msgdoc (msym.nice g ++ " is not a class member function"))
 
-tcInstMethod (sc:scs) isym msym
-    | Lens.is SymbolT._V msym || Lens.is SymbolT._L msym = do
+tcInstMethod (sc:scs) isym msym = do
         g <- getST
-        case sc.env.lookupS (view SymbolT.name msym).key of
+        case sc.env.lookupS (view SymMeth.name msym).key of
             Nothing -> tcInstMethod scs isym msym
             Just (SymbolT.V SymV{typ=(s@ForAll sbnd srho)}) | not (isPSigma s) = do
                 g <- getST
                 let !mtnice = case isPSigma sig of true -> "None"; false -> sig.nicer g
                     !csig   = ForAll (filter ((sc.tau.var!=) . _.var) sbnd) srho
-                    !sig    = case g.findit (view SymbolT.name msym) of
+                    !sig    = case g.findit (view SymMeth.name msym) of
                                 Just xsym | Just typ <- preview SymbolT.typ xsym -> typ
                                 other    -> error ("tcInstMethod: link to nothing: " ++ nice msym g)
-                E.logmsg TRACE6 (view SymbolT.pos msym) (text (msym.nice g
+                E.logmsg TRACE6 (view SymMeth.pos msym) (text (msym.nice g
                     ++ " class: " ++ sc.nice g
                     ++ " class method type: " ++ s.nicer g
                     ++ " own type: " ++ mtnice))
@@ -745,19 +743,15 @@ tcInstMethod (sc:scs) isym msym
                             -- of Eq.== for Int
                             adapt = filter (not • T.sameCtx (Ctx Position.null sc.name tau))
                             -- msig1 = msig
-                        E.logmsg TRACE6 (view SymbolT.pos msym) (text (msym.nice g ++ "  adapted type  " ++ msig.nicer g))
+                        E.logmsg TRACE6 (view SymMeth.pos msym) (text (msym.nice g ++ "  adapted type  " ++ msig.nicer g))
                         msig <- T.canonicSignature msig
-                        E.logmsg TRACE6 (view SymbolT.pos msym) (text (msym.nice g ++ "  instance type  " ++ msig.nicer g))
-                        -- let inst = U.sigmaInst g csig msig
-                        -- E.logmsg TRACE6 msym.pos ("sigmaInst: " ++ show (map (flip nice g) inst))
-                        -- let mfinal = msig.{bound = [ var | TVar {var} <- inst]}
-                        -- E.logmsg TRACE6 msym.pos (msym.nice g ++ "  instance type  " ++ mfinal.nicer g)
+                        E.logmsg TRACE6 (view SymMeth.pos msym) (text (msym.nice g ++ "  instance type  " ++ msig.nicer g))
                         unless (isPSigma sig) do
                             T.subsCheck msym sig msig
                             T.checkConstraints msym sig msig
                             T.checkConstraints msym msig sig
                         case msym of
-                            SymbolT.V msymv -> changeSym $ SymbolT.V msymv.{typ = msig, anno = true}
+                            SymMeth.V msymv -> changeSym $ SymbolT.V msymv.{typ = msig, anno = true}
                             _ -> pure ()
                     other -> E.fatal isym.pos (msgdoc ("RhoTau expected, got " ++ rhotau.nicer g))
             Just (SymbolT.V (symv@SymV {typ=sig})) | isPSigma sig -> do
@@ -767,7 +761,3 @@ tcInstMethod (sc:scs) isym msym
             Just (SymbolT.L _) -> tcInstMethod scs isym msym
             Just other -> do
                 E.fatal (view SymbolT.pos other) (text (other.nice g ++ " in " ++ sc.nice g))
-
-tcInstMethod _ _ msym = do
-        g <- getST
-        E.fatal (view SymbolT.pos msym) (text ("tcInstMethod: strange symbol " ++ msym.nice g))
