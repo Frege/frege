@@ -150,7 +150,7 @@ topFun (sym@SymV {expr = Just dx}) binds = do
         --        abinds  = map (arg2Bind g) strictArgs
         --        ctxs    = map (\(_,_,_,ctx) -> JAtom ctx) ctxArgs
 
-    stmts ← compiling (SymbolT.V sym) (genFunction sym si.returnJT methArgs binds)
+    stmts ← compiling sym (genFunction sym si.returnJT methArgs binds)
 
     let worker      = JMethod {attr,
                        gvars = targs g sym.typ,
@@ -207,7 +207,7 @@ localFun (sym@SymV {expr = Just dx}) binds = do
         methArgs  = argDefs argAttr si argNames
         methName  = (javaName g sym.name).base
 
-    stmts ← compiling (SymbolT.V sym) (genFunction sym si.returnJT methArgs binds)
+    stmts ← compiling sym (genFunction sym si.returnJT methArgs binds)
 
     let worker      = JMethod {attr = attrs [JFinal, JPublic],
                        gvars = targs g sym.typ,
@@ -268,7 +268,7 @@ innerFun (SymbolT.V (sym@SymV {expr = Just dx})) binds = do
             </> text "This is probably a compiler error you should report."
             )
     ex      ←   dx
-    stmts   ←   compiling (SymbolT.V symx) (genLambda (lazy . last . _.gargs $ funcjt) ex methArgs binds)
+    stmts   ←   compiling symx (genLambda (lazy . last . _.gargs $ funcjt) ex methArgs binds)
 
     let !lambda     = JLambda{fargs=methArgs, code=Right JBlock{stmts}}
         !member     = JMember{attr = attrFinal, 
@@ -327,7 +327,7 @@ cafCode (sym@SymV {name, depth = 0, expr = Just dx}) binds = do
 
     if not inmethod && rsimple && not self
     then do
-        ecode ← compiling (SymbolT.V sym) (genExpr false rtype x binds)
+        ecode ← compiling sym (genExpr false rtype x binds)
         pure (comments ++ [                            -- T foo = ....
             JMember { attr = attrTop, jtype = rtype,
                              name = name.base,
@@ -339,7 +339,7 @@ cafCode (sym@SymV {name, depth = 0, expr = Just dx}) binds = do
                      jthrow = [JThrow (JNew (Ref (JName "frege.runtime" "GuardFailed") []) [
                                                          JAtom (show (nicer sym g)),
                                                          JAtom (show sym.pos)])]
-                 code <- compiling (SymbolT.V sym) (genReturn stype x binds)
+                 code <- compiling sym (genReturn stype x binds)
                  case badguard of
                      Just (Left x) -> do
                          E.warn (getpos x) (text "guard (" <> (nicest g x) <> text ") may evaluate to false.")
@@ -405,7 +405,7 @@ innerCaf sym binds mutual = do
     
     run @action@ with @symbol@ in the current compiling environment
     -}
-compiling ∷ Symbol → StG 𝖆 → StG 𝖆
+compiling :: SymV Global -> StG a -> StG a
 compiling sym action = do
     changeST Global.{genEnv ← (sym:)}
     r ← action
@@ -452,7 +452,7 @@ genLambda rm (Lam {pat, ex}) ((arg@(_, _, _, s)) : args) binds = do
         badguard = openCaseWhen g ex
         assert = isNothing komplett
          -- mustthrow = not assert && isNothing badguard
-        margs = map JAtom [show ((view SymbolT.name (last g.genEnv)).nice g),
+        margs = map JAtom [show ((last g.genEnv).name.nice g),
                                                  show (getpos pat)] ++ [JAtom s]
         -- construct new NoMatch("Module.foo", 42, arg$1)
         jthrow = [JThrow (JNew jtNoMatch  margs)]
@@ -546,7 +546,7 @@ genStmts jret rm ex binds
              App _ _ _
                  | Vbl {name}:args <- map fst (flatx ex),
                    Just (SymbolT.V (sym@SymV{sid})) <- g.findit name,
-                   sid == view SymbolT.sid (head g.genEnv),
+                   sid == (head g.genEnv).sid,
                    length args == sym.depth = do
                         -- tail call
                         let argNames = map (++"f") 
@@ -707,7 +707,7 @@ genCaseStmt jret rm (x@Case {ckind,ex=cex,alts=calts}) binds = do
                      pure (jthrow arg)
                  | otherwise = pure []                   -- no throw needed
  
-             throwargs exb = map JAtom [show ((view SymbolT.name (Prelude.last g.genEnv)).nice g),
+             throwargs exb = map JAtom [show ((Prelude.last g.genEnv).name.nice g),
                                                  show (getpos x)] ++ [Binding.jex exb]
              jthrow exb = [JThrow (JNew jtNoMatch (throwargs exb))]
  
@@ -1042,7 +1042,7 @@ etaWrap ex sigs binds (rm@Func{gargs})   = do
                 gs  -> Func gs
             fake        = (U.patLocal (getpos ex) 0 "\\lambda").{depth=a,typ=ft}
         mapM_ (SymTab.enter . SymbolT.V) syms
-        call ← compiling (SymbolT.V fake) (genExpr false  subrm nex newbinds)
+        call ← compiling fake (genExpr false  subrm nex newbinds)
         let lambda = JCast (boxed rm) JLambda{fargs = cargs ++ fargs, code}
             apply
                 | n > a+length cargs = JInvoke (JX.xmem "apply" call.jex) (drop (n-a-length cargs) atoms)
@@ -1095,7 +1095,7 @@ wrapHigher rflg ex binds tctxs sigma  = do
         <+/> text " :: " <+> text (nice sigma g)
         <+/> text " @@ " <+> text (show jfunc)
         <+/> text (nicerctx tctxs g))
-    body <- compiling (SymbolT.V fakesym) (genExpr rflg innerjt ex binds)
+    body <- compiling fakesym (genExpr rflg innerjt ex binds)
     let eval     = JLambda{fargs, code = Right JBlock{stmts=map JLocal assigns ++ [JReturn body.jex]}}
     pure (newBind g sigma (JCast jfunc eval)).{jtype = jfunc}  
 
@@ -1703,7 +1703,7 @@ genExpr rflg rm ex binds = do
                     grm         = lazy $ case drop n gargs of
                                     [x] →   x
                                     ys  →   Func ys
-                stmts <- compiling (SymbolT.V fake) (genLambda grm ex args binds)
+                stmts <- compiling fake (genLambda grm ex args binds)
 
                 let jlam        =  JLambda{fargs=args, code = Right JBlock{stmts}}
                 result (newBind g ft (JCast (boxed rm) jlam)).{jtype = boxed rm}
