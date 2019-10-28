@@ -20,22 +20,27 @@ import  frege.compiler.common.Annotate(lit)
 import  frege.compiler.common.Errors  as  E()
 import  frege.compiler.instances.Nicer
 
-private insertGlobal p n s = enterWith (insertSym id) p n s
+
+private data InsUpd = DoInsert | DoUpdate
+private derive Show InsUpd
 
 
-private updateGlobal p n s = enterWith (updateSym id) p n s
-
-
+private enterWith :: InsUpd -> Pack -> String -> Symbol -> StG ()
 private enterWith insupd p n s = do
         g <- getST        -- give me the state
         case g.packages.lookup p of
             Just tab -> do
-                    ntab <- insupd tab n s
+                    ntab <- doInsUpd tab n s
                     changeST Global.{packages <- insert p ntab}
             Nothing  -> do
                     let sp = g.unpack p
                     E.error (view SymbolT.pos s) (fill ([text "module", text "`" <> text sp <> text "`"]
                                                  ++  break "does not exist."))
+    where
+    doInsUpd = case insupd of
+        DoInsert -> insertSym id
+        DoUpdate -> updateSym id
+
 
 
 {-- insert symbol, but make sure it does not exist yet -}
@@ -65,8 +70,11 @@ private updateSym toSymbol tab key value = case tab.lookupS key of
         E.error (view SymbolT.pos (toSymbol value)) (fill (break ("cannot update " ++ qn ++ "  " ++ show (keys tab))))
         stio (tab.insert key value)
 
---- Assume a Symbol is SymV because it's name is Local
---- It is caller's responsibility to ensure that
+{--
+ - Assume a Symbol is SymV because it's name is Local
+ -
+ - It is caller's responsibility to ensure that.
+ -}
 private toSymVBecauseLocal :: Symbol -> SymV Global
 private toSymVBecauseLocal (SymbolT.V symv) = symv
 private toSymVBecauseLocal _ = Prelude.error "thisIsSymVBecauseLocal: not SymV"
@@ -128,78 +136,78 @@ enter sym = case sym of
                         | otherwise = enterByName sym   -- error message follows
 
 
-changeSym :: Symbol ->  StG ()
-changeSym sym | view SymbolT.sid sym == 0 = do
-        u <- uniqid
-        changeSym $ set SymbolT.sid u sym
-changeSym sym = do
-        g <- getST
-        E.logmsg TRACE3 (view SymbolT.pos sym) (fill [text "changeSym", lit (view SymbolT.sid sym), text (sym.nice g ++ " :: " ++
-            (maybe "" (\typ -> typ.nice g) $ preview SymbolT.typ sym) ++ ", " ++
-            (case sym of { SymbolT.V SymV{state} -> show state; _ -> "" }))])
-        let name = view SymbolT.name sym
-        case name of
-            TName p b -> updateGlobal p name.key sym
-            VName p b -> updateGlobal p name.key sym
-            MName t b -> do
-                g <- getST
-                let tsy = g.findit t
-                case tsy of
-                    Nothing -> do
-                        let qn =  t.nice g
-                        E.error (view SymbolT.pos sym) (fill ([text "namespace", text "`" <> text qn <> text "`"] ++ break "does not exist"))
-                    Just (SymbolT.I typi) -> case SymMeth.fromSymbol sym of
-                        Just ameth -> do
-                            meth <- updateSym SymMeth.toSymbol typi.meth name.key ameth
-                            updateGlobal t.pack t.key $ SymbolT.I typi.{meth}
-                    Just typ -> case preview SymbolT.env typ of
-                        Just typEnv -> do
-                            env <- updateSym id typEnv name.key sym
-                            updateGlobal t.pack t.key (set SymbolT.env env typ)
-                        Nothing -> E.fatal (view SymbolT.pos sym) (text "no environment:" <+> text (t.nice g))
-            Local uid s -> do
-                --  g <- getST
-                let symv = toSymVBecauseLocal sym
-                when (symv.sid != uid) do
-                    E.fatal symv.pos (text("changeSym: name =" ++ show name
-                        ++ ", sid=" ++ show symv.sid))
-                changeST Global.{locals <- TreeMap.updatekvI uid symv}
+changeSym :: Symbol -> StG ()
+changeSym = insUpdSymByName DoUpdate
 
 
 private enterByName :: Symbol -> StG ()
-private enterByName sym | view SymbolT.sid sym == 0 = do
-        u <- uniqid
-        enterByName $ set SymbolT.sid u sym
-private enterByName sym = do
+private enterByName = insUpdSymByName DoInsert
+
+
+private insUpdSymByName :: InsUpd -> Symbol -> StG ()
+private insUpdSymByName insupd sym | view SymbolT.sid sym == 0 = do
+    u <- uniqid
+    insUpdSymByName insupd $ set SymbolT.sid u sym
+private insUpdSymByName insupd sym = do
     g <- getST
-    E.logmsg TRACE3 (view SymbolT.pos sym) (fill (break ("enterByName " ++ sym.nice g ++ " " ++ show (view SymbolT.sid sym) ++ " "
-        ++ (case sym of
-              SymbolT.V symv | not (isPSigma symv.typ) -> " :: " ++ symv.typ.nicer g
-              _ -> ""))))
+    E.logmsg TRACE3 (view SymbolT.pos sym) $ logMessage g
     let name = view SymbolT.name sym
-        pos = view SymbolT.pos sym
     case name of
-        TName p b -> insertGlobal p name.key sym
-        VName p b -> insertGlobal p name.key sym
+        TName p b -> enterWith insupd p name.key sym
+        VName p b -> enterWith insupd p name.key sym
         MName t b -> do
             g <- getST
-            let tsy = g.findit t
-            case tsy of
+            case g.findit t of
                 Nothing -> do
                     let qn = t.nice g
-                    E.error pos (msgdoc("namespace `" ++ qn ++ "` does not exist"))
+                    E.error (view SymbolT.pos sym) $ msgdoc $ "namespace `" ++ qn ++ "` does not exist"
                 Just (SymbolT.I typi) -> case SymMeth.fromSymbol sym of
                     Just ameth -> do
-                        meth <- insertSym SymMeth.toSymbol typi.meth name.key ameth
-                        updateGlobal t.pack t.key $ SymbolT.I typi.{meth}
+                        meth <- enterSym insupd SymMeth.toSymbol typi.meth name.key ameth
+                        enterWith DoUpdate t.pack t.key $ SymbolT.I typi.{meth}
                 Just typ -> case preview SymbolT.env typ of
                     Just typEnv -> do
-                        env <- insertSym id typEnv name.key sym
-                        updateGlobal t.pack t.key (set SymbolT.env env typ)
-                    Nothing -> E.fatal pos (msgdoc ("no environment: " ++ t.nice g))
-        Local {} -> do
-            g <- getST
-            E.fatal pos (text ("local passed to enterbyname " ++ nice sym g))
+                        env <- enterSym insupd id typEnv name.key sym
+                        enterWith DoUpdate t.pack t.key (set SymbolT.env env typ)
+                    Nothing -> E.fatal (view SymbolT.pos sym) $ msgdoc $ "no environment: " ++ t.nice g
+        Local uid _ -> enterLocal insupd sym uid
+  where
+    logMessage g = fill $ case insupd of
+        DoUpdate ->
+            [ text $ "insUpdSymByName " ++ show insupd
+            , lit $ view SymbolT.sid sym
+            , text $ concat
+                [ sym.nice g
+                , " :: "
+                , maybe "" (\typ -> typ.nice g) $ preview SymbolT.typ sym
+                , ", "
+                , maybe "" (\SymV{state} -> show state) $ preview SymbolT._V sym
+                ]]
+        DoInsert -> break $ unwords $
+            [ "insUpdSymByName"
+            , show insupd
+            , sym.nice g
+            , show (view SymbolT.sid sym)
+            ] ++
+            case sym of
+                SymbolT.V SymV{typ} | not (isPSigma typ) -> ["::", typ.nicer g]
+                _ -> []
+
+    enterSym :: InsUpd -> (sym -> Symbol) -> TreeMap String sym -> String -> sym -> StG (TreeMap String sym)
+    enterSym DoInsert = insertSym
+    enterSym DoUpdate = updateSym
+
+
+private enterLocal :: InsUpd -> Symbol -> Int -> StG ()
+private enterLocal DoInsert sym _ = do
+    g <- getST
+    E.fatal (view SymbolT.pos sym) (text ("local passed to enterbyname " ++ nice sym g))
+private enterLocal DoUpdate sym uid = do
+    let symv = toSymVBecauseLocal sym
+    when (symv.sid != uid) do
+        E.fatal symv.pos (text("changeSym: name =" ++ show symv.name
+            ++ ", sid=" ++ show symv.sid))
+    changeST Global.{locals <- TreeMap.updatekvI uid symv}
 
 
 {-- create a symbolic link to given qname -}
