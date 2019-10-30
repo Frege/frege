@@ -10,7 +10,7 @@ import frege.compiler.passes.Imp as I(getFP)
 import frege.compiler.tc.Util as TC
 import frege.compiler.Typecheck as TY hiding(pass, post)
 
-import  frege.compiler.common.Lens (_Just, preview, unsafePartialView, view)
+import  frege.compiler.common.Lens (_Just, preview, view)
 
 import Compiler.enums.TokenID(TokenID, defaultInfix)
 import Compiler.enums.Visibility(Private, Public)
@@ -147,7 +147,6 @@ instance Show Proposal where
 proposeContent :: Global -> Y RTree -> Int -> JArray Token -> Int -> [Proposal]
 proposeContent !global root !offset !tokens !index = propose 
     where
-        unsafeToSymV (SymbolT.V x) = x
         snekot = backwards tokens index     -- reverse order, last token before cursor on top
         thisline = takeWhile onThisLine snekot
         onThisLine tok = Token.line tok == token.line && tok.col > 0
@@ -252,15 +251,17 @@ proposeContent !global root !offset !tokens !index = propose
               Just (Right qname) <- Global.resolved global qual,
               traceLn ("resolved " ++ qual.value) || true,
               Just sym <- global.findit qname, 
+              Just typ <- preview SymbolT.typ sym,
               traceLn ("found " ++ sym.nice global) || true,
-                            = memProposal sym theProposal
+                            = memProposal typ theProposal
             | (Token{tokid=CHAR, value="."}      : (qual@Token{tokid=VARID})   :_) <- snekot,
               traceLn ("rule: " ++ qual.value ++ "." ++ insideProposal.prefix) || true,
               Just (Right qname) <- Global.resolved global qual,
               traceLn ("resolved " ++ qual.value) || true,
               Just sym <- global.findit qname, 
+              Just typ <- preview SymbolT.typ sym,
               traceLn ("found " ++ sym.nice global) || true,
-                            = memProposal sym insideProposal
+                            = memProposal typ insideProposal
             | (Token{tokid=VARID}:Token{tokid=CHAR, value="."}:(qual@Token{tokid=STRCONST}):_) <- snekot,
               (true, proposals) <- tauProposal TY.tauString theProposal 
                             = proposals
@@ -332,12 +333,12 @@ proposeContent !global root !offset !tokens !index = propose
               traceLn ("rule fundef " ++ value ++ "¦") || true,
               Just (Right qname) <- Global.resolved global varid,
               traceLn ("resolved " ++ nicer qname global) || true,
-              Just sym <- global.findit qname, 
+              Just (SymbolT.V sym) <- global.findit qname, 
               traceLn ("found " ++ sym.nice global) || true,
-              (unsafeToSymV sym).anno, traceLn (sym.nice global ++ " is annotated") || true,
-              isNothing (unsafeToSymV sym).nativ, traceLn (sym.nice global ++ " is not nativ") || true,
-              isNothing (unsafeToSymV sym).expr, traceLn (sym.nice global ++ " has no expression") || true,
-              (_, sigmas) <- U.returnType (unsafeToSymV sym).typ.rho,
+              sym.anno, traceLn (sym.nice global ++ " is annotated") || true,
+              isNothing sym.nativ, traceLn (sym.nice global ++ " is not nativ") || true,
+              isNothing sym.expr, traceLn (sym.nice global ++ " has no expression") || true,
+              (_, sigmas) <- U.returnType sym.typ.rho,
                             = let
                                 conidProposals
                                     | direct, token.tokid == CONID =
@@ -359,8 +360,9 @@ proposeContent !global root !offset !tokens !index = propose
               Just (Right qname) <- Global.resolved global token,
               traceLn ("resolved " ++ value) || true,
               Just sym <- global.findit qname, 
+              Just typ <- preview SymbolT.typ sym,
               traceLn ("found " ++ sym.nice global) || true,
-              RhoTau{tau} <- (unsafePartialView SymbolT.typ sym).rho,
+              RhoTau{tau} <- typ.rho,
               tau <- TC.reduced tau global,
               traceLn ("type is " ++ nicer tau global) || true,
               Just symbol <- instTauSym tau global
@@ -371,8 +373,9 @@ proposeContent !global root !offset !tokens !index = propose
               Just (Right qname) <- Global.resolved global token,
               traceLn ("resolved " ++ value) || true,
               Just sym <- global.findit qname, 
+              Just typ <- preview SymbolT.typ sym,
               traceLn ("found " ++ sym.nice global) || true,
-              (tau,_) <- U.returnType (unsafePartialView SymbolT.typ sym).rho,
+              (tau,_) <- U.returnType typ.rho,
               tau <- TC.reduced tau global,
               traceLn ("return type is " ++ nicer tau global) || true,
               Just symbol <- instTauSym tau global
@@ -496,11 +499,11 @@ proposeContent !global root !offset !tokens !index = propose
                                              
         -- Find a proposal for id.member
         --
-        memProposal :: Symbol -> Proposal -> [Proposal]
-        memProposal sym prop
-            | RhoTau _ tau   <- (unsafePartialView SymbolT.typ sym).rho,                  -- look in env of type tau
+        memProposal :: Sigma -> Proposal -> [Proposal]
+        memProposal typ prop
+            | RhoTau _ tau   <- typ.rho,                  -- look in env of type tau
               (true, result) <- tauProposal tau prop = result
-            | RhoFun{rho}    <- (unsafePartialView SymbolT.typ sym).rho,                  -- look in return type of fn
+            | RhoFun{rho}    <- typ.rho,                  -- look in return type of fn
               RhoTau _ tau   <- rho,
               (true, result) <- tauProposal tau prop = result                                      
             | otherwise = filteredEnvProposal prop (classMember:standardFilter) (thisTab global)
@@ -515,9 +518,10 @@ proposeContent !global root !offset !tokens !index = propose
                         Just s  
                           | ss <- s:U.supersOfNativ s global,     -- the supertypes of s (including s)
                             -- traceLn("supertypes are " ++ show ss) || true,
-                            envs <- [ unsafePartialView _Just sym.env' | s <- ss, 
+                            envs <- [ env | s <- ss,
                                         q <- U.typesOfNativ s global, 
-                                        sym <- global.findit q ]
+                                        sym <- global.findit q,
+                                        env <- sym.env' ]
                               = (true, concatMap (flip envProposal prop) envs)
                         other
                             | [TCon{name}, _, tau2] <- tau.flat,
@@ -655,8 +659,8 @@ proposeContent !global root !offset !tokens !index = propose
             | SymbolT.V SymV{name, nativ = Just _} <- sym,
               m~´^(.+)[αβγδεζηθιßκλμνξοπρςστυφχψω]+$´ <- base,  -- overloaded??
               Just stem <- m.group 1,
-              Just overld <- global.findit name.{base=stem},
-              name `elem` (unsafeToSymV overld).over = symProp stem overld
+              Just (SymbolT.V overld) <- global.findit name.{base=stem},
+              name `elem` overld.over = symProp stem $ SymbolT.V overld
             | otherwise = (imported, base)
             where
                 imported | global.our (view SymbolT.name sym) = base
