@@ -5,7 +5,7 @@ module frege.compiler.common.SymbolTable where
 import  frege.Prelude  hiding(error, print, println, break, <+>)
 import  frege.data.TreeMap as TM(TreeMap, lookup, each, insert, union, including, contains, keys, values, fromKeys)
 import  frege.lib.PP(fill, break, pretty, text, nest, msgdoc, <+>, <>, DOCUMENT)
-import  frege.compiler.common.Lens (preview, set, view)
+import  frege.compiler.common.Lens (preview, set)
 import  frege.compiler.enums.Flags
 import  frege.compiler.enums.SymState
 import  frege.compiler.enums.Visibility
@@ -35,7 +35,7 @@ private enterWith insupd p n s = do
                     changeST Global.{packages <- insert p ntab}
             Nothing  -> do
                     let sp = g.unpack p
-                    E.error (view SymbolT.pos s) (fill ([text "module", text "`" <> text sp <> text "`"]
+                    E.error s.pos (fill ([text "module", text "`" <> text sp <> text "`"]
                                                  ++  break "does not exist."))
     where
     doInsUpd = case insupd of
@@ -55,9 +55,9 @@ private insertSym toSymbol tab key value = case tab.lookupS key of
         case toSymbol value of
             SymbolT.V SymV{pos, name} -> E.error pos (msgdoc("duplicate function or pattern binding for `"
                             ++ name.nice g ++ "`, already bound on line "
-                            ++ show (view SymbolT.pos (toSymbol old))))
-            _          -> E.error (view SymbolT.pos (toSymbol value)) (msgdoc("redefinition of " ++ on ++ " with " ++ qn
-                                    ++ " introduced on line " ++ show (view SymbolT.pos (toSymbol old))))
+                            ++ show (toSymbol old).pos))
+            _          -> E.error (toSymbol value).pos (msgdoc("redefinition of " ++ on ++ " with " ++ qn
+                                    ++ " introduced on line " ++ show (toSymbol old).pos))
         stio (tab.insertS key value)
 
 
@@ -68,7 +68,7 @@ private updateSym toSymbol tab key value = case tab.lookupS key of
     Nothing  -> do
         g <- getST
         let qn = (toSymbol value).nice g
-        E.error (view SymbolT.pos (toSymbol value)) (fill (break ("cannot update " ++ qn ++ "  " ++ show (keys tab))))
+        E.error (toSymbol value).pos (fill (break ("cannot update " ++ qn ++ "  " ++ show (keys tab))))
         stio (tab.insert key value)
 
 {--
@@ -105,14 +105,12 @@ enter sym = case sym of
     _ -> enterOrUpdate
     where
         enterOrUpdate =
-            let name = view SymbolT.name sym
-            in
-            case name of
+            case sym.name of
               Local{uid} -> do
                 g <- getST
                 uid <- if uid > 0 then return uid else uniqid
                 let symv = toSymVBecauseLocal sym
-                case g.find name of
+                case g.find sym.name of
                     Nothing
                         | uid == symv.sid-> do
                             E.logmsg TRACE3 symv.pos (text("enterLocal: " ++
@@ -121,16 +119,16 @@ enter sym = case sym of
                                 ", " ++ show symv.state))
                             changeST Global.{locals <- TreeMap.insertkvI uid symv}
                         | otherwise = E.fatal symv.pos (text ("enterLocal: uid=" ++
-                            show uid ++ ", sid=" ++ show symv.sid ++ " for " ++ show name))
+                            show uid ++ ", sid=" ++ show symv.sid ++ " for " ++ show sym.name))
                     Just that -> E.error symv.pos (text ("already entered: " ++ nice symv g ++ " with uid " ++ show uid))
               _ -> do
                 g <- getST
-                case g.find name of
+                case g.find sym.name of
                     Nothing -> enterByName sym
                     Just that
                         | SymbolT.L SymL{alias=thatAlias} <- that, SymbolT.L SymL{alias=symAlias} <- sym, thatAlias == symAlias = pure ()  -- do nothing
-                        | SymbolT.L SymL{alias} <- that, alias.getpack != name.getpack = do
-                                E.warn (view SymbolT.pos sym) (fill (break("hiding previously (line " ++ show (view SymbolT.pos that)
+                        | SymbolT.L SymL{alias} <- that, alias.getpack != sym.name.getpack = do
+                                E.warn sym.pos (fill (break("hiding previously (line " ++ show that.pos
                                     ++ ") imported "
                                     ++ that.nice g ++ " through " ++ sym.nice g)))
                                 changeSym sym
@@ -146,42 +144,41 @@ private enterByName = insUpdSymByName DoInsert
 
 
 private insUpdSymByName :: InsUpd -> Symbol -> StG ()
-private insUpdSymByName insupd sym | view SymbolT.sid sym == 0 = do
+private insUpdSymByName insupd sym | sym.sid == 0 = do
     u <- uniqid
-    insUpdSymByName insupd $ set SymbolT.sid u sym
+    insUpdSymByName insupd $ set SymbolT._sid u sym
 private insUpdSymByName insupd sym = do
     g <- getST
-    E.logmsg TRACE3 (view SymbolT.pos sym) $ logMessage g
-    let name = view SymbolT.name sym
-    case name of
-        TName p b -> enterWith insupd p name.key sym
-        VName p b -> enterWith insupd p name.key sym
+    E.logmsg TRACE3 sym.pos $ logMessage g
+    case sym.name of
+        TName p b -> enterWith insupd p sym.name.key sym
+        VName p b -> enterWith insupd p sym.name.key sym
         MName t b -> do
             g <- getST
             case g.findit t of
                 Nothing -> do
                     let qn = t.nice g
-                    E.error (view SymbolT.pos sym) $ msgdoc $ "namespace `" ++ qn ++ "` does not exist"
+                    E.error sym.pos $ msgdoc $ "namespace `" ++ qn ++ "` does not exist"
                 Just (SymbolT.T typt) -> do
-                    env <- enterSym insupd id typt.env name.key sym
+                    env <- enterSym insupd id typt.env sym.name.key sym
                     enterWith DoUpdate t.pack t.key $ SymbolT.T typt.{env}
-                Just typ -> case preview SymbolT.meth typ of
+                Just typ -> case preview SymbolT._meth typ of
                     Just typMeth -> case SymMeth.fromSymbol sym of
                         Just ameth -> do
-                            meth <- enterSym insupd SymMeth.toSymbol typMeth name.key ameth
-                            enterWith DoUpdate t.pack t.key $ set SymbolT.meth meth typ
-                        Nothing -> E.error (view SymbolT.pos sym) $ msgdoc $ sym.nice g ++ " cannot be a member of " ++ typ.nice g
-                    Nothing -> E.fatal (view SymbolT.pos sym) $ msgdoc $ "no environment: " ++ t.nice g
+                            meth <- enterSym insupd SymMeth.toSymbol typMeth sym.name.key ameth
+                            enterWith DoUpdate t.pack t.key $ set SymbolT._meth meth typ
+                        Nothing -> E.error sym.pos $ msgdoc $ sym.nice g ++ " cannot be a member of " ++ typ.nice g
+                    Nothing -> E.fatal sym.pos $ msgdoc $ "no environment: " ++ t.nice g
         Local uid _ -> enterLocal insupd sym uid
   where
     logMessage g = fill $ case insupd of
         DoUpdate ->
             [ text $ "insUpdSymByName " ++ show insupd
-            , lit $ view SymbolT.sid sym
+            , lit sym.sid
             , text $ concat
                 [ sym.nice g
                 , " :: "
-                , maybe "" (\typ -> typ.nice g) $ preview SymbolT.typ sym
+                , maybe "" (\typ -> typ.nice g) $ preview SymbolT._typ sym
                 , ", "
                 , maybe "" (\SymV{state} -> show state) $ preview SymbolT._V sym
                 ]]
@@ -189,7 +186,7 @@ private insUpdSymByName insupd sym = do
             [ "insUpdSymByName"
             , show insupd
             , sym.nice g
-            , show (view SymbolT.sid sym)
+            , show sym.sid
             ] ++
             case sym of
                 SymbolT.V SymV{typ} | not (isPSigma typ) -> ["::", typ.nicer g]
@@ -203,7 +200,7 @@ private insUpdSymByName insupd sym = do
 private enterLocal :: InsUpd -> Symbol -> Int -> StG ()
 private enterLocal DoInsert sym _ = do
     g <- getST
-    E.fatal (view SymbolT.pos sym) (text ("local passed to enterbyname " ++ nice sym g))
+    E.fatal sym.pos (text ("local passed to enterbyname " ++ nice sym g))
 private enterLocal DoUpdate sym uid = do
     let symv = toSymVBecauseLocal sym
     when (symv.sid != uid) do
@@ -214,12 +211,12 @@ private enterLocal DoUpdate sym uid = do
 
 {-- create a symbolic link to given qname -}
 linkq :: QName -> Symbol -> StG ()
-linkq from sym = linkqv from sym (view SymbolT.vis sym)
+linkq from sym = linkqv from sym sym.vis
 
 
 --- create a symbolic link to a given 'Symbol' with a given 'Visibility'
 linkqv :: QName -> Symbol -> Visibility -> StG ()
-linkqv from sym vis = linkqvp from sym vis (view SymbolT.pos sym)
+linkqv from sym vis = linkqvp from sym vis sym.pos
 
 
 -- create a symbolic link to a given 'Symbol' with a given 'Visibility' and 'Position'
@@ -229,5 +226,5 @@ linkqvp from sym vis pos = do
     E.logmsg TRACE3 pos (text ("`" ++ from.nice g ++ "` link to " ++ sym.nice g))
     enter $ SymbolT.L
           (SymL {sid=0, pos=pos, vis, -- doc=Nothing,
-                    name=from, alias=view SymbolT.name sym})
+                    name=from, alias=sym.name})
 
