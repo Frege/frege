@@ -958,7 +958,7 @@ ccontext:
 classdef:
     CLASS ccontext EARROW CONID tyvar wheredef {
         \_\ctxs\_\c\v\defs -> do
-            sups <- classContext (Token.value c) ctxs (v::TauS).var
+            sups <- classContext ctxs (v::TauS).var
             pure ClaDcl{
                     pos = yyline c, 
                     vis = Public,

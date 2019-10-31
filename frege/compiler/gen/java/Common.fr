@@ -5,7 +5,7 @@ module frege.compiler.gen.java.Common where
 import frege.Prelude hiding (<+>)
 
 import Data.TreeMap(values, insert, lookup, TreeMap Map, fromList)
-import Data.Bits(BitSet.member)
+import Data.Bits(BitSet, BitSet.member)
 import Lib.PP(pretty, text, <+>, </>)
 import Data.List (zip4)
 
@@ -18,7 +18,7 @@ import Compiler.common.JavaName
 import Compiler.common.Mangle(mangled)
 
 import Compiler.enums.Flags(TRACEZ, TRACEG)
-import Compiler.enums.RFlag(RValue)
+import Compiler.enums.RFlag(RFlag, RValue)
 import Compiler.types.Global(StIO, StG, Symbol, SymInfo8, Global(), GenSt(),
             getST, changeST, uniqid,
             javaLangNames, primitiveTypes,
@@ -146,17 +146,20 @@ arrayTau g tau
 argType :: Global -> (JType -> JType) ->  Sigma -> JType
 argType g f = f . sigmaJT g
 
+argTypeB :: Global -> Bool -> Sigma -> JType
 argTypeB g b = argType g (if b then strict else lazy)
 
 {--
     - If the 'RValue' flag is on, the return type will be @int@, @String@ or @TList@
     - Otherwise, it will be lazy
 -}
+returnJType :: BitSet RFlag -> JType -> JType
 returnJType mode rjt = if RValue `member` mode 
     then strict rjt
     else lazy rjt
 
 --- a constraint is unsatisfied when its 'Tau' is an application of 'TVar's 
+unsatisfiedCtx_ :: Context -> Bool
 unsatisfiedCtx_ Ctx{tau}
     | TCon{} ← head tau.flat    =  false
     | otherwise                 =  true
@@ -164,6 +167,7 @@ unsatisfiedCtx_ Ctx{tau}
 --- Compute the 'JType' for a given 'Sigma' type
 --- If there are type variables, we have a higher order value which is just 'Something'
 --- Instantiation of such a value will need a cast! 
+sigmaJT :: Global -> Sigma -> JType
 sigmaJT g (ForAll bnd rho)
     | null bnd      = rhojt
     | otherwise     = substJT subst rhojt
@@ -180,6 +184,7 @@ sigmaJT g (ForAll bnd rho)
     a corresponding 'Kinded'.
 -}
 -- instKinded  KType = Something
+instKinded :: Kind -> JType
 instKinded  kind
     | k > 0  = Func  (Something:take k wilds)
     | otherwise = Something
@@ -187,6 +192,7 @@ instKinded  kind
                 k = kArity kind
 
 --- Compute the 'JType' for a given 'Rho' type
+rhoJT :: Global -> Rho -> JType
 rhoJT   g (fun@RhoFun ctxs a b)
     | null ctxjts   = func
     | otherwise     = lambdaType Func{gargs  = ctxjts ++ [func]}
@@ -203,12 +209,14 @@ rhoJT   g (RhoTau {context, tau})
         jtau = tauJT g tau
 
 --- Compute the 'JType' for a given 'Context'
+ctxJT :: Global -> Context -> JType
 ctxJT g (Ctx{pos, cname, tau}) 
     | isArrayClassName cname =  Constr (javaName g cname) [Nativ "[]" [strict taujt] false, taujt]
     | otherwise = Constr (javaName g cname) [taujt]
     where taujt = boxed (tauJT g tau)
 
 --- Compute the 'JType' for a given 'Tau' type
+tauJT :: Global -> Tau -> JType
 tauJT   g (app@TApp a b)
      | Just (a,b) ← app.getFun     
         =   Func{gargs = [boxed (tauJT g a), autoboxed (tauJT g b)]} 
@@ -218,7 +226,7 @@ tauJT   g (app@TApp a b)
             --    (_, other)  =  Func {gargs =  [boxed (tauJT g a), autoboxed other]}
      | Just array <- arrayTau g app = array 
      | otherwise = case app.flat of
-         (TCon {pos,name}):rest →  taujtApp g name rest app
+         (TCon {pos,name}):rest →  taujtApp g name rest
          TVar{var,kind}:ts      →  Kinded{arity = k, 
                                           gargs = TArg var : take k (map (boxed . tauJT g) ts ++ wilds)}
                                         where k = kArity kind
@@ -230,7 +238,7 @@ tauJT   g (app@TApp a b)
                                 where k = kArity kind
          _                      → error "empty app.flat"
  
-tauJT   g (ty@TCon {pos, name}) =  taujtApp g name [] ty
+tauJT   g (TCon {name}) =  taujtApp g name []
 
 tauJT   g (TVar {var=">", kind = KGen ts}) = Wild (SUPER jt)     where jt  = tauJT g (head ts)
 tauJT   g (TVar {var="<", kind = KGen ts}) = Wild (EXTENDS jts)  where jts = map (tauJT g) ts  
@@ -246,7 +254,8 @@ tauJT   g (Meta meta)           =  case meta of
 tauJT   g (TSig sig)            = sigmaJT g sig
 
 
-taujtApp g qname rest app
+taujtApp :: Global -> QName -> [Tau] -> JType
+taujtApp g qname rest
     | Just (SymbolT.T symt) <- g.findit qname = case symt of
         SymT{product=true, kind, newt=true} ->
              let sigmas = [ ConField.typ f | SymbolT.D SymD{flds} <- values symt.env, f <- flds ]
@@ -255,9 +264,7 @@ taujtApp g qname rest app
                  (s:_)  -> case (substJT subst . lambdaType . sigmaJT g) s of
                             other → other
                     where
-                        -- k = kArity kind
                         subst = fromList (zip symt.typ.vars  (map (boxed . tauJT g) rest ++ wilds))
-                        -- rsig = ForAll [] (RhoTau [] app) 
         SymT {product,nativ,enum,pur}
               -- U.pri
               | Just s <- nativ = if s `elem` primitiveTypes
