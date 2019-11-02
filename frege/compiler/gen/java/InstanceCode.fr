@@ -7,7 +7,7 @@ import Lib.PP (text, <+>, </>, <+/>, <>)
 import Data.TreeMap as Map(values, lookup, delete, insert, TreeMap)
 import Data.List(zip4)
 
-import  frege.compiler.common.Lens (over)
+import  frege.compiler.common.Lens (over, set, view)
 
 import Compiler.Utilities(findC, findV, forceTau, returnType)
 import Compiler.Javatypes(subTypeOf)
@@ -77,7 +77,7 @@ import Compiler.gen.java.VarCode(varCode, compiling, genExpression, genExpr)
 -}
 
 classCode :: SymC Global -> StG [JDecl]
-classCode (sym@SymC{tau = TVar{var,kind}}) = do           -- type class
+classCode (sym@SymC{tau = TauT.Var TVar{var,kind}}) = do           -- type class
      g <- getST
      let vals = map symMethAsSymV $ values sym.meth
          special = isSpecialClass sym
@@ -127,7 +127,7 @@ lowerKindSpecialClasses = do
 
 lowerKindAbstractFun :: SymC Global -> SymVal Global -> StG ()
 lowerKindAbstractFun symc sym = do
-        let classvar = symc.tau.var
+        let classvar = view TauT._unsafeVar symc.tau
             newsym   = over SymVal._typ (lowerKind classvar) sym
         changeSym newsym.toSymbol
         -- force syminfo to regenerate information, if already present
@@ -137,11 +137,11 @@ lowerKindAbstractFun symc sym = do
         lowerKind cv sigma = sigma.{rho <- lowerRhoKind cv}
         lowerRhoKind cv (rho@RhoFun{}) = rho.{sigma ← lowerKind cv, rho ← lowerRhoKind cv}
         lowerRhoKind cv (rho@RhoTau{}) = rho.{tau ← lowerTauKind cv}
-        lowerTauKind cv (TSig s)                =  TSig . lowerKind cv $ s
+        lowerTauKind cv (TSig s)       = TSig . lowerKind cv $ s
         lowerTauKind cv (app@TApp a b) = case app.flat of
-            TVar{pos, kind, var}:_ | var == cv  =  TVar{pos, kind=KType, var} 
-            other                               =  TApp (lowerTauKind cv a) (lowerTauKind cv b)
-        lowerTauKind cv t                       =  t
+            TauT.Var t:_ | t.var == cv = TauT.Var t.{kind=KType}
+            _                          = TApp (lowerTauKind cv a) (lowerTauKind cv b)
+        lowerTauKind _ t               = t
  
 
 
@@ -157,7 +157,7 @@ abstractFun symc sym = do
         !ctxs = filter (not . sameCtx classCtx) sym.typ.rho.context
         -- special = isSpecialClass symc
         arrays  = isArrayClass symc -- are we compiling one of the array classes?
-        gvars   = targs g sym.typ.{bound ← filter ((!= symc.tau.var) . _.var)}
+        gvars   = targs g sym.typ.{bound ← filter ((!= view TauT._unsafeVar symc.tau) . view TauT._unsafeVar)}
 
  
     let formalctxs = zipWith (constraintArg g)  ctxs  (getCtxs g)
@@ -297,7 +297,7 @@ instanceCode sym = do             -- instance definition
                 gargs = take (length gvars) wilds
 
      -- check for implementation restriction
-     let k = kArity csym.tau.kind
+     let k = kArity (view TauT._unsafeKind csym.tau)
          kindJT = (("frege.run."++) . show . _.jname . rawType $ Kinded k [])
          jt = head etype.gargs
          implementationRestriction = not special && isHigherKindedClass csym && not (implementsKinded g k jt)
@@ -381,11 +381,11 @@ instFun symc symi mname = do
                         text (nicer sym.name g) <+> text " :: " <+> text (nicer sym.typ g)
                         </> text (nicer cmem.name g) <+> text " :: " <+> text (nicer cmem.typ g)
                     )
-                let otvs = filter ((`elem` symi.typ.vars) . Tau.var) cmem.typ.tvars
+                let otvs = filter ((`elem` symi.typ.vars) . view TauT._unsafeVar) cmem.typ.tvars
                     orep = filter (`notElem` (cmem.typ.vars)) (allBinders g)
                     substBound :: TreeMap String Tau -> [Tau] -> [Tau]
-                    substBound subst xs = map (\tv -> maybe tv _.{kind=tv.kind} (lookup tv.var subst)) xs
-                    subst1 = Map.fromList [ (tv.var, tv.{var=s}) | (s,tv) ← zip orep otvs]
+                    substBound subst xs = map (\tv -> maybe tv (set TauT._unsafeKind (view TauT._unsafeKind tv)) (lookup (view TauT._unsafeVar tv) subst)) xs
+                    subst1 = Map.fromList [ (view TauT._unsafeVar tv, set TauT._unsafeVar s tv) | (s,tv) ← zip orep otvs]
                     typ1 = ForAll (substBound subst1 cmem.typ.bound) (substRho subst1 cmem.typ.rho)
                 E.logmsg TRACEG symi.pos (
                         text "(1) renamed type :: "
@@ -393,7 +393,7 @@ instFun symc symi mname = do
                     )
 
                 let cvar = substTau subst1 symc.tau
-                    withoutCVar  = filter ((!=) cvar.var . _.var)
+                    withoutCVar = filter ((view TauT._unsafeVar cvar !=) . view TauT._unsafeVar)
                 E.logmsg TRACEG symi.pos (
                         text "(2) class var is now " <+> text (nicer cvar g)
                     )
@@ -412,15 +412,14 @@ instFun symc symi mname = do
                 E.logmsg TRACEG symi.pos (
                         text "(3j) java type of (3) :: " <+> text (show jty3))
                 
-                let othertv = head (filter ((!=cvar.var) . _.var) typ3.tvars)
+                let othertv = head (filter ((!= view TauT._unsafeVar cvar) . view TauT._unsafeVar) typ3.tvars)
                     instTau0 = (tauRho symi.typ.rho.{context=[]}).tau
                     instTau  = if special then TApp instTau0 othertv else instTau0
-                    subst4 = Map.singleton cvar.var instTau
+                    subst4 = Map.singleton (view TauT._unsafeVar cvar) instTau
                     methty = ForAll typ3.bound (substRho subst4 typ3.rho)
                     raw    = if special then rawType else id
                     instjt = (boxed . lambdaType . tauJT g) instTau
-                    -- jsubst = Map.singleton cvar.var instjt
-                    jsubstr = Map.singleton cvar.var (raw instjt)
+                    jsubstr = Map.singleton (view TauT._unsafeVar cvar) (raw instjt)
                     jty4m   = boxed (rhoJT g methty.rho) -- substJT jsubstr (lambdaType jty3)
                     jty4r   = substJT jsubstr  (lambdaType jty3)
                 E.logmsg TRACEG symi.pos (
@@ -527,7 +526,7 @@ instFun symc symi mname = do
 
                 -- finally make the function
                 pure JMethod{attr = if special || unchecked rex 
-                                    || needsUnchecked fst cmem.name (Map.lookupDefault Something cvar.var jsubstr)
+                                    || needsUnchecked fst cmem.name (Map.lookupDefault Something (view TauT._unsafeVar cvar) jsubstr)
                                         then attrs [JUnchecked, JPublic, JFinal, JOverride]
                                         else attrs [JPublic, JFinal, JOverride], 
                             gvars = targs g methty, 

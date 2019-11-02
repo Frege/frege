@@ -45,7 +45,7 @@ import Data.TreeMap as TM(keys, values, TreeMap, insert, delete, lookup)
 import Data.List as DL(uniq, sort, sortBy, maximumBy)
 import Data.Graph (stronglyConnectedComponents tsort)
 
-import  frege.compiler.common.Lens (preview, set)
+import  frege.compiler.common.Lens (preview, set, view)
 
 import Compiler.enums.Flags as Compilerflags(TRACE6)
 import Compiler.enums.Visibility
@@ -143,24 +143,24 @@ passC = do
             g <- getST
             case g.find qcls of
                 Just (SymbolT.C symc) -> do
-                        superkind <- foldM (superKind symc) symc.tau.kind [sym |
+                        superkind <- foldM (superKind symc) (view TauT._unsafeKind symc.tau) [sym |
                                 qn <- symc.supers,
                                 sym <- g.findit qn
                                ]
-                        kind <- foldM (sigmaKind symc.tau.var) superkind  [ sym.toSymbol |
+                        kind <- foldM (sigmaKind (view TauT._unsafeVar symc.tau)) superkind  [ sym.toSymbol |
                                  (sym@(SymMeth.V SymV{typ,anno,nativ})) <- values symc.meth,
                                  anno || isJust nativ,
                                  not (isPSigma typ),
                                ]
                         let newkind =  if kind `keq` KVar then KType else kind 
                         symc <- U.findC symc.name
-                        changeSym $ SymbolT.C symc.{tau <- Tau.{kind = newkind}}    -- update class var
+                        changeSym $ SymbolT.C symc.{tau <- set TauT._unsafeKind newkind}  -- update class var
                         symc <- U.findC symc.name
                         foreach symc.supers (supercheck symc)
                         foreach (values symc.meth) (methodcheck symc)
                 nothing -> E.fatal Position.null (text ("lost class " ++ QName.nice qcls g))
         superKind symc ka (SymbolT.C supb) = do
-            case K.unifyKind ka supb.tau.kind of
+            case K.unifyKind ka (view TauT._unsafeKind supb.tau) of
                 Just k -> return k
                 Nothing -> do
                     g <- getST
@@ -173,7 +173,7 @@ passC = do
                             text "but superclass" 
                             <+> text (nicer supb.name g)
                             <+> text "demands"
-                            <+> text (show supb.tau.kind)
+                            <+> text (show (view TauT._unsafeKind supb.tau))
                         ))
                     return ka 
         superKind _ k _ = return k
@@ -181,7 +181,7 @@ passC = do
             (sig, _) <- K.kiSigmaC var kind sym.typ
             changeSym $ SymbolT.V sym.{typ = sig}
             let -- t  = TreeMap.fromList sig.bound
-                ok = _.kind <$> DL.find ((var==) . _.var) sig.bound
+                ok = view TauT._unsafeKind <$> DL.find ((var==) . view TauT._unsafeVar) sig.bound
             case ok of
                 Just k -> case K.unifyKind k kind of
                     Just u -> return u
@@ -262,9 +262,9 @@ passC = do
         mkanno csym mpos osym ssym = do
             g <- getST
             i <- uniqid
-            let newvar = TVar {pos=mpos, var=noClashIdent ("t" ++ show i), kind = KVar}
-                oldvar = ssym.tau.var
-                thsvar = csym.tau.var
+            let newvar = TauT.Var TVar{pos=mpos, var=noClashIdent ("t" ++ show i), kind = KVar}
+                oldvar = view TauT._unsafeVar ssym.tau
+                thsvar = view TauT._unsafeVar csym.tau
                 tree1   = TreeMap.insert empty oldvar csym.tau
                 tree | oldvar != thsvar = tree1.insert thsvar newvar
                      | otherwise        = tree1
@@ -272,11 +272,11 @@ passC = do
                 false -> do
                     let
                         rho1 = substRho tree osym.typ.rho
-                        rep (ctx@Ctx {cname, tau = TVar {var=x}})
+                        rep (ctx@Ctx {cname, tau=TauT.Var TVar{var=x}})
                             | cname == ssym.name, x == thsvar = ctx.{pos=mpos, cname=csym.name}
                         rep ctx = ctx
                         rho = rho1.{context <- map rep}
-                        repv tv = TM.lookupDefault tv tv.var tree
+                        repv tv = TM.lookupDefault tv (view TauT._unsafeVar tv) tree
                         memtyp = ForAll (map repv osym.typ.bound) rho
                     pure memtyp
                 true -> 
@@ -307,9 +307,9 @@ passC = do
         checklink sym = do
             g <- getST
             E.fatal sym.pos (text ("checklink: " ++ sym.nice g))
-        checkanno (SymbolT.C (symc@SymC {tau=TVar {var}})) (SymbolT.V (msym@SymV {typ=ForAll bound rho})) = do
-            let check1 = var `elem` map _.var bound
-                check2 = var `notElem` [ var | Ctx {tau=TVar {var}} <- rho.context ]
+        checkanno (SymbolT.C (symc@SymC {tau=TauT.Var TVar{var}})) (SymbolT.V (msym@SymV {typ=ForAll bound rho})) = do
+            let check1 = var `elem` map (view TauT._unsafeVar) bound
+                check2 = var `notElem` [ var | Ctx {tau=TauT.Var TVar{var}} <- rho.context ]
                 thisctx = Ctx msym.pos symc.name symc.tau
             unless (check1) do
                 E.error msym.pos (msgdoc ("class variable " ++ var
@@ -387,7 +387,7 @@ instForClass alien c iname = do
 
         when (not alien) do             -- check if class kind matches 
             isym <- U.findI iname
-            (sig, ki) <- K.kiSigmaX isym.typ csym.tau.kind
+            (sig, ki) <- K.kiSigmaX isym.typ (view TauT._unsafeKind csym.tau)
             changeSym $ SymbolT.I isym.{typ=sig}
 
         isym <- U.findI iname
@@ -714,7 +714,7 @@ tcInstMethod (sc:scs) isym msym = do
             Just (SymMeth.V SymV{typ=(s@ForAll sbnd srho)}) | not (isPSigma s) = do
                 g <- getST
                 let !mtnice = case isPSigma sig of true -> "None"; false -> sig.nicer g
-                    !csig   = ForAll (filter ((sc.tau.var!=) . _.var) sbnd) srho
+                    !csig   = ForAll (filter ((view TauT._unsafeVar sc.tau !=) . view TauT._unsafeVar) sbnd) srho
                     !sig    = case g.findit msym.name of
                                 Just xsym | Just typ <- preview SymbolT._typ xsym -> typ
                                 other    -> error ("tcInstMethod: link to nothing: " ++ nice msym g)
@@ -727,7 +727,7 @@ tcInstMethod (sc:scs) isym msym = do
                 case tauRho rhotau of
                     RhoTau ctx tau -> do    -- must be RhoTau, see Enter
                         -- C c => c a -> c b   ==> forall a b.C (I 42) => I 42 a -> I 42 b
-                        let sig1 = substSigma (TM.singleton sc.tau.var tau) csig
+                        let sig1 = substSigma (TM.singleton (view TauT._unsafeVar sc.tau) tau) csig
                         -- add the context of the instantiated type to sig
                         let !msig = case sig1 of
                                 ForAll bs (RhoFun c2 a b) = ForAll bs (RhoFun (ctx ++ adapt c2) a b)

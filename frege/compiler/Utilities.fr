@@ -50,7 +50,7 @@ import Data.List as DL(partitioned, sortBy, minimumBy, \\)
 
 import Lib.PP(fill, break, pretty, text, nest, msgdoc, <+>, <>, DOCUMENT)
 
-import  frege.compiler.common.Lens (over, preview, set)
+import  frege.compiler.common.Lens (over, preview, set, unsafePartialView)
 
 -- import Compiler.enums.Flags 
 import Compiler.enums.TokenID(defaultInfix, VARID)
@@ -204,7 +204,7 @@ freeTVnames bound rho = keys (freeRhoTVars bound TreeMap.empty rho)
 
 freeRhoTVars :: [String] -> SigmaEnv t -> RhoT t -> SigmaEnv t
 freeRhoTVars bound collected (RhoFun ctx (ForAll bndleft rho1) rho2) =
-    freeRhoTVars (map _.var bndleft ++ bound) (freeRhoTVars bound ctxcoll rho2) rho1
+    freeRhoTVars (map (_.var . unsafePartialView TauT._Var) bndleft ++ bound) (freeRhoTVars bound ctxcoll rho2) rho1
         where ctxcoll = freeCtxTVars bound collected ctx
 freeRhoTVars bound collected (RhoTau ctx tau) = freeTauTVars bound ctxcoll tau
         where ctxcoll = freeCtxTVars bound collected ctx
@@ -219,7 +219,7 @@ freeCtxTVars bnd coll cs = fold ctxTVars coll cs
 
 
 freeTauTVars :: [String] -> SigmaEnv t -> TauT t -> SigmaEnv t
-freeTauTVars bound collected (tv@TVar{var,kind})
+freeTauTVars bound collected (tv@(TauT.Var TVar{var,kind}))
     | isJust tv.wildTau = coll
     | var `elem` bound = coll
     | otherwise = insert var tv coll
@@ -365,7 +365,7 @@ rhoTau tau        = RhoTau [] tau
 validSigma :: SigmaT a -> StG (SigmaT a)
 validSigma (ForAll [] rho) = do
     let vs = freeTVars [] rho
-    rho <- validRho (map Tau.var vs) rho
+    rho <- validRho (map (_.var . unsafePartialView TauT._Var) vs) rho
     stio (ForAll vs rho)
 validSigma sig = validSigma1 [] sig
 
@@ -373,10 +373,10 @@ type SigmaEnv a = TreeMap String (TauT a)
 
 validSigma1 outer (ForAll bound rho) = do
     g <- getST
-    let inner = map _.var bound
+    let inner = map (_.var . unsafePartialView TauT._Var) bound
         vs = freeTVnames (DL.union inner outer) rho
         fs = freeTVnames (outer \\ inner) rho
-        ov = [ v | TVar{var=v} <- bound, v `notElem` fs ]
+        ov = [ v | TauT.Var TVar{var=v} <- bound, v `notElem` fs ]
     -- logmsg TRACE5 (rhoPos rho) ("vs: " ++ display vs)
     -- logmsg TRACE5 (rhoPos rho) ("fs: " ++ display fs)
     -- logmsg TRACE5 (rhoPos rho) ("ov: " ++ display ov)
@@ -436,12 +436,12 @@ private transSigma1 outer sigma = do
     case sigma of 
         ForAll bound rho -> do
                 inner ←  transBounds sigma.bound
-                let env = fold (\tm tv → tm.insertS tv.var tv) outer inner
-                    unshadowedOuter = fold (\tm tv → tm.delete tv.var) outer inner
+                let env = fold (\tm tv -> tm.insertS (unsafePartialView TauT._Var tv).var tv) outer inner
+                    unshadowedOuter = fold (\tm tv -> tm.delete (unsafePartialView TauT._Var tv).var) outer inner
                 rho <- transRho env rho
                 let freeTV = freeTVars (keys unshadowedOuter) rho   -- same as inner?
-                    innerMap = fold (\tm tv → tm.insertS tv.var tv) TreeMap.empty inner
-                    newbound = [ maybe tv id (innerMap.lookupS tv.var) | tv ← freeTV ]
+                    innerMap = fold (\tm tv -> tm.insertS (unsafePartialView TauT._Var tv).var tv) TreeMap.empty inner
+                    newbound = [ maybe tv id (innerMap.lookupS (unsafePartialView TauT._Var tv).var) | tv <- freeTV ]
                     constraints rho = case rho of 
                         RhoTau{} -> (rho.context, rho.{context=[]})
                         RhoFun{} -> (rho.context ++ subctx, rho.{context=[], rho=subrho})
@@ -491,13 +491,13 @@ transKind (KGen ts) = do
                 Just t  → pure t
                 Nothing → do
                     E.error (getpos t) (text "invalid type in a kind")
-                    pure TVar{pos=getpos t, kind=KType, var="wrong"}
+                    pure $ TauT.Var TVar{pos=getpos t, kind=KType, var="wrong"}
 
 --- Translate a 'Sigma' bound.
 --- This is really a shortcut way to translate a type variable.
 --- Will die of pattern match failure if argument doesn't have a @kind@ field.
 transBound ∷ TauS → StG Tau
-transBound tv  = tv.{kind=} <$> transKind tv.kind
+transBound tv = TauT.Var . (unsafePartialView TauT._Var tv).{kind=} <$> transKind (unsafePartialView TauT._Var tv).kind
 
 --- translate 'Sigma' bounds
 transBounds ∷ [TauS] → StG [Tau]
@@ -507,14 +507,14 @@ transBounds = mapM transBound
     check a tau and translate it to 'QName' form
  -}
 transTau :: TauT SName -> StG (SigmaT QName)
-transTau (TVar{pos,var,kind}) = do
-        k ← transKind kind
-        pure (tauAsSigma (TVar {pos,var,kind = k}))
+transTau (TauT.Var tvar) = do
+        kind <- transKind tvar.kind
+        pure (tauAsSigma $ TauT.Var tvar.{kind})
 
 transTau (t@Meta _) = do    -- Meta must not happen at this time
     g <- getST
     E.fatal (tauPos t) (text("meta type must not occur at this time: " ++ t.nice g))
-transTau (con@TCon {pos,name}) = transTApp [con]
+transTau (con@TCon{}) = transTApp [con]
 transTau (t@TApp _ _) = transTApp t.flat
 transTau (TSig s)     = do
         sig <- transSigma s
@@ -542,12 +542,12 @@ transTApp (con:as) = do
                           length as >= length alias.vars = do
                                 as <- mapSt transTau as  -- partial args allowed in alias
                                 tas <- mapSt forceTau as
-                                let env = TM.fromList (zip (map Tau.var alias.vars) tas)
+                                let env = TM.fromList (zip (map (_.var . unsafePartialView TauT._Var) alias.vars) tas)
                                     ras = drop (length alias.vars) as
                                 let nt = substTau env tau
                                 -- make sure errors are flagged on the right position
                                 let posnt = case Tau.flat nt of
-                                        (tcon:xs) | tcon.{pos?} = Tau.mkapp tcon.{pos} xs
+                                        (tcon:xs) | Just pos <- preview TauT._pos tcon = Tau.mkapp (set TauT._pos pos tcon) xs
                                         other -> nt
                                 appTauSigmas posnt ras
                         | ForAll _ (RhoTau _ tau) <- typ,
@@ -564,7 +564,7 @@ transTApp (con:as) = do
                         | length as == length alias.vars = do
                             sargs <- mapSt transTau as
                             targs <- mapSt forceTau sargs
-                            let env = TM.fromList (zip (map Tau.var alias.vars) targs)
+                            let env = TM.fromList (zip (map (_.var . unsafePartialView TauT._Var) alias.vars) targs)
                             return (substSigma env alias.typ)
                         | otherwise = do E.error pos (msgdoc("Apply " ++ alias.nice g
                                             ++ " to exactly " ++ show alias.vars.length

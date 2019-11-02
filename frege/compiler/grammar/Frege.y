@@ -76,6 +76,7 @@ import  Compiler.common.Resolve as R(enclosed);
 import Lib.PP (group, break, msgdoc);
 import frege.compiler.common.Tuples as T(tuple);
 import frege.compiler.common.Desugar;
+import frege.compiler.common.Lens (unsafePartialView, view);
 
 import frege.compiler.grammar.Lexer (substQQ);
 
@@ -906,11 +907,11 @@ simpletype:
 
 
 tyvar:
-    VARID                           { \n          -> TVar (yyline n) KVar (Token.value n)  }
-    | '('  VARID DCOLON kind ')'    { \_\n\_\k\_  -> TVar (yyline n) k    (Token.value n)  }
-    | '('  VARID EXTENDS tauSC ')'  { \_\v\x\ks\_ -> TVar (yyline v) (KGen ks) (v.value)   } 
-    | '('  EXTENDS tauSC ')'        { \_\x\ks\_   -> TVar (yyline x) (KGen ks) ("<")       }
-    | '('  SUPER tapp ')'           { \_\x\k\_    -> TVar (yyline x) (KGen [k]) (">")      }
+    VARID                           { \n          -> TauT.Var $ TVar{pos=yyline n, kind=KVar, var=Token.value n} }
+    | '('  VARID DCOLON kind ')'    { \_\n\_\k\_  -> TauT.Var $ TVar{pos=yyline n, kind=k,    var=Token.value n} }
+    | '('  VARID EXTENDS tauSC ')'  { \_\v\x\ks\_ -> TauT.Var $ TVar{pos=yyline v, kind=KGen ks, var=v.value} }
+    | '('  EXTENDS tauSC ')'        { \_\x\ks\_   -> TauT.Var $ TVar{pos=yyline x, kind=KGen ks, var="<"} }
+    | '('  SUPER tapp ')'           { \_\x\k\_    -> TauT.Var $ TVar{pos=yyline x, kind=KGen [k], var=">"} }
     ;
 
 
@@ -939,7 +940,7 @@ simplekind:
     ;
 
 scontext: 
-    qconid tyvar                { \c\v -> Ctx {pos=Pos (SName.id c) v.pos.last, cname=c, tau=v} }
+    qconid tyvar                { \c\v -> Ctx {pos=Pos (SName.id c) (view TauT._unsafePos v).last, cname=c, tau=v} }
     ;
 
 
@@ -958,7 +959,7 @@ ccontext:
 classdef:
     CLASS ccontext EARROW CONID tyvar wheredef {
         \_\ctxs\_\c\v\defs -> do
-            sups <- classContext ctxs (v::TauS).var
+            sups <- classContext ctxs (unsafePartialView TauT._Var v).var
             pure ClaDcl{
                     pos = yyline c, 
                     vis = Public,

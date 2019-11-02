@@ -52,6 +52,7 @@ import  Compiler.types.Global as G
 import  Compiler.common.Errors as E()
 import  Compiler.common.SymbolTable
 import  Compiler.common.Types as T(unifySigma, substSigma)
+import  Compiler.common.Lens (set, unsafePartialView, view)
 
 import  Compiler.classes.Nice
 import  Compiler.instances.Nicer
@@ -95,7 +96,7 @@ kiTypeSym names sym = do
     sym <- U.findT sym.name
     let kflat (KApp k ks) = k : kflat ks
         kflat ks          = [ks]
-        typ = ForAll (zipWith Tau.{kind=} (sym.typ.bound) (kflat sym.kind)) sym.typ.rho
+        typ = ForAll (zipWith (\t kind -> TauT.Var $ (unsafePartialView TauT._Var t).{kind}) (sym.typ.bound) (kflat sym.kind)) sym.typ.rho
         showbnds = text . joined " " . map (flip nice g)
     changeSym $ SymbolT.T sym.{typ}
     E.logmsg TRACEK sym.pos (text "type is now ∀"
@@ -115,14 +116,14 @@ kiSigmaX :: Sigma -> Kind -> StG (Sigma, Kind)
 kiSigmaX sigma kind = do
     g <- getST
     E.logmsg TRACEK (getpos sigma) (text ("kind check " ++ nice sigma g ++ " for " ++ show kind))
-    let e = Tau.kind <$> sigma.extendEnv empty
+    let e = view TauT._unsafeKind <$> sigma.extendEnv empty
     (rho, envs, kind) <- kiRhoX sigma.rho [e] kind
     let e' = fmap repKVar (head envs) 
     return (substSigmaBound sigma.{rho = substRhoKind e' rho} e', repKVar kind)
 
 substSigmaBound (ForAll bound rho) e = ForAll new rho
     where
-        new = [ tv.{kind=k} | tv ← bound, k ← lookup tv.var e ]
+        new = [ set TauT._unsafeKind k tv | tv <- bound, k <- lookup (view TauT._unsafeVar tv) e ]
 
 kiRhoX :: Rho -> Envs -> Kind -> StG (Rho, Envs, Kind)
 kiRhoX (it@RhoTau{}) env kind = do
@@ -146,7 +147,7 @@ kiSigmaC :: String -> Kind -> Sigma -> StG (Sigma, Envs)
 kiSigmaC name kind sigma = do
     g <- getST
     E.logmsg TRACEK (getpos sigma) (text ("kind check " ++ nice sigma g))
-    let se = Tau.kind <$> sigma.extendEnv empty
+    let se = view Tau._unsafeKind <$> sigma.extendEnv empty
         e  = case kind of KVar -> se ; _ -> insert name kind se
     -- the sub rho is checked with an extended env, i.e. one that is 1 longer than the
     -- one passed in.
@@ -164,7 +165,7 @@ kiSigma :: [QName] -> Envs -> Sigma -> StG (Sigma, Envs)
 kiSigma names env sigma = do
     g <- getST
     E.logmsg TRACEK (getpos sigma) (text ("kind check " ++ nice sigma g))
-    let e = Tau.kind <$> sigma.extendEnv empty
+    let e = view Tau._unsafeKind <$> sigma.extendEnv empty
     -- the sub rho is checked with an extended env, i.e. one that is 1 longer than the
     -- one passed in.
     -- If kiRho always returns an env with the same length as passed,
@@ -197,8 +198,8 @@ substCtxKind :: TreeMap String (KindT β) -> ContextT β -> ContextT β
 substCtxKind env it = it.{tau <- substTauKind env}
 
 substTauKind :: TreeMap String (KindT β) -> TauT β -> TauT β
-substTauKind env (it@TVar{}) = case env.lookup it.var of
-    Just kind -> it.{kind}
+substTauKind env (it@(TauT.Var _)) = case env.lookup (view TauT._unsafeVar it) of
+    Just kind -> set TauT._unsafeKind kind it
     _         -> it    
 substTauKind env (TApp a b)  = TApp (substTauKind env a) (substTauKind env b)
 substTauKind env tau         = tau
@@ -219,7 +220,7 @@ kiRho names env (it@RhoFun{context,sigma,rho}) = do
 kiCtx :: [QName] -> Envs -> Context -> StG Envs
 kiCtx names env Ctx{cname, tau} = do
     cls <- U.findC cname
-    case cls.tau.kind of
+    case view TauT._unsafeKind cls.tau of
         KVar -> return env          -- not yet kind checked
         k    -> do
             (_, env) <- unifyTauKind names env tau k
@@ -243,27 +244,27 @@ type Envs = [TreeMap String Kind]
     If kind errors are detected, error messages will be written.  
     -}
 unifyTauKind :: [QName] -> Envs -> Tau -> Kind -> StG (Kind, Envs)
-unifyTauKind names env (tvar@TVar{}) exp 
+unifyTauKind names env (tvar@(TauT.Var _)) exp
     | Just _ ← tvar.wildTau, 
-      KGen taus ← tvar.kind = do  
+      KGen taus ← (view TauT._unsafeKind tvar) = do
               env' ← foldM (\env t ->  snd <$> unifyTauKind names env t KType) env taus
-              case unifyKind tvar.kind exp of
+              case unifyKind (view TauT._unsafeKind tvar) exp of
                 Nothing → do 
                     g ← getST
-                    E.error tvar.pos (text ("kind error, wildcard `" 
+                    E.error (view TauT._unsafePos tvar) (text ("kind error, wildcard `"
                                         ++ "` has kind " 
-                                        ++ nicer tvar.kind g
+                                        ++ nicer (view TauT._unsafeKind tvar) g
                                         ++ ", expected was " ++ nicer exp g))
-                    pure (tvar.kind, env')
-                Just _ → pure (tvar.kind, env')                   
-unifyTauKind names env (TVar{pos,var,kind}) exp = do
+                    pure (view TauT._unsafeKind tvar, env')
+                Just _ → pure (view TauT._unsafeKind tvar, env')
+unifyTauKind names env (TauT.Var TVar{pos,var,kind}) exp = do
         g <- getST
         E.logmsg TRACEK pos (text ("unifyTauKind: " ++ var
             ++ "  initial "  ++ nicer varkind g 
             ++ "  expected " ++ nicer exp g))
         case unifyKind varkind exp of
             Just (KGen ts) → do
-                let subst = fold (\tm tv -> TreeMap.insert tm tv.var tv.{var,pos,kind=KVar}) empty
+                let subst = fold (\tm tv -> TreeMap.insert tm (view TauT._unsafeVar tv) (set TauT._unsafeVar var $ set TauT._unsafePos pos $ set TauT._unsafeKind KVar $ tv)) empty
                                 [ftv | t ← ts, ftv ← U.freeTVars [] (RhoTau [] t)]
                     ts'    = map (T.substTau subst) ts
                 pure (KGen ts', updenv env var (KGen ts'))

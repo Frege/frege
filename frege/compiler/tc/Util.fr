@@ -47,6 +47,7 @@ import Data.TreeMap (TreeMap, values, lookup, insert, keys,
                         including, union, contains)
 import Data.List as DL(unique, uniq, sort, elemBy, partition)
 
+import frege.compiler.common.Lens (set, view)
 import frege.compiler.enums.Flags as Compilerflags(TRACET)
 
 import  Compiler.types.Positions
@@ -79,12 +80,14 @@ newRhoTyVar   d = RhoTau [] <$>  newMeta2 d
 newMeta       :: Tau -> StG Tau
 newMeta       d = Meta      <$>  newFlexiTyVar d
 newMeta2      :: (String, Kind) -> StG Tau
-newMeta2      d = Meta      <$>  newFlexiTyVar (TVar Position.null (snd d) (fst d))
+newMeta2      d = Meta      <$>  newFlexiTyVar (TauT.Var TVar{pos=Position.null, kind=snd d, var=fst d})
+--- warning: TODO alter to take TVar
 newFlexiTyVar :: Tau -> StG MetaTv
-newFlexiTyVar TVar{kind=k, var=n} = do u <- uniqid; stio (Flexi u n k)
+newFlexiTyVar (TauT.Var TVar{kind=k, var=n}) = do u <- uniqid; stio (Flexi u n k)
 newFlexiTyVar _ = error "no tyvar"
+--- warning: TODO alter to take TVar
 newRigidTyVar :: Tau -> StG MetaTv
-newRigidTyVar TVar{kind=k, var=n} = do u <- uniqid; stio (Rigid u n k)
+newRigidTyVar (TauT.Var TVar{kind=k, var=n}) = do u <- uniqid; stio (Rigid u n k)
 newRigidTyVar _ = error "no tyvar"
 
 instSigma :: Expr -> Sigma -> Expected Rho -> StG Expr
@@ -294,8 +297,8 @@ getTauTvsT :: Global -> TreeMap MetaTv () -> Tau -> TreeMap MetaTv ()
 getTauTvsT g t (TApp a b) = 
     let ta =  getTauTvsT g t a
     in getTauTvsT g ta b
-getTauTvsT g t (TCon {pos}) = t
-getTauTvsT g t (TVar {pos}) = t
+getTauTvsT _ t (TCon {}) = t
+getTauTvsT _ t (TauT.Var _) = t
 getTauTvsT g t (Meta tv) = 
      case Global.bound g tv of
         Just ty -> getTauTvsT g t ty
@@ -328,7 +331,7 @@ skolemise :: Sigma -> StG ([MetaTv], Rho)
 skolemise (ForAll [] ty) = (,) [] <$> instWildRho ty
 skolemise (ForAll ns ty) = do
     tvs <- mapSt newRigidTyVar ns
-    let tree = TreeMap.fromList (zip (map _.var ns) (map Meta tvs))
+    let tree = TreeMap.fromList (zip (map (view TauT._unsafeVar) ns) (map Meta tvs))
     rho  ←  instWildRho (substRho tree ty)
     pure (tvs, rho)
 
@@ -338,7 +341,7 @@ instantiate :: Sigma -> StG Rho
 instantiate (ForAll [] ty) = instWildRho ty
 instantiate (ForAll ns ty) = do
     tvs <- mapSt newMeta ns
-    let tree = TreeMap.fromList (zip (map _.var ns) tvs)
+    let tree = TreeMap.fromList (zip (map (view TauT._unsafeVar) ns) tvs)
     instWildRho (substRho tree ty)
 
 --- Substitute all wild cards with flexible Meta types
@@ -366,16 +369,16 @@ instWildCtx :: Context -> StG Context
 instWildCtx (ctx@Ctx{pos, cname, tau}) = ctx.{tau=} <$> instWildTau tau
 
 instWildTau :: Tau -> StG Tau
-instWildTau (tv@TVar{pos, kind, var})  = case tv.wildTau of
-    Just _ | KGen tau ← kind = mapM instWildTau tau >>= newMeta . tv.{kind=} . KGen
+instWildTau (tv@(TauT.Var TVar{kind})) = case tv.wildTau of
+    Just _ | KGen tau ← kind = mapM instWildTau tau >>= newMeta . flip (set TauT._unsafeKind) tv . KGen
     other                    = pure tv  -- ordinary TVars must not be instantiated/skolemised here
 instWildTau (TApp t1 t2) = do
     t1'  ← instWildTau t1
     t2'  ← instWildTau t2
     pure (TApp t1' t2')
-instWildTau (tcon@TCon{pos, name}) = pure tcon
-instWildTau (tsig@TSig s)          = TSig <$> instWildSigma s
-instWildTau (meta@Meta m)          = case m.kind of
+instWildTau (tcon@TCon{}) = pure tcon
+instWildTau (tsig@TSig s) = TSig <$> instWildSigma s
+instWildTau (meta@Meta m) = case m.kind of
     KGen tau = mapM instWildTau tau >>= pure . Meta . m.{kind=} . KGen
     other    = pure meta
 {--
@@ -385,7 +388,7 @@ instantiateTvs :: Sigma -> StG ([Tau], Rho)
 instantiateTvs (ForAll [] ty) = stio ([], ty)
 instantiateTvs (ForAll ns ty) = do
     tvs <- mapSt newMeta ns
-    let tree = TreeMap.fromList (zip (map _.var ns) tvs)
+    let tree = TreeMap.fromList (zip (map (view TauT._unsafeVar) ns) tvs)
         rho  = substRho tree ty
     stio (tvs, rho)
 
@@ -456,7 +459,7 @@ unified ex tau1 tau2 = do
         _                                 = stio false
   where
     badType :: Tau -> Bool
-    badType (TVar {pos}) = true
+    badType (TauT.Var _) = true
     badType _            = false
     -- unifyTCon will only be called with real type names (no aliases)
     -- It returns true if both 'TCon's describe native types and the 
@@ -517,7 +520,7 @@ unifyVar ex tv lrtau = do
     unbound tau = do            -- unifyUnboundVar
         g <- getST
         let tauTvs = getTauTvs g tau
-            tvar   = TVar{pos=getpos tau, kind=KVar, var=" occurs in type "}    -- trick to make 'better' work
+            tvar   = TauT.Var TVar{pos=getpos tau, kind=KVar, var=" occurs in type "} -- trick to make 'better' work
             tapp   = TApp (TApp (Meta tv) tvar) tau                             -- fake type for showing
         if tauTvs `contains` tv then do
                 E.error (getpos ex) (
@@ -538,11 +541,11 @@ unifyVar ex tv lrtau = do
 --- substitute MetaTV with given UID in a Tau
 substMeta ∷ Int → Tau → Tau → StG Tau
 substMeta uid rep tau = case tau of
-    TVar{kind=KGen ts} = mapM (substMeta uid rep) ts >>= pure . tau.{kind=} . KGen
-    TApp a b           = liftM2 TApp (substMeta uid rep a) (substMeta uid rep b)
-    TCon{}             = pure tau
+    TauT.Var TVar{kind=KGen ts} = mapM (substMeta uid rep) ts >>= pure . flip (set TauT._unsafeKind) tau . KGen
+    TApp a b = liftM2 TApp (substMeta uid rep a) (substMeta uid rep b)
+    TCon{}   = pure tau
     Meta tv | uid == tv.uid = pure rep
-    Meta tv           = do
+    Meta tv  = do
         bound ← readTv tv
         case bound of 
             Just ty -> substMeta uid rep ty      -- skip enclosing Metas
@@ -591,7 +594,7 @@ zonkTau (m@Meta tv)      = do
         case mbtau of
             Nothing | Just x ← m.wildTau = do
                                         k ← zonkKind tv.kind
-                                        pure TVar{pos=getpos m, kind=k, var=x}
+                                        pure $ TauT.Var TVar{pos=getpos m, kind=k, var=x}
                     | otherwise = pure m
             Just ty -> do      -- short out multiple hops
                             ty <- zonkTau ty
@@ -607,7 +610,7 @@ zonkKind other    = pure other
 substRigidSigma :: [String] -> Sigma -> Sigma
 substRigidSigma [] sigma = sigma
 substRigidSigma bound (ForAll b rho) = ForAll b
-        (substRigidRho (filter (`notElem` map _.var b) bound) rho)
+        (substRigidRho (filter (`notElem` map (view TauT._unsafeVar) b) bound) rho)
 
 substRigidRho :: [String] -> Rho -> Rho
 substRigidRho [] rho = rho
@@ -628,7 +631,7 @@ substRigidTau bound (TApp a b) = TApp
         (substRigidTau bound b)
         
 substRigidTau bound (meta@Meta (Rigid {hint, kind}))           -- this is what happens in the end
-    | hint `elem` bound = (TVar Position.null kind hint)
+    | hint `elem` bound = TauT.Var TVar{pos=Position.null, kind, var=hint}
 substRigidTau bound tau = tau
 
 
@@ -657,10 +660,10 @@ quantifiedExcept exc rhos = do
             -- make sigma for rho with the tvs that appear in that rho
             mksig ∷ [(String,MetaTv)] → (Rho,[MetaTv]) → StG Sigma
             mksig bound (rho,tvs) = do
-                    nvz ← mapM (\tv → zonkKind tv.kind >>= pure . tv.{kind=}) nv
+                    nvz <- mapM (\tv -> zonkKind (view TauT._unsafeKind tv) >>= pure . flip (set TauT._unsafeKind) tv) nv
                     rhoz ← zonkRho rho
                     pure (ForAll nvz rhoz) 
-                where nv = [ TVar{pos, kind=MetaTv.kind v, var=n} | (n,v) <- bound, v `elem` tvs]
+                where nv = [ TauT.Var TVar{pos, kind=MetaTv.kind v, var=n} | (n,v) <- bound, v `elem` tvs]
                       pos = getpos rho
         foreach bound bind                              -- actually write TVars in the MetaTvs
         mapSt (mksig bound) (zip rhos rhosTvs)          -- create (and return) the sigmas
@@ -671,10 +674,10 @@ quantifiedExcept exc rhos = do
         bind ∷ (String,MetaTv) → StG ()
         bind (var,tv) = case tv.kind of
             KGen t → do
-                        writeTv tv (TVar {pos, var, kind=KVar})
+                        writeTv tv (TauT.Var TVar{pos, var, kind=KVar})
                         t' ← mapM zonkTau t
-                        writeTv tv (TVar {pos, var, kind=KGen t'})
-            other  → writeTv tv (TVar {pos, var, kind=tv.kind})
+                        writeTv tv (TauT.Var TVar{pos, var, kind=KGen t'})
+            other  → writeTv tv (TauT.Var TVar{pos, var, kind=tv.kind})
             
 
 quantify rho = do
@@ -691,7 +694,7 @@ canonicSignature sig = (instantiate sig >>= zonkRho) >>= quantify
  -}
 tyVarBndrs ty = (uniq • sort) (bndrs ty) where
     bndrs (RhoFun _ (ForAll tvs arg) res)
-                = (map _.var tvs ++ bndrs arg) ++ bndrs res
+                = (map (view TauT._unsafeVar) tvs ++ bndrs arg) ++ bndrs res
     bndrs _     = []
 
 {--
@@ -775,7 +778,7 @@ reducedTau g (TApp a b)     = TApp (reducedTau g a) (reducedTau g b)
 reducedTau g (meta@Meta{})  = case reduced meta g of
                                 t@Meta{} → t                    -- unbound
                                 tau      → reducedTau g tau     -- could be   <X> -> <Y>
-reducedTau g (t@TVar{})     = t
+reducedTau g (t@TauT.Var _) = t
 reducedTau g (t@TCon{})     = t
 reducedTau g (t@TSig{})     = t
 
@@ -804,7 +807,7 @@ sameCtx ca cb = ca.{cname?} && cb.{cname?} && ca.cname == cb.cname && sameTau ca
 --- check identity of 2 'Tau's. This works only on 'reducedTau's.
 sameTau :: Tau -> Tau -> Bool
 sameTau (Meta a) (Meta b) = a == b
-sameTau (TVar {var=a}) (TVar {var=b})   = a == b
+sameTau (TauT.Var a) (TauT.Var b) = a.var == b.var
 sameTau (TCon {name=a}) (TCon {name=b}) = a == b
 sameTau (TApp a b) (TApp c d) = sameTau a c && sameTau b d
 -- sameTau (TFun a b) (TFun c d) = sameTau a c && sameTau b d
@@ -859,7 +862,7 @@ simplify pos rho = do
                   where ctxs2 = filter (not • (ctx `implies`)) ctxs
 
 --- tell if this is either a 'TVar' or a 'Meta'
-isVarMeta (TVar {var}) = true
+isVarMeta (TauT.Var _) = true
 isVarMeta (Meta _)     = true
 isVarMeta _            = false
 

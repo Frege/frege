@@ -5,6 +5,7 @@ module frege.compiler.common.Types
 
 import  Data.TreeMap as Map(member, keys, insert, lookup, TreeSet, TreeMap)
 
+import  frege.compiler.common.Lens (unsafePartialView)
 import  frege.compiler.types.Types as T
 import  Compiler.types.Global as G
 import  Compiler.types.QNames (QName)
@@ -65,8 +66,8 @@ unboundTauTvs' g (Meta m) acc = case m  of
             bs     → foldr (unboundTauTvs' g) (acc.insertI uid ()) bs
     Rigid{} →  acc
 
-unboundTauTvs' g TVar{} acc = acc
-unboundTauTvs' g TCon{} acc = acc
+unboundTauTvs' _ (TauT.Var _) acc = acc
+unboundTauTvs' _ TCon{} acc = acc
 
 --- substitute 'MetaTv' unique ids in a 'Sigma'
 substSigmaUID :: Global -> TreeMap Int Int → Sigma → Sigma
@@ -89,7 +90,7 @@ substTauUID :: Global -> TreeMap Int Int -> Tau -> Tau
 substTauUID g m tau = case tau  of
     TApp a b →  TApp (substTauUID g m a) (substTauUID g m b)
     TCon{} →  tau
-    TVar{} →  tau
+    TauT.Var _ -> tau
     TSig s →  TSig (substSigmaUID g m s)
     Meta v →  case v  of
         Flexi{uid}
@@ -162,7 +163,7 @@ instanceHead clas rho = RhoTau{context=rho.context, tau=TApp tcon tau}
 --- note: type must not contain bound Metas
 substSigma :: TreeMap String (TauT t) ->  SigmaT t  -> SigmaT t
 substSigma t (ForAll bndrs rho) = ForAll bndrs (substRho t' rho)
-    where t' = fold TreeMap.delete t (map Tau.var bndrs)
+    where t' = fold TreeMap.delete t (map (_.var . unsafePartialView TauT._Var) bndrs)
 
 
 substRho :: TreeMap String (TauT t) -> RhoT t -> RhoT t
@@ -178,10 +179,10 @@ substTau :: TreeMap String (TauT t) -> TauT t -> TauT t
 substTau t (tau@TCon{})      = tau
 substTau t (TApp a b)        = TApp (substTau t a) (substTau t b)
 substTau t (typ@Meta _)      = typ     -- Meta must be unbound
-substTau t (typ@TVar {var})  = case TreeMap.lookupS t var of
-        Just (Meta tv)       = Meta tv.{kind ← substKind t var (Meta tv.{kind=KVar})}  
+substTau t (TauT.Var typ)    = case TreeMap.lookupS t typ.var of
+        Just (Meta tv)       = Meta tv.{kind <- substKind t typ.var (Meta tv.{kind=KVar})}
         Just tau -> tau
-        Nothing  -> typ.{kind ← substKind t var typ.{kind=KVar}}
+        Nothing  -> TauT.Var typ.{kind <- substKind t typ.var $ TauT.Var typ.{kind=KVar}}
 substTau t (typ@TSig s) = TSig (substSigma t s)
 
 {-- 
@@ -209,9 +210,9 @@ substCtx t x  = x.{tau <- substTau t}
 -}
 tauKind :: Tau -> Kind
 tauKind app = case app.flat of
-    TVar{pos, kind, var}:_          →  kind
-    Meta Flexi{uid, hint, kind}:_   →  kind
-    other                           →  KType
+    TauT.Var TVar{pos, kind, var}:_ -> kind
+    Meta Flexi{uid, hint, kind}:_   -> kind
+    other                           -> KType
 
 --- kindedness of a 'Sigma', based on enclosed 'Tau', see 'tauKind'
 sigmaKind (ForAll _ rho) = rhoKind rho
@@ -258,7 +259,7 @@ rhoKind RhoTau{tau} = tauKind tau
 
 avoidSigma avoid (ForAll tvs rho) = ForAll ntvs (avoidRho (\s -> avoid s ||  s `elem` new) rho')
     where
-        old = map _.var tvs                         -- old variables
+        old = map (_.var . unsafePartialView TauT._Var) tvs  -- old variables
         bads = filter avoid old                     -- the variables that need replacement
         safe s = not (avoid s) && s `notElem` old   -- check for a safe name
         salvage s = head
@@ -271,8 +272,8 @@ avoidSigma avoid (ForAll tvs rho) = ForAll ntvs (avoidRho (\s -> avoid s ||  s `
         binders = map salvage bads              -- our new safe names
         reps = Map.fromList (zip bads binders)  -- a substitution for variable names
         ntvs = map (rnTVar reps) tvs            -- renamed affected type variables
-        new = map _.var ntvs                    -- the variable names of the new Sigma
-        subst = Map.fromList (zip bads [ tv | tv ← ntvs, tv.var `elem` binders ]) 
+        new = map (_.var . unsafePartialView TauT._Var) ntvs -- the variable names of the new Sigma
+        subst = Map.fromList (zip bads [ tv | tv <- ntvs, (unsafePartialView TauT._Var tv).var `elem` binders ])
         rho' = substRho subst rho               -- substitute the new tvars in the rest of the type
 
 avoidRho :: (String → Bool) -> Rho -> Rho
@@ -280,13 +281,13 @@ avoidRho avoid (rhofun@RhoFun{})  = rhofun.{sigma ← avoidSigma avoid, rho ← 
 avoidRho avoid (rhotau@RhoTau{})  = rhotau
 
 rnTVar :: TreeMap String String → Tau → Tau
-rnTVar tree (TApp a b)  = TApp (rnTVar tree a) (rnTVar tree b)
-rnTVar tree (t@TCon{})  = t
-rnTVar tree (t@TVar{})  = case lookup t.var tree of
-    Just v  →   t.{kind ← rnKind tree, var=v}
-    Nothing →   t
-rnTVar tree (t@TSig _)  = t
-rnTVar tree (t@Meta _)  = t
+rnTVar tree (TApp a b)   = TApp (rnTVar tree a) (rnTVar tree b)
+rnTVar tree (t@TCon{})   = t
+rnTVar tree (TauT.Var t) = case lookup t.var tree of
+    Just v  -> TauT.Var t.{kind <- rnKind tree, var=v}
+    Nothing -> TauT.Var t
+rnTVar tree (t@TSig _)   = t
+rnTVar tree (t@Meta _)   = t
 
 rnKind :: TreeMap String String → Kind → Kind
 rnKind tree (KGen ts)  = KGen (map (rnTVar tree) ts)
@@ -350,11 +351,11 @@ unifyRho g t _ _ = t
 
 
 unifyTau ∷ TreeMap String Tau → Tau → Tau → TreeMap String (Tau)
-unifyTau t (TVar {var}) b = insert var b t
+unifyTau t (TauT.Var TVar{var}) b = insert var b t
 unifyTau t (tau1@TApp a b) (tau2@TApp c d) = unifyApp a c
     where
         -- do not match unequals!
-        unifyApp TVar{} _ 
+        unifyApp (TauT.Var _) _
             = unifyTau  (unifyTau  t a c) b d
         unifyApp TCon{name=n1} TCon{name=n2}
             | n1 == n2 = unifyTau  (unifyTau  t a c) b d
