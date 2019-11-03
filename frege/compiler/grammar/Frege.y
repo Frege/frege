@@ -829,7 +829,7 @@ sigma:
     ;
 
 forall:
-    FORALL dvars mbdot rho        { \_\vs\_\r      -> ForAll  vs  r }
+    FORALL dvars mbdot rho        { \_\vs\_\r      -> ForAll  (map (unsafePartialView TauT._Var) vs)  r }
     ;
 
 mbdot:

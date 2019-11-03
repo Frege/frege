@@ -44,7 +44,7 @@ import frege.Prelude hiding(<+>, break)
 import Data.TreeMap as TM(insert, lookup, values, keys, TreeMap, each, contains)
 import Data.List  as DL(find, unique, sortBy, groupBy)
 
-import  frege.compiler.common.Lens (preview, set, view)
+import  frege.compiler.common.Lens (preview, set, unsafePartialView, view)
 
 import Compiler.enums.Flags as Compilerflags(TRACE5, isOn, flagClr, flagSet, NODOCWARNINGS)
 import Compiler.enums.TokenID
@@ -157,7 +157,7 @@ inlineCandidates = do
                 notHC RhoTau{} = true
                 notHC RhoFun{sigma=ForAll bound srho, rho}
                     | t <- U.freeCtxTVars [] empty srho.context,
-                      any (`elem` map (view TauT._unsafeVar) bound) (keys t) = false
+                      any (`elem` map _.var bound) (keys t) = false
                     | otherwise = notHC srho && notHC rho
         notOurCode (sym, p) = do
             g <- getST
@@ -359,11 +359,11 @@ transNatDcl env fname (d@NatDcl {pos}) = do
                             avoid = maybeToList phantom ++ objectvars
                             -- type variables that are valid
                             sigvars = filter 
-                                    ((`notElem` avoid) . (view TauT._unsafeVar))
+                                    ((`notElem` avoid) . _.var)
                                     (sig.tvars)
-                            bound = map (view TauT._unsafeVar) sigvars
+                            bound = map _.var sigvars
                             inferred = if nik == NIMethod || nik == NIStatic then sigvars else []
-                            initial = maybe inferred (const dgargs) d.gargs
+                            initial = maybe (map TauT.Var inferred) (const dgargs) d.gargs
                             gargs
                                 | ovld       = filter (null . freeTVnames bound . RhoTau []) initial
                                 | otherwise  = initial
@@ -455,7 +455,7 @@ private refreshType name pos vars sym = do
     let !dname = TName g.thisPack name
         dtcon  = TCon {pos, name=dname}
         dtau  = dtcon.mkapp vars :: Tau
-        !dsig  = ForAll vars (RhoTau [] dtau)
+        !dsig  = ForAll (map (unsafePartialView TauT._Var) vars) (RhoTau [] dtau)
         !kind  = foldr KApp KType dsig.kinds :: Kind
         newsym = sym.{typ=dsig, kind}
     changeSym $ SymbolT.T newsym
@@ -599,9 +599,9 @@ transDatDcl env fname (d@DatDcl {pos}) = do
                 Just (SymbolT.D con) = do
                     let transSigma1 (ForAll [] (RhoTau [] t)) = transTau t
                         transSigma1 s = do      -- field types can be sigmas
-                            ForAll bound frho <- U.validSigma1 (map (view TauT._unsafeVar) bndrs) s
-                            bounds ← U.transBounds bound
-                            let env = fold (\tm tv -> tm.insertS (view TauT._unsafeVar tv) tv) TreeMap.empty (bounds ++ bndrs)
+                            ForAll bound frho <- U.validSigma1 (map _.var bndrs) s
+                            bounds <- U.transBounds bound
+                            let env = fold (\tm tv -> tm.insertS tv.var (TauT.Var tv)) TreeMap.empty (bounds ++ bndrs)
                             frho <- U.transRho env frho
                             stio (ForAll bounds frho)
                     sigmas <- mapSt (transSigma1 • ConField.typ) d.flds
@@ -609,7 +609,7 @@ transDatDcl env fname (d@DatDcl {pos}) = do
                         typ = ForAll bndrs (foldr (RhoFun []) rho sigmas)
                     E.logmsg TRACE5 con.pos (text (con.nice g ++ " :: " ++ typ.nice g))
                     sig <- U.validSigma typ >>= kiSigma [] [] >>= pure . fst
-                    let additional = filter (`notElem` map (view TauT._unsafeVar) bndrs) (map (view TauT._unsafeVar) sig.bound)
+                    let additional = filter (`notElem` map _.var bndrs) (map _.var sig.bound)
                     unless (null additional) do
                         E.error con.pos (text ("type variable(s) "
                             ++ joined ", " additional
@@ -628,7 +628,7 @@ transJavDcl env fname (d@JavDcl {pos}) = do
                     sym <- refreshTypeJavDcl d symt
                     -- extract and translate generic type arguments
                     let doit (Just gs) = mapM transTau gs >>= mapM forceTau
-                        doit Nothing   = pure sym.typ.tvars
+                        doit Nothing   = pure $ map TauT.Var sym.typ.tvars
                     gargs ← doit d.gargs       -- fromMaybe (pure (sym.typ.tvars sym.pos))  (map transTau <$> d.gargs)
                     let bound = sym.typ.vars
                     -- check that generic type arguments do not contain free type variables
@@ -648,10 +648,10 @@ transJavDcl env fname (d@JavDcl {pos}) = do
                                 )
                     -- fix type arguments that are not generic to kind * 
                     ktype t = case t of
-                        TauT.Var TVar{kind=KVar} -> set TauT._unsafeKind KType t
-                        _                        -> t
-                    let typ = sym.typ.{bound ← map ktype}
-                        !kind  = foldr KApp KType (map (view TauT._unsafeKind) typ.bound)
+                        TVar{kind=KVar} -> t.{kind=KType}
+                        _               -> t
+                    let typ = sym.typ.{bound <- map ktype}
+                        !kind  = foldr KApp KType (map _.kind typ.bound)
                     let purity = d.isPure || (nativ `elem` pureTypes)
                     changeSym $ SymbolT.T sym.{pur = purity, gargs, typ, kind}
                     foreach d.defs (transdef [] (MName tname))
@@ -693,7 +693,7 @@ transModDcl env fname ModDcl{pos, extending, implementing, code} = do
 ovlsigma :: Sigma
 ovlsigma = ForAll{  bound=[tvar], 
                     rho = RhoTau{context=[], tau=TauT.Var TVar{pos=Position.null, kind=KType, var="ω"}}}
-            where tvar = TauT.Var TVar{pos=Position.null, kind=KType, var="ω"}
+            where tvar = TVar{pos=Position.null, kind=KType, var="ω"}
 
 --- java types where we know for sure that they are pure
 pureTypes = primitiveTypes ++ ["java.lang.String", "java.math.BigInteger", "java.util.regex.Pattern",
