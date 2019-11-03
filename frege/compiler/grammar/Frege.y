@@ -1211,7 +1211,7 @@ typedef:
     | TYPE CONID dvars '=' sigma { \t\i\vs\_\r -> TypDcl {pos=yyline i, 
                                                             vis=Public, 
                                                             name=Token.value i, 
-                                                            vars=map TauT.Var vs,
+                                                            vars=vs,
                                                             typ = r, 
                                                             doc=Nothing}}
     ;
