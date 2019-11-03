@@ -76,7 +76,6 @@ import  Compiler.common.Resolve as R(enclosed);
 import Lib.PP (group, break, msgdoc);
 import frege.compiler.common.Tuples as T(tuple);
 import frege.compiler.common.Desugar;
-import frege.compiler.common.Lens (unsafePartialView, view);
 
 import frege.compiler.grammar.Lexer (substQQ);
 
@@ -181,7 +180,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type visibledefinition [Def]
 //%type moduledefinition ModDcl
 //%type wheredef        [Def]
-//%type tyvar           TauS
+//%type tyvar           (TVar SName)
 //%type tvapp           TauS
 //%type tau             TauS
 //%type tapp            TauS
@@ -189,7 +188,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type simpletypes     [TauS]
 //%type tauSC           [TauS]
 //%type tauSB           [TauS]
-//%type dvars           [TauS]
+//%type dvars           [TVar SName]
 //%type sigex           SigExs
 //%type sigexs          [SigExs]
 //%type sigma           SigmaS
@@ -829,7 +828,7 @@ sigma:
     ;
 
 forall:
-    FORALL dvars mbdot rho        { \_\vs\_\r      -> ForAll  (map (unsafePartialView TauT._Var) vs)  r }
+    FORALL dvars mbdot rho        { \_\vs\_\r -> ForAll vs r }
     ;
 
 mbdot:
@@ -887,7 +886,7 @@ tapp:
     ;
 
 simpletype:
-    tyvar
+    tyvar               {TauT.Var}
     | tyname            { \(tn::SName) -> TCon (yyline tn.id) tn}
     | '(' tau ')'       { \_\t\_ -> t }
     | '(' tau ',' tauSC ')'
@@ -907,11 +906,11 @@ simpletype:
 
 
 tyvar:
-    VARID                           { \n          -> TauT.Var $ TVar{pos=yyline n, kind=KVar, var=Token.value n} }
-    | '('  VARID DCOLON kind ')'    { \_\n\_\k\_  -> TauT.Var $ TVar{pos=yyline n, kind=k,    var=Token.value n} }
-    | '('  VARID EXTENDS tauSC ')'  { \_\v\x\ks\_ -> TauT.Var $ TVar{pos=yyline v, kind=KGen ks, var=v.value} }
-    | '('  EXTENDS tauSC ')'        { \_\x\ks\_   -> TauT.Var $ TVar{pos=yyline x, kind=KGen ks, var="<"} }
-    | '('  SUPER tapp ')'           { \_\x\k\_    -> TauT.Var $ TVar{pos=yyline x, kind=KGen [k], var=">"} }
+    VARID                           { \n          -> TVar{pos=yyline n, kind=KVar, var=Token.value n} }
+    | '('  VARID DCOLON kind ')'    { \_\n\_\k\_  -> TVar{pos=yyline n, kind=k,    var=Token.value n} }
+    | '('  VARID EXTENDS tauSC ')'  { \_\v\x\ks\_ -> TVar{pos=yyline v, kind=KGen ks, var=v.value} }
+    | '('  EXTENDS tauSC ')'        { \_\x\ks\_   -> TVar{pos=yyline x, kind=KGen ks, var="<"} }
+    | '('  SUPER tapp ')'           { \_\x\k\_    -> TVar{pos=yyline x, kind=KGen [k], var=">"} }
     ;
 
 
@@ -940,7 +939,7 @@ simplekind:
     ;
 
 scontext: 
-    qconid tyvar                { \c\v -> Ctx {pos=Pos (SName.id c) (view TauT._unsafePos v).last, cname=c, tau=v} }
+    qconid tyvar                { \c\v -> Ctx {pos=Pos (SName.id c) v.pos.last, cname=c, tau=TauT.Var v} }
     ;
 
 
@@ -959,12 +958,12 @@ ccontext:
 classdef:
     CLASS ccontext EARROW CONID tyvar wheredef {
         \_\ctxs\_\c\v\defs -> do
-            sups <- classContext ctxs (unsafePartialView TauT._Var v).var
+            sups <- classContext ctxs v.var
             pure ClaDcl{
                     pos = yyline c, 
                     vis = Public,
                     name = Token.value c,
-                    clvar = v,
+                    clvar = TauT.Var v,
                     supers = sups,
                     defs,
                     doc = Nothing}
@@ -1062,7 +1061,7 @@ datainit:
     DATA CONID dvars '=' dalts {
         \dat\d\ds\docu\alts -> DatDcl {pos=yyline d, vis=Public, name=Token.value d,
                                         newt = false,
-                                        vars=ds, ctrs=alts, defs=[], doc=Nothing}
+                                        vars=map TauT.Var ds, ctrs=alts, defs=[], doc=Nothing}
     }
     | DATA CONID '=' dalts {
         \dat\d\docu\alts -> DatDcl {pos=yyline d, vis=Public, name=Token.value d,
@@ -1077,7 +1076,7 @@ datainit:
     | NEWTYPE CONID dvars '=' dalt {
         \dat\d\ds\docu\alt -> DatDcl {pos=yyline d, vis=Public, name=Token.value d,
                                         newt = true,
-                                        vars=ds, ctrs=[alt], defs=[], doc=Nothing}
+                                        vars=map TauT.Var ds, ctrs=[alt], defs=[], doc=Nothing}
     }
     | NEWTYPE CONID '=' dalt {
         \dat\d\docu\alt -> DatDcl {pos=yyline d, vis=Public, name=Token.value d,
@@ -1096,7 +1095,7 @@ datajavainit:
     }
     | DATA CONID dvars '=' nativepur nativespec {
         \dat\d\ds\docu\pur\(jt,gargs) -> JavDcl {pos=yyline d, vis=Public, name=Token.value d,
-                                    jclas=jt, vars=ds, defs=[],
+                                    jclas=jt, vars=map TauT.Var ds, defs=[],
                                     gargs, 
                                     isPure = pur,
                                     doc=Nothing}
@@ -1212,7 +1211,7 @@ typedef:
     | TYPE CONID dvars '=' sigma { \t\i\vs\_\r -> TypDcl {pos=yyline i, 
                                                             vis=Public, 
                                                             name=Token.value i, 
-                                                            vars=vs, 
+                                                            vars=map TauT.Var vs,
                                                             typ = r, 
                                                             doc=Nothing}}
     ;
