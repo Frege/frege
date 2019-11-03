@@ -71,6 +71,7 @@ import  Compiler.types.Global as G;
 
 import  Compiler.common.Mangle;
 import  Compiler.common.Errors as E();
+import  Compiler.common.Lens (unsafePartialView);
 import  Compiler.common.Resolve as R(enclosed);
 
 import Lib.PP (group, break, msgdoc);
@@ -963,7 +964,7 @@ classdef:
                     pos = yyline c, 
                     vis = Public,
                     name = Token.value c,
-                    clvar = TauT.Var v,
+                    clvar = v,
                     supers = sups,
                     defs,
                     doc = Nothing}
@@ -976,7 +977,7 @@ classdef:
                 when (SName.{ty?} cname)
                     (yyerror (yyline cname.id) "classname must not be qualified") 
                 pure ClaDcl {pos, vis = Public, name=cname.id.value,
-                               clvar = tau, supers = [],
+                               clvar = unsafePartialView TauT._Var tau, supers = [],
                                defs, doc = Nothing}
             _ -> Prelude.error "fatal: empty ccontext (cannot happen)" 
     }
