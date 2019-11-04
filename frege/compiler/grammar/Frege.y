@@ -1096,7 +1096,7 @@ datajavainit:
     }
     | DATA CONID dvars '=' nativepur nativespec {
         \dat\d\ds\docu\pur\(jt,gargs) -> JavDcl {pos=yyline d, vis=Public, name=Token.value d,
-                                    jclas=jt, vars=map TauT.Var ds, defs=[],
+                                    jclas=jt, vars=ds, defs=[],
                                     gargs, 
                                     isPure = pur,
                                     doc=Nothing}
