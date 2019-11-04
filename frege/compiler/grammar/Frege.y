@@ -1062,7 +1062,7 @@ datainit:
     DATA CONID dvars '=' dalts {
         \dat\d\ds\docu\alts -> DatDcl {pos=yyline d, vis=Public, name=Token.value d,
                                         newt = false,
-                                        vars=map TauT.Var ds, ctrs=alts, defs=[], doc=Nothing}
+                                        vars=ds, ctrs=alts, defs=[], doc=Nothing}
     }
     | DATA CONID '=' dalts {
         \dat\d\docu\alts -> DatDcl {pos=yyline d, vis=Public, name=Token.value d,
@@ -1077,7 +1077,7 @@ datainit:
     | NEWTYPE CONID dvars '=' dalt {
         \dat\d\ds\docu\alt -> DatDcl {pos=yyline d, vis=Public, name=Token.value d,
                                         newt = true,
-                                        vars=map TauT.Var ds, ctrs=[alt], defs=[], doc=Nothing}
+                                        vars=ds, ctrs=[alt], defs=[], doc=Nothing}
     }
     | NEWTYPE CONID '=' dalt {
         \dat\d\docu\alt -> DatDcl {pos=yyline d, vis=Public, name=Token.value d,
