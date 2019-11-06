@@ -72,6 +72,7 @@ import  Compiler.types.Global as G;
 import  Compiler.common.Mangle;
 import  Compiler.common.Errors as E();
 import  Compiler.common.Resolve as R(enclosed);
+import  Compiler.common.Lens (unsafePartialViewMsg);
 
 import Lib.PP (group, break, msgdoc);
 import frege.compiler.common.Tuples as T(tuple);
@@ -1097,14 +1098,14 @@ datajavainit:
     DATA CONID '=' nativepur nativespec {
         \dat\d\docu\pur\(jt,gargs) -> JavDcl {pos=yyline d, vis=Public, name=Token.value d,
                                     jclas=jt, vars=[], defs=[],
-                                    gargs,  
+                                    gargs = map (unsafePartialViewMsg "datajavainit" TauT._Var) <$> gargs,
                                     isPure = pur, 
                                     doc=Nothing}
     }
     | DATA CONID dvars '=' nativepur nativespec {
         \dat\d\ds\docu\pur\(jt,gargs) -> JavDcl {pos=yyline d, vis=Public, name=Token.value d,
                                     jclas=jt, vars=ds, defs=[],
-                                    gargs, 
+                                    gargs = map (unsafePartialViewMsg "datajavainit" TauT._Var) <$> gargs,
                                     isPure = pur,
                                     doc=Nothing}
     }
