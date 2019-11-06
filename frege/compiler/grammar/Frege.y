@@ -818,7 +818,7 @@ impurenativedef:
     NATIVE methodspec DCOLON sigexs { \_\(fr,jv,ga)\col\t ->
                     NatDcl {pos=yyline fr, vis=Public, name=fr.value,
                                                 meth=jv, txs=t, isPure=false,
-                                                gargs = map TauT.Var <$> ga,
+                                                gargs = ga,
                                                 doc=Nothing}}
     ;
 
