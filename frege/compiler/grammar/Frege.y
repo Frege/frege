@@ -72,7 +72,6 @@ import  Compiler.types.Global as G;
 import  Compiler.common.Mangle;
 import  Compiler.common.Errors as E();
 import  Compiler.common.Resolve as R(enclosed);
-import  Compiler.common.Lens (unsafePartialViewMsg);
 
 import Lib.PP (group, break, msgdoc);
 import frege.compiler.common.Tuples as T(tuple);
@@ -107,8 +106,9 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type modulename1    (String, Position)
 //%type nativename      String
 //%type rawnativename   String
-//%type nativespec      (String, Maybe [TauS])
-//%type gargs           [TauS]
+//%type nativespec      (String, Maybe [TVar SName])
+//%type gargvars        [TVar SName]
+//%type gargs           [TVar SName]
 //%type nativepur       Bool
 //%type docs            String
 //%type docsO           (Maybe String)
@@ -135,7 +135,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type annoitem        Token
 //%type fitem           Token
 //%type jitem           String
-//%type methodspec      (Token, String, Maybe [TauS])
+//%type methodspec      (Token, String, Maybe [TVar SName])
 //%type importspec      ImportItem
 //%type importspecs     [ImportItem]
 //%type memspec         ImportItem
@@ -335,6 +335,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%explain nativename   a valid java identifier
 //%explain rawnativename   a valid java identifier
 //%explain nativespec   a native generic type
+//%explain gargvars     a list of type variables separated by ','
 //%explain gargs        native generic type arguments
 //%explain nativepur    a native data type
 //%explain documentation documentation
@@ -817,7 +818,7 @@ impurenativedef:
     NATIVE methodspec DCOLON sigexs { \_\(fr,jv,ga)\col\t ->
                     NatDcl {pos=yyline fr, vis=Public, name=fr.value,
                                                 meth=jv, txs=t, isPure=false,
-                                                gargs = ga, 
+                                                gargs = map TauT.Var <$> ga,
                                                 doc=Nothing}}
     ;
 
@@ -1061,8 +1062,13 @@ nativespec:
     | nativename gargs          { \x\gs  ->  (x, Just gs) }
     ;
 
+gargvars:
+      tyvar               { single }
+    | tyvar ',' gargvars  { \h\_\t -> h:t }
+    ;
+
 gargs:
-      '{' tauSC '}'             { \_\ts\_   -> ts }
+      '{' gargvars '}'          { \_\ts\_   -> ts }
     | '{' '}'                   { \_\_      -> [] }
     ;
 
@@ -1098,14 +1104,14 @@ datajavainit:
     DATA CONID '=' nativepur nativespec {
         \dat\d\docu\pur\(jt,gargs) -> JavDcl {pos=yyline d, vis=Public, name=Token.value d,
                                     jclas=jt, vars=[], defs=[],
-                                    gargs = map (unsafePartialViewMsg "datajavainit" TauT._Var) <$> gargs,
+                                    gargs,
                                     isPure = pur, 
                                     doc=Nothing}
     }
     | DATA CONID dvars '=' nativepur nativespec {
         \dat\d\ds\docu\pur\(jt,gargs) -> JavDcl {pos=yyline d, vis=Public, name=Token.value d,
                                     jclas=jt, vars=ds, defs=[],
-                                    gargs = map (unsafePartialViewMsg "datajavainit" TauT._Var) <$> gargs,
+                                    gargs,
                                     isPure = pur,
                                     doc=Nothing}
     }
