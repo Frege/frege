@@ -869,7 +869,7 @@ tau:
     | forall             { TSig }
     | tapp ARROW tau     { \a\f\b ->  case a of
                             TSig s -> TSig (ForAll [] (RhoFun [] s (RhoTau [] b))) 
-                            _      -> TApp (TApp (TCon (yyline f) (fromBase f.{tokid=CONID, value="->"})) a) b 
+                            _      -> TApp (TApp (TauT.Con TCon{pos=yyline f, name=fromBase f.{tokid=CONID, value="->"}}) a) b
                          }
     ;
 
@@ -889,7 +889,7 @@ tapp:
 
 simpletype:
     tyvar               {TauT.Var}
-    | tyname            { \(tn::SName) -> TCon (yyline tn.id) tn}
+    | tyname            { \(tn::SName) -> TauT.Con TCon{pos=yyline tn.id, name=tn} }
     | '(' tau ')'       { \_\t\_ -> t }
     | '(' tau ',' tauSC ')'
                         {\_\t\(c::Token)\ts\_ ->
@@ -897,12 +897,10 @@ simpletype:
                                 tus = t:ts;
                                 i = length tus;
                                 tname = fromBase c.{tokid=CONID, value=tuple i}
-                            in  (TCon (yyline c) tname).mkapp tus
+                            in  (TauT.Con TCon{pos=yyline c, name=tname}).mkapp tus
                         }
     | '(' tau '|' tauSB ')' { \_\t\e\ts\_ -> mkEither (yyline e) t ts }
-    | '[' tau ']'      {\a\t\_ -> TApp (TCon (yyline a)
-                                             (fromBase a.{tokid=CONID, value="[]"}))
-                                        t }
+    | '[' tau ']'      {\a\t\_ -> TApp (TauT.Con TCon{pos=yyline a, name=fromBase a.{tokid=CONID, value="[]"} }) t }
     ;
 
 
