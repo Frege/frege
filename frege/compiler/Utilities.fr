@@ -203,10 +203,10 @@ freeTVnames bound rho = keys (freeRhoTVars bound TreeMap.empty rho)
 
 
 freeRhoTVars :: [String] -> SigmaEnv t -> RhoT t -> SigmaEnv t
-freeRhoTVars bound collected (RhoFun ctx (ForAll bndleft rho1) rho2) =
+freeRhoTVars bound collected (RhoT.Fun RhoFun{context=ctx,sigma=ForAll bndleft rho1,rho=rho2}) =
     freeRhoTVars (map _.var bndleft ++ bound) (freeRhoTVars bound ctxcoll rho2) rho1
         where ctxcoll = freeCtxTVars bound collected ctx
-freeRhoTVars bound collected (RhoTau ctx tau) = freeTauTVars bound ctxcoll tau
+freeRhoTVars bound collected (RhoT.Tau RhoTau{context=ctx,tau}) = freeTauTVars bound ctxcoll tau
         where ctxcoll = freeCtxTVars bound collected ctx
 
 
@@ -352,8 +352,8 @@ lambdaDepth ex = 0
  * make a rho type from a tau type
  -}
 rhoTau tau
-    | Just (a,b) <- Tau.getFun tau = RhoFun [] (ForAll [] (rhoTau a)) (rhoTau b)
-rhoTau tau        = RhoTau [] tau
+    | Just (a,b) <- Tau.getFun tau = RhoT.Fun $ RhoFun [] (ForAll [] (rhoTau a)) (rhoTau b)
+rhoTau tau = RhoT.Tau $ RhoTau [] tau
 
 
 {--
@@ -400,13 +400,8 @@ validSigma1 outer (ForAll bound rho) = do
  -}
 validRho :: [String] -> RhoT a -> StG (RhoT a)
 validRho bound rho = do
-        foreach (Rho.context rho) check
-        case rho of
-            RhoFun _ sig r -> do
-                 sig <- validSigma1 bound sig
-                 r   <- validRho    bound r
-                 stio rho.{sigma=sig, rho=r}
-            _ -> stio rho
+        foreach rho.context check
+        RhoT._Fun (RhoFun._sigma (validSigma1 bound) >=> RhoFun._rho (validRho bound)) rho
     where
         check (Ctx pos qname tau) = do
             let vars = keys (freeTauTVars [] empty tau)
@@ -442,14 +437,14 @@ private transSigma1 outer sigma = do
                 let freeTV = freeTVars (keys unshadowedOuter) rho   -- same as inner?
                     innerMap = fold (\tm tv -> tm.insertS tv.var tv) TreeMap.empty inner
                     newbound = [ maybe tv id (innerMap.lookupS tv.var) | tv <- freeTV ]
-                    constraints rho = case rho of 
-                        RhoTau{} -> (rho.context, rho.{context=[]})
-                        RhoFun{} -> (rho.context ++ subctx, rho.{context=[], rho=subrho})
-                                    where (subctx, subrho) = constraints rho.rho
+                    constraints rho = case rho of
+                        RhoT.Tau r -> (r.context, RhoT.Tau r.{context=[]})
+                        RhoT.Fun r -> (r.context ++ subctx, RhoT.Fun r.{context=[], rho=subrho})
+                                    where (subctx, subrho) = constraints r.rho
                     (ctx, rrho) = constraints rho
-                    nrho = rrho.{context=ctx} 
+                    nrho = set RhoT._context ctx rrho
                 case rho of
-                    RhoTau _ _ -> return (ForAll newbound nrho)
+                    RhoT.Tau _ -> return (ForAll newbound nrho)
                     _          -> return (ForAll newbound (unTau nrho))
 
 
@@ -467,15 +462,15 @@ transCtx (Ctx pos name tau) = do
  * check a rho and translate it to 'QName' form
  -}
 transRho :: SigmaEnv QName -> RhoS -> StG Rho
-transRho outer (RhoFun ctx sig rho) = do
-        sig <- transSigma1 outer sig
-        rho <- transRho outer rho
-        ctx  <- mapSt transCtx ctx
-        stio (RhoFun ctx sig rho)
-transRho outer (RhoTau ctx tau) = do
-        sig  <- transTau tau
-        ctx  <- mapSt transCtx ctx
-        stio $ sig.rho.{context <- (++ ctx)}
+transRho outer (RhoT.Fun r) = do
+        sig <- transSigma1 outer r.sigma
+        rho <- transRho outer r.rho
+        ctx <- mapSt transCtx r.context
+        pure $ RhoT.Fun RhoFun{context=ctx, sigma=sig, rho}
+transRho _ (RhoT.Tau r) = do
+        sig <- transTau r.tau
+        ctx <- mapSt transCtx r.context
+        pure $ over RhoT._context (++ ctx) sig.rho
 
 --- translate a 'KindT' 'Sname' to 'KindT' 'QName'
 transKind KType = pure KType
@@ -549,7 +544,7 @@ transTApp (con:as) = do
                             as <- mapSt transTau as
                             appTauSigmas ncon as
                     Just (SymbolT.A (alias@SymA {typ}))
-                        | ForAll _ (RhoTau _ tau) <- typ,
+                        | ForAll _ (RhoT.Tau RhoTau{tau}) <- typ,
                           length as >= length alias.vars = do
                                 as <- mapSt transTau as  -- partial args allowed in alias
                                 tas <- mapSt forceTau as
@@ -561,7 +556,7 @@ transTApp (con:as) = do
                                         (tcon:xs) | Just pos <- preview TauT._pos tcon = Tau.mkapp (set TauT._pos pos tcon) xs
                                         other -> nt
                                 appTauSigmas posnt ras
-                        | ForAll _ (RhoTau _ tau) <- typ,
+                        | ForAll _ (RhoT.Tau _) <- typ,
                           length as < length alias.vars = do
                                 E.error pos (msgdoc ("apply " ++ alias.nice g ++ " to at least "
                                         ++ show (length alias.vars)
@@ -596,8 +591,9 @@ transTApp _ = undefined                   -- must only be used with tau.flat
 
 
 --- wrap a 'Tau' in a 'Sigma'
+tauAsSigma :: Tau -> Sigma
 tauAsSigma (TSig s) = s
-tauAsSigma t = ForAll [] (unTau (RhoTau [] t))
+tauAsSigma tau = ForAll [] (unTau (RhoT.Tau RhoTau{context=[], tau}))
 
 
 {--
@@ -607,8 +603,9 @@ tauAsSigma t = ForAll [] (unTau (RhoTau [] t))
     > ForAll [] (RhoFun [] a b) 
 -}
 sigmaAsTau :: Sigma -> Maybe Tau
-sigmaAsTau (ForAll [] (RhoTau [] t)) = Just t
-sigmaAsTau (ForAll [] (r@RhoFun{})) | RhoTau [] t <- tauRho r  = Just t
+sigmaAsTau (ForAll [] (RhoT.Tau RhoTau{context=[], tau=t})) = Just t
+sigmaAsTau (ForAll [] (r@RhoT.Fun _))
+    | RhoT.Tau RhoTau{context=[], tau=t} <- tauRho r = Just t
 sigmaAsTau _ = Nothing
 
 
@@ -1016,8 +1013,9 @@ println x = do
  * yet the actual number of formal arguments derived from the
  * number of nested lambdas (given in 'Symbol.depth') may be smaller and even 0.
  -}
-returnType (RhoFun _ sig rho) =  (tau, sig:sigs) where (tau, sigs) = returnType rho
-returnType (RhoTau _ tau)     =  (tau, [])
+returnType :: Rho -> (Tau, [Sigma])
+returnType (RhoT.Fun r) = (tau, r.sigma:sigs) where (tau, sigs) = returnType r.rho
+returnType (RhoT.Tau r) = (r.tau, [])
 
 
 {--
@@ -1027,9 +1025,10 @@ returnType (RhoTau _ tau)     =  (tau, [])
  * [undefined] if @n@ is greater than the 'arity' of the type. This should never happen after
  * type check and hints at a compiler error.
  -}
+returnTypeN :: Int -> Rho -> (Rho, [Sigma])
 returnTypeN 0 !rho = (tauRho rho, [])
-returnTypeN n (RhoFun _ sig rho) = (r, sig:sigs) where (r, sigs) = returnTypeN (n-1) rho
-returnTypeN n rho = Prelude.error "returnTypeN: too many arguments"
+returnTypeN n (RhoT.Fun fun) = (r, fun.sigma:sigs) where (r, sigs) = returnTypeN (n-1) fun.rho
+returnTypeN _ _ = Prelude.error "returnTypeN: too many arguments"
 
 
 

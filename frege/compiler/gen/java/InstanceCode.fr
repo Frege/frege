@@ -16,7 +16,7 @@ import Compiler.enums.TokenID(VARID)
 import Compiler.types.AbstractJava
 import Compiler.types.Symbols
 import Compiler.types.Global
-import Compiler.types.Types(Ctx, TVar, Tau, SigmaT, TauT, RhoT, Kind, KindT, pSigma)
+import Compiler.types.Types(Ctx, TVar, Tau, SigmaT, TauT, RhoT, RhoFun, RhoTau Kind, KindT, pSigma)
 import Compiler.types.Expression
 import Compiler.types.QNames(QName)
 import Compiler.types.Packs(pPreludeList)
@@ -27,7 +27,7 @@ import Compiler.common.Types  as CT(substRho, substTVar, tauRho)
 import Compiler.common.Binders(allBinders)
 import Compiler.common.SymbolTable(changeSym)
 import Compiler.common.JavaName(symJavaName, javaName)
-import Compiler.common.Lens(over)
+import Compiler.common.Lens(over, set, view)
 
 import Compiler.classes.Nice (nice, nicer, nicest)
 
@@ -125,8 +125,8 @@ lowerKindAbstractFun symc sym = do
         return ()
     where
         lowerKind cv sigma = sigma.{rho <- lowerRhoKind cv}
-        lowerRhoKind cv (rho@RhoFun{}) = rho.{sigma ← lowerKind cv, rho ← lowerRhoKind cv}
-        lowerRhoKind cv (rho@RhoTau{}) = rho.{tau ← lowerTauKind cv}
+        lowerRhoKind cv (RhoT.Fun rho) = RhoT.Fun rho.{sigma <- lowerKind cv, rho <- lowerRhoKind cv}
+        lowerRhoKind cv (RhoT.Tau rho) = RhoT.Tau rho.{tau <- lowerTauKind cv}
         lowerTauKind cv (TSig s)       = TSig . lowerKind cv $ s
         lowerTauKind cv (app@TApp a b) = case app.flat of
             TauT.Var t:_ | t.var == cv = TauT.Var t.{kind=KType}
@@ -163,7 +163,7 @@ abstractFun symc sym = do
         formalargs  = argDefs attrFinal lazysi (getArgs g)
     let !result = JMethod {attr = attrs [JPublic],
                              gvars,
-                             jtype = (strict . adapt . tauJT g . fst . returnType . _.{context=ctxs} . _.rho) sym.typ,    
+                             jtype = (strict . adapt . tauJT g . fst . returnType . set RhoT._context ctxs . _.rho) sym.typ,
                              name = latinF ++ (symJavaName g (SymbolT.V sym)).base,
                              args = formalctxs ++ formalargs,
                              body = JEmpty}
@@ -236,7 +236,7 @@ instanceCode sym = do             -- instance definition
  
  
      let instName = symJavaName g $ SymbolT.I sym
-         instjt   = boxed (rhoJT g sym.typ.rho.{context=[]})
+         instjt   = boxed (rhoJT g (set RhoT._context [] sym.typ.rho))
          array    = Nativ{typ="[]", gargs=[strict instjt], generic=false}
          rawinst  = rawType instjt
          jtype = Ref instName []
@@ -294,7 +294,7 @@ instanceCode sym = do             -- instance definition
      when (implementationRestriction) do
         case jt of
             Nativ{typ} | not (subTypeOf g typ kindJT) = E.error sym.pos (
-                 text "The type " <+> nicest g sym.typ.rho.{context=[]} 
+                 text "The type " <+> nicest g (set RhoT._context [] sym.typ.rho)
                  <+> text "cannot be an instance of" <+> text (csym.name.nicer g)
                  <+/> text "because the corresponding java type" <+> text jt.show
                  <+/> text "does not implement the interface " <+> text kindJT <> text ","
@@ -302,7 +302,7 @@ instanceCode sym = do             -- instance definition
               )
             other → E.error sym.pos (
                 text "Implementation restriction: the type" 
-                <+> nicest g sym.typ.rho.{context=[]}
+                <+> nicest g (set RhoT._context [] sym.typ.rho)
                 <+> text "cannot be an instance of" <+> text (csym.name.nicer g)
                 <+/> text "because attempting to represent"
                 <+/> text "it as a higher kinded type" 
@@ -391,7 +391,7 @@ instFun symc symi mname = do
                                     cname = symc.name, 
                                     tau = TauT.Var cvar }
                     ctxs = filter (not . sameCtx classCtx) typ1.rho.context
-                    rho3 = typ1.rho.{context = ctxs}
+                    rho3 = set RhoT._context ctxs typ1.rho
                     bound3 = withoutCVar typ1.bound
                     typ3  = ForAll bound3 rho3
                 E.logmsg TRACEG symi.pos (
@@ -403,7 +403,7 @@ instFun symc symi mname = do
                         text "(3j) java type of (3) :: " <+> text (show jty3))
                 
                 let othertv = head (filter ((!= cvar.var) . _.var) typ3.tvars)
-                    instTau0 = (tauRho symi.typ.rho.{context=[]}).tau
+                    instTau0 = view RhoT._unsafeTau $ tauRho $ set RhoT._context [] symi.typ.rho
                     instTau  = if special then TApp instTau0 (TauT.Var othertv) else instTau0
                     subst4 = Map.singleton cvar.var instTau
                     methty = ForAll typ3.bound (substRho subst4 typ3.rho)
@@ -436,7 +436,7 @@ instFun symc symi mname = do
 
                 let fakety = methty.{
                                 bound ← (symi.typ.bound ++),  -- make sure ctx will be recognized
-                                rho ← _.{context ← (symi.typ.rho.context++)}}
+                                rho <- over RhoT._context (symi.typ.rho.context++)}
                 E.logmsg TRACEG symi.pos (
                         text "(5) add extra contexts to (4), final type :: "
                         <+> text (nicer fakety g)

@@ -100,6 +100,7 @@ import  Compiler.common.Types  as TH
 import  Compiler.common.Resolve as R(weUse)
 import  Compiler.common.SymbolTable
 import  Compiler.common.Binders(avoidBinders)
+import  Compiler.common.Lens(over, set)
 
 import  Compiler.classes.Nice
 
@@ -185,21 +186,17 @@ tc n = TCon{pos=Position.null, name=TName pPreludeBase n}
 tcTau :: String -> Tau
 tcTau n = TauT.Con (tc n)
 
-mainSigmaA t = ForAll [] 
-                (RhoFun [] (ForAll [] (RhoTau [] strings)) 
-                           (RhoTau [] iovoid))
+mainSigmaA t = ForAll []
+             $ RhoT.Fun $ RhoFun []
+                 (ForAll [] (RhoT.Tau $ RhoTau [] strings))
+                 (RhoT.Tau $ RhoTau [] iovoid)
     where
         strings = TApp (tcTau "[]") tauString          -- [String]
         iovoid = TApp (TApp (tcTau "ST") (tcTau "RealWorld")) t
 
-mainSigma = ForAll [] 
-                (RhoFun [] (ForAll [] (RhoTau [] strings)) 
-                           (RhoTau [] iovoid))
-    where
-        strings = TApp (tcTau "[]") tauString          -- [String]
-        iovoid = TApp (TApp (tcTau "ST") (tcTau "RealWorld")) (tcTau "()")
+mainSigma = mainSigmaA (tcTau "()")
 
-mainSimple (ForAll xs RhoFun{rho}) = ForAll xs rho
+mainSimple (ForAll xs (RhoT.Fun r)) = ForAll xs r.rho
 mainSimple sigma = sigma
 
 findMain :: StG (Maybe (SymV Global))
@@ -247,8 +244,8 @@ checkMain = do
         Just sym | sym.name.pack == g.thisPack -> do
             let m = Vbl {pos = sym.pos, name = sym.name, typ = Just pSigma}
                 sigma 
-                    | RhoFun{} <- sym.typ.rho = mainSigmaA tau
-                    | otherwise               = mainSimple (mainSigmaA tau)
+                    | RhoT.Fun _ <- sym.typ.rho = mainSigmaA tau
+                    | otherwise                 = mainSimple (mainSigmaA tau)
             checkAnnotated m sigma
             gnew <- getST
             when (g.errors < gnew.errors) do
@@ -342,8 +339,7 @@ checkgroup7 nms = do
                     scrapCtx it = do
                         let sig = it.typ.{rho <- clear}
                             clear ∷ Rho → Rho
-                            clear RhoFun{context, sigma, rho} = RhoFun{context=[], sigma, rho = clear rho}
-                            clear RhoTau{context, tau} = RhoTau{context=[], tau}
+                            clear = set RhoT._traverseCtxs []
                         nex <- case it.expr of
                             Just x  -> x >>= U.mapEx false removeCtx >>= (return . Just . return)
                             Nothing -> return Nothing
@@ -380,8 +376,8 @@ checkKind = correctK empty
 
 checkAmbiguous :: Symbol -> Sigma -> StG ()
 checkAmbiguous sym (ForAll bnd r) = do
-        let ra = r.{context=[]}                     -- ctx => rho    --> rho
-            rb = (rhoInt).{context=r.context}       -- Int           --> ctx => Int
+        let ra = set RhoT._context [] r             -- ctx => rho    --> rho
+            rb = set RhoT._context r.context rhoInt -- Int           --> ctx => Int
             va = freeTVnames [] ra
             vb = freeTVnames [] rb
             bad = filter (`notElem` va) vb
@@ -429,7 +425,7 @@ resolveConstraints sym
     | SymbolT.V (symv@SymV{typ, expr=Just x, anno=false, state}) <- sym, state != Recursive = do
         x   <- x >>= resolveHas 
         cxs <- collectConstrs x
-        rho <- simplify symv.pos typ.rho.{context=cxs}
+        rho <- simplify symv.pos (set RhoT._context cxs typ.rho)
                 >>= simplify symv.pos        -- remove duplicates
         -- Drop the contexts that contain a rigid tvar that is not occurring in the type itself.
         -- Those stem from typechecking applications of higher rank functions where
@@ -437,20 +433,18 @@ resolveConstraints sym
         -- The rigid context remains intact on the application itself, which will help us
         -- in code generation to identify them.
         g <- getST
-        let rhometas = rhoTvs g rho.{context=[]}
+        let rhometas = rhoTvs g $ set RhoT._context [] rho
             ctxmetas = map (ctxTvs g) rho.context
         let filteredCtx = [ ctx | (metas, ctx) <- zip ctxmetas rho.context,
                                   all (`elem` rhometas)  (filter (not . MetaTv.isFlexi) metas)]
-        changeSym $ SymbolT.V symv.{typ <- Sigma.{rho <- rmtrailing . Rho.{context=filteredCtx}},
+        changeSym $ SymbolT.V symv.{typ <- Sigma.{rho <- rmtrailing . set RhoT._context filteredCtx},
                          expr = Just (return x)}
     | otherwise = return ()
     where 
-        rmtrailing rho 
-            | RhoFun{} <- rho = rho.{rho <- zapctx}
-            | otherwise = rho
-        zapctx RhoTau{context, tau} = RhoTau{context=[], tau}
-        zapctx RhoFun{context, sigma, rho} = RhoFun{context=[], sigma, rho = zapctx rho} 
-     
+        rmtrailing (RhoT.Fun r) = RhoT.Fun r.{rho <- zapctx}
+        rmtrailing rho = rho
+        zapctx = set RhoT._traverseCtxs []
+
 {--
  * look for applications of class member functions in the code of the named item
  * and replace them with instance member functions, if possible.
@@ -485,7 +479,7 @@ substInst (vbl@Vbl {pos, name = MName tn bs, typ = Just (ForAll [] rho)})
                             mem  <- findV vbl.name
                             case g.findit (MName iname bs) of
                                 Just imem' | Just imem <- SymVal.fromSymbol imem' -> do
-                                    let nrho = rho.{context <- filter (not • sameCtx ctx)}
+                                    let nrho = over RhoT._context (filter (not . sameCtx ctx)) rho
                                         strho = substRho 
                                                     (unifySigma g imem.typ ForAll{bound=[], rho=nrho})
                                                     imem.typ.rho
@@ -524,7 +518,7 @@ substInst (vbl@Vbl {pos, name = MName tn bs, typ = Just (ForAll [] rho)})
 --- Also, make sure no DWIM literal has a constraint in its type.
 substInst (lit@Lit{pos, kind, value, typ=Just (ForAll [] rho)})
     | kind == LInt || kind == LDouble,
-      not (null rho.context) = pure (Right lit.{typ=Just (ForAll [] rho.{context=[]})})
+      not (null rho.context) = pure $ Right lit.{typ=Just $ ForAll [] $ set RhoT._context [] rho}
 substInst x = stio (Left x)
 
 renameSigma :: SymV Global -> StG ()
@@ -582,11 +576,11 @@ checkName nm = do
                     x <- dx
                     rho0 <- approxRho x 
                     ex <- case rho0 of
-                        RhoTau{} -> do
+                        RhoT.Tau _ -> do
                             changeSym $ SymbolT.V sym.{state=Typechecking}
                             (rho, ex) <- inferRho x  -- CAF ?
                             return ex
-                        RhoFun{} -> do
+                        RhoT.Fun _ -> do
                             changeSym $ SymbolT.V sym.{state=Typechecking, typ = ForAll [] rho0}
                             checkRho x rho0
                     sym <- findV sym.name       -- refresh, might be updated meanwhile
@@ -751,14 +745,14 @@ approxRho :: Expr -> StG Rho
 approxRho (Lam {ex,pat}) = do
     sig <- case pat of
         PAnn{pat, typ} -> return typ
-        sonst          -> ForAll [] . RhoTau [] <$> newMeta2 ("arg", KType)
+        sonst          -> ForAll [] . RhoT.Tau . RhoTau [] <$> newMeta2 ("arg", KType)
     rho <- approxRho ex
-    stio (RhoFun [] sig rho)
+    pure $ RhoT.Fun $ RhoFun [] sig rho
 approxRho _ = newRhoTyVar ("res", KType)
 
 
 inferRho x = do
-    rho    <- RhoTau [] <$> newMeta2 ("infer", KVar) -- doio (Ref.new Nothing)
+    rho    <- RhoT.Tau . RhoTau [] <$> newMeta2 ("infer", KVar)
     x      <- tcRho x (Infer rho)
     case x.typ of
         Just s -> return (s.rho, x)
@@ -808,9 +802,9 @@ checkSigma1 annotated x s = do
                 ectx <- collectConstrs x
                 let pos = getpos x
                 let sigma = unJust (Expr.typ x)
-                rho  <- simplify pos sigma.rho.{context=ectx}
+                rho  <- simplify pos $ set RhoT._context ectx sigma.rho
                 g    <- getST
-                let rhometas = rhoTvs g rho.{context=[]}
+                let rhometas = rhoTvs g $ set RhoT._context [] rho
                     ctxmetas = map (ctxTvs g) rho.context
 
                 let fctx    = map snd . filter relevantCtx $ zip ctxmetas rho.context
@@ -824,7 +818,7 @@ checkSigma1 annotated x s = do
                                             -- . filter (not . MetaTv.isFlexi) 
                                             . fst
 
-                    frho = rho.{context=fctx}
+                    frho = set RhoT._context fctx rho
                 x    <- return (x.{typ = Just sigma.{rho=frho}})                  
                 let ety = canonicContext g expty
 
@@ -878,26 +872,26 @@ tnameDouble  = TName pPreludeBase "Double"
 tnameFloat   = TName pPreludeBase "Float"
 tnameInteger = TName pPreludeBase "Integer"
 
-rhoFor name = RhoTau [] (TauT.Con TCon{pos=Position.null,name})
+rhoFor name = RhoT.Tau RhoTau{context=[], tau=TauT.Con TCon{pos=Position.null,name}}
 rhoBool     = rhoFor tnameBool
 rhoChar     = rhoFor tnameChar
-rhoString   = RhoTau [] tauString
+rhoString   = RhoT.Tau RhoTau{context=[], tau=tauString}
 rhoInt      = rhoFor tnameInt
 rhoLong     = rhoFor tnameLong
 rhoDouble   = rhoFor tnameDouble
 rhoFloat    = rhoFor tnameFloat
-rhoDec      = RhoTau [] (TauT.Con TCon{pos=Position.null, name=TName pPreludeDecimal "Decimal"})
-rhoRegex    = RhoTau [] (TauT.Con TCon{pos=Position.null, name=TName pUtilRegex "Regex"})
-rhoMatcher  = RhoTau [] (TauT.Con TCon{pos=Position.null, name=TName pUtilRegex "MatchResult"})
+rhoDec      = RhoT.Tau RhoTau{context=[], tau=TauT.Con TCon{pos=Position.null, name=TName pPreludeDecimal "Decimal"}}
+rhoRegex    = RhoT.Tau RhoTau{context=[], tau=TauT.Con TCon{pos=Position.null, name=TName pUtilRegex "Regex"}}
+rhoMatcher  = RhoT.Tau RhoTau{context=[], tau=TauT.Con TCon{pos=Position.null, name=TName pUtilRegex "MatchResult"}}
 rhoInteger  = rhoFor tnameInteger
 tauString   = TApp (tcTau "StringJ") (tcTau "Char")
 numVar      = ForAll [tvar]
-                     RhoTau{context=[Ctx{pos, cname=TName pPreludeBase "Num", tau}], tau}
+                     (RhoT.Tau RhoTau{context=[Ctx{pos, cname=TName pPreludeBase "Num", tau}], tau})
                 where tau = TauT.Var tvar
                       tvar = TVar{pos, kind=KType, var="int"}
                       pos = Position.null
 realVar     = ForAll [tvar]
-                     RhoTau{context=[Ctx{pos, cname=TName pPreludeBase "Real", tau}], tau}
+                     (RhoT.Tau RhoTau{context=[Ctx{pos, cname=TName pPreludeBase "Real", tau}], tau})
                 where tau = TauT.Var tvar
                       tvar = TVar{pos, kind=KType, var="int"}
                       pos = Position.null
@@ -937,13 +931,13 @@ tcRho' (x@Vbl{name}) (ety@Check erho)
                             y ← expand x erho
                             tcRho y ety
     where
-        higherRankedConstrainedArgs RhoFun{sigma, rho}
+        higherRankedConstrainedArgs (RhoT.Fun RhoFun{sigma, rho})
             | ForAll{bound, rho=r} ← sigma, not (null bound), not (null r.context) = true
             | otherwise = higherRankedConstrainedArgs rho
-        higherRankedConstrainedArgs RhoTau{} = false
-        expand ex RhoTau{} = pure ex
-        expand ex RhoFun{rho} = do
-            ex' <- expand ex rho
+        higherRankedConstrainedArgs (RhoT.Tau _) = false
+        expand ex (RhoT.Tau _) = pure ex
+        expand ex (RhoT.Fun r) = do
+            ex' <- expand ex r.rho
             pat ← U.freshVar x.pos
             pure Lam{pat, 
                         ex=App{fun=ex', 
@@ -1028,13 +1022,13 @@ tcRho' (lam@Lam {pat,ex}) (ety@Check rho) = do
         (asig, brho) <- unifyFun x rho
         checkPat pat asig
         ex <- checkRho ex brho
-        instRho x.{ex} (RhoFun [] asig (unJust ex.typ).rho) ety
+        instRho x.{ex} (RhoT.Fun RhoFun{context=[], sigma=asig, rho=(unJust ex.typ).rho}) ety
 tcRho' (lam@Lam {}) ety = do
     (pat, ex) <- dwimPatEx lam.pat lam.ex
     let x = lam.{pat, ex}
     sigma     <- inferPat x.pat
     (rho, ex) <- inferRho x.ex
-    instRho (x.{ex}) (RhoFun [] sigma rho) ety
+    instRho (x.{ex}) (RhoT.Fun RhoFun{context=[], sigma, rho}) ety
 
 tcRho' (x@Mem {ex,member}) ety = do
         (rho, ex) <- inferRho ex
@@ -1056,14 +1050,14 @@ tcRho' (x@Mem {ex,member}) ety = do
         
         let pos = getpos x
         case rho of
-            RhoFun _ _ _ -> do
+            RhoT.Fun _ -> do
                 E.error pos (text ("primary expression  " ++ ex.nice g ++ "  must not be a function"))
                 wrong <- newRhoTyVar ("wrong", KType)
                 instRho x.{ex} wrong ety
-            RhoTau _ taut -> do
+            RhoT.Tau RhoTau{tau=taut} -> do
                 let tau = reducedTau g taut
                 let expected ety
-                        | Check RhoTau{tau=fun} <- ety,
+                        | Check (RhoT.Tau RhoTau{tau=fun}) <- ety,
                           TApp a b <- reduced fun g,
                           TApp f _ <- reduced a g,
                           TauT.Con TCon{name=TName{pack,base="->"}} <- reduced f g,
@@ -1179,7 +1173,7 @@ tcPat p expty = case expty of
         E.logmsg TRACET (getpos p) (text ("tcPat Check  " ++ p.nice g ++ "  for  " ++ s.nice g))
         tcPat' p expty
 
-sigFor s   = ForAll [] (RhoTau [] (TauT.Con TCon{pos=Position.null,name=TName pPreludeBase s}))
+sigFor s   = ForAll [] (RhoT.Tau RhoTau{context=[], tau=TauT.Con TCon{pos=Position.null,name=TName pPreludeBase s}})
 sigBool    = ForAll [] rhoBool
 sigChar    = ForAll [] rhoChar
 sigString  = ForAll [] rhoString
@@ -1238,7 +1232,7 @@ tcPat' (p@PMat {pos,uid,var}) ety = do
 tcPat' (p@PCon {qname,pats}) ety = do
     sym <- findD qname
     rho <- instantiate sym.typ
-    let spRho (RhoFun _ s r) = case spRho r of
+    let spRho (RhoT.Fun (RhoFun _ s r)) = case spRho r of
             (args, ret) -> (s:args,ret)
         spRho rhotau = ([], rhotau)
     case spRho rho of
@@ -1273,7 +1267,7 @@ private num  = TName{pack=pPreludeBase, base="Num"}
 --- Make sure all constraints are removed when a type is found
 literalType ctxs (lit@Lit{pos, kind, value, typ=Just sigma})
     | kind != LInt, kind != LDouble = return (Left lit)
-    | kind == LInt, isDWIM LInt value, RhoTau _ taut <- sigma.rho = do
+    | kind == LInt, isDWIM LInt value, RhoT.Tau RhoTau{tau=taut} <- sigma.rho = do
             
             g <- getST
             let tau = reduced taut g
@@ -1305,7 +1299,7 @@ literalType ctxs (lit@Lit{pos, kind, value, typ=Just sigma})
                 _            -> do
                     x <- checkRho lit rhoInt        -- fix unresolved to Int
                     strip x                         -- or force type error
-    | kind == LDouble, isDWIM LDouble value, RhoTau _ taut <- sigma.rho = do
+    | kind == LDouble, isDWIM LDouble value, RhoT.Tau RhoTau{tau=taut} <- sigma.rho = do
             g <- getST
             let tau = reduced taut g
             
@@ -1323,15 +1317,15 @@ literalType ctxs (lit@Lit{pos, kind, value, typ=Just sigma})
     | otherwise       = checkRho lit rhoInt    >>= strip   -- no DWIM
     where
         strip ∷ ExprT → StG (ExprT | ExprT)
-        strip x = pure . Right $ x.{typ ← fmap _.{rho ← _.{context = []}}}
+        strip x = pure . Right $ x.{typ <- fmap _.{rho <- set RhoT._context []}}
         frmIntlit = nApp frmInt lit.{typ=Just sigInt}
         frmDbllit = nApp frmDbl lit.{typ=Just sigDouble}
         frmInt = Vbl{pos = pos.change VARID "fromInt", 
                      name = MName{tynm=num, base="fromInt"}, typ=Nothing}
         frmDbl = Vbl{pos= pos.change VARID "fromDouble",
                      name = MName{tynm=real, base="fromDouble"}, typ=Nothing}
-        fromInt    = checkRho frmIntlit sigma.rho.{context=[]} >>= strip
-        fromDouble = checkRho frmDbllit sigma.rho.{context=[]} >>= strip
+        fromInt    = checkRho frmIntlit (set RhoT._context [] sigma.rho) >>= strip
+        fromDouble = checkRho frmDbllit (set RhoT._context [] sigma.rho) >>= strip
 literalType _ x = return (Left x)
 
 
@@ -1375,7 +1369,7 @@ rHas flagerr (x@Mem{ex, member, typ = Just sigma}) = do
         Mem{}
             | not flagerr = return (Left x)
             | Just sigma <- ex.typ,
-              RhoTau{tau=taut} <- sigma.rho = do
+              RhoT.Tau RhoTau{tau=taut} <- sigma.rho = do
                 g <- getST 
                 let tau = reduced taut g
                 case tau.flat of

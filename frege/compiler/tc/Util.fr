@@ -58,6 +58,7 @@ import  Compiler.types.Global as G
 
 import  Compiler.common.Errors as E()
 import  Compiler.common.Binders
+import  Compiler.common.Lens (over, set, view)
 import  Compiler.common.Types as TT (betterReadable, substRho)
 
 import  Compiler.classes.Nice
@@ -75,7 +76,7 @@ data Expected t = Check t | Infer t
 newSigmaTyVar :: (String, Kind) -> StG Sigma
 newSigmaTyVar d = ForAll [] <$>  newRhoTyVar d
 newRhoTyVar   :: (String, Kind) -> StG Rho
-newRhoTyVar   d = RhoTau [] <$>  newMeta2 d
+newRhoTyVar   d = RhoT.Tau . RhoTau [] <$> newMeta2 d
 newMeta       :: TVar QName -> StG Tau
 newMeta       d = Meta      <$>  newFlexiTyVar d
 newMeta2      :: (String, Kind) -> StG Tau
@@ -114,7 +115,7 @@ instRho ex ty ety = do
         case ety of
             Check r   -> do subsCheckRR ex ty r
                             g ← getST   -- make unifications visible
-                            let mty = ty.{context ← mergeCtx r.context . reducedCtxs g}
+                            let mty = over RhoT._context (mergeCtx r.context . reducedCtxs g) ty
                             instExplain ex mty ety
                             E.logmsg TRACET (getpos ex) (text ("instRho subschecked: "
                                                 ++ ex.nice g ++ "  ::  " ++ mty.nice g))
@@ -123,7 +124,7 @@ instRho ex ty ety = do
                 instExplain ex ty ety
                 -- subsCheckRR ex ty r
                 -- doio (ref.put (Just ty))
-                pure ex.{typ=Just (ForAll [] ty.{context ← reducedCtxs g})}
+                pure ex.{typ=Just (ForAll [] $ over RhoT._context (reducedCtxs g) ty)}
 
 instPatSigma :: (Positioned e, Nice e) => e -> Sigma -> Expected Sigma -> StG ()
 instPatSigma pat sigma esig = do
@@ -217,16 +218,16 @@ subsCheckRR ex ty ety = do
             {-
              - implement rule FUN if one of the types is a RhoFun
              -}
-            subsCheckRR' exp t1 (RhoFun _ a2 r2) = do
+            subsCheckRR' exp t1 (RhoT.Fun (RhoFun _ a2 r2)) = do
                         (a1,r1) <- unifyFun exp t1
                         subsCheckFun exp a1 r1 a2 r2
-            subsCheckRR' exp (RhoFun _ a1 r1) t2 = do
+            subsCheckRR' exp (RhoT.Fun (RhoFun _ a1 r1)) t2 = do
                         (a2,r2) <- unifyFun exp t2
                         subsCheckFun exp a1 r1 a2 r2
             {-
              | otherwise revert to ordinary unification
              -}
-            subsCheckRR' expr (RhoTau _ off) exp = unify expr off exp.tau
+            subsCheckRR' expr (RhoT.Tau (RhoTau _ off)) exp = unify expr off $ view RhoT._unsafeTau exp
 
 subsCheckFun :: (Positioned e, Nice e) => e -> Sigma -> Rho -> Sigma -> Rho -> StG ()
 subsCheckFun exp s1 r1 s2 r2 = do
@@ -234,23 +235,23 @@ subsCheckFun exp s1 r1 s2 r2 = do
             subsCheckRR exp r1 r2
 
 unifyFun :: (Positioned e, Nice e) => e -> Rho -> StG (Sigma, Rho)
-unifyFun _ (RhoFun _ sigma res) = pure (sigma, res)
-unifyFun exp (RhoTau cx tau) =  do
+unifyFun _ (RhoT.Fun r) = pure (r.sigma, r.rho)
+unifyFun exp (RhoT.Tau r) =  do
         g <- getST
         arg_ty <- newMeta2 ("arg", KType)
         res_ty <- newMeta2 ("res", KType)
         let !funty = Tau.tfun arg_ty res_ty
-        b <- unified exp tau funty
+        b <- unified exp r.tau funty
         unless b do
             g <- getST
             E.error (getpos exp) (message g funty)
             E.hint  (getpos exp) (text ("too many or too few arguments perhaps?"))
-        pure (ForAll [] (RhoTau [] arg_ty), RhoTau [] res_ty)
+        pure (ForAll [] (RhoT.Tau $ RhoTau [] arg_ty), RhoT.Tau $ RhoTau [] res_ty)
     where
         message g funty = part1 </> part2 </> part3
             where
                 part1 = text "type error in" <+> text exp.is </> nest 2 (nicest g exp)
-                part2 = text "type is apparently " <+> text (tau.nicer g)
+                part2 = text "type is apparently " <+> text (r.tau.nicer g)
                 part3 = text "does not match function type " <+> text (better g funty) 
 
 
@@ -272,12 +273,12 @@ getSigmaTvs :: Global -> Sigma -> TreeMap MetaTv ()
 getSigmaTvs g (ForAll _ rho) = getRhoTvs g rho
 
 getRhoTvs :: Global -> Rho -> TreeMap MetaTv ()
-getRhoTvs g (RhoFun cs sig rho) = let
+getRhoTvs g (RhoT.Fun (RhoFun cs sig rho)) = let
         csTvs = map (getCtxTvs g) cs
         sTvs  = getSigmaTvs g sig
         rTvs  = getRhoTvs g rho
     in (fold union (sTvs `union` rTvs) csTvs)
-getRhoTvs g (RhoTau cs tau) = let
+getRhoTvs g (RhoT.Tau (RhoTau cs tau)) = let
         csTvs = map (getCtxTvs g) cs
         tTvs  = getTauTvs g tau
     in (fold union tTvs csTvs)
@@ -342,16 +343,17 @@ instantiate (ForAll ns ty) = do
 --- Substitute all wild cards with flexible Meta types
 --- This cannot be done with 'substRho' and friends, since wild cards are unnamed.
 --- Every wild card gets its own meta type var.
+-- TODO consider performance impact by using lenses
 instWildRho :: Rho -> StG Rho
-instWildRho RhoFun{context, sigma, rho} = do
-    c  ← mapM instWildCtx context
-    s  ← instWildSigma sigma
-    r  ← instWildRho rho
-    pure RhoFun{context=c, sigma=s, rho=r}
-instWildRho RhoTau{context, tau} = do
-    c  ← mapM instWildCtx context
-    t  ← instWildTau tau
-    pure RhoTau{context=c, tau=t}
+instWildRho = go <=< RhoT._context (mapM instWildCtx)
+  where
+    go (RhoT.Fun it) =
+      pure . RhoT.Fun
+      =<< RhoFun._rho     instWildRho
+      =<< RhoFun._sigma   instWildSigma it
+    go (RhoT.Tau it) =
+      pure . RhoT.Tau
+      =<< RhoTau._tau instWildTau it
 
 --- see 'instWildRho'
 --- don't descend into higher rank types yet (or should we?) 
@@ -559,11 +561,14 @@ zonkSigma :: Sigma -> StG Sigma
 zonkSigma (ForAll ns ty) = do rho <- zonkRho ty; stio (ForAll ns rho)
 cleanSigma (ForAll ns ty) = do rho <- cleanRho ty; stio (ForAll ns rho)
 
+-- TODO consider performance impact by using lenses
 zonkRho   :: Rho   -> StG Rho
-zonkRho (RhoFun ctxs arg res) = liftM3 RhoFun (mapSt zonkCtx ctxs) (zonkSigma arg) (zonkRho res)
-zonkRho (RhoTau ctxs tau)     = liftM2 RhoTau (mapSt zonkCtx ctxs) (zonkTau tau)
-cleanRho (RhoFun ctxs arg res) = liftM3 RhoFun (zonkCtxs ctxs) (zonkSigma arg) (zonkRho res)
-cleanRho (RhoTau ctxs tau)     = liftM2 RhoTau (zonkCtxs ctxs) (zonkTau tau)
+zonkRho (RhoT.Fun it) = pure . RhoT.Fun =<< RhoFun._context (mapSt zonkCtx) =<< RhoFun._sigma zonkSigma =<< RhoFun._rho zonkRho it
+zonkRho (RhoT.Tau it) = pure . RhoT.Tau =<< RhoTau._context (mapSt zonkCtx) =<< RhoTau._tau zonkTau it
+-- TODO consider performance impact by using lenses
+cleanRho :: Rho -> StG Rho
+cleanRho (RhoT.Fun it) = pure . RhoT.Fun =<< RhoFun._context zonkCtxs =<< RhoFun._sigma zonkSigma =<< RhoFun._rho zonkRho it
+cleanRho (RhoT.Tau it) = pure . RhoT.Tau =<< RhoTau._context zonkCtxs =<< RhoTau._tau zonkTau it
 
 zonkCtxs  :: [Context] -> StG [Context]
 zonkCtxs ctxs = do
@@ -608,13 +613,16 @@ substRigidSigma bound (ForAll b rho) = ForAll b
 
 substRigidRho :: [String] -> Rho -> Rho
 substRigidRho [] rho = rho
-substRigidRho bound (RhoFun ctxs sig rho) = RhoFun 
-        (map (substRigidCtx bound) ctxs)
-        (substRigidSigma bound sig)
-        (substRigidRho   bound rho)
+substRigidRho bound (RhoT.Fun it) = RhoT.Fun
+    it.{ context <- map (substRigidCtx bound)
+       , sigma   <- substRigidSigma bound
+       , rho     <- substRigidRho bound
+       }
 
-substRigidRho bound (RhoTau ctxs tau) = 
-        RhoTau (map (substRigidCtx bound) ctxs)  (substRigidTau bound tau)
+substRigidRho bound (RhoT.Tau it) = RhoT.Tau
+    it.{ context <- map (substRigidCtx bound)
+       , tau     <- substRigidTau bound
+       }
 
 substRigidCtx :: [String] -> Context -> Context
 substRigidCtx bound ctx = ctx.{tau <- substRigidTau bound}
@@ -686,8 +694,9 @@ canonicSignature sig = (instantiate sig >>= zonkRho) >>= quantify
  * get all the binders used in ForAlls in the type so that when
  * quantifying an outer forall we can avoid these inner ones
  -}
+tyVarBndrs :: Rho -> [String]
 tyVarBndrs ty = (uniq • sort) (bndrs ty) where
-    bndrs (RhoFun _ (ForAll tvs arg) res)
+    bndrs (RhoT.Fun (RhoFun _ (ForAll tvs arg) res))
                 = (map _.var tvs ++ bndrs arg) ++ bndrs res
     bndrs _     = []
 
@@ -704,6 +713,7 @@ exContext g ex = case Expr.typ ex of
 {--
  * enrich the type by all contexts found in any subexpr
  -}
+contexts :: ExprT -> Rho -> StG Rho
 contexts ex typ = do
         g <- getST
         let pos = getpos ex
@@ -714,11 +724,11 @@ contexts ex typ = do
             Lit {pos} -> simplify pos rho
             Ann ex ty -> do
                 let ectx = exContext g ex
-                simplify pos rho.{context <- mergeCtx ectx}
+                simplify pos $ over RhoT._context (mergeCtx ectx) rho
             App fun arg _ -> do
                 let fctx = exContext g fun
                 let actx = exContext g arg
-                simplify pos rho.{context <- mergeCtx (mergeCtx fctx actx)}
+                simplify pos $ over RhoT._context (mergeCtx (mergeCtx fctx actx)) rho
             Let {env,ex} -> do
                 let ectx = exContext g ex
                 syms <- mapSt U.findV env
@@ -729,38 +739,36 @@ contexts ex typ = do
                     rtvss = map (ctxTvs g) rctxs
                 let ctxs =  [ ctx | (ctx,tvs) <- zip rctxs rtvss, any (MetaTv.isFlexi) tvs]
                 let merged = fold mergeCtx rho.context [ectx,ctxs]
-                simplify pos rho.{context=merged}
+                simplify pos $ set RhoT._context merged rho
             Lam {ex} -> do
                 let ectx = exContext g ex
                 E.logmsg TRACET (getpos ex) (text ("contexts: lamrho="
                     ++ nicectx rho.context g
                     ++ ", ectx=" ++ nicectx ectx g))
-                simplify pos rho.{context <- mergeCtx ectx}
+                simplify pos $ over RhoT._context (mergeCtx ectx) rho
             Ifte c t e _ -> do
                 let ctxs   = map (exContext g) [c,t,e]
                 let merged = fold mergeCtx rho.context ctxs
-                simplify pos rho.{context=merged}
+                simplify pos $ set RhoT._context merged rho
             Case {ex,alts} -> do
                 let ectx = exContext g ex
                     ctxs = map (exContext g • CAlt.ex) alts
                 let merged = fold mergeCtx rho.context (ectx:ctxs)
-                simplify pos rho.{context=merged}
+                simplify pos $ set RhoT._context merged rho
             Mem  {ex} -> do         -- can happen when x.xyz does not typecheck
                 let ectx = exContext g ex
-                simplify pos rho.{context <- mergeCtx ectx}
+                simplify pos $ over RhoT._context (mergeCtx ectx) rho
             inv -> do
                 g <- getST
                 E.fatal (getpos inv) (text ("contexts: Invalid expression " ++ inv.nice g))
 
 canonicContext :: Global -> Rho -> Rho
-canonicContext g (RhoTau ctxs tau) = 
-        let rctxs = reducedCtxs g ctxs
-        in (RhoTau rctxs tau)
-canonicContext g (RhoFun ctxs (ForAll bs rhoA) rhoB) = 
-        let rctxs = reducedCtxs g ctxs
-            rho1  = canonicContext g rhoA
-            rho2  = canonicContext g rhoB
-        in (RhoFun rctxs {-merged-} (ForAll bs rho1.{context=[]}) rho2.{context=[]})
+canonicContext g (RhoT.Tau it) =
+    RhoT.Tau it.{context <- reducedCtxs g}
+canonicContext g (RhoT.Fun it) =
+    let f = set RhoT._context [] . canonicContext g
+    in
+    RhoT.Fun it.{context <- reducedCtxs g, sigma <- _.{rho <- f}, rho <- f}
 
 {--
  * Reduce a 'Tau' to a form where only unbound 'Meta's occur.
@@ -824,17 +832,17 @@ simplify pos rho = do
         singler ctx = nicerctx [ctx] g
         context = reducedCtxs g rho.context
     case context of
-        [] -> stio rho.{context}
+        [] -> pure $ set RhoT._context context rho
         (ctx:ctxs) -> case ctx.tau.flat of
             [] -> Prelude.error "Tau.flat returns empty list"       -- avoid case warning
             t1:ts | isVarMeta t1 = if (any (`implies` ctx) ctxs2)
                        then do
                             E.logmsg TRACET pos (text ("dropped: " ++ single ctx ++ "  (implied)"))
-                            simplify pos rho.{context=ctxs2}            -- drop ctx as it is implied
+                            simplify pos $ set RhoT._context ctxs2 rho  -- drop ctx as it is implied
                        else do
                             E.logmsg TRACET pos (text ("retained: " ++ single ctx))
-                            rho <- simplify pos rho.{context=ctxs2}
-                            stio rho.{context <- (ctx:)}
+                            rho <- simplify pos $ set RhoT._context ctxs2 rho
+                            pure $ over RhoT._context (ctx:) rho
                   | otherwise = do
                         implications <- instanceOf ctx.pos ctx.cname ctx.tau
                         let reducedctxs = reducedCtxs g (ctx:implications)
@@ -845,7 +853,7 @@ simplify pos rho = do
                         when (not (null implications)) do
                             E.explain pos (text ("the implications of " ++ singler ctx
                                 ++ "  are  " ++ joined ", " (map singler implications)))
-                        rho <- simplify pos rho.{context = ctxs2 ++ implications}
+                        rho <- simplify pos $ set RhoT._context (ctxs2 ++ implications) rho
                         -- tau <- reducedTau ctx.tau
                         stio rho -- .{context <- (ctx.{checked=true, tau}:)}
                   where ctxs2 = filter (not • (ctx `implies`)) ctxs
@@ -883,7 +891,7 @@ instanceOf pos qn tau = do
                     E.explain pos (text ("we assume there is a variable inst::" ++ nicer tau g
                         ++ "  and check if it unifies with " ++ rho.nicer g))
                     let inst = Local 0 "inst"
-                    subsCheckRR (Vbl pos inst Nothing) (RhoTau [] tau) rho
+                    subsCheckRR (Vbl pos inst Nothing) (RhoT.Tau (RhoTau [] tau)) rho
                     stio (map _.{pos} rho.context)
         _ -> do
             E.error pos (msgdoc (nicer tau g ++ " is not, and cannot be, an instance of " ++ nice qn g))

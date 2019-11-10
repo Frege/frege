@@ -9,7 +9,7 @@ import Lib.PP(text, <>, <+>, <+/>, </>)
 import Data.Bits(BitSet, BitSet.member, BitSet.unionE, BitSet.differenceE)
 import Data.List(partitioned, zip4)
 
-import  frege.compiler.common.Lens (preview, view)
+import  frege.compiler.common.Lens (preview, set)
 
 import Compiler.enums.Flags(TRACEG)
 import Compiler.enums.RFlag as RF(RFlag)
@@ -27,7 +27,7 @@ import Compiler.types.Symbols(SymV, SymL, SymD, SymT, SymC, SymI, SymMeth, SymVa
 import Compiler.types.Expression(Expr, ExprT, CAlt, CAltT, flatx)
 import Compiler.types.Patterns(Pattern, PatternT)
 import Compiler.types.Positions(Positioned)
-import Compiler.types.Types(RhoT, SigmaT, TauT, Rho, Sigma, Tau, Context, Ctx, pSigma)
+import Compiler.types.Types(RhoT, RhoTau, SigmaT, TauT, Rho, Sigma, Tau, Context, Ctx, pSigma)
 import Compiler.types.Strictness(allLazy, Strictness)
 import Compiler.types.QNames(QName)
 import Compiler.types.JNames(JName, memberOf)
@@ -309,7 +309,7 @@ cafCode (sym@SymV {name, depth = 0, expr = Just dx}) binds = do
         use7  = outer || self
         ctxs  = if null bnds then [] else sym.typ.rho.context
         cargs = zipWith (constraintArg g) ctxs ctxNames
-        jtype = rhoJT g sym.typ.rho.{context=[]}
+        jtype = rhoJT g $ set RhoT._context [] sym.typ.rho
         rtype = returnType sym.rkind jtype
         stype = if inmethod || rsimple then rtype else jtype
         inmethod = not (null sym.typ.bound) || not (null sym.typ.rho.context)
@@ -518,7 +518,7 @@ genStmts jret rm (x@Let {env, ex}) binds = do
                      | symv.depth == 0,
                        symv.strsig.isStrict,
                        RSimple `member` symv.rkind,
-                       RhoTau [] t <- symv.typ.rho = do
+                       RhoT.Tau (RhoTau [] t) <- symv.typ.rho = do
                                         vx <- vx
                                         genCaseStmt jret rm (cas vx) binds
                      where
@@ -938,14 +938,15 @@ genExpression ret stri x binds = do
     g <- getST
     let nt = case x.typ of 
           Just sigma
-            | null sigma.bound = rhoJT g (sigma.rho.{context=[]})
+            | null sigma.bound = rhoJT g $ set RhoT._context [] sigma.rho
             | otherwise = sigmaJT g sigma
           _ → error ("untyped expr " ++ nicer x g ++ " in genExpression") 
     genExpr ret (stri nt) x binds
 
 --- Avoid change of arity when a function is substituted for b
 --- > forall a b .ctx => (a->b)  ==> forall a b. ctx => a -> b 
-rhoTauInSigma (ForAll bs (RhoTau ctx fun)) = ForAll bs (U.rhoTau fun).{context=ctx}
+rhoTauInSigma :: Sigma -> Sigma
+rhoTauInSigma (ForAll bs (RhoT.Tau (RhoTau ctx fun))) = ForAll bs $ set RhoT._context ctx $ U.rhoTau fun
 rhoTauInSigma sig = sig
 
 --- Adapt result from 'genExpr' and do some logging
@@ -971,9 +972,11 @@ etaShrink rflg rm ex n binds = do
     unEta 0 args app = getST >>= \g →
                         genExpr false (subrm g) app binds >>= unwind args . strictBind g
         where 
-            subrm g
-              | App{} ← app = (rhoJT g . _.{context = []} . _.rho . unJust . _.typ) app
-              | otherwise   = (rhoJT g .                    _.rho . unJust . _.typ) app
+            subrm g =
+              let f = case app of
+                    App{} -> set RhoT._context []
+                    _     -> id
+              in (rhoJT g . f . _.rho . unJust . _.typ) app
     unEta n args (App{fun,arg}) = unEta (n-1) (arg:args) fun
     unEta n args noapp = do
         g ← getST
@@ -1152,7 +1155,7 @@ genExpr rflg rm ex binds = do
                                     ++ " @@ " ++ nice ft g
                                     ))
                                 exprResult arm aex bind             -- just pass on function
-                other    = wrapHigher false aex binds sctxs ft.{rho ← _.{context=sctxs}} 
+                other    = wrapHigher false aex binds sctxs ft.{rho <- set RhoT._context sctxs}
                             >>= exprResult arm aex
                     where
                         -- build the context expected by the caller of the function
@@ -1279,7 +1282,7 @@ genExpr rflg rm ex binds = do
                         item        =  Ref (symJavaName g (SymbolT.D sym)) targs
                         mk          =  JX.static "mk" item
                         call        =  JInvoke mk []
-                    result (newBind g ft.{rho ← _.{context=[]}} call)
+                    result $ newBind g (ft.{rho <- set RhoT._context []}) call
             | otherwise = do
                 E.error pos (
                         text "FATAL COMPILER ERROR "
@@ -1299,7 +1302,7 @@ genExpr rflg rm ex binds = do
                 let subst       =  unifySigma g sym.typ ft
                     rhoctx      =  substRho subst sym.typ.rho
                     targs       =  map (boxed . tauJT g . substTau subst . TauT.Var) sym.typ.tvars
-                    ret         =  ft.{rho ← Rho.{context = []}}
+                    ret         =  ft.{rho <- set RhoT._context []}
                 if (sym.depth > 0) 
                 then etaWrap (snd (U.returnType (rhoTauInSigma ft).rho))
                 else if isJust sym.nativ
@@ -1465,7 +1468,7 @@ genExpr rflg rm ex binds = do
                                         <> text "´ :: "
                                         <+> text (nicer sym.typ g)
                                     </> text "Possible workaround: restrict the type of `" <> text sym.name.base
-                                        <> text "´ to " <+> text (nicer csigma.rho.{context=[]} g) 
+                                        <> text "´ to " <+> text (nicer (set RhoT._context [] csigma.rho) g)
                                 )
                             _ -> pure ()
 
@@ -1551,7 +1554,7 @@ genExpr rflg rm ex binds = do
                             | Local{uid} ← symv.name,
                               Just b ← lookup uid binds  
                             = do
-                                let subrm = rhoJT g vsigma.rho.{context=[]}
+                                let subrm = rhoJT g $ set RhoT._context [] vsigma.rho
                                 fun ← genExpr false subrm vbl binds
                                 case fun.jtype of
                                     Func [ajty, rjty] → do
@@ -1593,7 +1596,7 @@ genExpr rflg rm ex binds = do
                                         <> text "´ :: "
                                         <+> text (nicer symtyp g)
                                     </> text "Possible workaround: restrict the type of `" <> text symv.name.base
-                                        <> text "´ to " <+> text (nicer vsigma.rho.{context=[]} g) 
+                                        <> text "´ to " <+> text (nicer (set RhoT._context [] vsigma.rho) g)
                                 )
                             _ -> pure ()
                       -- resolve the contexts, if any

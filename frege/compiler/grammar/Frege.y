@@ -71,6 +71,7 @@ import  Compiler.types.Global as G;
 
 import  Compiler.common.Mangle;
 import  Compiler.common.Errors as E();
+import  Compiler.common.Lens (set);
 import  Compiler.common.Resolve as R(enclosed);
 
 import Lib.PP (group, break, msgdoc);
@@ -846,16 +847,17 @@ mbdot:
 rho:
     tapp EARROW rhofun               { \tau\t\rho -> do
                                         context <- tauToCtx tau
-                                        YYM.pure (Rho.{context} rho)
+                                        YYM.pure $ set RhoT._context context rho
                                      }
     | rhofun              
     ;
 
 rhofun:
-    tapp                            { RhoTau [] }
+    tapp                            { RhoT.Tau . RhoTau [] }
     | tapp  ARROW rhofun            { \a\_\b     -> case a of
-                                            TSig s -> RhoFun [] s b 
-                                            _ -> RhoFun [] (ForAll [] (RhoTau [] a)) b }
+                                            -- TODO change the type of rhofun to RhoFun (revive rhotau grammar?)
+                                            TSig s -> RhoT.Fun $ RhoFun [] s b
+                                            _ -> RhoT.Fun $ RhoFun [] (ForAll [] (RhoT.Tau $ RhoTau [] a)) b }
     ;
 
 /*
@@ -868,7 +870,7 @@ tau:
     tapp                 
     | forall             { TSig }
     | tapp ARROW tau     { \a\f\b ->  case a of
-                            TSig s -> TSig (ForAll [] (RhoFun [] s (RhoTau [] b))) 
+                            TSig s -> TSig (ForAll [] (RhoT.Fun $ RhoFun [] s (RhoT.Tau $ RhoTau [] b)))
                             _      -> TApp (TApp (TauT.Con TCon{pos=yyline f, name=fromBase f.{tokid=CONID, value="->"}}) a) b
                          }
     ;
@@ -1011,7 +1013,7 @@ insthead:
             pos = yyline ea,
             vis = Public,
             clas = cls,
-            typ = ForAll [] (RhoTau ctxs tau),
+            typ = ForAll [] (RhoT.Tau $ RhoTau ctxs tau),
             defs = [],
             doc = Nothing}
     }
@@ -1022,7 +1024,7 @@ insthead:
                         (yyerror pos "classname missing after instance contexts")
                 pure InsDcl {
                     pos, vis = Public, clas = cname,
-                    typ = ForAll [] (RhoTau [] tau),
+                    typ = ForAll [] (RhoT.Tau $ RhoTau [] tau),
                     defs = [],
                     doc = Nothing,
                     }
@@ -1170,7 +1172,7 @@ contype:
     simpletype                  { \tau -> case tau of 
                                     TSig s -> Field Position.null Nothing Nothing Public false s
                                     _      -> Field Position.null Nothing Nothing Public false 
-                                                (ForAll [] (RhoTau [] tau))
+                                                (ForAll [] (RhoT.Tau $ RhoTau [] tau))
                                 }
     ;
 

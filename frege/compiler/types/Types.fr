@@ -265,8 +265,7 @@ data SigmaT s = ForAll { !bound :: [TVar s], !rho :: RhoT s } where
     --- get the bound type variables as list of 'TVar's.
     tvars (ForAll b _)  = b  -- zipWith (\(v,k)\p -> TVar p k v) b (repeat pos)
     --- tell if this is a function
-    isFun (ForAll _ RhoFun{})    = true
-    isFun (ForAll _ RhoTau{tau}) = tau.isFun
+    isFun (ForAll _ rho) = rho.isFun
     --- add our bound variables to a type environment
     extendEnv (ForAll bound _) env = fold (\e tv -> insert tv.var tv e) env bound
 
@@ -288,6 +287,30 @@ type Context    = ContextT QName
 type ContextS   = ContextT SName
 
 
+--- The rho type for functions
+data RhoFun s = !RhoFun {context::[ContextT s], sigma::SigmaT s, rho::RhoT s}
+  where
+    -- _context :: Lens' (RhoFun s) [ContextT s]
+    _context :: Functor f => ([ContextT s] -> f [ContextT s]) -> RhoFun s -> f (RhoFun s)
+    _context f r = r.{context=} <$> f r.context
+    -- _sigma :: Lens' (RhoFun s) [SigmaT s]
+    _sigma :: Functor f => (SigmaT s -> f (SigmaT s)) -> RhoFun s -> f (RhoFun s)
+    _sigma f r = r.{sigma=} <$> f r.sigma
+    -- _rho :: Lens' (RhoFun s) [RhoT s]
+    _rho :: Functor f => (RhoT s -> f (RhoT s)) -> RhoFun s -> f (RhoFun s)
+    _rho f r = r.{rho=} <$> f r.rho
+
+--- The rho type for non-functions
+data RhoTau s = !RhoTau {context::[ContextT s], tau::TauT s}
+  where
+    -- _context :: Lens' (RhoTau s) [ContextT s]
+    _context :: Functor f => ([ContextT s] -> f [ContextT s]) -> RhoTau s -> f (RhoTau s)
+    _context f r = r.{context=} <$> f r.context
+    -- _tau :: Lens' (RhoTau s) [TauT s]
+    _tau :: Functor f => (TauT s -> f (TauT s)) -> RhoTau s -> f (RhoTau s)
+    _tau f r = r.{tau=} <$> f r.tau
+
+
 {--
     The type for modelling rho types,
     which are constraint bearing types that may be functions.
@@ -305,9 +328,47 @@ type ContextS   = ContextT SName
     If some function has the above type, it will compile
     to a method with two arguments and return type @[b]@.  
  -}
-data RhoT s =
-      !RhoFun {context::[ContextT s], sigma::SigmaT s, rho::RhoT s}
-    | !RhoTau {context::[ContextT s], tau::TauT s}
+data RhoT s
+    = protected !Fun (RhoFun s)
+    | protected !Tau (RhoTau s)
+  where
+    --- tell if this is a function
+    isFun (Fun _) = true
+    isFun (Tau RhoTau{tau}) = tau.isFun
+    context :: RhoT s -> [ContextT s]
+    context (Fun r) = r.context
+    context (Tau r) = r.context
+
+    -- _context :: Lens' (RhoT s) [ContextT s]
+    _context :: Functor f => ([ContextT s] -> f [ContextT s]) -> RhoT s -> f (RhoT s)
+    _context f (Fun r) = Fun . r.{context=} <$> f r.context
+    _context f (Tau r) = Tau . r.{context=} <$> f r.context
+    -- _Fun :: Traversal' (RhoT s) (RhoFun s)
+    _Fun :: Applicative f => (RhoFun s -> f (RhoFun s)) -> RhoT s -> f (RhoT s)
+    _Fun f (Fun r) = Fun <$> f r
+    _Fun _ r = pure r
+    -- _Tau :: Traversal' (RhoT s) (RhoTau s)
+    _Tau :: Applicative f => (RhoTau s -> f (RhoTau s)) -> RhoT s -> f (RhoT s)
+    _Tau f (Tau r) = Tau <$> f r
+    _Tau _ r = pure r
+
+    --- Access @context@, and if this is @RhoFun@ recurse into @RhoFun.rho@
+    -- _traverseCtxs :: Traversal' (RhoT s) [ContextT s]
+    _traverseCtxs :: Applicative f => ([ContextT s] -> f [ContextT s]) -> RhoT s -> f (RhoT s)
+    _traverseCtxs f (RhoT.Tau r) = RhoT.Tau . r.{context=} <$> f r.context
+    _traverseCtxs f (RhoT.Fun r) = (\context rho -> RhoT.Fun r.{context, rho}) <$> f r.context <*> _traverseCtxs f r.rho
+
+    --- warning: this function is partial
+    -- _unsafeRho :: Lens' (RhoT s) (RhoT s)
+    _unsafeRho :: Functor f => (RhoT s -> f (RhoT s)) -> RhoT s -> f (RhoT s)
+    _unsafeRho f (Fun r) = Fun . r.{rho=} <$> f r.rho
+    -- _unsafeSigma :: Lens' (RhoT s) (SigmaT s)
+    _unsafeSigma :: Functor f => (SigmaT s -> f (SigmaT s)) -> RhoT s -> f (RhoT s)
+    _unsafeSigma f (Fun r) = Fun . r.{sigma=} <$> f r.sigma
+    --- warning: this function is partial
+    -- _unsafeTau :: Lens' (RhoT s) (TauT s)
+    _unsafeTau :: Functor f => (TauT s -> f (TauT s)) -> RhoT s -> f (RhoT s)
+    _unsafeTau f (Tau r) = Tau . r.{tau=} <$> f r.tau
 
 
 --- rho as returned from parsing
@@ -338,8 +399,8 @@ instance Positioned (TauT a) where
 instance Positioned (RhoT a) where
     is p = "rho type"
     getpos rho = case rho of
-        RhoFun{sigma,rho}  = (c.merge sigma.getpos).merge rho.getpos
-        RhoTau{tau}        = c.merge tau.getpos
+        RhoT.Fun RhoFun{sigma,rho}  = (c.merge sigma.getpos).merge rho.getpos
+        RhoT.Tau RhoTau{tau}        = c.merge tau.getpos
       where
         c = Position.merges (map Context.getpos rho.context)
 
@@ -365,11 +426,11 @@ isTvApp _ = false
 
 {-- a provisional 'Sigma' shared by all 'Symbol's that have no type yet -}
 pSigma :: Sigma
-pSigma =  ForAll [] (RhoTau [] (Meta (Rigid (negate 1) "provisional" KVar)))
+pSigma =  ForAll [] (RhoT.Tau RhoTau{context=[], tau=Meta (Rigid (negate 1) "provisional" KVar)})
 
 
 {-- check if this is the provisional 'Sigma' -}
-isPSigma (ForAll [] (RhoTau [] (Meta (Rigid n          "provisional" KVar)))) = n == negate 1
+isPSigma (ForAll [] (RhoT.Tau RhoTau{context=[], tau=Meta (Rigid n "provisional" KVar)})) = n == negate 1
 isPSigma _ = false
 
 

@@ -59,7 +59,7 @@ import  Compiler.instances.Nicer
 import Lib.PP(group, break, text, <+>, <>)
 import frege.compiler.Utilities as U()
 
-import Data.TreeMap as TM(TreeMap, keys, values, each, including, 
+import Data.TreeMap as TM(TreeMap, TreeSet, keys, values, each, including,
     lookup, insert, delete)
     
 import Data.Graph (stronglyConnectedComponents tsort)
@@ -125,10 +125,10 @@ substSigmaBound (ForAll bound rho) e = ForAll new rho
         new = [ tv.{kind=k} | tv <- bound, k <- lookup tv.var e ]
 
 kiRhoX :: Rho -> Envs -> Kind -> StG (Rho, Envs, Kind)
-kiRhoX (it@RhoTau{}) env kind = do
+kiRhoX (RhoT.Tau it) env kind = do
     env <- foldM (kiCtx []) env it.context
     (kind, env) <- unifyTauKind [] env it.tau kind
-    return (it, env, kind)
+    pure (RhoT.Tau it, env, kind)
 kiRhoX it env kind = do            -- it is a RhoFun, and this a type
     (rho, env) <- kiRho [] env it
     case unifyKind KType kind of
@@ -181,11 +181,12 @@ kiSigma names env sigma = do
 repKVar KVar = KType
 repKVar (KApp a b) = KApp (repKVar a) (repKVar b)
 repKVar x = x
-    
-substRhoKind env (it@RhoTau{}) = it.{
+
+substRhoKind :: TreeMap String (KindT a) -> RhoT a -> RhoT a
+substRhoKind env (RhoT.Tau it) = RhoT.Tau it.{
     context <- map (substCtxKind env),
     tau     <- substTauKind env}
-substRhoKind env (it@RhoFun{}) = it.{
+substRhoKind env (RhoT.Fun it) = RhoT.Fun it.{
         context <- map (substCtxKind env),
         sigma   <- Sigma.{rho <- substRhoKind env'},
         rho     <- substRhoKind env}
@@ -205,15 +206,15 @@ substTauKind env tau         = tau
 
 --- kind inference on a 'Rho' type
 kiRho :: [QName] -> Envs -> Rho -> StG (Rho, Envs)
-kiRho names env (it@RhoTau{context,tau}) = do
-    env <- foldM (kiCtx names) env context
-    (_, env) <- unifyTauKind names env tau KType
-    return (it, env)
-kiRho names env (it@RhoFun{context,sigma,rho}) = do
-    env <- foldM (kiCtx names) env context
-    (sig, env) <- kiSigma names env sigma
-    (rho, env) <- kiRho   names env rho  
-    return (it.{sigma=sig, rho}, env)    
+kiRho names env (RhoT.Tau it) = do
+    env <- foldM (kiCtx names) env it.context
+    (_, env) <- unifyTauKind names env it.tau KType
+    pure (RhoT.Tau it, env)
+kiRho names env (RhoT.Fun it) = do
+    env <- foldM (kiCtx names) env it.context
+    (sig, env) <- kiSigma names env it.sigma
+    (rho, env) <- kiRho   names env it.rho
+    pure (RhoT.Fun it.{sigma=sig, rho}, env)
 
 --- kind inference on a 'Ctx', takes into account kind checked classes only
 kiCtx :: [QName] -> Envs -> Context -> StG Envs
@@ -264,7 +265,7 @@ unifyTauKind names env (TauT.Var TVar{pos,var,kind}) exp = do
         case unifyKind varkind exp of
             Just (KGen ts) → do
                 let subst = fold (\tm tv -> TreeMap.insert tm tv.var $ TauT.Var tv.{var,pos,kind=KVar}) empty
-                                [ftv | t ← ts, ftv ← U.freeTVars [] (RhoTau [] t)]
+                                [ftv | t <- ts, ftv <- U.freeTVars [] $ RhoT.Tau $ RhoTau [] t]
                     ts'    = map (T.substTau subst) ts
                 pure (KGen ts', updenv env var (KGen ts'))
             Just k  -> do
@@ -430,9 +431,10 @@ sigmasTCons = fold rhoTCons TreeMap.empty . map Sigma.rho
 sigmaTCons (ForAll _ rho) = keys (rhoTCons TreeMap.empty rho)
 
 --- find all 'QName's that denote types in a 'Rho' type
-rhoTCons set (rho@RhoFun{}) = rhoTCons sigset rho.rho where
+rhoTCons :: TreeSet QName -> Rho -> TreeSet QName
+rhoTCons set (RhoT.Fun rho) = rhoTCons sigset rho.rho where
     sigset = rhoTCons set rho.sigma.rho
-rhoTCons set (rho@RhoTau{}) = tauTCons set rho.tau
+rhoTCons set (RhoT.Tau rho) = tauTCons set rho.tau
 
 --- find all 'QName's that denote types in a 'Tau' type
 tauTCons set (TauT.Con c) = set `including` c.name
