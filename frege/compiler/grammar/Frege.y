@@ -855,7 +855,6 @@ rho:
 rhofun:
     tapp                            { RhoT.Tau . RhoTau [] }
     | tapp  ARROW rhofun            { \a\_\b     -> case a of
-                                            -- TODO change the type of rhofun to RhoFun (revive rhotau grammar?)
                                             TSig s -> RhoT.Fun $ RhoFun [] s b
                                             _ -> RhoT.Fun $ RhoFun [] (ForAll [] (RhoT.Tau $ RhoTau [] a)) b }
     ;
