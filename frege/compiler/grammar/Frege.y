@@ -819,7 +819,7 @@ impurenativedef:
     NATIVE methodspec DCOLON sigexs { \_\(fr,jv,ga)\col\t ->
                     NatDcl {pos=yyline fr, vis=Public, name=fr.value,
                                                 meth=jv, txs=t, isPure=false,
-                                                gargs = ga,
+                                                gargs = ga, 
                                                 doc=Nothing}}
     ;
 
@@ -831,7 +831,7 @@ sigma:
     ;
 
 forall:
-    FORALL dvars mbdot rho        { \_\vs\_\r -> ForAll vs r }
+    FORALL dvars mbdot rho        { \_\vs\_\r      -> ForAll  vs  r }
     ;
 
 mbdot:
@@ -1103,14 +1103,14 @@ datajavainit:
     DATA CONID '=' nativepur nativespec {
         \dat\d\docu\pur\(jt,gargs) -> JavDcl {pos=yyline d, vis=Public, name=Token.value d,
                                     jclas=jt, vars=[], defs=[],
-                                    gargs,
+                                    gargs,  
                                     isPure = pur, 
                                     doc=Nothing}
     }
     | DATA CONID dvars '=' nativepur nativespec {
         \dat\d\ds\docu\pur\(jt,gargs) -> JavDcl {pos=yyline d, vis=Public, name=Token.value d,
                                     jclas=jt, vars=ds, defs=[],
-                                    gargs,
+                                    gargs, 
                                     isPure = pur,
                                     doc=Nothing}
     }
@@ -1225,7 +1225,7 @@ typedef:
     | TYPE CONID dvars '=' sigma { \t\i\vs\_\r -> TypDcl {pos=yyline i, 
                                                             vis=Public, 
                                                             name=Token.value i, 
-                                                            vars=vs,
+                                                            vars=vs, 
                                                             typ = r, 
                                                             doc=Nothing}}
     ;
