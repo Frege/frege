@@ -199,8 +199,8 @@ The awesome QuickCheck library for advanced unit testing comes bundled with the 
 Related Projects
 ----------------
 
-* [Hoogle for Frege](http://hoogle.haskell.org:8081/), a Frege API search engine, by Neil Mitchell and Marimuthu Madasamy
-* The REPL projects, consisting of [core JSR 223 scripting support](https://github.com/Frege/frege-interpreter), [interface for the command-line](https://github.com/Frege/frege-repl) and [online REPL (currently disabled since we have to move the server)](https://github.com/Frege/try-frege), all written and maintained by Marimuthu Madasamy, and the [FregeFX REPL](https://github.com/Dierk/frepl-gui/blob/master/README.adoc) with a JavaFX view by Dierk König
+* [Hoogle for Frege (currently disabled due to domain issues)](http://hoogle.haskell.org:8081/), a Frege API search engine, by Neil Mitchell and Marimuthu Madasamy
+* The REPL projects, consisting of [core JSR 223 scripting support](https://github.com/Frege/frege-interpreter), [interface for the command-line](https://github.com/Frege/frege-repl) and [online REPL](http://86.119.37.112:9999), all written and maintained by Marimuthu Madasamy, and the [FregeFX REPL](https://github.com/Dierk/frepl-gui/blob/master/README.adoc) with a JavaFX view by Dierk König
 * Support for [web applications and web services](https://github.com/Frege/frege/wiki/Frege-for-Web-Applications) 
 * [Maven Compiler Plugin for the Frege language](https://github.com/Frege/frege-maven-plugin), by Mark Derricut 
 * [Frege compiler/library as an OSGi bundle](https://github.com/talios/frege-bundle), by Mark Derricut 
