@@ -44,7 +44,7 @@ JAVA     = java -Dfrege.javac=internal
 CP       = cp -pf
 RM       = rm -rf
 MKDIR    = mkdir -p
-TIME     = time -f "%E %Mk"       
+TIME     = time
 TIMEPROG = `which gtime || which time || false`
 FREGE    = $(TIME) $(JAVA) -Xss4m -Xmx2222m -cp $(BUILD)
 
