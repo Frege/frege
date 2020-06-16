@@ -25,7 +25,7 @@ while ($n < 27) {
     print J <<'LIZENZ';
 /* «•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»«•»
 
-    Copyright © 2011, Ingo Wechsung
+    Copyright © 2011 - 2020, Ingo Wechsung
     All rights reserved.
 
     Redistribution and use in source and binary forms, with or

@@ -300,7 +300,7 @@ API Docs
 Copyright and License
 ---------------------
 
-Copyright (c) Ingo Wechsung, 2011-2016. All rights reserved.
+Copyright (c) Ingo Wechsung, 2011-2020. All rights reserved.
 The use and distribution terms for this software are covered by the
 [BSD 3-clause license](http://opensource.org/licenses/BSD-3-Clause)
 which can be found in the file LICENSE.txt at the root of this distribution.
