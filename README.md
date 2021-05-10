@@ -190,7 +190,8 @@ being there for good reason.
 
 See the [Getting Started](https://github.com/Frege/frege/wiki/Getting-Started) page for 
 getting started at the command-line or read the [Eclipse plugin](https://github.com/Frege/eclipse-plugin) page.
-You can develop [Frege inside Intellij IDEA](https://github.com/Frege/frege/wiki/Using-Frege-in-Intellij-IDEA)
+You can develop [Frege inside Intellij IDEA](https://github.com/Frege/frege/wiki/Using-Frege-in-Intellij-IDEA) with an
+Intellj IDEA plugin being under [active development](https://github.com/psurkov/intellij-frege)
 and there is build automation support for
 Maven, Gradle, Leiningen, SBT, and Bazel.
 
