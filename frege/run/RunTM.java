@@ -3,7 +3,7 @@
  */
 
 /*
-    Copyright © 2011 - 2020, Ingo Wechsung
+    Copyright © 2011 - 2021, Ingo Wechsung
  
     All rights reserved.
  
