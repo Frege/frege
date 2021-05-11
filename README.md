@@ -62,14 +62,14 @@ Much can be achieved in Frege in one line of code and here is an example that yo
 
     [ (x,y,z) | x <- [1..10], y <- [x..10], z <- [x..10], x*x + y*y == z*z ]
     
-After execution you should see a list of triples containing the solutions `(3, 4, 5)` and `(6, 8, 10)`. 
+After execution, you should see a list of triples containing the solutions `(3, 4, 5)` and `(6, 8, 10)`. 
     
 Such a comprehension reads almost like an SQL statement: 
 * _select_ the triple `(x,y,z)`
 * with `x` drawn _from_ the list of `1` to `10`, `y` from `x` to `10`, and `z` from `x` to `10`
 * _where_ `x*x + y*y == z*z`
 
-> There are much more elegant and efficient ways to calculate the triples but those are a bit less obvious.
+> There are much more elegant and efficient ways to calculate the triples, but those are a bit less obvious.
 
 **3. No mutable state**
 
@@ -89,14 +89,14 @@ cosines = iterate cos 1.0
 pairsOf xs = zip xs (tail xs)
 head [ x | (x,y) <- pairsOf cosines, x == y] 
 ```
-After execution it should show you the value
+After execution, it should show you the value
 
      0.7390851332151607
 
-The code is most likely incomprehensible for a Frege/Haskell newcomer at first but it becomes
+The code is most likely incomprehensible for a Frege/Haskell newcomer at first, but it becomes
 less intimidating once you know the parts. With a bit of experience, you may even find it
 clear and obvious.
-* Again, we have a list comprehension. We get a list of `x` values but we only need the first element, the `head`.
+* Again, we have a list comprehension. We get a list of `x` values, but we only need the first element, the `head`.
 * The `x` comes from an `(x,y)` pair where `x == y`.
 * The `(x,y)` pair is drawn from a list of pairs of cosine values.
 * The `cosines` are an _infinite_ list of values that starts with `1.0` and then `iterate`s to `cos(1.0)`, `cos(cos(1.0))`, `cos(cos(cos(1.0)))`, and so forth.
@@ -184,7 +184,7 @@ A number of tools are **written in Frege**:
 
 This should speak for itself regarding stability, functional completeness and performance of the language.
 
-The documentation is provisional and the library supports almost all of the Haskell 2010 standard library
+The documentation is provisional, and the library supports almost all of the Haskell 2010 standard library
 with the remaining [known differences](https://github.com/Frege/frege/wiki/Differences-between-Frege-and-Haskell)
 being there for good reason.
 
@@ -222,7 +222,7 @@ If you are interested in contributing, here are some hot topics:
 
 * Write Frege code to support more of the Java API.
 * Port Haskell [libraries](https://github.com/Frege/frege/wiki/Libraries) or tools.
-* Open issues in the issues tracker if you find bugs, errors in documentation, etc.
+* Open issues in the issue tracker if you find bugs, errors in documentation, etc.
 * [Open issues](https://github.com/Frege/frege-gradle-plugin/issues) in the tooling like [this one](https://github.com/Frege/frege-gradle-plugin/issues/41)
 * Help make Frege popular by writing code for projects like [Rosetta Code](http://rosettacode.org/wiki/Rosetta_Code), or [PLEAC](http://pleac.sourceforge.net).
 * Contribute to the related projects mentioned above, or make your own.
