@@ -100,7 +100,7 @@ clear and obvious.
 * The `x` comes from an `(x,y)` pair where `x == y`.
 * The `(x,y)` pair is drawn from a list of pairs of cosine values.
 * The `cosines` are an _infinite_ list of values that starts with `1.0` and then `iterate`s to `cos(1.0)`, `cos(cos(1.0))`, `cos(cos(cos(1.0)))`, and so forth.
-* Please note that the `=` signs do _not_ denote assignment but a definition. There are no assignment in Frege!
+* Please note that the `=` signs do _not_ denote an assignment but a definition. There are no assignments in Frege!
 * The `pairsOf` function works on any list of values to create pairs of any adjacent values.
 It uses `zip`, which is an often-used construction for this task, but the details are not relevant here.
 
@@ -140,7 +140,7 @@ many (free) books, publications, tutorials, online courses, and considerable ind
 
 Frege gives you the opportunity to **use your skills on the JVM**.
 Most idiomatic Haskell code will run in Frege unmodified or with only minimal, obvious adaptations.
-Even more important: you can bring your purely functional problem solution strategies to your Java projects.
+Even more important: you can bring your purely functional solution strategies to your Java projects.
 
 From now on you can also enjoy on the JVM:
 * the terse Haskell syntax
@@ -170,7 +170,7 @@ Just click the audio symbol in the left (german) part.
 Project State
 -------------
 
-The compiler, an Eclipse plugin and a provisional version of the documentation can be [downloaded](https://github.com/Frege/frege/releases). 
+The compiler, an Eclipse plugin, and a provisional version of the documentation can be [downloaded](https://github.com/Frege/frege/releases). 
 Note that Frege requires at least JDK 7 to compile and run programs.
 
 A number of tools are **written in Frege**:
