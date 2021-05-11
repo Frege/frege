@@ -58,7 +58,7 @@ Since the purity information is carried through the **type system**, the compile
 **2. Expressive code**
 
 Much can be achieved in Frege in one line of code and here is an example that you can paste into the
-[Online REPL](http://try.frege-lang.org/). It calculates [pythagorean triples](https://en.wikipedia.org/wiki/Pythagorean_triple) below `10` with the help of a list comprehension:
+[Online REPL](http://try.fregelang.org/). It calculates [pythagorean triples](https://en.wikipedia.org/wiki/Pythagorean_triple) below `10` with the help of a list comprehension:
 
     [ (x,y,z) | x <- [1..10], y <- [x..10], z <- [x..10], x*x + y*y == z*z ]
     
@@ -177,7 +177,7 @@ A number of tools are **written in Frege**:
 * the Frege compiler itself,
 * the Frege [standard library]( http://www.frege-lang.org/doc/frege/Prelude.html),
 * the Frege [command-line REPL](https://github.com/Frege/frege-repl),
-* the Frege web-based, full-stack [interactive online REPL (currently disabled since we have to move the server)](http://try.frege-lang.org/),
+* the Frege web-based, full-stack [interactive online REPL](http://try.fregelang.org/),
 * the [FregeFX REPL](https://github.com/Dierk/frepl-gui/blob/master/README.adoc) - a JavaFX view on the REPL,
 * the Frege [Eclipse plugin](https://github.com/Frege/eclipse-plugin), 
 * and the documentation tool.
@@ -201,7 +201,7 @@ Related Projects
 ----------------
 
 * [Hoogle for Frege (currently disabled due to domain issues)](http://hoogle.haskell.org:8081/), a Frege API search engine, by Neil Mitchell and Marimuthu Madasamy
-* The REPL projects, consisting of [core JSR 223 scripting support](https://github.com/Frege/frege-interpreter), [interface for the command-line](https://github.com/Frege/frege-repl) and [online REPL](http://86.119.37.112:9999), all written and maintained by Marimuthu Madasamy, and the [FregeFX REPL](https://github.com/Dierk/frepl-gui/blob/master/README.adoc) with a JavaFX view by Dierk König
+* The REPL projects, consisting of [core JSR 223 scripting support](https://github.com/Frege/frege-interpreter), [interface for the command-line](https://github.com/Frege/frege-repl) and [online REPL](http://try.fregelang.org), all written and maintained by Marimuthu Madasamy, and the [FregeFX REPL](https://github.com/Dierk/frepl-gui/blob/master/README.adoc) with a JavaFX view by Dierk König
 * Support for [web applications and web services](https://github.com/Frege/frege/wiki/Frege-for-Web-Applications) 
 * [Maven Compiler Plugin for the Frege language](https://github.com/Frege/frege-maven-plugin), by Mark Derricut 
 * [Frege compiler/library as an OSGi bundle](https://github.com/talios/frege-bundle), by Mark Derricut 
