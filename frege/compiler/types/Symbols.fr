@@ -3,6 +3,7 @@ module frege.compiler.types.Symbols where
 
 import  frege.data.TreeMap as TM(TreeMap, each, values)
 import  frege.control.monad.State
+import  frege.compiler.common.Lens (preview)
 import  frege.compiler.enums.RFlag(RState, RFlag)
 import  frege.compiler.types.Positions
 import  frege.compiler.types.Strictness
@@ -20,74 +21,443 @@ import  frege.compiler.enums.TokenID
 --- A delayed expressions that will be build on demand.
 type ExprD a = State a Expr
 
+--- data type
+data SymT global = !SymT
+  { sid::Int, pos::Position, vis::Visibility, doc::Maybe String, name::QName,
+    kind::Kind, typ::Sigma, env::TreeMap String (SymbolT global), nativ::Maybe String,
+    gargs::[TVar QName]   --- generic arguments of a native type
+    product::Bool  --- indicate product type 
+    enum::Bool     --- indicates enumeration type 
+    pur::Bool      --- indicates *pure native* types
+    newt::Bool     --- indicates *newtype*
+  }
+
+--- alias name
+data SymL global = !SymL
+  { sid::Int, pos::Position, vis::Visibility, name::QName, alias::QName }
+
+--- data constructor
+data SymD global = !SymD
+  { sid::Int, pos::Position, vis::Visibility, doc::Maybe String, name::QName,
+    cid::Int   --- constructor number
+    typ::Sigma, flds::[ConField QName],
+    strsig :: Strictness,
+    op :: TokenID                  --- how to use as operator 
+  }
+
+--- class
+data SymC global = !SymC
+  { sid::Int, pos::Position, vis::Visibility, doc::Maybe String, name::QName,
+    clvar::TVar QName, supers::[QName], insts::[(QName, QName)],
+    meth::TreeMap String (SymMeth global)
+  }
+
+--- instance
+data SymI global = !SymI
+  { sid::Int, pos::Position, vis::Visibility, doc::Maybe String, name ::QName,
+    clas::QName, typ::Sigma,
+    meth::TreeMap String (SymMeth global)
+  }
+
+--- variable or function
+data SymV global = !SymV
+  { sid::Int, pos::Position, vis::Visibility, doc::Maybe String, name ::QName,
+    typ::Sigma,
+    --- For imported expressions, we will make them on demand 
+    expr::Maybe (ExprD global),
+    nativ::Maybe String,
+    pur::Bool, anno::Bool, exported::Bool, state::SymState,
+    strsig :: Strictness, depth :: Int, rkind :: RState,
+    throwing :: [Tau]  --- list of exceptions thrown
+    over :: [QName ]   --- list of overloaded members, if any
+    gargs::[TVar QName]--- generic arguments that must be used on the method
+    op   :: TokenID    --- how to use as operator
+  }
+  where
+  -- functions for querying the field 'Symbol.rkind'
+  --- Check certain bit in 'Symbol.rkind'
+  has :: SymV a -> RFlag -> Bool
+  has sym bit = bit RState.`member` sym.rkind
+  --- Check if this is 'RMethod'
+  isMethod sym = has sym RMethod
+  gExpr SymV{expr} g = fmap (\x -> evalState x g) expr
+
+--- type alias
+data SymA global = !SymA
+  { sid::Int, pos::Position, vis::Visibility, doc::Maybe String, name ::QName,
+    kind::Kind, typ::Sigma, vars::[TVar QName]
+  }
+
+--- generalized value
+--- variable, function, or data constructor
+data SymVal global
+    = protected !D (SymD global)
+    | protected !V (SymV global)
+    where
+    toSymbol :: SymVal g -> SymbolT g
+    toSymbol (D s) = SymbolT.D s
+    toSymbol (V s) = SymbolT.V s
+    fromSymbol :: SymbolT g -> Maybe (SymVal g)
+    fromSymbol (SymbolT.D s) = Just (D s)
+    fromSymbol (SymbolT.V s) = Just (V s)
+    fromSymbol _ = Nothing
+
+    name :: SymVal g -> QName
+    name (D s) = s.name
+    name (V s) = s.name
+    op :: SymVal g -> TokenID
+    op (D s) = s.op
+    op (V s) = s.op
+    pos :: SymVal g -> Position
+    pos (D s) = s.pos
+    pos (V s) = s.pos
+    sid :: SymVal g -> Int
+    sid (D s) = s.sid
+    sid (V s) = s.sid
+    strsig :: SymVal g -> Strictness
+    strsig (D s) = s.strsig
+    strsig (V s) = s.strsig
+    typ :: SymVal g -> Sigma
+    typ (D s) = s.typ
+    typ (V s) = s.typ
+
+    -- _name :: Lens' (SymVal g) QName
+    _name :: Functor f => (QName -> f QName) -> SymVal g -> f (SymVal g)
+    _name f (D s) = (\name -> D s.{name}) <$> f s.name
+    _name f (V s) = (\name -> V s.{name}) <$> f s.name
+    -- _op :: Lens' (SymVal g) TokenID
+    _op :: Functor f => (TokenID -> f TokenID) -> SymVal g -> f (SymVal g)
+    _op f (D s) = (\op -> D s.{op}) <$> f s.op
+    _op f (V s) = (\op -> V s.{op}) <$> f s.op
+    -- _pos :: Lens' (SymVal g) Position
+    _pos :: Functor f => (Position -> f Position) -> SymVal g -> f (SymVal g)
+    _pos f (D s) = (\pos -> D s.{pos}) <$> f s.pos
+    _pos f (V s) = (\pos -> V s.{pos}) <$> f s.pos
+    -- _sid :: Lens' (SymVal g) Int
+    _sid :: Functor f => (Int -> f Int) -> SymVal g -> f (SymVal g)
+    _sid f (D s) = (\sid -> D s.{sid}) <$> f s.sid
+    _sid f (V s) = (\sid -> V s.{sid}) <$> f s.sid
+    -- _strsig :: Lens' (SymVal g) Strictness
+    _strsig :: Functor f => (Strictness -> f Strictness) -> SymVal g -> f (SymVal g)
+    _strsig f (D s) = (\strsig -> D s.{strsig}) <$> f s.strsig
+    _strsig f (V s) = (\strsig -> V s.{strsig}) <$> f s.strsig
+    -- _typ :: Lens' (SymVal g) Sigma
+    _typ :: Functor f => (Sigma -> f Sigma) -> SymVal g -> f (SymVal g)
+    _typ f (D s) = (\typ -> D s.{typ}) <$> f s.typ
+    _typ f (V s) = (\typ -> V s.{typ}) <$> f s.typ
+
+--- the type of 'SymI.env'
+--- method of a class
+data SymMeth global
+    = --- inherited by super classes
+      protected !L (SymL global)
+    | --- ordinary members (methods)
+      protected !V (SymV global)
+    where
+    toSymbol :: SymMeth g -> SymbolT g
+    toSymbol (L s) = SymbolT.L s
+    toSymbol (V s) = SymbolT.V s
+    fromSymbol :: SymbolT g -> Maybe (SymMeth g)
+    fromSymbol (SymbolT.L s) = Just (L s)
+    fromSymbol (SymbolT.V s) = Just (V s)
+    fromSymbol _ = Nothing
+
+    name :: SymMeth g -> QName
+    name (L s) = s.name
+    name (V s) = s.name
+    pos :: SymMeth g -> Position
+    pos (L s) = s.pos
+    pos (V s) = s.pos
+
+    -- _name :: Lens' (SymMeth g) QName
+    _name :: Functor f => (QName -> f QName) -> SymMeth g -> f (SymMeth g)
+    _name f (L s) = (\name -> L s.{name}) <$> f s.name
+    _name f (V s) = (\name -> V s.{name}) <$> f s.name
+    -- _pos :: Lens' (SymMeth g) Position
+    _pos :: Functor f => (Position -> f Position) -> SymMeth g -> f (SymMeth g)
+    _pos f (L s) = (\pos -> L s.{pos}) <$> f s.pos
+    _pos f (V s) = (\pos -> V s.{pos}) <$> f s.pos
+
+    -- _L :: Traversal' (SymMeth g) (SymL g)
+    _L :: Applicative f => (SymL g -> f (SymL g)) -> SymMeth g -> f (SymMeth g)
+    _L f (L s) = L <$> f s
+    _L _ s = pure s
+    -- _V :: Traversal' (SymMeth g) (SymV g)
+    _V :: Applicative f => (SymV g -> f (SymV g)) -> SymMeth g -> f (SymMeth g)
+    _V f (V s) = V <$> f s
+    _V _ s = pure s
 
 {--
     The information stored in the 'Symtab' nodes.
     -}
 data SymbolT global =
-        !SymT    {sid::Int, pos::Position, vis::Visibility, doc::Maybe String, name::QName,
-                 kind::Kind, typ::Sigma, env::TreeMap String (SymbolT global), nativ::Maybe String,
-                 gargs::[Tau]   --- generic arguments of a native type
-                 product::Bool  --- indicate product type 
-                 enum::Bool     --- indicates enumeration type 
-                 pur::Bool      --- indicates *pure native* types
-                 newt::Bool     --- indicates *newtype*
-                }  --- data type
-        | !SymL  {sid::Int, pos::Position, vis::Visibility, name::QName,
-                 alias::QName}                                      --- alias name
-        | !SymD  {sid::Int, pos::Position, vis::Visibility, doc::Maybe String, name::QName,
-                 cid::Int   --- constructor number
-                 typ::Sigma, flds::[ConField QName],
-                 strsig :: Strictness,
-                 op :: TokenID                  --- how to use as operator 
-                }                             --- data constructor
-        | !SymC  {sid::Int, pos::Position, vis::Visibility, doc::Maybe String, name::QName,
-                 tau::Tau, supers::[QName], insts::[(QName, QName)],
-                 env::TreeMap String (SymbolT global)}                         --- class
-        | !SymI  {sid::Int, pos::Position, vis::Visibility, doc::Maybe String, name ::QName,
-                 clas::QName, typ::Sigma, 
-                 env::TreeMap String (SymbolT global)}              --- instance
-        | !SymV  {sid::Int, pos::Position, vis::Visibility, doc::Maybe String, name ::QName,
-                 typ::Sigma,
-                 --- For imported expressions, we will make them on demand 
-                 expr::Maybe (ExprD global), 
-                 nativ::Maybe String, 
-                 pur::Bool, anno::Bool, exported::Bool, state::SymState,
-                 strsig :: Strictness, depth :: Int, rkind :: RState,
-                 throwing :: [Tau]  --- list of exceptions thrown
-                 over :: [QName ]   --- list of overloaded members, if any
-                 gargs::[Tau]       --- generic arguments that must be used on the method
-                 op   :: TokenID    --- how to use as operator
-                } --- variable or function
-        | !SymA  {sid::Int, pos::Position, vis::Visibility, doc::Maybe String, name ::QName,
-                 kind::Kind, typ::Sigma, vars::[Tau]}                           --- type alias
+          protected !T (SymT global) --- data type
+        | protected !L (SymL global) --- alias name
+        | protected !D (SymD global) --- data constructor
+        | protected !C (SymC global) --- class
+        | protected !I (SymI global) --- instance
+        | protected !V (SymV global) --- variable or function
+        | protected !A (SymA global) --- type alias
     where
+        hashCode :: SymbolT global -> Int
         hashCode = SymbolT.sid
-        gExpr SymV{expr=Just x} g = Just (evalState x g)
-        gExpr _                 _ = Nothing
-        -- functions for querying the field 'Symbol.rkind'
-        --- Check certain bit in 'Symbol.rkind'
-        has ∷ SymbolT a → RFlag → Bool
-        has sym bit = bit RState.`member` sym.rkind
-        --- Check if this is 'RMethod'
-        isMethod sym = has sym RMethod
+
+        name :: SymbolT g -> QName
+        name (T s) = s.name
+        name (L s) = s.name
+        name (D s) = s.name
+        name (C s) = s.name
+        name (I s) = s.name
+        name (V s) = s.name
+        name (A s) = s.name
+        pos :: SymbolT g -> Position
+        pos (T s) = s.pos
+        pos (L s) = s.pos
+        pos (D s) = s.pos
+        pos (C s) = s.pos
+        pos (I s) = s.pos
+        pos (V s) = s.pos
+        pos (A s) = s.pos
+        sid :: SymbolT g -> Int
+        sid (T s) = s.sid
+        sid (L s) = s.sid
+        sid (D s) = s.sid
+        sid (C s) = s.sid
+        sid (I s) = s.sid
+        sid (V s) = s.sid
+        sid (A s) = s.sid
+        vis :: SymbolT g -> Visibility
+        vis (T s) = s.vis
+        vis (L s) = s.vis
+        vis (D s) = s.vis
+        vis (C s) = s.vis
+        vis (I s) = s.vis
+        vis (V s) = s.vis
+        vis (A s) = s.vis
+
+        -- _doc :: Traversal' (SymbolT g) (Maybe String)
+        _doc :: Applicative f => (Maybe String -> f (Maybe String)) -> SymbolT g -> f (SymbolT g)
+        _doc f (T s) = (\doc -> T s.{doc}) <$> f s.doc
+        _doc _ (sym@(L _)) = pure sym
+        _doc f (D s) = (\doc -> D s.{doc}) <$> f s.doc
+        _doc f (C s) = (\doc -> C s.{doc}) <$> f s.doc
+        _doc f (I s) = (\doc -> I s.{doc}) <$> f s.doc
+        _doc f (V s) = (\doc -> V s.{doc}) <$> f s.doc
+        _doc f (A s) = (\doc -> A s.{doc}) <$> f s.doc
+        -- _kind :: Traversal' (SymbolT g) Kind
+        _kind :: Applicative f => (Kind -> f Kind) -> SymbolT g -> f (SymbolT g)
+        _kind f (T s) = (\kind -> T s.{kind}) <$> f s.kind
+        _kind _ (sym@(L _)) = pure sym
+        _kind _ (sym@(D _)) = pure sym
+        _kind _ (sym@(C _)) = pure sym
+        _kind _ (sym@(I _)) = pure sym
+        _kind _ (sym@(V _)) = pure sym
+        _kind f (A s) = (\kind -> A s.{kind}) <$> f s.kind
+        -- _meth :: Traversal' (SymbolT g) (TreeMap String (SymMeth g))
+        _meth :: Applicative f => (TreeMap String (SymMeth g) -> f (TreeMap String (SymMeth g))) -> SymbolT g -> f (SymbolT g)
+        _meth _ (sym@(T _)) = pure sym
+        _meth _ (sym@(L _)) = pure sym
+        _meth _ (sym@(D _)) = pure sym
+        _meth f (C s) = (\meth -> C s.{meth}) <$> f s.meth
+        _meth f (I s) = (\meth -> I s.{meth}) <$> f s.meth
+        _meth _ (sym@(V _)) = pure sym
+        _meth _ (sym@(A _)) = pure sym
+        -- _name :: Lens' (SymbolT g) QName
+        _name :: Functor f => (QName -> f QName) -> SymbolT g -> f (SymbolT g)
+        _name f (T s) = (\name -> T s.{name}) <$> f s.name
+        _name f (L s) = (\name -> L s.{name}) <$> f s.name
+        _name f (D s) = (\name -> D s.{name}) <$> f s.name
+        _name f (C s) = (\name -> C s.{name}) <$> f s.name
+        _name f (I s) = (\name -> I s.{name}) <$> f s.name
+        _name f (V s) = (\name -> V s.{name}) <$> f s.name
+        _name f (A s) = (\name -> A s.{name}) <$> f s.name
+        -- _nativ :: Traversal' (SymbolT g) (Maybe String)
+        _nativ :: Applicative f => (Maybe String -> f (Maybe String)) -> SymbolT g -> f (SymbolT g)
+        _nativ f (T s) = (\nativ -> T s.{nativ}) <$> f s.nativ
+        _nativ _ (sym@(L _)) = pure sym
+        _nativ _ (sym@(D _)) = pure sym
+        _nativ _ (sym@(C _)) = pure sym
+        _nativ _ (sym@(I _)) = pure sym
+        _nativ f (V s) = (\nativ -> V s.{nativ}) <$> f s.nativ
+        _nativ _ (sym@(A _)) = pure sym
+        -- _op :: Traversal' (SymbolT g) TokenID
+        _op :: Applicative f => (TokenID -> f TokenID) -> SymbolT g -> f (SymbolT g)
+        _op _ (sym@(T _)) = pure sym
+        _op _ (sym@(L _)) = pure sym
+        _op f (D s) = (\op -> D s.{op}) <$> f s.op
+        _op _ (sym@(C _)) = pure sym
+        _op _ (sym@(I _)) = pure sym
+        _op f (V s) = (\op -> V s.{op}) <$> f s.op
+        _op _ (sym@(A _)) = pure sym
+        -- _pos :: Lens' (SymbolT g) Position
+        _pos :: Functor f => (Position -> f Position) -> SymbolT g -> f (SymbolT g)
+        _pos f (T s) = (\pos -> T s.{pos}) <$> f s.pos
+        _pos f (L s) = (\pos -> L s.{pos}) <$> f s.pos
+        _pos f (D s) = (\pos -> D s.{pos}) <$> f s.pos
+        _pos f (C s) = (\pos -> C s.{pos}) <$> f s.pos
+        _pos f (I s) = (\pos -> I s.{pos}) <$> f s.pos
+        _pos f (V s) = (\pos -> V s.{pos}) <$> f s.pos
+        _pos f (A s) = (\pos -> A s.{pos}) <$> f s.pos
+        -- _pur :: Traversal' (SymbolT g) Bool
+        _pur :: Applicative f => (Bool -> f Bool) -> SymbolT g -> f (SymbolT g)
+        _pur f (T s) = (\pur -> T s.{pur}) <$> f s.pur
+        _pur _ (sym@(L _)) = pure sym
+        _pur _ (sym@(D _)) = pure sym
+        _pur _ (sym@(C _)) = pure sym
+        _pur _ (sym@(I _)) = pure sym
+        _pur f (V s) = (\pur -> V s.{pur}) <$> f s.pur
+        _pur _ (sym@(A _)) = pure sym
+        -- _sid :: Lens' (SymbolT g) Int
+        _sid :: Functor f => (Int -> f Int) -> SymbolT g -> f (SymbolT g)
+        _sid f (T s) = (\sid -> T s.{sid}) <$> f s.sid
+        _sid f (L s) = (\sid -> L s.{sid}) <$> f s.sid
+        _sid f (D s) = (\sid -> D s.{sid}) <$> f s.sid
+        _sid f (C s) = (\sid -> C s.{sid}) <$> f s.sid
+        _sid f (I s) = (\sid -> I s.{sid}) <$> f s.sid
+        _sid f (V s) = (\sid -> V s.{sid}) <$> f s.sid
+        _sid f (A s) = (\sid -> A s.{sid}) <$> f s.sid
+        -- _strsig :: Traversal' (SymbolT g) Strictness
+        _strsig :: Applicative f => (Strictness -> f Strictness) -> SymbolT g -> f (SymbolT g)
+        _strsig _ (sym@(T _)) = pure sym
+        _strsig _ (sym@(L _)) = pure sym
+        _strsig f (D s) = (\strsig -> D s.{strsig}) <$> f s.strsig
+        _strsig _ (sym@(C _)) = pure sym
+        _strsig _ (sym@(I _)) = pure sym
+        _strsig f (V s) = (\strsig -> V s.{strsig}) <$> f s.strsig
+        _strsig _ (sym@(A _)) = pure sym
+        -- _typ :: Traversal' (SymbolT g) Sigma
+        _typ :: Applicative f => (Sigma -> f Sigma) -> SymbolT g -> f (SymbolT g)
+        _typ f (T s) = (\typ -> T s.{typ}) <$> f s.typ
+        _typ _ (sym@(L _)) = pure sym
+        _typ f (D s) = (\typ -> D s.{typ}) <$> f s.typ
+        _typ _ (sym@(C _)) = pure sym
+        _typ f (I s) = (\typ -> I s.{typ}) <$> f s.typ
+        _typ f (V s) = (\typ -> V s.{typ}) <$> f s.typ
+        _typ f (A s) = (\typ -> A s.{typ}) <$> f s.typ
+        -- _vis :: Lens' (SymbolT g) Visibility
+        _vis :: Functor f => (Visibility -> f Visibility) -> SymbolT g -> f (SymbolT g)
+        _vis f (T s) = (\vis -> T s.{vis}) <$> f s.vis
+        _vis f (L s) = (\vis -> L s.{vis}) <$> f s.vis
+        _vis f (D s) = (\vis -> D s.{vis}) <$> f s.vis
+        _vis f (C s) = (\vis -> C s.{vis}) <$> f s.vis
+        _vis f (I s) = (\vis -> I s.{vis}) <$> f s.vis
+        _vis f (V s) = (\vis -> V s.{vis}) <$> f s.vis
+        _vis f (A s) = (\vis -> A s.{vis}) <$> f s.vis
+
+        --- a generalized read-only view of 'env'
+        env' :: SymbolT g -> Maybe (TreeMap String (SymbolT g))
+        env' (T s) = Just s.env
+        env' s = fmap (fmap SymMeth.toSymbol) $ preview _meth s
+        -- TODO add for performance?
+        -- envValues' :: SymbolT g -> Maybe [SymbolT g]
+
+        -- _T :: Traversal' (SymbolT g) (SymT g)
+        _T :: Applicative f => (SymT g -> f (SymT g)) -> SymbolT g -> f (SymbolT g)
+        _T f (T s) = T <$> f s
+        _T _ s = pure s
+        -- _L :: Traversal' (SymbolT g) (SymL g)
+        _L :: Applicative f => (SymL g -> f (SymL g)) -> SymbolT g -> f (SymbolT g)
+        _L f (L s) = L <$> f s
+        _L _ s = pure s
+        -- _D :: Traversal' (SymbolT g) (SymD g)
+        _D :: Applicative f => (SymD g -> f (SymD g)) -> SymbolT g -> f (SymbolT g)
+        _D f (D s) = D <$> f s
+        _D _ s = pure s
+        -- _C :: Traversal' (SymbolT g) (SymC g)
+        _C :: Applicative f => (SymC g -> f (SymC g)) -> SymbolT g -> f (SymbolT g)
+        _C f (C s) = C <$> f s
+        _C _ s = pure s
+        -- _I :: Traversal' (SymbolT g) (SymI g)
+        _I :: Applicative f => (SymI g -> f (SymI g)) -> SymbolT g -> f (SymbolT g)
+        _I f (I s) = I <$> f s
+        _I _ s = pure s
+        -- _V :: Traversal' (SymbolT g) (SymV g)
+        _V :: Applicative f => (SymV g -> f (SymV g)) -> SymbolT g -> f (SymbolT g)
+        _V f (V s) = V <$> f s
+        _V _ s = pure s
+        -- _A :: Traversal' (SymbolT g) (SymA g)
+        _A :: Applicative f => (SymA g -> f (SymA g)) -> SymbolT g -> f (SymbolT g)
+        _A f (A s) = A <$> f s
+        _A _ s = pure s
+
+        -- _Val :: Traversal' (SymbolT g) (SymVal g)
+        _Val :: Applicative f => (SymVal g -> f (SymVal g)) -> SymbolT g -> f (SymbolT g)
+        _Val f s = case SymVal.fromSymbol s of
+            Just sv -> SymVal.toSymbol <$> f sv
+            Nothing -> pure s
+        -- _Meth :: Traversal' (SymbolT g) (SymMeth g)
+        _Meth :: Applicative f => (SymMeth g -> f (SymMeth g)) -> SymbolT g -> f (SymbolT g)
+        _Meth f s = case SymMeth.fromSymbol s of
+            Just sm -> SymMeth.toSymbol <$> f sm
+            Nothing -> pure s
+
+
+
+instance Ord (SymT g) where
+    sym1 <=> sym2 = SymbolT.T sym1 <=> SymbolT.T sym2
+    sym1 ==  sym2 = SymbolT.T sym1 ==  SymbolT.T sym2
+    sym1 !=  sym2 = SymbolT.T sym1 !=  SymbolT.T sym2
+    hashCode = hashCode . SymbolT.T
+instance Ord (SymL g) where
+    sym1 <=> sym2 = SymbolT.L sym1 <=> SymbolT.L sym2
+    sym1 ==  sym2 = SymbolT.L sym1 ==  SymbolT.L sym2
+    sym1 !=  sym2 = SymbolT.L sym1 !=  SymbolT.L sym2
+    hashCode = hashCode . SymbolT.L
+instance Ord (SymD g) where
+    sym1 <=> sym2 = SymbolT.D sym1 <=> SymbolT.D sym2
+    sym1 ==  sym2 = SymbolT.D sym1 ==  SymbolT.D sym2
+    sym1 !=  sym2 = SymbolT.D sym1 !=  SymbolT.D sym2
+    hashCode = hashCode . SymbolT.D
+instance Ord (SymC g) where
+    sym1 <=> sym2 = SymbolT.C sym1 <=> SymbolT.C sym2
+    sym1 ==  sym2 = SymbolT.C sym1 ==  SymbolT.C sym2
+    sym1 !=  sym2 = SymbolT.C sym1 !=  SymbolT.C sym2
+    hashCode = hashCode . SymbolT.C
+instance Ord (SymI g) where
+    sym1 <=> sym2 = SymbolT.I sym1 <=> SymbolT.I sym2
+    sym1 ==  sym2 = SymbolT.I sym1 ==  SymbolT.I sym2
+    sym1 !=  sym2 = SymbolT.I sym1 !=  SymbolT.I sym2
+    hashCode = hashCode . SymbolT.I
+instance Ord (SymV g) where
+    sym1 <=> sym2 = SymbolT.V sym1 <=> SymbolT.V sym2
+    sym1 ==  sym2 = SymbolT.V sym1 ==  SymbolT.V sym2
+    sym1 !=  sym2 = SymbolT.V sym1 !=  SymbolT.V sym2
+    hashCode = hashCode . SymbolT.V
+instance Ord (SymA g) where
+    sym1 <=> sym2 = SymbolT.A sym1 <=> SymbolT.A sym2
+    sym1 ==  sym2 = SymbolT.A sym1 ==  SymbolT.A sym2
+    sym1 !=  sym2 = SymbolT.A sym1 !=  SymbolT.A sym2
+    hashCode = hashCode . SymbolT.A
+
+instance Ord (SymVal g) where
+    sym1 <=> sym2 = sym1.toSymbol <=> sym2.toSymbol
+    sym1 ==  sym2 = sym1.toSymbol ==  sym2.toSymbol
+    sym1 !=  sym2 = sym1.toSymbol !=  sym2.toSymbol
+    hashCode = hashCode . _.toSymbol
+
+instance Ord (SymMeth g) where
+    sym1 <=> sym2 = sym1.toSymbol <=> sym2.toSymbol
+    sym1 ==  sym2 = sym1.toSymbol ==  sym2.toSymbol
+    sym1 !=  sym2 = sym1.toSymbol !=  sym2.toSymbol
+    hashCode = hashCode . _.toSymbol
 
 --- Symbols ordered by the 'Symbol.sid' field, which is a unique number.
 --- This allows us to have sets of symbols.
 instance Ord (SymbolT g) where
-        sym1 <=> sym2 = (SymbolT.sid sym1). <=> (SymbolT.sid sym2)
-        sym1 == sym2  = (SymbolT.sid sym1). ==  (SymbolT.sid sym2)
-        sym1 != sym2  = (SymbolT.sid sym1). !=  (SymbolT.sid sym2)
+        sym1 <=> sym2 = sym1.sid <=> sym2.sid
+        sym1 ==  sym2 = sym1.sid ==  sym2.sid
+        sym1 !=  sym2 = sym1.sid !=  sym2.sid
 
 
+instance Positioned (SymMeth g) where
+    is = is . _.toSymbol
+    getpos = getpos . _.toSymbol
+    getrange = getrange . _.toSymbol
 
 instance Positioned (SymbolT g) where
     is x = ""
     getpos = SymbolT.pos
-    getrange sym
-        | sym.{env?} = fold Position.merge sym.pos (map getrange (values sym.env))
-        -- SymV{expr = Just x} <- sym = sym.pos.merge x.getrange
-        | otherwise = getpos sym
-    -- untyped = id
-
-
+    getrange sym =
+        case sym.env' of
+            Just env -> fold Position.merge sym.pos (map getrange (values env))
+            Nothing -> getpos sym
