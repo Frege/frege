@@ -1,0 +1,275 @@
+{--
+    Example module to show the use of producer-consumer piping by putting it in various contexts like
+    file, url, and command line processing but also pure in-memory operations.
+-}
+
+module examples.LineProducerConsumer where
+
+import Control.pipe.Producer (produce, endWith, Producer, runProducer )
+import Control.pipe.Consumer (consume,  Consumer, runConsumer )
+import Control.monad.trans.MonadTrans (MonadTrans (lift))
+import Control.pipe.Pipe (pipe2)
+import Java.IO (openReader)
+import Java.Net (URL, MalformedURLException)
+
+
+prepareTestFile :: IO File
+prepareTestFile = do
+        testFile = File.new "TestFile.txt"
+        println "\n----------------------------------------"
+        println "general file handling"
+        -- delete test file if it already existed
+        result <- testFile.delete
+        println $ "Test file deleted to clean up before start: " ++ show result
+        println "create test file with three lines"
+        writeFile testFile.getPath $ unlines ["first line","second line","third line"]
+        result <- testFile.exists
+        println $ "File now exists: " ++ show result
+        println "read test file in toto"
+        content <- readFile testFile.getPath
+        println "file content was:"
+        println content
+        println "append 2 lines to show that we can write"
+        appendFile testFile.getPath $ unlines ["fourth line","fifth line"]
+        return testFile
+
+-- Basic support
+
+--- A producer of Strings (lines) that runs in an (ST s) Monad (usually IO) and returns no result.
+--- Used with many Reader types that a BufferedReader can decorate.
+produceLinesFromBufferedReader :: Mutable s BufferedReader -> Producer String (ST s) ()
+produceLinesFromBufferedReader bufferedReader = do
+    maybeLine <- lift $ bufferedReader.readLine             -- lift into the Producer context monad
+                        `catch` \(e :: IOException) -> return Nothing
+    case maybeLine of
+      Just line -> do                                       -- successful read
+          produce line                                      --   produce the line, yield to consumer if any
+          produceLinesFromBufferedReader bufferedReader     --   proceed with next line
+      Nothing -> do                                         -- no more lines
+          lift $ bufferedReader.close                       --   cleanup
+          endWith ()                                        --   signal end of processing
+
+-- use case 1:
+
+processFileByLines :: String -> IO ()
+processFileByLines filePath = do
+    println "\n----------------------------------------"
+    println "processing a named file line-by-line with a buffered reader, while keeping track of line numbers"
+    (end, count) <- pipe2 (produceLinesFromFilePath filePath) (countAndPrintLinesConsumer 0)
+    println $ "total number of lines: " ++ show count
+    println $ "producer end value is (): " ++ show (end == ())
+
+produceLinesFromFilePath :: String -> Producer String IO ()
+produceLinesFromFilePath filePath = do
+   bufferedReader <- lift $ openReader filePath     -- get a buffered reader in the Producer context, now IO specific
+   produceLinesFromBufferedReader bufferedReader    -- simple delegate, nothing specific to do
+
+countAndPrintLinesConsumer :: Show a => Int -> Consumer (Maybe a) IO Int
+countAndPrintLinesConsumer count = do
+    maybeLine <- consume                                            -- try to consume
+    case maybeLine of
+      Just line -> do                                               -- on success
+          lift $ println $ show (count + 1) ++ ": " ++ show line    --   work in the Consumer context monad (IO) and lift
+          countAndPrintLinesConsumer (count + 1)                    --   proceed with next consumption
+      Nothing -> pure count                                         -- on end, return result in Consumer context monad
+
+-- use case 2:
+
+processFileInTotal :: String -> IO ()
+processFileInTotal filePath = do
+    println "\n----------------------------------------"
+    println "processing all lines from a file, adding each line to a list"
+    println "without consumer and pipe, we can run the same producer to get the full result"
+    (list, end) <- runProducer (produceLinesFromFilePath filePath)
+    println $ "total result list: " ++ show list
+    println $ "producer end value is (): " ++ show (end == ())
+
+-- use case 3:
+
+processFirstLineOnly :: String -> IO ()
+processFirstLineOnly filePath = do
+    println "\n----------------------------------------"
+    println "reading only one line (a header for example)"
+    (end, maybeHeader) <- pipe2 (produceLinesFromFilePath filePath) oneLineConsumer
+    case maybeHeader of
+        Just header -> println $ "the header line is: " ++ show header ++ " , ends with: " ++ show end
+        Nothing     -> println $ "The file is empty"
+
+    println "compact Version of processing just one line"
+    (end, maybeHeader) <- pipe2 (produceLinesFromFilePath filePath) (consume >>= pure)
+    case maybeHeader of
+        Just header -> println $ "the header line is: " ++ show header ++ " , ends with: " ++ show end
+        Nothing     -> println $ "The file is empty"
+
+oneLineConsumer :: Show a => Consumer (Maybe a) IO (Maybe a)
+oneLineConsumer = do
+    line <- consume
+    pure line               -- todo dk: how is the file closed ?
+
+-- use case 4:
+
+processStringReader :: IO ()
+processStringReader = do
+    println "\n----------------------------------------"
+    println "processing each line with a non-IO impure reader, here: StringReader. (great for testing)"
+    countST = do
+        (_, count) <- pipe2 (produceLinesFromStringReader) (countLinesConsumer 0)
+        pure count
+    println $ "processing strings with StringReader works as expected: " ++ show (3 == countST.run)
+
+produceLinesFromStringReader :: Producer String (ST s) ()
+produceLinesFromStringReader = do
+    stringReader   <- lift $ StringReader.new "first \n second \n third"
+    bufferedReader <- lift $ BufferedReader.new stringReader
+    produceLinesFromBufferedReader bufferedReader
+
+countLinesConsumer :: Show a => Int -> Consumer (Maybe a) (ST s) Int
+countLinesConsumer count = do
+    mayLine <- consume
+    case mayLine of
+        Just line -> countLinesConsumer (count + 1)
+        Nothing   -> pure count
+
+-- use case 5:
+
+processUrlByLines :: IO ()
+processUrlByLines = do
+    println "\n----------------------------------------"
+    println "reading from a URL: http://google.com"
+    (_, urlLinesCount) <- pipe2 (produceLinesFromUrl "http://google.com") (maxLineCountAndPrintConsumer 4 0)
+    println $ "processing strings from URL works as expected: " ++ show (urlLinesCount == 4)
+
+produceLinesFromUrl :: String -> Producer String IO ()
+produceLinesFromUrl url = do
+   xurl <- lift $ URL.new url
+   uis  <- lift $ URL.openStream xurl
+   isr  <- lift $ InputStreamReader.new uis "UTF-8"
+   bufferedReader <- lift $ BufferedReader.new isr
+   produceLinesFromBufferedReader bufferedReader
+
+maxLineCountAndPrintConsumer :: Show a => Int -> Int -> Consumer (Maybe a) IO Int
+maxLineCountAndPrintConsumer max count | max == count = pure count
+maxLineCountAndPrintConsumer max count | otherwise = do
+    mayLine <- consume
+    case mayLine of
+        Just line -> do
+                     lift $ println $ show (count + 1) ++ ": " ++ show line
+                     maxLineCountAndPrintConsumer max (count + 1)
+        Nothing   -> pure count
+
+-- use case 6:
+
+processGeneratedLines :: IO ()
+processGeneratedLines = do
+    println "\n----------------------------------------"
+    println "stateful processing of generated strings"
+    strGenLineCount =
+      do
+        strGenRef <- Ref.new $ StrGen { line = "", nextLine = (++ "x") }
+        (_, res) <- pipe2 (produceLinesFromStrGenData 4 strGenRef) (countLinesConsumer 0)
+        pure res
+    println $ "processing strings from String Producer works as expected: " ++ show (strGenLineCount.run == 4)
+
+data StrGenData = StrGen {
+    line        :: String,              -- the currently generated line, "onLine" will be called with this
+    nextLine    :: String -> String     -- the generation function for the next line
+}
+
+type StringProducer = Ref StrGenData   -- a mutable reference to the Producer data
+
+produceLinesFromStrGenData :: Int -> Mutable s StringProducer -> Producer String (ST s) ()
+produceLinesFromStrGenData countDown _      | countDown == 0 = pure ()
+produceLinesFromStrGenData countDown strGen | otherwise = do
+    state <- lift $ strGen.get
+    produce state.line
+    lift $ strGen.modify _.{line <- state.nextLine}
+    produceLinesFromStrGenData (countDown - 1) strGen
+
+-- use case 7:
+
+processRawProducersAndConsumers :: IO ()
+processRawProducersAndConsumers = do
+    println "\n----------------------------------------"
+    gen = do
+        produce 1
+        produce 2
+        endWith 42
+    iter = do
+        lift $ print "Enter two numbers: "
+        a <- consume
+        b <- consume
+        lift $ println $ "Sum is " ++ show (a + b)
+    (xs, res) <- runProducer gen
+    println $ show xs ++ " " ++  show res
+    println $ "processing producers and consumers independently without the pipe2 function"
+    runConsumer xs iter
+
+-- use case 8:
+
+processCustomDataType :: IO ()
+processCustomDataType = do
+    println "\n----------------------------------------"
+    (_, _) <- pipe2 personProducer personConsumer
+    println "processing custom data type Person works"
+
+data Person = Person {
+    name        :: String,
+    birthyear   :: Int
+}
+
+personProducer :: Producer Person IO ()
+personProducer = do
+    produce $ Person "Leonard Euler"        1707
+    produce $ Person "Carl Friedrich Gauss" 1777
+    produce $ Person "Gottlob Frege"        1848
+    endWith ()
+
+personConsumer :: Consumer (Maybe Person) IO ()
+personConsumer = do
+    maybePerson <- consume
+    case maybePerson of
+        Just person ->  do
+                      lift $ println $ "Processing " ++ person.name ++ ", " ++ show person.birthyear
+                      personConsumer
+        Nothing      -> pure ()
+
+main :: IO ()
+main =
+  do
+    testFile <- prepareTestFile
+
+    processFileByLines   testFile.getPath
+    processFileInTotal   testFile.getPath
+    processFirstLineOnly testFile.getPath
+
+    processStringReader
+    processUrlByLines
+    processGeneratedLines
+
+    processRawProducersAndConsumers
+    processCustomDataType
+
+    println "FIN"
+
+    cli
+
+cli = do
+    println "command line input (end with empty line)"
+    (end, count) <- pipe2 (produceLinesFromBufferedReader stdin) (cliConsumer 0)
+    println $ "finished processing " ++ show count ++ " lines"
+
+cliConsumer :: Int -> Consumer (Maybe String) IO Int
+cliConsumer count = do
+    mayLine <- consume
+    lift $ println $ "line is" ++ show mayLine
+    case mayLine of
+        Just line ->
+            if (line.length == 0)
+            then do
+                lift $ stdin.close -- todo it is a bummer that we need this
+                pure count
+            else do
+                lift $ println $ show (count + 1) ++ ": " ++ show line
+                cliConsumer (count + 1)
+        Nothing   -> pure count
+
