@@ -76,7 +76,7 @@ Such a comprehension reads almost like an SQL statement:
 Mutable state is the source of many bugs and makes code less modular. 
 Frege allows interesting ways to avoid it.
 That style is very unfamiliar to many developers that come from the imperative world.
-Be brave. It is different but there are a huge benefits to be discovered.
+Be brave. It is different but there are huge benefits to be discovered.
 
 Let's go for a more advanced example where we calculate the fixpoint of the cosine function, i.e. the
 value where [`cos(x) == x`](http://www.wolframalpha.com/input/?i=cos+0.7390851332151607).
