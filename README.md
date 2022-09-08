@@ -179,7 +179,7 @@ A number of tools are **written in Frege**:
 * the Frege [command-line REPL](https://github.com/Frege/frege-repl),
 * the Frege web-based, full-stack [interactive online REPL](http://try.fregelang.org/),
 * the [FregeFX REPL](https://github.com/Dierk/frepl-gui/blob/master/README.adoc) - a JavaFX view on the REPL,
-* the Frege [Eclipse plugin](https://github.com/Frege/eclipse-plugin), 
+* the Frege [Eclipse plugin](https://github.com/Frege/eclipse-plugin), the [VS Code Plugin](https://github.com/Frege/frege/wiki/VS-Code)
 * and the documentation tool.
 
 This should speak for itself regarding stability, functional completeness and performance of the language.
@@ -195,7 +195,7 @@ Intellj IDEA plugin being under [active development](https://github.com/psurkov/
 and there is build automation support for
 Maven, Gradle, Leiningen, SBT, and Bazel.
 
-The awesome QuickCheck library for advanced unit testing comes bundled with the language.
+The documentation tool and the awesome QuickCheck library for advanced unit testing comes bundled with the language.
 
 Related Projects
 ----------------
@@ -301,7 +301,7 @@ API Docs
 Copyright and License
 ---------------------
 
-Copyright (c) Ingo Wechsung, 2011-2021. All rights reserved.
+Copyright (c) Ingo Wechsung, 2011-2022. All rights reserved.
 The use and distribution terms for this software are covered by the
 [BSD 3-clause license](http://opensource.org/licenses/BSD-3-Clause)
 which can be found in the file LICENSE.txt at the root of this distribution.
