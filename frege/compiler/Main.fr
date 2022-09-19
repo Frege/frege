@@ -43,7 +43,7 @@ package frege.compiler.Main
 import  frege.Prelude hiding(<+>)
 import  Lib.PP(msgdoc, text, <+>, <>)
 import  Control.monad.State
-import  Data.TreeMap as TM(TreeMap, each, values, keys, insert, delete)
+import  Data.TreeMap as TM(TreeMap, each, values, keys, insert, delete, filterValues)
 import  Data.List (sort, uniq)
 
 import  frege.Version(version)
@@ -234,7 +234,6 @@ lexparse p = do
         liftIO $ stderr.println ("parsing " ++ p)
     L.pass
     liftStG parsePass
-    printErrors
     gc <- switchState g
     mergeErrors gc
     return gc
@@ -380,7 +379,6 @@ runpass (pass,description) = do
         state <- getSTT
         later <- liftIO $ System.currentTimeMillis()
         when (isOff state.options.flags IDEMODE) printAndClearErrors
-        when (state.errors > 0) (liftIO $ state.printer.close)
         when (length description > 0 && isOn state.options.flags VERBOSE) do
             liftIO $ do  
                 state.stderr.printf
@@ -537,7 +535,9 @@ data Todo =
     }
     | --- failed for some reason like syntax, compiler errors or file not found
     Failed {
-        because     :: String       --- reason for abort, if known
+        because     :: String,       --- reason for abort, if known
+        global      :: Global
+
     }
     | --- no rebuild needed
     NoRebuild {
@@ -634,6 +634,12 @@ complete x           = failed x
 failed Failed{}  = true
 failed Aborted{} = true
 failed _         = false
+
+--- Predicate to tell wheter a 'Todo' has a global
+hasGlobal :: Todo -> Bool
+hasGlobal Compiled{} = true
+hasGlobal Failed{}   = true
+hasGlobal _          = false
  
 {--
     Add dependencies of a parsed module to a 'TodoList' 
@@ -664,8 +670,9 @@ parseAll mvar tree = do
             case todo of
                 Parsed{global} -> return (tree.insert global.thisPack todo)
                 _ -> do
-                    stderr.println (p.raw ++ ": " ++ show todo)
                     return (tree.insert p todo)
+
+
  
 {--
     Make a bunch of source files and/or packages.
@@ -760,6 +767,64 @@ make mvar tree = do
                             ++ show todo)) hanging
             liftIO $ stderr.println "Build failed."
             return false
+            
+makeIDE :: C.MVar (Pack, Todo) -> TodoList -> StIO TodoList
+makeIDE mvar tree = do
+    -- go through the todo list and submit any tasks that can do some work
+    tree <- foldM (makeone mvar) tree (each tree)
+    -- if something was running before or just submitted, wait for an answer
+    if any running (values tree)
+    then do
+        g       ←   getSTT
+        tree    ←   liftIO do
+            -- result <-  mvar.poll
+            (p, todo)   ←   mvar.take
+            when (isOn g.options.flags VERBOSE && successful todo || 
+                failed todo && (isOff g.options.flags IDEMODE)) do
+                    stderr.println (unmagicPack p.raw ++ ": " ++ show todo)
+            case todo of
+                CompileAfterDeps{global} -> do
+                                -- need to add the new dependencies to the todo list
+                                -- also, the package name may have changed
+                                return ((     insert global.thisPack todo
+                                            . delete p 
+                                            . addDepsOf global) 
+                                        tree)
+                Waiting{for, status, todo=prev} -> do
+                    -- module waited for may already have changed state,
+                    -- in that case just resubmit
+                    case tree.lookup for of
+                        Just x | failed x || status x
+                              = return (tree.insert p prev)
+                        sonst = return (tree.insert p todo)
+                _ | failed todo || successful todo
+                              -- awake tasks waiting for this one 
+                              = return (fmap unwait (tree.insert p todo))
+                  | otherwise = return (tree.insert p todo)
+                  where 
+                        unwait Waiting{for, todo} | for == p = todo
+                        unwait x = x
+        makeIDE mvar tree
+    else do                 -- no running tasks found
+        g <- getSTT
+        when (isOff g.options.flags IDEMODE) do 
+            liftIO C.shutdown
+        if all successful (values tree)
+        then do
+            pure $ filterValues (not . hasGlobal) tree
+        else do
+            g <- getSTT
+            -- there should be no tasks that are not either successful or failed
+            -- whenever this outputs something, it is time to reconsider the code
+            when (isOff g.options.flags IDEMODE) do
+                let hanging = filter (not . successful . snd)
+                            . filter (not . failed     . snd)
+                            . each $ tree
+                liftIO $ mapM_ (\(p,todo) -> stderr.println ("hanging: `" 
+                                ++ unmagicPack p.raw ++ "`  "
+                                ++ show todo)) hanging
+                liftIO $ stderr.println "Build failed."
+            pure $ filterValues (not . hasGlobal) tree
 
 {--
     See what can be done for a single 'Todo' item
@@ -819,8 +884,14 @@ compileAfterDeps tree global reason = do
     if length results != length deps
     then error "packages missing"       -- must not happen
     else do
+        g <- getSTT
         case filter (failed . snd) dr of
-            (p,_):_ -> return Failed{because="module `" ++ unmagicPack p.raw ++ "` not built."}
+            (p,_):_ -> do
+                errorMessage = getImportErrorMessage p tree
+                message = "module `" ++ unmagicPack p.raw ++ "` not built" ++ maybe "" id errorMessage
+                liftStG $ E.error importErrorPosition (msgdoc message)
+                g      <- getSTT  
+                return Failed{because=message, global = g}
             [] -> case filter (not . successful . snd) dr of
                 -- not successful, but not failed, i.e. waiting or running
                 -- tell the scheduler that we wait until p's state changes
@@ -859,7 +930,13 @@ compileAfterDeps tree global reason = do
                             else
                                 return NoRebuild{because="class file is up to date", compiletime=cmod}
 
+getImportErrorMessage :: Pack -> TodoList -> Maybe String
+getImportErrorMessage moduleName todos = do
+    todo <- todos.lookup moduleName
+    pure $ " because: " ++ todo.because
 
+importErrorPosition :: Position
+importErrorPosition = Pos (Token LEXERROR "?¿" 3 1 0 []) (Token LEXERROR "?¿" 4 1 0 [])
 
 javacMe g pack reason = do
     src  ← liftIO $ resolvePackSP g (Pack.raw pack)
@@ -870,7 +947,7 @@ javacMe g pack reason = do
             if smod >= cmod then do
                 rc ← javacJava s
                 if rc > 0 
-                    then pure Failed{because="of bad java code"}
+                    then pure Failed{because="of bad java code", global=g}
                     else pure JavaCompiled
             else pure NoRebuild{because="target class file is up to date", compiletime=0}
         Just wat → do
@@ -921,7 +998,7 @@ checkUpdate pack reason = do
             -- There is no such file that corresponds to the wanted package
             -- If this package name comes from the command line, this counts as error.
             case reason of
-                Nothing -> return Failed{because = "couldn't find source file"}
+                Nothing -> return Failed{because = "couldn't find source file", global = g}
                 just    -> do
                     -- otherwise we could have a library function
                     -- Note that we can safely load the class file, as there
@@ -929,10 +1006,12 @@ checkUpdate pack reason = do
                     res <- Imp.getFP (g.unpack pack)
                     case res  of
                         Left _ -> return Failed {
-                                because = "module is not on class path"
+                                because = "module is not on class path",
+                                global  = g.{ options <- _.{ source = "-"}}
                             }
                         Right Nothing -> return Failed {
-                                because = "class is not a frege module."
+                                because = "class is not a frege module",
+                                global  = g.{ options <- _.{ source = "-"}}
                             }
                         Right (Just fp) -> return NoRebuild {
                                 because = "module exists on class path and no source available.",
@@ -940,18 +1019,19 @@ checkUpdate pack reason = do
                             }
         Just path  -> do
             gc <- lexparse path
-            if gc.errors > 0 then return Failed{because = "of syntax errors."}
+            if gc.errors > 0 then return Failed{because = "of syntax errors.", global = gc}
             else if pack == gc.thisPack 
                 then return CompileAfterDeps{global=gc, reason}
                 else return Failed{because="`" 
                                 ++ gc.options.source 
                                 ++ "` defines unexpected module `" ++ gc.unpack gc.thisPack
-                                ++ "`"}
+                                ++ "`",
+                                global = gc}
 
 parseMe path = do
     gc <- lexparse path
     if gc.errors > 0 
-    then return Failed{because = "of syntax errors."}
+    then return Failed{because = "of syntax errors.", global = gc}
     else return Parsed{global = gc}
 
 compileMe :: TodoList → Global → String → StIO Todo
@@ -977,7 +1057,7 @@ compileMe tree g reason = do
 
     gc <- makeFile g.{packages = ps, javaEnv = jt} sts
     if gc.errors > 0
-    then return Failed{because = "of compilation errors."}
+    then return Failed{because = "of compilation errors.", global = gc}
     else return Compiled{global=gc}
             {- do
                 -- We have a source file in 'path', let's see if it is newer than
