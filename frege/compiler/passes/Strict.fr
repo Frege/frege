@@ -6,6 +6,7 @@ import  frege.data.TreeMap  as  TM(TreeMap, TreeSet, lookup, insert, keys, value
 import  frege.data.List  as  DL(uniq, sort, partitioned, elemBy)
 import  frege.data.Bits(BitSet, BitSet.member, BitSet.union bitunion, BitSet.intersection, BitSet.difference)
 import  frege.data.Graph(stronglyConnectedComponents tsort)
+import  frege.compiler.common.Lens (set)
 import  frege.compiler.enums.Flags
 import  frege.compiler.enums.TokenID(VARID)
 import  frege.compiler.enums.RFlag
@@ -54,7 +55,7 @@ pass = do
         
         -- bring default class methods in good shape
         g <- getST
-        let classmethods = [ sym | SymC{env} <- values g.thisTab, sym@SymV{expr = Just _} <- values env ]
+        let classmethods = [ sym | SymbolT.C SymC{meth} <- values g.thisTab, SymMeth.V (sym@SymV{expr = Just _}) <- values meth ]
         foreach classmethods easyClassMethodSym 
 
         stio ("functions", length names)
@@ -85,13 +86,13 @@ pass = do
     > anon a b = let c = b+1 in a c
     > method a' b' = anon a' b'   
     -}
-easyClassMethodSym :: Symbol -> StG ()
+easyClassMethodSym :: SymV Global -> StG ()
 easyClassMethodSym (sym@SymV{expr = Just dx, typ}) = do
         x <- dx
         easy <- goodClassMethod x
         unless ( easy ) do
             g <- getST
-            U.symWarning E.warn sym (text (nice sym g
+            U.symWarning E.warn (SymbolT.V sym) (text (nice sym g
                 ++ (if easy then "" else " is not easy enough ") 
                 ++ (if RSafeTC  `member` sym.rkind  then "" else " recurses deeply ")
                 ++ (if RTailRec `member` sym.rkind  then " is tail recursive " else "")))
@@ -102,9 +103,9 @@ easyClassMethodSym (sym@SymV{expr = Just dx, typ}) = do
             let anon = sym.{sid=0, name, vis = Protected, expr = Just (return nx)}
                 vbl = Vbl{name, pos=anon.pos.change VARID name.base, typ=Just (ForAll [] sym.typ.rho)}
                 rk = (sym.rkind.unionE RSafeTC).differenceE RTailRec
-            enter anon  
+            enter $ SymbolT.V anon
             x <- etaExpand vbl
-            changeSym sym.{expr = Just (return x), rkind = rk}
+            changeSym $ SymbolT.V sym.{expr = Just (return x), rkind = rk}
     where
         -- goodClassMethod :: Expr -> StG Bool
         goodClassMethod x = do
@@ -116,8 +117,6 @@ easyClassMethodSym (sym@SymV{expr = Just dx, typ}) = do
                 Vbl{name=Local{}} -> return true
                 Vbl{name} -> do
                     vsym <- U.findV name
-                    -- when (vsym.vis == Private) do
-                    --     E.hint (getpos x) (text("uses private " ++ nice name g))
                     return (vsym.vis != Private)
                 Con{name} -> return true        -- constructors always exported
                 Case{} -> do
@@ -164,10 +163,11 @@ easyClassMethodSym sym = return ()
  *   Forward references can appear in global symbols which reference any global
  *   value from this package.
  -}
+returnKind :: [Int] -> SymV Global -> StG ()
 returnKind syms (sym@SymV {nativ = Just _}) = do
         g <- getST
         -- jt <- U.isJavaType ((fst • U.returnType) sym.typ.rho)
-        changeSym sym.{rkind = RState.fromList [RSafeTC, RValue]}
+        changeSym $ SymbolT.V sym.{rkind = RState.fromList [RSafeTC, RValue]}
 
 returnKind syms (sym@SymV {expr = Just dx, depth = 0}) = do
         x      <- dx
@@ -206,7 +206,7 @@ returnKind syms (sym@SymV {expr = Just dx, depth = 0}) = do
                                                     -- and force it right away in the eval() fun
                 | stricter, local, self > 0 = false -- local self refs must be lazy 
                 | otherwise                 = stricter
-        changeSym sym.{rkind, strsig = stri}
+        changeSym $ SymbolT.V sym.{rkind, strsig = stri}
 
 returnKind syms (sym@SymV {expr = Just dx}) = do
         x      <- dx
@@ -226,23 +226,23 @@ returnKind syms (sym@SymV {expr = Just dx}) = do
         -- class functions must be RSafeTC
         case sym.name of
             MName inst base | Just symic <- g.findit inst = case symic of
-                SymC{} ->  do
+                SymbolT.C _ ->  do
                             let nkind = classMemberState
-                            changeSym sym.{rkind=nkind}
-                SymI{} ->  do
+                            changeSym $ SymbolT.V sym.{rkind=nkind}
+                SymbolT.I _ ->  do
                         cm <- classMethodOfInstMethod sym.pos inst base
                         if cm.rkind.null then do
                             returnKind [] cm
                             returnKind syms sym
                         else do
                             -- let nkind = (xkind.differenceE RAlways).union cm.rkind
-                            changeSym sym.{rkind = xkind}
-                other -> changeSym sym.{rkind = xkind} 
-            other -> changeSym sym.{rkind = xkind}
+                            changeSym $ SymbolT.V sym.{rkind = xkind}
+                _ -> changeSym $ SymbolT.V sym.{rkind = xkind}
+            _ -> changeSym $ SymbolT.V sym.{rkind = xkind}
 
 --- assume abstract class functions are tail call safe and return a value 
 returnKind syms (sym@SymV {expr = Nothing, name = MName _ _}) 
-    = changeSym sym.{rkind=classMemberState}
+    = changeSym $ SymbolT.V sym.{rkind=classMemberState}
 returnKind _ _ = stio ()     -- abstract methods
 
 
@@ -272,6 +272,7 @@ defaultRKind = RState.fromList [RSafeTC, RValue]
  *   it's lazy.
  * - Unsaturated applications are boxed (function types)
  -}
+returnExprKind :: [Int] -> SymV Global -> ExprT -> StG RState
 returnExprKind syms sym (x@Lit {pos}) = stio defaultRKind
 returnExprKind syms sym (x@Con {pos}) = stio defaultRKind
 returnExprKind syms sym (x@Ann {ex})  = returnExprKind syms sym ex
@@ -300,10 +301,10 @@ returnExprKind syms sym (ex@App a b typ) = do
         Vbl {name} -> do
             symf <- U.findV name
             g <- getST
-            let ari = if isJust symf.expr then symf.depth else U.arity symf
+            let ari = if isJust symf.expr then symf.depth else U.arity $ SymVal.V symf
                 rwa = defaultRKind.intersection  symf.rkind 
                 rw  | MName tname _ <- symf.name,
-                      Just SymC{} <- g.findit tname 
+                      Just (SymbolT.C _) <- g.findit tname
                     = rwa.unionE RValue   -- call class methods lazy
                     | otherwise = rwa
             if isJust symf.nativ then stio (rw)
@@ -315,7 +316,7 @@ returnExprKind syms sym (ex@App a b typ) = do
                         _       -> stio (rw)                         -- global fun
                     Just _ -> do
                         g <- getST
-                        if symf.sid == Symbol.sid sym               -- self recursive
+                        if symf.sid == sym.sid               -- self recursive
                             then stio (defaultRKind.unionE RTailRec)
                             else if (symf.sid `elem` syms)
                                 then if isOn g.options.flags PROPERTC
@@ -389,12 +390,12 @@ minRkind a b = (safetc.union tailbit).union wrbits where
  -}
 returnNames sids nms = do
         syms  <- mapSt U.findV nms
-        let !deps = sids ++ map Symbol.sid syms
+        let !deps = sids ++ map _.sid syms
         foreach syms setsafetc
         foreach syms (returnKind deps)
     where
-        setsafetc :: Symbol -> StG ()
-        setsafetc sym = changeSym  sym.{rkind = BitSet.singleton RSafeTC}
+        setsafetc :: SymV Global -> StG ()
+        setsafetc sym = changeSym $ SymbolT.V sym.{rkind = BitSet.singleton RSafeTC}
 
 
 {--
@@ -447,23 +448,23 @@ strictName sids nm = do
     v <- U.findV nm
     when (v.state != StrictChecked) do
         E.logmsg TRACES v.pos (text ("strictness analysis for " ++ v.nice g))
-    let ari = U.arity v             -- ... based on type
+    let ari = U.arity $ SymVal.V v             -- ... based on type
         notLazy sym = RValue `member` sym.rkind
     case v of
         SymV {state = StrictChecked} = stio []          -- do nothing
 
-        SymV {name = MName{tynm}} | Just SymC{} ← g.findit tynm → do
+        SymV {name = MName{tynm}} | Just (SymbolT.C _) <- g.findit tynm -> do
             let strsig = S (take ari allLazy)
             E.logmsg TRACES v.pos (text ("strictness for abstract " ++ v.name.nice g ++ " is "
                                     ++ show strsig))
-            changeSym v.{strsig, state = StrictChecked}
+            changeSym $ SymbolT.V v.{strsig, state = StrictChecked}
             stio []
 
         SymV {nativ = Just _} -> do
             let strsig = S (take ari allStrict)
             E.logmsg TRACES v.pos (text ("strictness for " ++ v.name.nice g ++ " is "
                                     ++ show strsig))
-            changeSym v.{strsig, state = StrictChecked}
+            changeSym $ SymbolT.V v.{strsig, state = StrictChecked}
             stio []
 
         SymV {} | Just (x@Lam{ex}) <- v.gExpr g -> do
@@ -472,8 +473,8 @@ strictName sids nm = do
             E.logmsg TRACES v.pos (text ("strictness for " ++ v.name.nice g ++ " is "
                                     ++ show (S s)
                                     ++ " ignoring "
-                                    ++ joined ", " (map (flip nice g • Symbol.name) syms)))
-            changeSym v.{expr = Just (return x), strsig = S s, state = StrictChecked}
+                                    ++ joined ", " (map (flip nice g . _.name) syms)))
+            changeSym $ SymbolT.V v.{expr = Just (return x), strsig = S s, state = StrictChecked}
             stio syms
         SymV {expr = Just x} | ari >= 0 = do
                 y <- x >>= eta ari 
@@ -483,7 +484,7 @@ strictName sids nm = do
                     rs = if null s then v.strsig else S s
                 E.logmsg TRACES v.pos (text ("strictness for " ++ v.name.nice g ++ " is "
                                     ++ show rs))
-                changeSym v.{expr = Just (return x), strsig = rs, state = StrictChecked}
+                changeSym $ SymbolT.V v.{expr = Just (return x), strsig = rs, state = StrictChecked}
                 stio syms
             where
                 eta 0 x = stio x
@@ -491,11 +492,11 @@ strictName sids nm = do
                     let pos = getpos x
                     nums <- sequence (take n (repeat uniqid))
                     syms <- mapSt U.mkLocal  [ PVar{pos=pos,uid,var="$"} | uid <- nums ]
-                    let vars = map Symbol.name syms
+                    let vars = map _.name syms
                         mkapp ex n = nApp ex (Vbl {pos, name=n, typ = Nothing})
                         -- mklam :: Expr -> Int -> Expr
                         mklam ex sym = Lam {pat,ex,typ=Nothing}
-                            where pat = PVar {pos, uid=Symbol.sid sym, var="$"}
+                            where pat = PVar {pos, uid=sym.sid, var="$"}
                                   -- env = insert Nil pat.var (U.patLocal pos pat.var).{sid=n}
                         -- \a\b -> x a b
                         body = fold mkapp    x vars
@@ -513,9 +514,8 @@ strictName sids nm = do
             let strsig = if ari == 0 then v.strsig else S (take ari allLazy)
             E.logmsg TRACES v.pos (text ("strictness for " ++ v.name.nice g ++ " is "
                                     ++ show strsig))
-            changeSym v.{strsig, state = StrictChecked}
+            changeSym $ SymbolT.V v.{strsig, state = StrictChecked}
             stio []
-        other -> E.fatal other.pos (text ("strictness: strange symbol  " ++ other.nice g))
 
 
 {--
@@ -540,20 +540,20 @@ strictName sids nm = do
  *      the lambda strictness for the arguments
  * 6. if g is checked recursively, all arguments are strict
  -}
-strictReturn :: Bool ->  [Int] -> Expr -> StG (Expr, [Symbol])
+strictReturn :: Bool ->  [Int] -> Expr -> StG (Expr, [SymVal Global])
 strictReturn notLazy sids x = strictness sids x where
-  strictness :: [Int] -> Expr -> StG (Expr, [Symbol])
+  strictness :: [Int] -> Expr -> StG (Expr, [SymVal Global])
   strictness sids x = do
         g <- getST
         E.logmsg TRACES (getpos x) (text ("strictness for: " ++ nice x g))
         let mine = if x.{env?} then map QName.uid x.env
                     else if x.{pat?} then map Pattern.uid (patVars x.pat) 
                     else []
-            my   = filter ((`elem`    mine) • Symbol.sid)
-            them = filter ((`notElem` mine) • Symbol.sid)
+            my   = filter ((`elem`    mine) . _.sid)
+            them = filter ((`notElem` mine) . _.sid)
         case x of
             Vbl {name=Local{}} -> do
-                    v <- U.findV x.name
+                    v <- fmap SymVal.V $ U.findV x.name
                     E.logmsg TRACES (getpos x) (text ("strictness  " ++ nice x g ++ " :: " ++ names g [v]))
                     stio (x, if notLazy then [v] else [])
             Vbl {name} -> do
@@ -575,7 +575,7 @@ strictReturn notLazy sids x = strictness sids x where
                                   (filter ((`notElem` sids) • QName.uid) env)
                     (ex, syms) <- strictness sids ex
                     let strictSyms = my syms
-                        sSsids = map Symbol.sid strictSyms
+                        sSsids = map (_.sid) strictSyms
                         upper = [ sres  | (loc, sres) <- zip env results,
                                         QName.uid loc `elem` sSsids ]
                         result = fold uni (them syms) upper
@@ -620,10 +620,10 @@ strictReturn notLazy sids x = strictness sids x where
                 E.fatal (getpos x) (text ("no strictness rule, turn on -xs -xr " ++ show (getpos x)))
                 stio (x, [])
     where
-        names g = show • map (flip QName.nice g • Symbol.name)
-        inter as = filter (\b -> elemBy (using Symbol.sid) b as)
-        uni :: [Symbol] -> [Symbol] -> [Symbol]
-        uni as bs = as ++ [ b | b <- bs, not (elemBy (using Symbol.sid) b as)]
+        names g = show . map (flip QName.nice g . _.name)
+        inter as = filter (\b -> elemBy (using _.sid) b as)
+        uni :: [SymVal Global] -> [SymVal Global] -> [SymVal Global]
+        uni as bs = as ++ [ b | b <- bs, not (elemBy (using _.sid) b as)]
         maxss (S s1) (S s2) = S (zipWith maxss s1 s2)
         maxss U s = s
         maxss s _ = s
@@ -638,10 +638,11 @@ strictReturn notLazy sids x = strictness sids x where
 
 
         -- mark a symbol as strict
+        mark :: SymVal Global -> StG ()
         mark sym = do
             g <- getST
-            E.logmsg TRACES (Symbol.pos sym) (text (nice sym.name g ++ " marked as strict"))
-            when (sym.strsig == U) do changeSym sym.{strsig = S[]}
+            E.logmsg TRACES sym.pos (text (nice sym.name g ++ " marked as strict"))
+            when (sym.strsig == U) do changeSym $ SymVal.toSymbol $ set SymVal._strsig (S[]) sym
         -- strictness for case alternative, same as in lambda
         strictAlt (alt@CAlt {pat,ex}) = do
                 (lam, syms) <- strictness sids (Lam {pat,ex,typ=Nothing})
@@ -676,8 +677,8 @@ strictReturn notLazy sids x = strictness sids x where
         appstr (app@((f,mbt):as)) = do
             g <- getST
             v <- case f of
-                    Con {name} -> U.findD name
-                    Vbl {name} -> U.findV name
+                    Con {name} -> fmap SymVal.D $ U.findD name
+                    Vbl {name} -> fmap SymVal.V $ U.findV name
                     _ -> E.fatal (getpos f) (text ("Can't handle " ++ nice f g ++ "  applications"))
             let fsym | Local {} <- v.name = [v]
                      | otherwise = []
@@ -686,18 +687,18 @@ strictReturn notLazy sids x = strictness sids x where
                     let napp = zip (map fst fapp) (map snd app)
                     stio (napp, fsym)
             case v of
-                SymV {state = Typechecked, expr = Nothing} = mkAll
-                SymV {state = Typechecked, expr = Just _}
-                    | Just (Lam{}) <- v.gExpr g = if v.sid `elem` sids
+                SymVal.V (SymV{state = Typechecked, expr = Nothing}) = mkAll
+                SymVal.V (symv@SymV{state = Typechecked, expr = Just _})
+                    | Just (Lam{}) <- symv.gExpr g = if symv.sid `elem` sids
                         then do
                             -- assume all are strict
                             asx <- mapSt (strictness sids) (map fst as)
                             stio ((f,mbt):zip (map fst asx) (map snd as), fold uni fsym (map snd asx))
                         else do
-                            strictName sids v.name
+                            strictName sids symv.name
                             appstr app              -- repeat
-                SymV {state = Typechecked, expr = Just dx}
-                    | v.sid `notElem` sids = do
+                SymVal.V (symv@SymV{state = Typechecked, expr = Just dx})
+                    | symv.sid `notElem` sids = do
                             -- inline pointless
                             x <- dx
                             let fx = flatx x
@@ -705,22 +706,21 @@ strictReturn notLazy sids x = strictness sids x where
                             let as = drop (length fx) fxas
                             stio ((f,mbt):as, fsym ++ syms)
                     | otherwise = mkAll
-                SymD {strsig = U} -> mkAll
-                SymD {strsig = S ss} -> do
+                SymVal.D SymD{strsig = U} -> mkAll
+                SymVal.D SymD{strsig = S ss} -> do
                         let xss = take (length as) (ss ++ repeat U)     -- make sure enough
                         exsyms <- mapSt subapp (zip (map fst as) xss)
                         stio ((f,mbt):zip (map fst exsyms) (map snd as), fold uni fsym (map snd exsyms))
-                SymV {state = StrictChecked, strsig = U} -> mkAll
-                SymV {state = StrictChecked, strsig = S ss} -> do
+                SymVal.V SymV{state = StrictChecked, strsig = U} -> mkAll
+                SymVal.V (symv@SymV{state = StrictChecked, strsig = S ss}) -> do
                         let xss = take (length as) (ss ++ repeat U)     -- make sure enough
-                        E.logmsg TRACES (getpos f) (text ("appstr: xss=" ++ show xss ++ " for " ++ v.name.nice g))
+                        E.logmsg TRACES (getpos f) (text ("appstr: xss=" ++ show xss ++ " for " ++ symv.name.nice g))
                         exsyms <- mapSt subapp (zip (map fst as) xss)
                         stio ((f,mbt):zip (map fst exsyms) (map snd as), fold uni fsym (map snd exsyms))
-                SymV {sid} -> do
-                    E.fatal (v.pos) (text ("appstr: unexpected symbol " ++ nice v g
-                        ++ ", state=" ++ show v.state
-                        ++ ", expr="  ++ show (isJust v.expr)))
-                _ -> error "appstr: no appropriate sym"
+                SymVal.V symv -> do
+                    E.fatal symv.pos (text ("appstr: unexpected symbol " ++ nice v g
+                        ++ ", state=" ++ show symv.state
+                        ++ ", expr="  ++ show (isJust symv.expr)))
         appstr _ = error "appstr: []"
 
 

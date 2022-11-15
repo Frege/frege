@@ -16,12 +16,12 @@ import  frege.compiler.classes.Nice(Nice)
 isFun (ForAll _ rho) g = isRhoFun rho g
 
 --- tell if the 'RhoT' represents a function type.
-isRhoFun (RhoFun _ _ _) g = true
-isRhoFun (RhoTau _ tau) g = isTauFun tau g
+isRhoFun (RhoT.Fun _) _ = true
+isRhoFun (RhoT.Tau r) g = isTauFun r.tau g
 
 
 --- tell if the 'TauT' represents a function type.
-isTauFun fun g | [TCon {name}, _, _] <- Tau.flat fun, name.nice g ~ ´->$´ = true
+isTauFun fun g | [TauT.Con c, _, _] <- Tau.flat fun, c.name.nice g ~ ´->$´ = true
                | otherwise =  false
 
 
@@ -39,14 +39,15 @@ unboundTauTvs g tau = keys (unboundTauTvs' g tau TreeSet.empty)
 unboundSigmaTvs' g (ForAll{rho}) acc = unboundRhoTvs' g rho acc
 
 --- accumulate unbound 'MetaTv's from the components of a 'Rho'
-unboundRhoTvs' g RhoFun{context, sigma, rho} acc = 
-    unboundRhoTvs' g rho (
-        unboundSigmaTvs' g sigma (
-            fold (unboundCtxTvs' g) acc context))
-unboundRhoTvs' g RhoTau{context, tau} acc = 
-    unboundTauTvs' g tau (fold (unboundCtxTvs' g) acc context)
+unboundRhoTvs' g (RhoT.Fun r) acc =
+    unboundRhoTvs' g r.rho $
+        unboundSigmaTvs' g r.sigma $
+            fold (unboundCtxTvs' g) acc r.context
+unboundRhoTvs' g (RhoT.Tau r) acc =
+    unboundTauTvs' g r.tau (fold (unboundCtxTvs' g) acc r.context)
 
 --- accumulate unbound 'MetaTv's of a 'Context'
+unboundCtxTvs' :: Global -> TreeSet Int -> Context -> TreeSet Int
 unboundCtxTvs' g acc Ctx{pos, cname, tau}  = unboundTauTvs' g tau acc
 
 --- accumulate unbound 'MetaTv's of a 'Tau'
@@ -64,8 +65,8 @@ unboundTauTvs' g (Meta m) acc = case m  of
             bs     → foldr (unboundTauTvs' g) (acc.insertI uid ()) bs
     Rigid{} →  acc
 
-unboundTauTvs' g TVar{} acc = acc
-unboundTauTvs' g TCon{} acc = acc
+unboundTauTvs' _ (TauT.Var _) acc = acc
+unboundTauTvs' _ (TauT.Con _) acc = acc
 
 --- substitute 'MetaTv' unique ids in a 'Sigma'
 substSigmaUID :: Global -> TreeMap Int Int → Sigma → Sigma
@@ -73,11 +74,15 @@ substSigmaUID g m sigma = sigma.{rho ← substRhoUID g m}
 
 --- substitute 'MetaTv' unique ids in a 'Rho'
 substRhoUID :: Global -> TreeMap Int Int → Rho → Rho
-substRhoUID g m (r@RhoFun{})  = r.{context ← map (substCtxUID g m), 
-                                 sigma   ← substSigmaUID g m, 
-                                 rho     ← substRhoUID g m}
-substRhoUID g m (r@RhoTau{})  = r.{context ← map (substCtxUID g m), 
-                                 tau     ← substTauUID g m}
+substRhoUID g m (RhoT.Fun r) = RhoT.Fun
+    r.{ context <- map (substCtxUID g m)
+      , sigma   <- substSigmaUID g m
+      , rho     <- substRhoUID g m
+      }
+substRhoUID g m (RhoT.Tau r) = RhoT.Tau
+    r.{ context <- map (substCtxUID g m)
+      , tau     <- substTauUID g m
+      }
 
 --- substitute 'MetaTv' unique ids in a 'Context'
 substCtxUID :: Global -> TreeMap Int Int -> Context -> Context
@@ -87,8 +92,8 @@ substCtxUID g m ctx = ctx.{tau <- substTauUID g m}
 substTauUID :: Global -> TreeMap Int Int -> Tau -> Tau
 substTauUID g m tau = case tau  of
     TApp a b →  TApp (substTauUID g m a) (substTauUID g m b)
-    TCon{} →  tau
-    TVar{} →  tau
+    TauT.Con _ -> tau
+    TauT.Var _ -> tau
     TSig s →  TSig (substSigmaUID g m s)
     Meta v →  case v  of
         Flexi{uid}
@@ -137,11 +142,21 @@ instance BetterReadable Tau where
         subst = zip (unboundTauTvs g s) (smallUIDs g)
 
 {--
- * make @RhoFun a b@ to @RhoTau (TFun a b)@ 
+ * make @RhoFun ctxs a b@ to @RhoTau ctxs (TFun a b)@
+ *
+ * For @RhoTau@, this is identity.
+ * For @RhoFun@, all of the following conditions must hold:
+ * - @null a.bound@
+ * - @a.rho == RhoT.Tau t@ and @null t.context@
+ * - @b@ recursively satisfies the above conditions
+ *
+ * This in particular means 'tauRho' returns 'Nothing' for higher order functions and Rank-N types.
  -}
-tauRho (RhoFun ctxs (ForAll [] (RhoTau [] a)) rho2)
-    | RhoTau _ b <- tauRho rho2 = RhoTau ctxs (Tau.tfun a b)
-tauRho r = r
+tauRho :: Rho -> Maybe (RhoTau QName)
+tauRho (RhoT.Tau r) = Just r
+tauRho (RhoT.Fun (RhoFun ctxs (ForAll [] (RhoT.Tau (RhoTau [] a))) rho2))
+    | Just (RhoTau _ b) <- tauRho rho2 = Just $ RhoTau ctxs (Tau.tfun a b)
+tauRho _ = Nothing
 
 
 {--
@@ -151,36 +166,45 @@ tauRho r = r
     ordinary instance head, e.g.
     >  (A a, B b) ⇒ C (F a b)
 -}
-instanceHead :: QName -> Rho -> Rho
-instanceHead clas rho = RhoTau{context=rho.context, tau=TApp tcon tau}
+instanceHead :: QName -> RhoTau QName -> RhoTau QName
+instanceHead clas rho = rho.{tau <- TApp (TauT.Con tcon)}
     where
-        tau = (tauRho rho).tau
-        tcon = TCon{pos=getpos tau, name=clas}
+        tcon = TCon{pos=getpos rho.tau, name=clas}
 
 
 --- note: type must not contain bound Metas
 substSigma :: TreeMap String (TauT t) ->  SigmaT t  -> SigmaT t
 substSigma t (ForAll bndrs rho) = ForAll bndrs (substRho t' rho)
-    where t' = fold TreeMap.delete t (map Tau.var bndrs)
+    where t' = fold TreeMap.delete t (map _.var bndrs)
 
 
-substRho t (RhoFun ctx sig rho) = let
-            ctx' = map (substCtx t) ctx
-            sig' = substSigma t sig 
-            rho' = substRho t rho 
-        in (RhoFun ctx' sig' rho')
-substRho t (RhoTau ctx tau)  = RhoTau (map (substCtx t) ctx) (substTau t tau)
+substRho :: TreeMap String (TauT t) -> RhoT t -> RhoT t
+substRho t (RhoT.Fun r) = RhoT.Fun
+    r.{ context <- map (substCtx t)
+      , sigma   <- substSigma t
+      , rho     <- substRho t
+      }
+substRho t (RhoT.Tau r) = RhoT.Tau
+    r.{ context <- map (substCtx t)
+      , tau     <- substTau t
+      }
 
 
-
-substTau t (tau@TCon{})      = tau
+substTau :: TreeMap String (TauT t) -> TauT t -> TauT t
+substTau t (tau@TauT.Con _)  = tau
 substTau t (TApp a b)        = TApp (substTau t a) (substTau t b)
 substTau t (typ@Meta _)      = typ     -- Meta must be unbound
-substTau t (typ@TVar {var})  = case TreeMap.lookupS t var of
-        Just (Meta tv)       = Meta tv.{kind ← substKind t var (Meta tv.{kind=KVar})}  
+substTau t (TauT.Var typ)    = case TreeMap.lookupS t typ.var of
+        Just (Meta tv)       = Meta tv.{kind <- substKind t typ.var (Meta tv.{kind=KVar})}
         Just tau -> tau
-        Nothing  -> typ.{kind ← substKind t var typ.{kind=KVar}}
+        Nothing  -> TauT.Var typ.{kind <- substKind t typ.var $ TauT.Var typ.{kind=KVar}}
 substTau t (typ@TSig s) = TSig (substSigma t s)
+
+--- 'substTau' restricted to 'TVar'. Note that the type of 'TreeMap' differs
+substTVar :: TreeMap String (TVar t) -> TVar t -> TVar t
+substTVar t typ = case TreeMap.lookupS t typ.var of
+    Just tau -> tau
+    Nothing  -> typ.{kind <- substKind (fmap TauT.Var t) typ.var $ TauT.Var typ.{kind=KVar}}
 
 {-- 
     Substitute the 'Tau' in a 'Kind'
@@ -207,17 +231,17 @@ substCtx t x  = x.{tau <- substTau t}
 -}
 tauKind :: Tau -> Kind
 tauKind app = case app.flat of
-    TVar{pos, kind, var}:_          →  kind
-    Meta Flexi{uid, hint, kind}:_   →  kind
-    other                           →  KType
+    TauT.Var TVar{kind}:_ -> kind
+    Meta Flexi{kind}:_    -> kind
+    other                 -> KType
 
 --- kindedness of a 'Sigma', based on enclosed 'Tau', see 'tauKind'
 sigmaKind (ForAll _ rho) = rhoKind rho
 
 --- kindedness of a 'Rho', based on enclosed 'Tau', see 'tauKind'
 --- A 'RhoFun' will always be 'KType', as it is equivalent to application of @(->)@
-rhoKind RhoFun{} = KType
-rhoKind RhoTau{tau} = tauKind tau
+rhoKind (RhoT.Fun _) = KType
+rhoKind (RhoT.Tau r) = tauKind r.tau
 
 {--
     Alpha conversion of a sigma.
@@ -270,24 +294,27 @@ avoidSigma avoid (ForAll tvs rho) = ForAll ntvs (avoidRho (\s -> avoid s ||  s `
         reps = Map.fromList (zip bads binders)  -- a substitution for variable names
         ntvs = map (rnTVar reps) tvs            -- renamed affected type variables
         new = map _.var ntvs                    -- the variable names of the new Sigma
-        subst = Map.fromList (zip bads [ tv | tv ← ntvs, tv.var `elem` binders ]) 
+        subst = Map.fromList (zip bads [ TauT.Var tv | tv <- ntvs, tv.var `elem` binders ])
         rho' = substRho subst rho               -- substitute the new tvars in the rest of the type
 
 avoidRho :: (String → Bool) -> Rho -> Rho
-avoidRho avoid (rhofun@RhoFun{})  = rhofun.{sigma ← avoidSigma avoid, rho ← avoidRho avoid}
-avoidRho avoid (rhotau@RhoTau{})  = rhotau
+avoidRho avoid (RhoT.Fun r) = RhoT.Fun r.{sigma <- avoidSigma avoid, rho <- avoidRho avoid}
+avoidRho _ (rhotau@RhoT.Tau _) = rhotau
 
-rnTVar :: TreeMap String String → Tau → Tau
-rnTVar tree (TApp a b)  = TApp (rnTVar tree a) (rnTVar tree b)
-rnTVar tree (t@TCon{})  = t
-rnTVar tree (t@TVar{})  = case lookup t.var tree of
-    Just v  →   t.{kind ← rnKind tree, var=v}
-    Nothing →   t
-rnTVar tree (t@TSig _)  = t
-rnTVar tree (t@Meta _)  = t
+rnTVar :: TreeMap String String -> TVar QName -> TVar QName
+rnTVar tree t = case lookup t.var tree of
+    Just v  -> t.{kind <- rnKind tree, var=v}
+    Nothing -> t
+
+rnTau :: TreeMap String String -> Tau -> Tau
+rnTau tree (TApp a b) = TApp (rnTau tree a) (rnTau tree b)
+rnTau _ (t@TauT.Con _) = t
+rnTau tree (TauT.Var v) = TauT.Var $ rnTVar tree v
+rnTau _ (t@TSig _) = t
+rnTau _ (t@Meta _) = t
 
 rnKind :: TreeMap String String → Kind → Kind
-rnKind tree (KGen ts)  = KGen (map (rnTVar tree) ts)
+rnKind tree (KGen ts)  = KGen (map (rnTau tree) ts)
 rnKind tree (KApp k1 k2)  = KApp (rnKind tree k1) (rnKind tree k2)
 rnKind tree k  = k
 
@@ -312,9 +339,11 @@ varInst subst names = [ tau | nm ← names, tau ← TreeMap.lookupS subst nm ]
     make @RhoTau (TFun a b)@ into @RhoFun (RhoTau a) (unTau (RhoTau b))@
  -}
 unTau ∷ Rho → Rho
-unTau (RhoTau ctx fun)
-    | Just (a,b) <- fun.getFun = RhoFun ctx (ForAll [] (RhoTau [] a)) (unTau (RhoTau [] b))
-unTau (RhoFun ctx sig rho)     = RhoFun ctx sig                       (unTau rho)
+unTau (RhoT.Tau (RhoTau ctx fun))
+    | Just (a,b) <- fun.getFun        = RhoT.Fun $ RhoFun ctx (ForAll [] (rhotau a)) (unTau (rhotau b))
+    where
+    rhotau x = RhoT.Tau $ RhoTau [] x
+unTau (RhoT.Fun (RhoFun ctx sig rho)) = RhoT.Fun $ RhoFun ctx sig                    (unTau rho)
 unTau rho = rho
 
 
@@ -327,34 +356,31 @@ unTau rho = rho
  *
  * > unifySigma (forall a b. Maybe a -> [b]) (Maybe Int -> [Float]) ==> [(a,Int), (b, Float)]
  -}
-unifySigma ∷ Global → Sigma → Sigma → TreeMap String Tau
-unifySigma g (ForAll [] _) _ = empty
-unifySigma g s1 (ForAll _ rho) = unifyRho g empty s1.rho rho
+unifySigma :: Sigma -> Sigma -> TreeMap String Tau
+unifySigma (ForAll [] _) _ = empty
+unifySigma s1 (ForAll _ rho) = unifyRho empty s1.rho rho
 
-
-unifyRho :: Global -> TreeMap String Tau -> Rho -> Rho -> TreeMap String Tau
-unifyRho g t (rho1@RhoFun{}) rho2
-    | RhoFun{}      <- rho2       = result
-    | rfun@RhoFun{} <- unTau rho2 = unifyRho g t rho1 rfun
-    | otherwise                   = t           -- no match
-    where
-        result = unifyRho g t2 rho1.rho rho2.rho
-        t2     = unifyRho g t  rho1.sigma.rho rho2.sigma.rho
--- rho1 must be a RhoTau as the first clause catches all cases where it is a RhoFun
-unifyRho g t rho1 rho2
-    | RhoTau{}      <- rho2        = unifyTau   t  rho1.tau   rho2.tau
-    | rtau@RhoTau{} <- tauRho rho2 = unifyRho g t  rho1       rtau
-unifyRho g t _ _ = t
+unifyRho :: TreeMap String Tau -> Rho -> Rho -> TreeMap String Tau
+unifyRho t (RhoT.Fun rho1) (RhoT.Fun rho2) = result
+  where
+    result = unifyRho t2 rho1.rho rho2.rho
+    t2     = unifyRho t  rho1.sigma.rho rho2.sigma.rho
+unifyRho t (RhoT.Fun rho1) rho2
+    | rfun@RhoT.Fun _ <- unTau rho2 = unifyRho t (RhoT.Fun rho1) rfun
+    | otherwise                     = t           -- no match
+unifyRho t (RhoT.Tau rho1) rho2
+    | Just rtau <- tauRho rho2 = unifyTau t rho1.tau rtau.tau
+    | otherwise                = t
 
 
 unifyTau ∷ TreeMap String Tau → Tau → Tau → TreeMap String (Tau)
-unifyTau t (TVar {var}) b = insert var b t
+unifyTau t (TauT.Var TVar{var}) b = insert var b t
 unifyTau t (tau1@TApp a b) (tau2@TApp c d) = unifyApp a c
     where
         -- do not match unequals!
-        unifyApp TVar{} _ 
+        unifyApp (TauT.Var _) _
             = unifyTau  (unifyTau  t a c) b d
-        unifyApp TCon{name=n1} TCon{name=n2}
+        unifyApp (TauT.Con TCon{name=n1}) (TauT.Con TCon{name=n2})
             | n1 == n2 = unifyTau  (unifyTau  t a c) b d
             | otherwise = t
         unifyApp (TApp x _) (TApp y _) = unifyApp x y
@@ -368,8 +394,6 @@ unifyTau t _ _ = t
  * the bounded variables of @sigma1@ in @sigma2@
  * which must be a valid substitution of the former (up to contexts).
  -}
-sigmaInst g sigma1 sigma2 = [ s | Just s <-  map (TreeMap.lookupS tree) (Sigma.vars sigma1) ]
-    where tree =  unifySigma g sigma1 sigma2
-
-
-
+sigmaInst :: Sigma -> Sigma -> [Tau]
+sigmaInst sigma1 sigma2 = [ s | Just s <- map (TreeMap.lookupS tree) (Sigma.vars sigma1) ]
+    where tree = unifySigma sigma1 sigma2

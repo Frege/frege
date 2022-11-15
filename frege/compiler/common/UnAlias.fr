@@ -6,6 +6,7 @@ import  frege.Prelude  hiding(error, print, println, break, <+>)
 import  frege.data.TreeMap as TM(TreeMap, lookup, each, insert, union, including, contains, keys, values, fromKeys)
 import  frege.compiler.enums.Flags
 import  frege.compiler.types.Positions
+import  frege.compiler.types.QNames (QName)
 import  frege.compiler.types.Types
 import  frege.compiler.types.Symbols
 import  frege.compiler.types.Global  as  G
@@ -35,14 +36,17 @@ unAlias g tau
     where
         -- make sure we work on a 'TauT' 'QName'
         fake ∷ QNameMatcher a => Global → TauT a → Tau
-        fake g (TApp a b)           = TApp (fake g a) (fake g b)
-        fake g TVar{pos,var,kind}   = TVar Position.null (kmap g kind) var
-        fake g (Meta Rigid{hint, kind})   = TVar Position.null (kmap g kind) hint
+        fake g (TApp a b)               = TApp (fake g a) (fake g b)
+        fake g (TauT.Var t)             = TauT.Var $ fakeTVar g t
+        fake g (Meta Rigid{hint, kind}) = TauT.Var $ TVar {pos=Position.null, kind=kmap g kind, var=hint}
         fake g (Meta x)        = case g.bound  x of
             Just tau      -> tau
-            otherwise     -> TVar Position.null (kmap g x.kind) ("t" ++ show x.uid)
-        fake g TCon{pos, name}  = TCon{pos, name = fakeQName name}
+            otherwise     -> TauT.Var $ TVar {pos=Position.null, kind=kmap g x.kind, var="t" ++ show x.uid}
+        fake g (TauT.Con TCon{pos, name}) = TauT.Con TCon{pos, name = fakeQName name}
         fake g (TSig s)        = TSig (fakeSigma g s)
+
+        fakeTVar :: QNameMatcher a => Global -> TVar a -> TVar QName
+        fakeTVar g TVar{var, kind} = TVar{pos=Position.null, kind=kmap g kind, var}
 
         kmap ∷ QNameMatcher a => Global -> KindT a → Kind
         kmap g (KGen t)     = KGen (map (fake g) t)
@@ -51,14 +55,14 @@ unAlias g tau
         kmap g KVar         = KVar
 
         fakeSigma ∷ QNameMatcher a => Global -> SigmaT a → Sigma
-        fakeSigma g (ForAll{bound, rho}) = ForAll (map (fake g) bound) (fakeRho g rho)
+        fakeSigma g (ForAll{bound, rho}) = ForAll (map (fakeTVar g) bound) (fakeRho g rho)
         fakeRho ∷ QNameMatcher a => Global -> RhoT a → Rho
-        fakeRho g (r@RhoFun{context, sigma, rho}) 
-            = RhoFun{context = map (fakeCtx g) r.context, 
-                     sigma   = fakeSigma g r.sigma, 
+        fakeRho g (RhoT.Fun r) = RhoT.Fun
+            $ RhoFun{context = map (fakeCtx g) r.context,
+                     sigma   = fakeSigma g r.sigma,
                      rho     = fakeRho g r.rho}
-        fakeRho g (r@RhoTau{context, tau}) 
-            = RhoTau{context = map (fakeCtx g) context, tau = fake g tau}
+        fakeRho g (RhoT.Tau r) = RhoT.Tau
+            $ RhoTau{context = map (fakeCtx g) r.context, tau = fake g r.tau}
         fakeCtx ∷ QNameMatcher a => Global -> ContextT a → Context
         fakeCtx g ctx = Ctx{tau = fake g ctx.tau, cname = fakeQName ctx.cname, pos = ctx.pos}  
 
@@ -73,26 +77,26 @@ unAlias g tau
 
                 aliased (tau1@TApp a b) (SymA{pos,name,typ,vars}) = case rho of
                         -- the expansion of the type alias must be more than a tvar 
-                        RhoTau [] tau2 | not (isTvApp tau2) -> case unify empty tau2 tau1 of
+                        RhoT.Tau RhoTau{tau=tau2} | not (isTvApp tau2) -> case unify empty tau2 tau1 of
                             Just subst -> Just (substTau env aApp)
                                 where env = fmap unAlias subst
                             Nothing    -> Nothing
                         _              -> Nothing
                     where
                         rho = typ.rho
-                        vs  = map Tau.var vars
+                        vs  = map _.var vars
                         aApp :: Tau
-                        aApp = fold TApp (TCon pos name) (map (TVar pos KVar) vs)
+                        aApp = fold TApp (TauT.Con TCon{pos, name}) (map (\var -> TauT.Var TVar{pos, kind=KVar, var}) vs)
 
                 aliased _ _ = Nothing
 
-                aliases = [ sym | any <- values g.thisTab, sym@SymA{} <- g.follow any ]
+                aliases = [ sym | any <- values g.thisTab, SymbolT.A sym <- g.follow any ]
 
 
                 -- substTau env (TFun a b)  = TFun (substTau env a) (substTau env b)
                 substTau :: TreeMap String (TauT β) -> TauT β -> TauT β
                 substTau env (TApp a b)  = TApp (substTau env a) (substTau env b)
-                substTau env (TVar{var})
+                substTau env (TauT.Var TVar{var})
                     | Just tau <- lookup var env  = tau
                 substTau env tau         = tau
 
@@ -102,12 +106,12 @@ unAlias g tau
                 --         t2 <- unify t1 b d
                 --         return t2
                 unify t (Meta x) (Meta y) | x.uid == y.uid = Just t
-                unify t TCon{name=name1} TCon{name=name2} |  match g name1 name2 = Just t
+                unify t (TauT.Con c1) (TauT.Con c2) | match g c1.name c2.name = Just t
                 unify t (TApp a b) (TApp c d) = do
                         t1 <- unify t  a c
                         t2 <- unify t1 b d
                         return t2
-                unify t TVar{var} tau = case lookup var t of
+                unify t (TauT.Var TVar{var}) tau = case lookup var t of
                         Nothing  -> Just (insert var tau t)         -- extend substitution
                         Just old -> case unify empty old tau of       -- check if previous substitution matches current
                             Just sub | all varSelf (each sub) = Just t
@@ -115,8 +119,8 @@ unAlias g tau
                     where
                         -- checks whether each variable would be substituted by itself
                         -- if all substitutions are of this form, then we have type equality
-                        varSelf (s, TVar{var}) = s == var
-                        varSelf _              = false
+                        varSelf (s, TauT.Var TVar{var}) = s == var
+                        varSelf _ = false
                 unify t _ _ = Nothing
 
 
