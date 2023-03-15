@@ -9,6 +9,8 @@ import Lib.PP(text, <>, <+>, <+/>, </>)
 import Data.Bits(BitSet, BitSet.member, BitSet.unionE, BitSet.differenceE)
 import Data.List(partitioned, zip4)
 
+import  frege.compiler.common.Lens (preview)
+
 import Compiler.enums.Flags(TRACEG)
 import Compiler.enums.RFlag as RF(RFlag)
 import Compiler.enums.Literals
@@ -21,7 +23,7 @@ import Compiler.instances.Nicer(nicerctx, nicectx)
 
 import Compiler.types.Global(Symbol, StG, Global(),
                                 getST, changeST, uniqid)
-import Compiler.types.Symbols(SymV, SymL, SymD, SymT, SymC, SymI)
+import Compiler.types.Symbols(SymV, SymL, SymD, SymT, SymC, SymI, SymMeth, SymVal, SymbolT)
 import Compiler.types.Expression(Expr, ExprT, CAlt, CAltT, flatx)
 import Compiler.types.Patterns(Pattern, PatternT)
 import Compiler.types.Positions(Positioned)
@@ -58,39 +60,39 @@ import Compiler.gen.java.Constants(findConst, staticConst)
 import Compiler.gen.java.Instantiation(instPatternBound, resolveConstraint, envCtxs, resolvableCtxs)
 import Compiler.gen.java.PrettyJava(lambda7, thunkMarker)
 
-varCode ∷ TreeMap Int Binding → Symbol → StG [JDecl]
-varCode _ (SymL{sid, pos, vis, name, alias})  = do
+varCode :: TreeMap Int Binding -> SymMeth Global -> StG [JDecl]
+varCode _ (SymMeth.L SymL{sid, pos, vis, name, alias}) = do
     g ← getST
     pure [JComment ("alias " 
             ++ name.base
             ++ " for "
             ++ show (javaName g alias))]
 
-varCode binds sym = do
+varCode binds (SymMeth.V symv) = do
     g <- getST
-    E.logmsg TRACEG sym.pos (text ("varCode for " ++ nicer sym g))
-    si <- symInfo sym
-    case sym of 
-        SymV{expr = Just{}}
-            | null si.argSigs = cafCode sym binds  -- nust be CAF
-            | otherwise       = funDef sym binds 
-        SymV {nativ = Just _, over} 
+    E.logmsg TRACEG symv.pos (text ("varCode for " ++ nicer symv g))
+    si <- symInfo $ SymVal.V symv
+    case symv of
+        SymV{expr = Just _}
+            | null si.argSigs = cafCode symv binds  -- nust be CAF
+            | otherwise       = funDef symv binds
+        SymV{nativ = Just _, over}
             | null over = do
                 g   ← getST
-                E.logmsg TRACEG sym.pos (text "native var:" 
-                            <+> text (nice sym.name g) <+> text "∷"
-                            <+> text (nicer sym.typ.rho g) 
-                            <>  text ", depth="  <> anno sym.depth
-                            <>  text ", rstate=" <> (text • show) sym.rkind)
-                si  ← symInfo sym
-                return (comment : methCode g sym si)
+                E.logmsg TRACEG symv.pos (text "native var:"
+                            <+> text (nice symv.name g) <+> text "∷"
+                            <+> text (nicer symv.typ.rho g)
+                            <>  text ", depth="  <> anno symv.depth
+                            <>  text ", rstate=" <> (text • show) symv.rkind)
+                si <- symInfo $ SymVal.V symv
+                return (comment : methCode g symv si)
             | otherwise = return []         -- there is no code for overloads
             where
-                comment = JComment (nicer sym g) 
-        _  = error ("varCode: no SymV? " ++ nicer sym g)
+                comment = JComment (nicer symv g)
+        _ -> error ("varCode: bad SymV " ++ nicer symv g)
 
 --- Generate code for a function with arguments
-funDef ∷ Symbol → TreeMap Int Binding → StG [JDecl]
+funDef :: SymV Global -> TreeMap Int Binding -> StG [JDecl]
 funDef sym binds = do
     g   ← getST
     if g.toplevel
@@ -98,7 +100,7 @@ funDef sym binds = do
     else localFun sym binds
 
 --- Generate code for a top level function
-topFun ∷ Symbol → TreeMap Int Binding → StG [JDecl]
+topFun :: SymV Global -> TreeMap Int Binding -> StG [JDecl]
 topFun (sym@SymV {expr = Just dx}) binds = do
     g   ← getST
     E.logmsg TRACEG sym.pos (text "topFun:" 
@@ -108,7 +110,7 @@ topFun (sym@SymV {expr = Just dx}) binds = do
                 <>  text ", rstate=" <> (text • show) sym.rkind)
 
     -- x   ← dx                -- get expression
-    si  ← symInfo sym
+    si <- symInfo $ SymVal.V sym
 
     let !arity = length si.argSigs
     when (arity != sym.depth) do
@@ -124,7 +126,7 @@ topFun (sym@SymV {expr = Just dx}) binds = do
         argAttr  = if isTailRec then empty else attrFinal
         ctxArgs  = map (unFinal isTailRec) (zipWith (constraintArg g)  sym.typ.rho.context  ctxNames)
         methArgs  = argDefs argAttr si argNames
-        methName  = (symJavaName g sym).base
+        methName  = (symJavaName g $ SymbolT.V sym).base
         attr
             | unsafe     = attrs [JUnchecked, JFinal, JPublic, JStatic]
             | otherwise  = attrs [JFinal, JPublic, JStatic]
@@ -180,7 +182,7 @@ topFun sym binds = do
     as well as other let bound items the code may reference.
 -}
 
-localFun ∷ Symbol → TreeMap Int Binding → StG [JDecl]
+localFun :: SymV Global -> TreeMap Int Binding -> StG [JDecl]
 localFun (sym@SymV {expr = Just dx}) binds = do
     g ← getST
     E.logmsg TRACEG sym.pos (text "localFun:" 
@@ -189,7 +191,7 @@ localFun (sym@SymV {expr = Just dx}) binds = do
                 <>  text ", depth="  <> anno sym.depth
                 <>  text ", rstate=" <> (text • show) sym.rkind)
 
-    si  ← symInfo sym
+    si <- symInfo $ SymVal.V sym
 
     let !arity = length si.argSigs
     when (arity != sym.depth) do
@@ -238,7 +240,7 @@ unFinal s (arg@(a,b,c,d))
     Results in a simple java lambda.
 -}
 innerFun ∷ Symbol → TreeMap Int Binding → StG [JDecl]
-innerFun (sym@SymV {expr = Just dx}) binds = do
+innerFun (SymbolT.V (sym@SymV {expr = Just dx})) binds = do
     g ← getST
     E.logmsg TRACEG sym.pos (text "innerFun:" 
             <+> text (nice sym.name g) <+> text "∷"
@@ -252,11 +254,11 @@ innerFun (sym@SymV {expr = Just dx}) binds = do
         argNames    =  getArgs g
         methArgs    =  [ (attrFinal, sig, lazy jt, nm)
                             | (sig,jt,nm) <- zip3 sigs (take arity funcjt.gargs) argNames ]
-        methName    =  (symJavaName g sym).base
+        methName    =  (symJavaName g $ SymbolT.V sym).base
         funcjt      =  lambdaType (rhoJT g sym.typ.rho)
         symx        =  sym.{rkind ← _.differenceE RValue}
 
-    changeSym symx  -- remember this
+    changeSym $ SymbolT.V symx  -- remember this
     when (arity != length funcjt.gargs - 1) do
         E.error sym.pos (
             text "lambda depth" <+> anno arity <+> text "does not match function type "
@@ -315,13 +317,13 @@ cafCode (sym@SymV {name, depth = 0, expr = Just dx}) binds = do
             then  sym.rkind.unionE RMethod
             else  sym.rkind.differenceE RMethod
 
-    changeSym sym.{rkind=xkind}
+    changeSym $ SymbolT.V sym.{rkind=xkind}
 
     let comments = [
             JComment ((nicer sym g) ++ "  " ++ show sym.strsig ++ "  " ++ show xkind),
             JComment (nicer sym.typ g), 
             JComment (nicer x g)]
-        name  = symJavaName g sym           -- P.foo
+        name  = symJavaName g (SymbolT.V sym)           -- P.foo
 
     if not inmethod && rsimple && not self
     then do
@@ -382,13 +384,13 @@ cafCode (sym@SymV {name, depth = 0, expr = Just dx}) binds = do
 
 cafCode _ binds = error "cafCode: no caf"
 
-innerCaf ∷ Symbol → TreeMap Int Binding → Bool → StG [JDecl]
+innerCaf :: SymV Global -> TreeMap Int Binding -> Bool -> StG [JDecl]
 innerCaf sym binds mutual = do
     g ← getST
 
     E.logmsg TRACEG sym.pos (text ("compiling inner " ++ sym.nice g))
 
-    let memName    =  (symJavaName g sym).base
+    let memName    =  (symJavaName g (SymbolT.V sym)).base
         memAttrs   = attrs [JFinal]
         tweak :: JDecl -> JDecl
         tweak decl
@@ -403,7 +405,7 @@ innerCaf sym binds mutual = do
     
     run @action@ with @symbol@ in the current compiling environment
     -}
-compiling ∷ Symbol → StG 𝖆 → StG 𝖆
+compiling :: SymV Global -> StG a -> StG a
 compiling sym action = do
     changeST Global.{genEnv ← (sym:)}
     r ← action
@@ -543,8 +545,8 @@ genStmts jret rm ex binds
          case ex of
              App _ _ _
                  | Vbl {name}:args <- map fst (flatx ex),
-                   Just (sym@SymV {sid}) <- g.findit name,
-                   sid == (head (g.genEnv)).sid,
+                   Just (SymbolT.V (sym@SymV{sid})) <- g.findit name,
+                   sid == (head g.genEnv).sid,
                    length args == sym.depth = do
                         -- tail call
                         let argNames = map (++"f") 
@@ -749,11 +751,11 @@ genCaseStmt jret rm (x@Case {ckind,ex=cex,alts=calts}) binds = do
                  case pat of
                      PCon {qname} -> do
                          sym <- U.findD qname
-                         if sym.sid == Symbol.sid con then do
+                         if sym.sid == con.sid then do
                                  let nbexs = case stri of
                                          S ss -> zipWith (bexStr g) bexs (ss ++ allLazy)
                                          _    -> bexs
-                                 code <- matchCon noif pat con nbexs (genStmts jret rm ex) binds
+                                 code <- matchCon noif pat (SymbolT.D con) nbexs (genStmts jret rm ex) binds
                                  g <- getST
                                  pure ((altComm g:code):codes, nbexs)
                              else do
@@ -811,7 +813,7 @@ genCaseStmt jret rm nocase binds = error "genCaseStmt: no case"
     - Functions, i.e. things that have 'Symbol.depth' greater than 0 or a type with
       constraints or bound type variables.
 -}
-needClassForLet ∷ [Symbol] → Bool
+needClassForLet :: [SymV Global] -> Bool
 needClassForLet [SymV{typ, depth, rkind}] = RSelfRec `member` rkind 
                                                 || depth > 0
                                                 || not (null typ.bound)
@@ -862,14 +864,14 @@ genLet jret rm x binds = do
             incls = concat (take (length envxx - length after) envxx)
         genLetEnvs jret rm before incls after letex binds
     where
-        toSym = mapM U.findV 
+        toSym = mapM U.findV
         (letex, envqq) = collect x []
         -- collect the environments of nested lets in reverse order
         collect ∷ ExprT → [[QName]] → (ExprT,[[QName]])
         collect (x@Let {env,ex}) acc = collect ex (env:acc)
         collect x                acc = (x, acc)
 
-genLetEnvs ∷ (JExpr→[JStmt]) → JType → [Symbol] → [Symbol] → [Symbol] → ExprT → TreeMap Int Binding → StG [JStmt]
+genLetEnvs :: (JExpr -> [JStmt]) -> JType -> [SymV Global] -> [SymV Global] -> [SymV Global] -> ExprT -> TreeMap Int Binding -> StG [JStmt]
 genLetEnvs jret rm before inclass after ex binds = do
          g ← getST
          let bbinds = fold (mkbind g JAtom) binds before
@@ -882,21 +884,20 @@ genLetEnvs jret rm before inclass after ex binds = do
 
      where
          -- generate declaration of inner function or caf
-         gen ∷ Bool → TreeMap Int Binding → Symbol → StG [JDecl]
+         gen :: Bool -> TreeMap Int Binding -> SymV Global -> StG [JDecl]
          gen mutual binds sym
             | sym.depth == 0 = innerCaf sym binds mutual
-            | otherwise      = localFun sym binds 
-            --otherwise      = innerFun sym binds
+            | otherwise      = localFun sym binds
 
          -- set up simple bindings, generate the mutually dependent items in a class
          -- instantiate that class and make bindings that access the bindings from outside
-         genLetClass ∷ TreeMap Int Binding → [Symbol] → StG (TreeMap Int Binding,[JStmt])
+         genLetClass ∷ TreeMap Int Binding → [SymV Global] → StG (TreeMap Int Binding,[JStmt])
          genLetClass binds []   = pure (binds, [])
          genLetClass binds syms = do
             g <- getST
-            forM syms (changeSym . _.{rkind ← (BitSet.`unionE` RMethod)})
+            forM syms (changeSym . SymbolT.V . _.{rkind <- (BitSet.`unionE` RMethod)})
             -- refresh the symbols
-            syms ← mapM U.findV (map _.name syms)
+            syms <- mapM U.findV (map _.name syms)
             u <- uniqid
             let base = "Let$" ++ show u
                 name = "let$" ++ show u
@@ -915,7 +916,7 @@ genLetEnvs jret rm before inclass after ex binds = do
             -- stmts <- genStmts jret rm ex letbinds
             pure (letbinds, [JLocal letcl, JLocal var])
 
-         mkbind :: Global -> (String -> JX)  -> TreeMap Int Binding -> Symbol -> TreeMap Int Binding
+         mkbind :: Global -> (String -> JX) -> TreeMap Int Binding -> SymV Global -> TreeMap Int Binding
          mkbind g prefix binds sym = insert sym.sid bind binds 
             where
                 bind = Bind{stype=nicer sym.typ g, 
@@ -926,7 +927,7 @@ genLetEnvs jret rm before inclass after ex binds = do
                 mode = if sym.depth > 0 then strict
                         else if RValue `member` sym.rkind
                             then strict else lazy
-                name = (symJavaName g sym).base
+                name = (symJavaName g $ SymbolT.V sym).base
 
 
 --- genExpression returnexpression f expr binds
@@ -1040,7 +1041,7 @@ etaWrap ex sigs binds (rm@Func{gargs})   = do
                 [x] -> lazy x
                 gs  -> Func gs
             fake        = (U.patLocal (getpos ex) 0 "\\lambda").{depth=a,typ=ft}
-        mapM_ SymTab.enter syms 
+        mapM_ (SymTab.enter . SymbolT.V) syms
         call ← compiling fake (genExpr false  subrm nex newbinds)
         let lambda = JCast (boxed rm) JLambda{fargs = cargs ++ fargs, code}
             apply
@@ -1136,7 +1137,7 @@ genExpr rflg rm ex binds = do
               Just ft ← aex.typ = case aex of
                 (exx@Vbl{name = Local{uid}}) | 
                         Just bind <- lookup uid binds,
-                        Nothing <- g.findit exx.name >>= _.expr,              -- pattern bound
+                        Nothing <- g.findit exx.name >>= preview SymbolT._V >>= _.expr,              -- pattern bound
                         not bind.ftype.bound.null,        -- forall a. ....
                         -- make sure the contexts are in the right order
                         -- we can't pass forall a b. (Num a, Num b) =>
@@ -1231,32 +1232,24 @@ genExpr rflg rm ex binds = do
         -- Local Variables are being looked up in the bindings
         Vbl{name=Local{uid, base}, pos, typ}
             | Just b    ← lookup uid binds = do
-                --E.logmsg TRACEG pos (text "genExpr bound at " <+> nicest g b.ftype)
-                --E.logmsg TRACEG pos (text "not (null bound) " <+> (text . show) (not (null b.ftype.bound)))
-                --let mbsym = g.findit ex.name
-                --E.logmsg TRACEG pos (text "g.findit ex.name " <+> (text . show . fmap (const ())) mbsym)
-                --let cond = case mbsym of
-                --        Just sym -> not (isJust sym.expr && sym.depth > 0 && RMethod `member` sym.rkind)
-                --        _        -> false
-                --E.logmsg TRACEG pos (text "not local method " <+> (text . show) cond)
                 case b.ftype of
                     ForAll{bound, rho}
                         | not (null bound),
-                          Just sym ← g.findit ex.name,
+                          Just (SymbolT.V sym) <- g.findit ex.name,
                           -- exclude local methods
                           not (isJust sym.expr && sym.depth > 0 && RMethod `member` sym.rkind),
-                          b' ← if sym.depth == 0 && RMethod `member` sym.rkind
+                          b' <- if sym.depth == 0 && RMethod `member` sym.rkind
                                 then b.{jex ← JX.invoke []}     -- evaluate method CAFs
                                 else b
                         = instPatternBound pos b' ft >>= result
                         
                     ForAll{bound, rho}
                         | not (null bound),
-                          Nothing ←  g.findit ex.name >>= _.expr,       -- pattern bound
+                          Nothing <- g.findit ex.name >>= preview SymbolT._V >>= _.expr,       -- pattern bound
                         = instPatternBound pos b ft >>= result
                     _
                         | Func{} ← b.jtype,
-                          Just sym  ← g.findit ex.name,
+                          Just (SymbolT.V sym) <- g.findit ex.name,
                           RMethod `member` sym.rkind,
                           sym.depth > 0
                         = etaWrap (snd (U.returnType ft.rho))
@@ -1268,12 +1261,14 @@ genExpr rflg rm ex binds = do
                 sym <- U.findV ex.name
                 result (newBind g sym.typ (JAtom ("UNBOUND." ++ ex.name.base)))
         Con{pos, name}
-            | Just (sym@SymD{cid, flds}) ← g.findit name = 
+            | Just (SymbolT.D (sym@SymD{cid, flds})) <- g.findit name =
                 if (length flds > 0) 
                 then etaWrap (snd (U.returnType ft.rho))  
-                else if maybe false _.enum (g.findit name.tynm)
+                else if case g.findit name.tynm of
+                           Just (SymbolT.T symt) -> symt.enum
+                           _ -> false
                 then do
-                    let item        =  symJavaName g sym
+                    let item        =  symJavaName g (SymbolT.D sym)
                         stref       =  JX.staticMember item
                     result (newBind g ft stref)
                 else do
@@ -1281,7 +1276,7 @@ genExpr rflg rm ex binds = do
                         -- rhoctx      =  substRho subst sym.typ.rho
                         targs       =  map (boxed . tauJT g . substTau subst) sym.typ.tvars
                         -- contexts    =  map  (reducedCtx g)  rhoctx.context
-                        item        =  Ref (symJavaName g sym) targs
+                        item        =  Ref (symJavaName g (SymbolT.D sym)) targs
                         mk          =  JX.static "mk" item
                         call        =  JInvoke mk []
                     result (newBind g ft.{rho ← _.{context=[]}} call)
@@ -1300,9 +1295,7 @@ genExpr rflg rm ex binds = do
                         --            bind   = (newBind g ret inst).{jtype = retjt, jex  ← coerce}
                         --        pure bind
         Vbl{pos,name}
-            --| Just (sym@SymV{depth = 0, nativ = Just _}) = do
-            --    nativeCall g sym TreeMap.empty []
-            | Just (sym@SymV{}) ← g.findit name = do
+            | Just (SymbolT.V sym) <- g.findit name = do
                 let subst       =  unifySigma g sym.typ ft
                     rhoctx      =  substRho subst sym.typ.rho
                     targs       =  map (boxed . tauJT g . substTau subst) sym.typ.tvars
@@ -1310,15 +1303,15 @@ genExpr rflg rm ex binds = do
                 if (sym.depth > 0) 
                 then etaWrap (snd (U.returnType (rhoTauInSigma ft).rho))
                 else if isJust sym.nativ
-                then if wrappedOnly g sym
+                then if wrappedOnly g (SymbolT.V sym)
                     then do
-                        let method  =  symJavaName g sym
+                        let method  =  symJavaName g (SymbolT.V sym)
                             stref   =  (JX.staticMember method).{targs}
                             call    =  newBind g ret
                                             (JInvoke stref [])
                             bind    =  if isStrictJT rm then call else delayBind call
                         result bind
-                    else result (nativeCall g sym subst []) 
+                    else result (nativeCall g sym subst [])
                 else do 
                     let contexts    =  map  (reducedCtx g)  rhoctx.context
                         kret         = kArity (sigmaKind sym.typ)
@@ -1330,7 +1323,7 @@ genExpr rflg rm ex binds = do
                     ctxs    ←  mapM (resolveConstraint pos) contexts
                     case sym.name of
                         MName{tynm,base}
-                            | Just (SymC {tau}) <- g.findit tynm, prevtargs ← targs 
+                            | Just (SymbolT.C SymC{tau}) <- g.findit tynm, prevtargs <- targs
                             = do                                
                                 let spec   =  isSpecialClassName tynm       
                                     -- Our class member will have a phantom type var if from a special class
@@ -1359,7 +1352,7 @@ genExpr rflg rm ex binds = do
                                   )
                                 result bind
                         other = do
-                            let item    =  symJavaName g sym
+                            let item    =  symJavaName g (SymbolT.V sym)
                                 stref   =  (JX.staticMember item).{targs}
                                 call0
                                     | null targs, null ctxs  =  newBind g ft stref
@@ -1397,10 +1390,10 @@ genExpr rflg rm ex binds = do
                 args  = tail flat
                 -- is this a getter of a product type??
                 getter fun = case fun of
-                    Vbl{name} 
-                        | Just SymV{name=MName{tynm, base}} ← g.findit name,
-                          Just SymT{env,product=true} ← g.findit tynm =
-                            base `elem`  [ s | SymD{flds} ← values env, f ← flds, s ← f.name ]
+                    Vbl{name}
+                        | Just (SymbolT.V SymV{name=MName{tynm, base}}) <- g.findit name,
+                          Just (SymbolT.T SymT{env, product=true}) <- g.findit tynm ->
+                            base `elem` [ s | SymbolT.D symd <- values env, f <- symd.flds, s <- f.name ]
                     other -> false
 
                 -- determine whether result so far needs nesting, and which one
@@ -1416,8 +1409,8 @@ genExpr rflg rm ex binds = do
                               | otherwise             = result (delayBind bind)      -- possibly nested!
                 -- constructors
                 genApp (con@Con {pos, name, typ = Just csigma}) args = do
-                    sym     ← U.findD name
-                    symt    ← U.findT sym.name.tynm
+                    sym  <- U.findD name
+                    symt <- U.findT sym.name.tynm
                     () ← E.logmsg TRACEG pos (
                             text "genApp: constructor " <+> text name.base <+> text " :: "
                             <+> text (nice sym.typ g)
@@ -1483,7 +1476,7 @@ genExpr rflg rm ex binds = do
                             where nargs = length args
                         SymT{newt = true, product = true}
                             = genExpr rflg rm (head args) binds
-                        SymT{}
+                        _
                             = do
                                 -- resolve the contexts, if any
                                 ctxs    ←  mapM (resolveConstraint pos) contexts
@@ -1491,16 +1484,15 @@ genExpr rflg rm ex binds = do
                                 abinds  ←  sequence (zipWith3 genArgBind sigs argjts args)
                                 let arguments   =  ctxs ++ map  _.jex  abinds
 
-                                let cons = symJavaName g sym
+                                let cons = symJavaName g (SymbolT.D sym)
                                     jref = Ref{jname = cons, gargs = targs}
                                     make = JX.static "mk" jref
                                     call = JInvoke make arguments
                                     bind = (newBind g ft call).{jtype = retjt}
                                 appResult true bind
-                        _   = noGenApp "not yet" con args
 
                 genApp (vbl@Vbl {pos, name, typ = Just vsigma}) args = do
-                    symv ← U.findV name
+                    symv <- U.findV name
                     --vsigma  ←  (_.{bound=[]} . fst) <$> kiSigma [] [] xsigma
                     --ft      ←  (_.{bound=[]} . fst) <$> kiSigma [] [] ft
                     let symtyp = rhoTauInSigma symv.typ
@@ -1653,7 +1645,7 @@ genExpr rflg rm ex binds = do
 
                         -- class operations
                         SymV{name = MName{tynm,base}}
-                            | Just (SymC {tau}) <- g.findit tynm 
+                            | Just (SymbolT.C SymC{tau}) <- g.findit tynm
                             = do
                                 let inst   = JInvoke get.{targs} (tail arguments)
                                     targs  =  map (substJT jsubst . TArg)
@@ -1662,16 +1654,12 @@ genExpr rflg rm ex binds = do
                                     get    = JX.jexmem  (head ctxs) (latinF ++ mangled base)
                                     bind   = (newBind g ret inst).{jtype = retjt}
                                 appResult safetc  bind
-                            --| Nothing  ←  g.findit tynm = noGenApp (nicer tynm g ++ " not found") fun args
-                            --| Just other ← g.findit tynm,
-                            --    traceLn (tynm.base ++ " is a " ++ (nicer other g)) = undefined
-
 
                         -- native functions 
                         SymV{nativ = Just item} →  do
-                            if wrappedOnly g symv 
+                            if wrappedOnly g (SymbolT.V symv)
                             then do
-                                let method  =  symJavaName g symv
+                                let method  =  symJavaName g (SymbolT.V symv)
                                     stref   =  (JX.staticMember method).{targs}
                                     call0   =  newBind g ret
                                                     (JInvoke stref arguments)
@@ -1688,13 +1676,12 @@ genExpr rflg rm ex binds = do
 
                         -- ordinary functions
                         SymV{} → do
-                            let method  =  symJavaName g symv
+                            let method  =  symJavaName g $ SymbolT.V symv
                                 stref   =  (JX.staticMember method).{targs}
                                 call0   =  newBind g ret
                                                 (JInvoke stref arguments)
                                 call    =  call0.{jtype = retjt}
                             appResult safetc  call
-                        _ → noGenApp "unknown SymV" vbl args
                 genApp bad args = noGenApp "no Con or Vbl" bad args
                 noGenApp why bad args = do
                     E.error (getpos ex) (text "Cannot genApp"

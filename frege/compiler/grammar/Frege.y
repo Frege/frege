@@ -145,38 +145,40 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type importliste     ImportList
 //%type definitions     [Def]
 //%type definition      [Def]
-//%type import          Def
-//%type infix           Def
-//%type fixity          Def
-//%type typedef         Def
+//%type import          ImpDcl
+//%type infix           FixDcl
+//%type fixity          FixDcl
+//%type typedef         TypDcl
 //%type scontext        ContextS
 //%type scontexts       [ContextS]
 //%type ccontext        [ContextS]
 //%type sicontext       ContextS
 //%type sicontexts      [ContextS]
 //%type icontext        [ContextS]
-//%type insthead        Def
-//%type classdef        Def
-//%type instdef         Def
-//%type derivedef       Def
-//%type nativedef       Def
-//%type impurenativedef Def
-//%type datadef         Def
-//%type datainit        Def
-//%type annotation      [Def]
-//%type fundef          [Def]
-//%type documentation   Def
+//%type insthead        InsDcl
+//%type classdef        ClaDcl
+//%type instdef         InsDcl
+//%type derivedef       DrvDcl
+//%type nativedef       NatDcl
+//%type impurenativedef NatDcl
+//%type datadef         DatDcl
+//%type datainit        DatDcl
+//%type datajavadef     JavDcl
+//%type datajavainit    JavDcl
+//%type annotation      [AnnDcl]
+//%type fundef          FunDcl
+//%type documentation   DocDcl
 //%type topdefinition   [Def]
 //%type publicdefinition [Def]
 //%type plocaldef       [Def]
 //%type dplocaldef      [Def]
 //%type localdef        [Def]
 //%type localdefs       [Def]
-//%type letdef          [Def]
-//%type letdefs         [Def]
-//%type wherelet        [Def]
+//%type letdef          [LetMemberS]
+//%type letdefs         [LetMemberS]
+//%type wherelet        [LetMemberS]
 //%type visibledefinition [Def]
-//%type moduledefinition Def
+//%type moduledefinition ModDcl
 //%type wheredef        [Def]
 //%type tyvar           TauS
 //%type tvapp           TauS
@@ -351,6 +353,8 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%explain letdefs      declarations in a let expression or where clause
 //%explain datadef      a data definition
 //%explain datainit     a data definition
+//%explain datajavadef  a data definition for a native type
+//%explain datajavainit a data definition for a native type
 //%explain dalt         a variant of an algebraic datatype
 //%explain simpledalt   a variant of an algebraic datatype
 //%explain strictdalt   a variant of an algebraic datatype
@@ -500,7 +504,7 @@ definitions:
     ;
 
 definition:
-    documentation                       { single }
+    documentation                       { single . DefinitionS.Doc }
     | topdefinition
     | visibledefinition
     ;
@@ -509,14 +513,14 @@ visibledefinition:
     PRIVATE     publicdefinition        { \_\ds -> map (updVis Private) ds }
     | PROTECTED publicdefinition        { \_\ds -> map (updVis Protected) ds }
     | PUBLIC    publicdefinition        { \_\ds -> map (updVis Public) ds }
-    | ABSTRACT  datadef                 { \_\(d::Def) -> [d.{ctrs <- map updCtr}] }
+    | ABSTRACT  datadef                 { \_\(d::DatDcl) -> [DefinitionS.Dat $ d.{ctrs <- map updCtr}] }
     ;
 
 
 topdefinition:
-    import                              { single }
-    | infix                             { single }
-    | moduledefinition                  { single }
+    import                              { single . DefinitionS.Imp }
+    | infix                             { single . DefinitionS.Fix }
+    | moduledefinition                  { single . DefinitionS.Mod }
     | publicdefinition
     ;
 
@@ -566,11 +570,12 @@ documentation:
     ;
 
 publicdefinition:
-    typedef                             { single }
-    | datadef                           { single }
-    | classdef                          { single }
-    | instdef                           { single }
-    | derivedef                         { single }
+    typedef                             { single . DefinitionS.Typ }
+    | datadef                           { single . DefinitionS.Dat }
+    | datajavadef                       { single . DefinitionS.Jav }
+    | classdef                          { single . DefinitionS.Cla }
+    | instdef                           { single . DefinitionS.Ins }
+    | derivedef                         { single . DefinitionS.Drv }
     | localdef
     ;
 
@@ -582,9 +587,9 @@ localdefs:
     ;
 
 localdef:
-    annotation
-    | nativedef                         { single }
-    | fundef
+    annotation                      { map DefinitionS.Ann }
+    | nativedef                     { single . DefinitionS.Nat }
+    | fundef                        { single . DefinitionS.Fun }
     ;
 
 plocaldef:
@@ -595,14 +600,14 @@ plocaldef:
     ;
 
 dplocaldef:
-    documentation                       { single }
-    | documentation dplocaldef          { (:) }
+    documentation                       { single . DefinitionS.Doc }
+    | documentation dplocaldef          { \doc\ds -> DefinitionS.Doc doc : ds }
     | plocaldef
     ;
 
 letdef:
-    annotation
-    | fundef
+    annotation                     { map LetMemberS.Ann }
+    | fundef                       { single . LetMemberS.Fun }
     ;
 
 
@@ -751,7 +756,7 @@ operators:
     ;
 
 infix:
-    fixity operators        { \(def::Def)\o -> def.{ops = o}}
+    fixity operators        { \(def::FixDcl)\o -> def.{ops = o}}
     ;
 
 annotation:
@@ -772,7 +777,7 @@ annoitems:
 
 
 nativedef:
-    PURE impurenativedef        { \_\(d::Def) -> d.{isPure = true} }
+    PURE impurenativedef        { \_\(d::NatDcl) -> d.{isPure = true} }
     | impurenativedef
     ;
 
@@ -1019,20 +1024,23 @@ insthead:
 
 instdef:
     INSTANCE insthead wheredef {
-        \ins\head\defs -> (head::Def).{defs, pos = yyline ins}
+        \ins\head\defs -> (head::InsDcl).{defs, pos = yyline ins}
     }
     ;
 
 
 derivedef:
-    DERIVE insthead     { 
-        \d\(i::Def) -> DrvDcl {pos = yyline d, vis = Public, clas=i.clas, typ=i.typ, doc=Nothing}
+    DERIVE insthead     {
+        \d\(i::InsDcl) -> DrvDcl {pos = yyline d, vis = Public, clas=i.clas, typ=i.typ, doc=Nothing}
     }
     ;
 
 datadef:
-    datainit wheredef       { \def\defs -> (def::Def).{defs = defs} }
+    datainit wheredef       { \def\defs -> (def::DatDcl).{defs = defs} }
     ;
+
+datajavadef:
+    datajavainit wheredef   { \def\defs -> (def::JavDcl).{defs = defs} }
 
 nativepur:
     PURE NATIVE         { \_\_ -> true  }
@@ -1049,23 +1057,8 @@ gargs:
     | '{' '}'                   { \_\_      -> [] }
     ;
 
-
 datainit:
-    DATA CONID '=' nativepur nativespec {
-        \dat\d\docu\pur\(jt,gargs) -> JavDcl {pos=yyline d, vis=Public, name=Token.value d,
-                                    jclas=jt, vars=[], defs=[],
-                                    gargs,  
-                                    isPure = pur, 
-                                    doc=Nothing}
-    }
-    | DATA CONID dvars '=' nativepur nativespec {
-        \dat\d\ds\docu\pur\(jt,gargs) -> JavDcl {pos=yyline d, vis=Public, name=Token.value d,
-                                    jclas=jt, vars=ds, defs=[],
-                                    gargs, 
-                                    isPure = pur,
-                                    doc=Nothing}
-    }
-    | DATA CONID dvars '=' dalts {
+    DATA CONID dvars '=' dalts {
         \dat\d\ds\docu\alts -> DatDcl {pos=yyline d, vis=Public, name=Token.value d,
                                         newt = false,
                                         vars=ds, ctrs=alts, defs=[], doc=Nothing}
@@ -1089,6 +1082,23 @@ datainit:
         \dat\d\docu\alt -> DatDcl {pos=yyline d, vis=Public, name=Token.value d,
                                         newt = true,
                                         vars=[], ctrs=[alt], defs=[], doc=Nothing}
+    }
+    ;
+
+datajavainit:
+    DATA CONID '=' nativepur nativespec {
+        \dat\d\docu\pur\(jt,gargs) -> JavDcl {pos=yyline d, vis=Public, name=Token.value d,
+                                    jclas=jt, vars=[], defs=[],
+                                    gargs,  
+                                    isPure = pur, 
+                                    doc=Nothing}
+    }
+    | DATA CONID dvars '=' nativepur nativespec {
+        \dat\d\ds\docu\pur\(jt,gargs) -> JavDcl {pos=yyline d, vis=Public, name=Token.value d,
+                                    jclas=jt, vars=ds, defs=[],
+                                    gargs, 
+                                    isPure = pur,
+                                    doc=Nothing}
     }
     ;
 
@@ -1221,13 +1231,7 @@ wherelet:
 fundef:
     funhead '=' expr        { \(ex,pats)\eq\expr -> fundef ex pats expr }
     | funhead guards        { \(ex,pats)\gds -> fungds ex pats gds }
-    | fundef wherelet       { \fdefs\defs ->
-        case fdefs of
-            [fd] | FunDcl {expr=x} <- fd = YYM.pure [fd.{expr = Let defs x}]
-            _ = do
-                yyerror (head fdefs).pos ("illegal function definition, where { ... } after annotation?")
-                YYM.pure fdefs
-    }
+    | fundef wherelet       { \(fd::FunDcl)\defs -> YYM.pure $ fd.{expr = Let defs fd.expr} }
     ;
 
 
@@ -1262,7 +1266,9 @@ aeq: ARROW | '=';
 
 lcqual:
     gqual
-    | expr '=' expr                { \e\t\x -> do { (ex,pat) <- funhead e; YYM.pure (Right (fundef ex pat x)) }}
+    | expr '=' expr                { \e\t\x -> do
+                                         (ex,pat) <- funhead e
+                                         YYM.pure $ Right $ single $ LetMemberS.Fun $ fundef ex pat x }
     | LET '{' letdefs '}'           { \_\_\ds\_ -> Right ds }
     ;
 

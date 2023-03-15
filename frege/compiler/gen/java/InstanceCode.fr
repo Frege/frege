@@ -7,6 +7,8 @@ import Lib.PP (text, <+>, </>, <+/>, <>)
 import Data.TreeMap as Map(values, lookup, delete, insert, TreeMap)
 import Data.List(zip4)
 
+import  frege.compiler.common.Lens (over)
+
 import Compiler.Utilities(findC, findV, forceTau, returnType)
 import Compiler.Javatypes(subTypeOf)
 
@@ -74,16 +76,13 @@ import Compiler.gen.java.VarCode(varCode, compiling, genExpression, genExpr)
     the class operations, like (++) and 'length'. 
 -}
 
-classCode ∷ Symbol → StG [JDecl]
-
-
-
-classCode  (sym@SymC{tau = TVar{var,kind}}) = do           -- type class
+classCode :: SymC Global -> StG [JDecl]
+classCode (sym@SymC{tau = TVar{var,kind}}) = do           -- type class
      g <- getST
-     let vals = values sym.env
+     let vals = map symMethAsSymV $ values sym.meth
          special = isSpecialClass sym
      abstrFuns ← mapSt (abstractFun sym) vals
-     let name  = (symJavaName g sym).base
+     let name  = (symJavaName g (SymbolT.C sym)).base
          -- this  = Constr (JName "" name) gargs
          gvars = if special 
                     then [targ g var KType] 
@@ -113,17 +112,24 @@ classCode sym = do
 --- Returns the compiler state prior to this action, which must be restored afterwards.
 lowerKindSpecialClasses = do
     g ← getST
-    let items = [ (c,v) | n ← specialClassNames, 
-                            c ← g.findit (TName pPreludeList n),
-                            v ← Map.values c.env ]
-    mapM_ (uncurry lowerKindAbstractFun) items
+    let items = [ (c,v) | n <- specialClassNames
+                        , c <- findSpecialClass g n
+                        , v <- notLink g <$> Map.values c.meth ]
+    mapM_ (\(c, v) -> lowerKindAbstractFun c v) items
     return g
+  where
+    findSpecialClass g n = case g.findit (TName pPreludeList n) of
+        Just (SymbolT.C symc) -> Just symc
+        Just _ -> error $ "lowerKindSpecialClasses: non-class name in specialClassNames: " ++ show n
+        Nothing -> Nothing
+    notLink _ (SymMeth.V s) = SymVal.V s
+    notLink g (SymMeth.L s) = error $ "lowerKindSpecialClasses: SymL in special class: " ++ s.nice g
 
-lowerKindAbstractFun ∷ Symbol → Symbol → StG ()
+lowerKindAbstractFun :: SymC Global -> SymVal Global -> StG ()
 lowerKindAbstractFun symc sym = do
         let classvar = symc.tau.var
-            newsym   = sym.{typ <- lowerKind classvar}
-        changeSym newsym
+            newsym   = over SymVal._typ (lowerKind classvar) sym
+        changeSym newsym.toSymbol
         -- force syminfo to regenerate information, if already present
         changeST Global.{gen ← _.{symi8 ← delete sym}}
         return ()
@@ -141,13 +147,13 @@ lowerKindAbstractFun symc sym = do
 
 
 --- declare abstract class Member function
-abstractFun ∷ Symbol → Symbol → StG [JDecl]
-abstractFun symc (sym@SymV{}) = do
+abstractFun :: SymC Global -> SymV Global -> StG [JDecl]
+abstractFun symc sym = do
     g <- getST
-    si <- symInfo sym
+    si <- symInfo (SymVal.V sym)
     let !classCtx = Ctx {pos=symc.pos, 
-                        cname = Symbol.name symc, 
-                        tau = Symbol.tau symc }
+                        cname = symc.name,
+                        tau = symc.tau }
         !ctxs = filter (not . sameCtx classCtx) sym.typ.rho.context
         -- special = isSpecialClass symc
         arrays  = isArrayClass symc -- are we compiling one of the array classes?
@@ -168,21 +174,10 @@ abstractFun symc (sym@SymV{}) = do
     let !result = JMethod {attr = attrs [JPublic],
                              gvars,
                              jtype = (strict . adapt . tauJT g . fst . returnType . _.{context=ctxs} . _.rho) sym.typ,    
-                             name = latinF ++ (symJavaName g sym).base,
+                             name = latinF ++ (symJavaName g (SymbolT.V sym)).base,
                              args = formalctxs ++ formalargs,
                              body = JEmpty}
     pure [JComment ((nicer sym g) ++ " :: " ++ nicer sym.typ g), result]
-
-abstractFun symc symx = do
-    g ← getST
-    E.fatal symx.pos (
-        text "abstractFun: argument is "
-            <+> text (nice symx g)
-            <+> text " for "
-            <+> text (nice symc g) 
-        ) 
-
-
 
 
 {--
@@ -209,7 +204,8 @@ abstractFun symc symx = do
     >     public Eq_Maybe(CEq<A> ctx) { ... }
     > }  
 -}
-instanceCode (sym@SymI {sid}) = do             -- instance definition
+instanceCode :: SymI Global -> StG [JDecl]
+instanceCode sym = do             -- instance definition
      g <- getST
      csym <- findC sym.clas
  
@@ -217,24 +213,25 @@ instanceCode (sym@SymI {sid}) = do             -- instance definition
          special = isSpecialClass csym
          -- the functions we must provide in the instance
          superMethods = [ m.name.base | c <- classes,
-                                   SymC{env} <- g.findit c,
-                                   m@SymV{}  <- values env ]
+                                   SymbolT.C SymC{meth} <- g.findit c,
+                                   SymMeth.V m <- values meth ]
          -- links in types that point to instance members of this class and its superclasses
          -- The goal is to have (links to) implementations of all super class methods. 
-         methods2 = case instTSym (Symbol.typ sym) g of
-              Just (tsym@SymT {pos}) -> [ alias |
-                                SymL {name, alias} <- values tsym.env, alias.{tynm?},    -- links
+         methods2 = case instTSym sym.typ g of
+              Just tsym -> [ alias |
+                                SymbolT.L SymL{name, alias} <- values tsym.env,
+                                alias.{tynm?},    -- links
                                 alias `notElem` methods1,                 -- avoid duplicates
                                 alias.base `elem` superMethods,           -- mentioning one of our methods
                                 name.base `notElem` map QName.base methods1,
-                                SymI {clas} <- g.findit alias.tynm, -- pointing to an instance
-                                SymC {supers} <- g.findit clas,     -- of a class that is in our hierarchy
+                                SymbolT.I SymI{clas} <- g.findit alias.tynm, -- pointing to an instance
+                                SymbolT.C SymC{supers} <- g.findit clas,     -- of a class that is in our hierarchy
                                 clas `elem` classes || any (`elem` classes) supers]
               _ -> error "unexpected result from instTSym"
-         methods1 = map Symbol.name (values sym.env)
+         methods1 = map (_.name) (values sym.meth)
          -- methods of super classes that are implemented in the type itself
-         methods3 = case instTSym (Symbol.typ sym) g of
-            Just (tsym@SymT {pos}) -> [ sym.name |
+         methods3 = case instTSym sym.typ g of
+            Just tsym -> [ sym.name |
                                  sym  <- values tsym.env,
                                  sym.name.base `elem` superMethods,
                                  sym.name.base `notElem` methods] where
@@ -242,18 +239,18 @@ instanceCode (sym@SymI {sid}) = do             -- instance definition
             _ -> error "unexpected result from instTSym" 
          methods  = methods1 ++ methods2 ++ methods3
  
-     let vals = values sym.env
+     let vals = values sym.meth
  
      let constraints = zipWith (constraintDef g)  sym.typ.rho.context (getCtxs g)
          constrargs  = zipWith (constraintArg g)  sym.typ.rho.context (getArgs g)
  
  
-     let instName = symJavaName g sym
+     let instName = symJavaName g $ SymbolT.I sym
          instjt   = boxed (rhoJT g sym.typ.rho.{context=[]})
          array    = Nativ{typ="[]", gargs=[strict instjt], generic=false}
          rawinst  = rawType instjt
          jtype = Ref instName []
-         etype = Ref (symJavaName g csym)  (if special 
+         etype = Ref (symJavaName g $ SymbolT.C csym) (if special
                                                 then [rawinst] 
                                                 else if isArrayClass csym 
                                                     then [array, instjt]
@@ -275,7 +272,7 @@ instanceCode (sym@SymI {sid}) = do             -- instance definition
             | null constrargs, special = [JMethod{
                             attr = attrs [JUnchecked, JPublic, JFinal, JStatic], 
                             gvars = [JTVar{var="r", bounds=UNBOUNDED}], 
-                            jtype = Constr (symJavaName g csym) [TArg "r"], 
+                            jtype = Constr (symJavaName g $ SymbolT.C csym) [TArg "r"],
                             name  = "mk", 
                             args  = [], 
                             body = JBlock{stmts = stmtssp}}]
@@ -290,7 +287,7 @@ instanceCode (sym@SymI {sid}) = do             -- instance definition
             where
                 gargs = map (TArg . _.var) gvars 
                 stmts = [JReturn (JCast jtype.{gargs} (JAtom "it"))]
-                stmtssp = [JReturn (JCast (Constr (symJavaName g csym) [TArg "r"]) (JAtom "it"))]
+                stmtssp = [JReturn (JCast (Constr (symJavaName g $ SymbolT.C csym) [TArg "r"]) (JAtom "it"))]
 
          singleton
             | null constrargs = [JMember{attr = attrTop, jtype = jtype.{gargs}, name="it", 
@@ -346,28 +343,22 @@ instanceCode (sym@SymI {sid}) = do             -- instance definition
                              ++ concat instImpls}     
      pure [JComment (nice sym g ++ " :: " ++ nice sym.typ g), result]
 
---- If given something else than a type class this is a fatal compiler error
-instanceCode sym = do
-    g ← getST
-    E.fatal sym.pos (
-            text "instanceCode: argument is "
-            <+> text (nice sym g) 
-        ) 
-
-instFun :: Symbol → Symbol → QName → StG JDecl
+instFun :: SymC Global -> SymI Global -> QName -> StG JDecl
 instFun symc symi mname = do
-        g       ←  getST
-        sym     ←  findV mname
+        g   <- getST
+        sym <- findV mname
         let classnames = symc.name:symc.supers
             special = isSpecialClass symc
-            cmems = [ m | cln ← classnames, SymC{env} ← g.findit cln, 
-                            m ← env.lookupS mname.base ]
+            cmems = [ symMethAsSymV m
+                    | cln <- classnames
+                    , SymbolT.C SymC{meth} <- g.findit cln
+                    , m <- meth.lookupS mname.base ]
         case cmems of
             [] → E.fatal symi.pos (text "trying to instFun " <+> text (nicer mname g)
                         <+> text " but no class member found.")
             cmem:_ → do 
                 -- replace symc with class where method was introduced
-                symc ← findC cmem.name.tynm
+                symc <- findC cmem.name.tynm
                 E.logmsg TRACEG symi.pos (text "instFun" <+> text (nicer sym g)
                     <+> text "for" <+> text (nicer cmem g))
                 -- We need to tweek the types a bit so that java type variables won't conflict.
@@ -512,7 +503,7 @@ instFun symc symi mname = do
                                 | (uid, sig, atom, jt) ← zip4 uids sigs atoms rgargs,
                                                         ex = JCast (lazy jt) (JCast Something atom) ]
                         | otherwise = binds
-                result ← compiling sym.{typ=fakety} (genExpr true retJT ex rawbinds)
+                result <- compiling sym.{typ=fakety} (genExpr true retJT ex rawbinds)
                 let rex
                         | special, retJTr != retJT = JCast retJTr (JCast Something result.jex)
                         | otherwise                = result.jex
@@ -536,12 +527,12 @@ instFun symc symi mname = do
 
                 -- finally make the function
                 pure JMethod{attr = if special || unchecked rex 
-                                    || needsUnchecked fst cmem.name (Map.lookupDefault Something cvar.var jsubstr) 
+                                    || needsUnchecked fst cmem.name (Map.lookupDefault Something cvar.var jsubstr)
                                         then attrs [JUnchecked, JPublic, JFinal, JOverride]
                                         else attrs [JPublic, JFinal, JOverride], 
                             gvars = targs g methty, 
                             jtype = retJTr, 
-                            name = latinF ++ (symJavaName g sym).base, 
+                            name = latinF ++ (symJavaName g (SymbolT.V sym)).base, 
                             args = [(attrFinal, pSigma, ctx, name) 
                                        | (ctx,name) ← zip cgargs 
                                                           (drop (length symi.typ.rho.context) 
@@ -549,3 +540,7 @@ instFun symc symi mname = do
                                     ++ [(attrFinal, pSigma, lazy jt, name)
                                         | (jt,name) ← zip vgargs args], 
                             body = JBlock{stmts=[JReturn rex]}}
+
+private symMethAsSymV :: SymMeth Global -> SymV Global
+private symMethAsSymV (SymMeth.V symv) = symv
+private symMethAsSymV _ = error "InstanceCode: all methods should have been resolved"
