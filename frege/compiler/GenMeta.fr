@@ -141,21 +141,21 @@ genmeta = do
 
     -- let ops = [ mkOp (s,x) | (s,x) <- each g.optab, x >= LOP0 ]
 
-    let asyms = [sym | sym@SymA {pos} <- values g.thisTab, sym.vis!=Private]
+    let asyms = [sym | SymbolT.A sym <- values g.thisTab, sym.vis!=Private]
     symas <- liftStG $ mapSt annoSymA asyms
 
 
-    let csyms = [sym | sym@SymC {pos} <- values g.thisTab, sym.vis!=Private]
+    let csyms = [sym | SymbolT.C sym <- values g.thisTab, sym.vis!=Private]
     symcs <- liftStG $ mapSt annoSymC csyms
 
-    let isyms = [sym | sym@SymI {pos} <- values g.thisTab, sym.vis!=Private]
+    let isyms = [sym | SymbolT.I sym <- values g.thisTab, sym.vis!=Private]
     symis <- liftStG $ mapSt annoSymI isyms
 
-    let tsyms = [sym | sym@SymT {pos} <- values g.thisTab, sym.vis!=Private]
+    let tsyms = [sym | SymbolT.T sym <- values g.thisTab, sym.vis!=Private]
     symts <- liftStG $ mapSt annoSymT tsyms
 
-    symvs <- liftStG $ envValues g.thisTab
-    symls <- liftStG $ envLinks g.thisTab
+    symvs <- liftStG $ envValues $ values g.thisTab
+    symls <- liftStG $ envLinks  $ values g.thisTab
 
     g <- getSTT
     ctime <- liftIO (System.currentTimeMillis())
@@ -200,23 +200,23 @@ genmeta = do
 
 
 --- create annotations for all SymV in an environment
-envValues :: Symtab -> StG [DOCUMENT]
-envValues env = do
-    let vsyms = [sym | sym@SymV {pos} <- values env, sym.vis != Private]
+envValues :: [Symbol] -> StG [DOCUMENT]
+envValues envsyms = do
+    let vsyms = [sym | SymbolT.V sym <- envsyms, sym.vis != Private]
     symvs <- mapSt annoSymV vsyms
     stio symvs
 
 --- create annotations for all SymL in an environment
-envLinks :: Symtab -> StG [DOCUMENT]
-envLinks env = do
+envLinks :: [Symbol] -> StG [DOCUMENT]
+envLinks envsyms = do
     g <- getST
-    let syms = [ sym | sym@SymL {alias} <- values env, sym.vis != Private]
+    let syms = [ sym | SymbolT.L sym <- envsyms, sym.vis != Private]
     mapM annoSymL syms
 
 --- create annotations for all SymD in an environment
-envCons :: Symtab -> StG [DOCUMENT]
-envCons env = do
-    let syms = [sym | sym@SymD {pos} <- values env]
+envCons :: [Symbol] -> StG [DOCUMENT]
+envCons envsyms = do
+    let syms = [sym | SymbolT.D sym <- envsyms]
     mapSt annoSymD syms
 
 
@@ -429,9 +429,9 @@ expIndex exp = encodeX exp >>= mbIndex
             -- the list of symbols corresponding to the let bound names
             syms ← mapM U.findV env
             -- make (and encode) the list of sigmas
-            sigs ← mapM (\s -> if Symbol.anno s then sigIndex s.typ else return (-1)) syms
+            sigs ← mapM (\s -> if SymV.anno s then sigIndex s.typ else return (-1)) syms
             -- make and encode the list of expressions
-            exps ← mapM (maybe (return 0) (>>=expIndex) . Symbol.expr) syms
+            exps ← mapM (maybe (return 0) (>>=expIndex) . _.expr) syms
             exp  ← expIndex ex
             if exp == 0 || any (<1) exps || any (<1) qexs
             then return Nothing
@@ -503,33 +503,35 @@ eaIndex expa = do
             changeST Global.{gen <- GenSt.{xunique <- (1+)} • GenSt.{xTree <- insert expa g.xunique}}
             stio g.xunique
 
+annoSymA :: SymA Global -> StG DOCUMENT
 annoSymA syma = do
     g  ←  getST
-    vars <- mapSt tauIndex (Symbol.vars syma)
-    typ  <- sigIndex (Symbol.typ syma)
+    vars <- mapSt tauIndex syma.vars
+    typ  <- sigIndex syma.typ
     kind <- kindIndex syma.kind
     let a = meta g "SymA" [
                 ("offset", anno syma.pos.first.offset),
-                ("name", annoG g (Symbol.name syma)),
+                ("name", annoG g syma.name),
                 ("vars", anno vars),
                 ("typ",  anno typ),
                 ("kind", anno kind),
                 ("publik", if syma.vis == Public then PP.nil else anno false),
-                ("doc", maybe PP.nil anno (Symbol.doc syma))
+                ("doc", maybe PP.nil anno syma.doc)
             ]
     stio a
 
+annoSymV :: SymV Global -> StG DOCUMENT
 annoSymV symv = do
     g <- getST
     gargs ← mapM tauIndex symv.gargs
-    case isPSigma (Symbol.typ symv) of
+    case isPSigma symv.typ of
         true -> E.fatal symv.pos (text (symv.nice g ++ " has no type."))
         false -> do
-            sig <- sigIndex (Symbol.typ symv)
+            sig <- sigIndex symv.typ
             -- inline candidates must be safe tail calls and no loops
             let !classop 
                     | MName tname _ <- symv.name,
-                      Just SymC{} <- g.find tname = isJust symv.expr      -- this is a class member
+                      Just (SymbolT.C _) <- g.find tname = isJust symv.expr      -- this is a class member
                     | otherwise = false
                 !candidate = classop || symv.exported
             -- U.logmsg TRACE9 symv.pos (text ((nicer symv g) 
@@ -580,32 +582,30 @@ annoSymV symv = do
                 changeST Global.{gen <- _.{expSym <- insert symv.name exp}}
             stio a
 
+annoSymL :: SymL Global -> StG DOCUMENT
 annoSymL sym = do
     g ← getST
     pure $ meta g "SymL" [
-                    ("offset", anno (Symbol.pos sym).first.offset),
-                    ("name",  annoG g (Symbol.name  sym)),
-                    ("alias", annoG g (Symbol.alias sym)),
+                    ("offset", anno sym.pos.first.offset),
+                    ("name",  annoG g sym.name),
+                    ("alias", annoG g sym.alias),
                     ("publik", if sym.vis == Public then PP.nil else anno false),
-                    -- ("doc", maybe PP.nil anno (Symbol.doc sym))
                     ]
 
+annoSymD :: SymD Global -> StG DOCUMENT
 annoSymD sym = do
     g <- getST
-    typ <- sigIndex (Symbol.typ sym)
+    typ <- sigIndex sym.typ
     fields <- mapSt conFieldA sym.flds
     let a = meta g "SymD" [
-                    ("offset", anno (Symbol.pos sym).first.offset),
-                    ("name",  annoG g (Symbol.name  sym)),
-                    -- ("stri",  lit sym.strsig.show),
-                    ("cid",   anno (Symbol.cid   sym)),
+                    ("offset", anno sym.pos.first.offset),
+                    ("name",  annoG g sym.name),
+                    ("cid",   anno sym.cid),
                     ("typ",   anno typ),
                     ("fields", annoListG g fields),
-                    -- ("fnms",  if null fnms || all null fnms then PP.nil else anno fnms),
-                    -- ("ftys",  if null ftys then PP.nil else anno ftys),
                     ("priv",  if sym.vis == Private then anno true else PP.nil),
                     ("publik", if sym.vis == Public then PP.nil else anno false),
-                    ("doc", maybe PP.nil anno (Symbol.doc sym)),
+                    ("doc", maybe PP.nil anno sym.doc),
                     ("op", if sym.op == defaultInfix then PP.nil else anno (ord sym.op))]
     stio a
 
@@ -626,14 +626,15 @@ instance AnnoG ConFieldA where
         ]
 
 
+annoSymC :: SymC Global -> StG DOCUMENT
 annoSymC sym = do
     g ← getST
-    tau <- tauIndex (Symbol.tau sym)
-    meml <- envLinks  (Symbol.env sym)
-    memv <- envValues (Symbol.env sym)
+    tau <- tauIndex sym.tau
+    meml <- envLinks  $ map _.toSymbol $ values sym.meth
+    memv <- envValues $ map _.toSymbol $ values sym.meth
     let a = meta g "SymC" [
-                    ("offset", anno (Symbol.pos sym).first.offset),
-                    ("name",  annoG g (Symbol.name  sym)),
+                    ("offset", anno sym.pos.first.offset),
+                    ("name",  annoG g sym.name),
                     ("tau",   anno tau),
                     ("sups",  if null sym.supers then PP.nil else annoListG g sym.supers),
                     ("ins1",  if null sym.insts  then PP.nil else annoListG g (map fst sym.insts)),
@@ -641,35 +642,37 @@ annoSymC sym = do
                     ("lnks",  some meml),
                     ("funs",  some memv),
                     ("publik", if sym.vis == Public then PP.nil else anno false),
-                    ("doc", maybe PP.nil anno (Symbol.doc sym))]
+                    ("doc", maybe PP.nil anno sym.doc)]
     stio a
 
+annoSymI :: SymI Global -> StG DOCUMENT
 annoSymI sym = do
     g ← getST
-    typ <- sigIndex (Symbol.typ sym)
-    meml <- envLinks  (Symbol.env sym)
-    memv <- envValues (Symbol.env sym)
+    typ <- sigIndex sym.typ
+    meml <- envLinks  $ map _.toSymbol $ values sym.meth
+    memv <- envValues $ map _.toSymbol $ values sym.meth
     let a = meta g "SymI" [
-                    ("offset", anno (Symbol.pos sym).first.offset),
-                    ("name",  annoG g (Symbol.name  sym)),
-                    ("clas",  annoG g (Symbol.clas  sym)),
+                    ("offset", anno sym.pos.first.offset),
+                    ("name",  annoG g sym.name),
+                    ("clas",  annoG g sym.clas),
                     ("typ",   anno typ),
                     ("lnks",  some meml),
                     ("funs",  some memv),
-                    ("doc", maybe PP.nil anno (Symbol.doc sym))]
+                    ("doc", maybe PP.nil anno sym.doc)]
     stio a
 
+annoSymT :: SymT Global -> StG DOCUMENT
 annoSymT sym = do
     g ← getST
-    typ <- sigIndex (Symbol.typ sym)
-    memc <- envCons   (Symbol.env sym)
-    meml <- envLinks  (Symbol.env sym)
-    memv <- envValues (Symbol.env sym)
+    typ <- sigIndex sym.typ
+    memc <- envCons   $ values sym.env
+    meml <- envLinks  $ values sym.env
+    memv <- envValues $ values sym.env
     kind <- kindIndex sym.kind
     gargs ← mapM tauIndex sym.gargs
     let a = meta g "SymT" [
-                    ("offset", anno (Symbol.pos sym).first.offset),
-                    ("name",  annoG g (Symbol.name  sym)),
+                    ("offset", anno sym.pos.first.offset),
+                    ("name",  annoG g sym.name),
                     ("typ",   anno typ),
                     ("kind",  anno kind),
                     ("cons",  some memc),
@@ -679,8 +682,8 @@ annoSymT sym = do
                     ("isEnum",  if sym.enum then anno true else PP.nil),
                     ("pur",  if sym.pur then anno true else PP.nil),
                     ("newt",  if sym.newt then anno true else PP.nil),
-                    ("nativ", maybe PP.nil anno (Symbol.nativ sym)),
+                    ("nativ", maybe PP.nil anno sym.nativ),
                     ("gargs", if null gargs then PP.nil else anno gargs),
                     ("publik", if sym.vis == Public then PP.nil else anno false),
-                    ("doc", maybe PP.nil anno (Symbol.doc sym))]
+                    ("doc", maybe PP.nil anno sym.doc)]
     pure a

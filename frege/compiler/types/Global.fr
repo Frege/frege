@@ -120,7 +120,7 @@ data GenSt = !Gen {
     xTree   :: TreeMap ExprA Int          --- expr table
     expSym  :: TreeMap QName Int          --- keeps track of expression numbers used for exported symbols
     consts  :: TreeMap (Literalkind, String, Bool) Int   --- constant table
-    symi8   :: TreeMap Symbol SymInfo8     --- cached information about symbols return/arg types
+    symi8   :: TreeMap (SymVal Global) SymInfo8          --- cached information about symbols return/arg types
     jimport :: TreeMap String Pack         --- packages we have a java import statement for, by base name
     main    :: String                   --- bare name of the top level class, set in GenMeta
 }
@@ -135,8 +135,8 @@ data Global = !Global {
     packages :: TreeMap Pack Symtab         --- map packages to symbol table
     namespaces  :: TreeMap NSName Pack      --- map namespaces to packages
     javaEnv :: TreeMap String ([String],[QName]) --- names of supertypes and types that implement a certain java type
-    genEnv  :: [Symbol]                  --- symbols of function that is being compiled
-    locals :: TreeMap Int Symbol            --- local ids identified by name
+    genEnv  :: [SymV Global]             --- symbols of function that is being compiled
+    locals :: TreeMap Int (SymV Global)  --- local ids identified by name
     typEnv :: [QName]                    --- names of functions being type checked
     tySubst :: TreeMap Int Tau              --- substitutions for type variables
 } where
@@ -197,11 +197,11 @@ data Global = !Global {
 
     --- tell if a 'Symbol' is from the module we're just compiling
     ourSym :: Global -> Symbol -> Bool
-    ourSym g sy = our g (Symbol.name sy)
+    ourSym g sy = our g sy.name
 
     --- find the 'Symbol' for a 'QName', which may be a 'SymL' (symbolic link) 
     find :: Global -> QName  -> Maybe Symbol
-    find g (this@Local{uid}) =  g.locals.lookupI uid 
+    find g (this@Local{uid}) = fmap SymbolT.V $ g.locals.lookupI uid
     find g (this@TName p s) = case g.packages.lookup p of
         Just env -> env.lookupS this.key
         Nothing  -> Nothing
@@ -212,8 +212,8 @@ data Global = !Global {
     --- find a member of a type, type class or instance  
     findm ∷ Global → QName → String → Maybe Symbol
     findm g t s  = case findit g t  of
-        Just sy | sy.{env?} = sy.env.lookupS s
-        Just (SymA {typ}) = case instTSym typ g of
+        Just sy | Just env <- sy.env' = env.lookupS s
+        Just (SymbolT.A SymA{typ}) = case instTSym typ g of
             Just sym 
                 | Just r <- findm g sym.name s  = Just r
                 | ForAll _ (RhoTau{tau=tau1}) <- typ,       -- look if its 
@@ -230,7 +230,7 @@ data Global = !Global {
         Nothing -> Nothing
     --- follow a symbolic link
     follow ∷ Global → Symbol → Maybe Symbol
-    follow g (ali@SymL {alias}) = findit g alias
+    follow g (SymbolT.L SymL{alias}) = findit g alias
     follow g sym = Just sym
 
     --- tell if the 'MetaTv' is bound
@@ -257,21 +257,23 @@ inPrelude p g = (p `elem` map fst preludePacks)
 
 --- Determine type symbol of some type 
 --- This is either a function, or basically a 'Tau' type
-instTSym ∷ Sigma → Global → Maybe Symbol
-instTSym      (ForAll _ (RhoTau _ tau)) g = instTauSym tau g
---         no need to deconstruct this again
-instTSym _ {- (ForAll _ (RhoFun{}))  -} g = g.findit (TName pPreludeBase "->")
-
-
--- instTSym _ g = Nothing
+instTSym :: Sigma -> Global -> Maybe (SymT Global)
+instTSym (ForAll _ (RhoTau _ tau)) g = instTauSym tau g
+instTSym _ g = fmap assertSymT (g.findit (TName pPreludeBase "->"))
+  where
+    assertSymT (SymbolT.T symt) = symt
+    assertSymT _ = error "instTSym: frege.PreludeBase.(->) not a SymT??"
 
 
 --- return type symbol for constructor of tau, if any
-instTauSym ∷ Tau → Global → Maybe Symbol
+instTauSym :: Tau -> Global -> Maybe (SymT Global)
 instTauSym tau g = case tau of
-        TCon {name} -> Global.findit g name
+        TCon {name} -> fmap (assertSymT name) $ g.findit name
         TApp a _    -> instTauSym a g
         _           -> Nothing
+    where
+        assertSymT _ (SymbolT.T symt) = symt
+        assertSymT name _ = error $ "instTauSym: TCon{name=" ++ show name ++ "} refers to a non-SymT??"
 
 
 --- The names of the java primitive types 
