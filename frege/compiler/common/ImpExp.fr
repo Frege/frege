@@ -43,6 +43,7 @@ import Compiler.types.Positions
 import Compiler.types.QNames
 import Compiler.types.Packs
 import Compiler.types.Global
+import Compiler.types.Symbols (SymbolT)
 import Compiler.enums.SymState
 import Compiler.types.Strictness
 import Compiler.Utilities as U()
@@ -93,9 +94,9 @@ tauFromA :: JArray TauA -> TauA -> JArray Tau -> Tau
 tauFromA karray ta tarray = case ta.kind of
         0 -> tapp
         1 -> tfun
-        2 | Just qn <- ta.tcon = TCon pos qn
-        3 -> TVar pos (kindFromA karray.[ta.suba] karray tarray) ta.tvar
-        k | k>=8, k<=13 = TVar pos KType "?"
+        2 | Just qn <- ta.tcon = TauT.Con TCon{pos, name=qn}
+        3 -> TauT.Var TVar{pos, kind=kindFromA karray.[ta.suba] karray tarray, var=ta.tvar}
+        k | k>=8, k<=13 = TauT.Var TVar{pos, kind=KType, var="?"}
           | otherwise = error ("illegal tau kind " ++ show k ++ " in tau")
     where
         pos  = Position.null
@@ -121,8 +122,8 @@ ctRho ct = RhoA{rhofun=ct.rhofun,
 --- At this point we don't have a sigma array yet, hence we use an array of 'SigmaA'
 rhoFromA :: JArray TauA -> JArray Tau -> JArray SigmaA -> RhoA -> JArray Rho -> Rho
 rhoFromA karray tarray sarray ra rarray = case ra of
-        RhoA{rhofun=false} = RhoTau{context, tau}
-        RhoA{rhofun=true}  = RhoFun{context, sigma, rho}
+        RhoA{rhofun=false} = RhoT.Tau RhoTau{context, tau}
+        RhoA{rhofun=true}  = RhoT.Fun RhoFun{context, sigma, rho}
     where
         context = map (ctxFromA tarray) ra.cont
         tau     = tarray.[ra.rhotau]
@@ -203,7 +204,7 @@ exprFromA  sarray earray exa = case exa.xkind of
                 pat <- dpat
                 ex  <- dex
                 pat <- U.pReturn pat        -- make sure it has numbers
-                syms <- mapSt U.mkLocal (patVars pat)
+                syms <- mapSt (fmap SymbolT.V . U.mkLocal) (patVars pat)
                 mkStrictPVars pat
                 ex <- U.mapEx true (U.replaceLocals syms) ex
                 stio CAlt {pat, ex}
@@ -212,11 +213,10 @@ exprFromA  sarray earray exa = case exa.xkind of
         triples xs          = error "list size must be multiple of 3"
         mklet triples body = do
             syms ← mapSt letbound triples
-            syms `foreach` 
-                \sym → changeSym sym.{
-                            expr ← fmap (>>= U.mapEx true (U.replaceLocals syms))}
-            ex   ← xref body >>= U.mapEx true (U.replaceLocals syms)
-            return Let{env=map Symbol.name syms, ex, typ=Nothing}
+            syms `foreach`
+                \sym -> changeSym $ SymbolT.V sym.{expr <- fmap (>>= U.mapEx true (U.replaceLocals $ map SymbolT.V syms))}
+            ex   ← xref body >>= U.mapEx true (U.replaceLocals $ map SymbolT.V syms)
+            return Let{env=map _.name syms, ex, typ=Nothing}
         letbound (varix, sigix, rhsix) = do
             pat ← pref varix >>= U.pReturn
             let pvar = patVars pat
@@ -224,10 +224,10 @@ exprFromA  sarray earray exa = case exa.xkind of
                 [p@PVar{}] → do
                     sym ← U.mkLocal p
                     let bound = sym.{expr = Just (xref rhsix),
-                                     typ  = if sigix >= 0 
-                                                then nSigma sigix 
+                                     typ  = if sigix >= 0
+                                                then nSigma sigix
                                                 else pSigma}
-                    changeSym bound
+                    changeSym $ SymbolT.V bound
                     return bound
                 _ -> do
                     g <- getST
@@ -238,7 +238,7 @@ exprFromA  sarray earray exa = case exa.xkind of
         mkStrictPVars PUser{pat,lazy}
             | PVar{pos,uid,var} <- pat = do
                 sym <- U.findV (Local {base=var, uid})
-                changeSym sym.{state=StrictChecked, strsig=if lazy then U else S[]}
+                changeSym $ SymbolT.V sym.{state=StrictChecked, strsig=if lazy then U else S[]}
             | otherwise          = mkStrictPVars pat
         mkStrictPVars PAnn{pat}  = mkStrictPVars pat
         mkStrictPVars PAt{pat}   = mkStrictPVars pat

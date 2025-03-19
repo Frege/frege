@@ -71,6 +71,7 @@ import  Compiler.types.Global as G;
 
 import  Compiler.common.Mangle;
 import  Compiler.common.Errors as E();
+import  Compiler.common.Lens (set);
 import  Compiler.common.Resolve as R(enclosed);
 
 import Lib.PP (group, break, msgdoc);
@@ -106,8 +107,9 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type modulename1    (String, Position)
 //%type nativename      String
 //%type rawnativename   String
-//%type nativespec      (String, Maybe [TauS])
-//%type gargs           [TauS]
+//%type nativespec      (String, Maybe [TVar SName])
+//%type gargvars        [TVar SName]
+//%type gargs           [TVar SName]
 //%type nativepur       Bool
 //%type docs            String
 //%type docsO           (Maybe String)
@@ -134,7 +136,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type annoitem        Token
 //%type fitem           Token
 //%type jitem           String
-//%type methodspec      (Token, String, Maybe [TauS])
+//%type methodspec      (Token, String, Maybe [TVar SName])
 //%type importspec      ImportItem
 //%type importspecs     [ImportItem]
 //%type memspec         ImportItem
@@ -145,40 +147,42 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type importliste     ImportList
 //%type definitions     [Def]
 //%type definition      [Def]
-//%type import          Def
-//%type infix           Def
-//%type fixity          Def
-//%type typedef         Def
+//%type import          ImpDcl
+//%type infix           FixDcl
+//%type fixity          FixDcl
+//%type typedef         TypDcl
 //%type scontext        ContextS
 //%type scontexts       [ContextS]
 //%type ccontext        [ContextS]
 //%type sicontext       ContextS
 //%type sicontexts      [ContextS]
 //%type icontext        [ContextS]
-//%type insthead        Def
-//%type classdef        Def
-//%type instdef         Def
-//%type derivedef       Def
-//%type nativedef       Def
-//%type impurenativedef Def
-//%type datadef         Def
-//%type datainit        Def
-//%type annotation      [Def]
-//%type fundef          [Def]
-//%type documentation   Def
+//%type insthead        InsDcl
+//%type classdef        ClaDcl
+//%type instdef         InsDcl
+//%type derivedef       DrvDcl
+//%type nativedef       NatDcl
+//%type impurenativedef NatDcl
+//%type datadef         DatDcl
+//%type datainit        DatDcl
+//%type datajavadef     JavDcl
+//%type datajavainit    JavDcl
+//%type annotation      [AnnDcl]
+//%type fundef          FunDcl
+//%type documentation   DocDcl
 //%type topdefinition   [Def]
 //%type publicdefinition [Def]
 //%type plocaldef       [Def]
 //%type dplocaldef      [Def]
 //%type localdef        [Def]
 //%type localdefs       [Def]
-//%type letdef          [Def]
-//%type letdefs         [Def]
-//%type wherelet        [Def]
+//%type letdef          [LetMemberS]
+//%type letdefs         [LetMemberS]
+//%type wherelet        [LetMemberS]
 //%type visibledefinition [Def]
-//%type moduledefinition Def
+//%type moduledefinition ModDcl
 //%type wheredef        [Def]
-//%type tyvar           TauS
+//%type tyvar           (TVar SName)
 //%type tvapp           TauS
 //%type tau             TauS
 //%type tapp            TauS
@@ -186,7 +190,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type simpletypes     [TauS]
 //%type tauSC           [TauS]
 //%type tauSB           [TauS]
-//%type dvars           [TauS]
+//%type dvars           [TVar SName]
 //%type sigex           SigExs
 //%type sigexs          [SigExs]
 //%type sigma           SigmaS
@@ -332,6 +336,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%explain nativename   a valid java identifier
 //%explain rawnativename   a valid java identifier
 //%explain nativespec   a native generic type
+//%explain gargvars     a list of type variables separated by ','
 //%explain gargs        native generic type arguments
 //%explain nativepur    a native data type
 //%explain documentation documentation
@@ -351,6 +356,8 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%explain letdefs      declarations in a let expression or where clause
 //%explain datadef      a data definition
 //%explain datainit     a data definition
+//%explain datajavadef  a data definition for a native type
+//%explain datajavainit a data definition for a native type
 //%explain dalt         a variant of an algebraic datatype
 //%explain simpledalt   a variant of an algebraic datatype
 //%explain strictdalt   a variant of an algebraic datatype
@@ -500,7 +507,7 @@ definitions:
     ;
 
 definition:
-    documentation                       { single }
+    documentation                       { single . DefinitionS.Doc }
     | topdefinition
     | visibledefinition
     ;
@@ -509,14 +516,14 @@ visibledefinition:
     PRIVATE     publicdefinition        { \_\ds -> map (updVis Private) ds }
     | PROTECTED publicdefinition        { \_\ds -> map (updVis Protected) ds }
     | PUBLIC    publicdefinition        { \_\ds -> map (updVis Public) ds }
-    | ABSTRACT  datadef                 { \_\(d::Def) -> [d.{ctrs <- map updCtr}] }
+    | ABSTRACT  datadef                 { \_\(d::DatDcl) -> [DefinitionS.Dat $ d.{ctrs <- map updCtr}] }
     ;
 
 
 topdefinition:
-    import                              { single }
-    | infix                             { single }
-    | moduledefinition                  { single }
+    import                              { single . DefinitionS.Imp }
+    | infix                             { single . DefinitionS.Fix }
+    | moduledefinition                  { single . DefinitionS.Mod }
     | publicdefinition
     ;
 
@@ -566,11 +573,12 @@ documentation:
     ;
 
 publicdefinition:
-    typedef                             { single }
-    | datadef                           { single }
-    | classdef                          { single }
-    | instdef                           { single }
-    | derivedef                         { single }
+    typedef                             { single . DefinitionS.Typ }
+    | datadef                           { single . DefinitionS.Dat }
+    | datajavadef                       { single . DefinitionS.Jav }
+    | classdef                          { single . DefinitionS.Cla }
+    | instdef                           { single . DefinitionS.Ins }
+    | derivedef                         { single . DefinitionS.Drv }
     | localdef
     ;
 
@@ -582,9 +590,9 @@ localdefs:
     ;
 
 localdef:
-    annotation
-    | nativedef                         { single }
-    | fundef
+    annotation                      { map DefinitionS.Ann }
+    | nativedef                     { single . DefinitionS.Nat }
+    | fundef                        { single . DefinitionS.Fun }
     ;
 
 plocaldef:
@@ -595,14 +603,14 @@ plocaldef:
     ;
 
 dplocaldef:
-    documentation                       { single }
-    | documentation dplocaldef          { (:) }
+    documentation                       { single . DefinitionS.Doc }
+    | documentation dplocaldef          { \doc\ds -> DefinitionS.Doc doc : ds }
     | plocaldef
     ;
 
 letdef:
-    annotation
-    | fundef
+    annotation                     { map LetMemberS.Ann }
+    | fundef                       { single . LetMemberS.Fun }
     ;
 
 
@@ -751,7 +759,7 @@ operators:
     ;
 
 infix:
-    fixity operators        { \(def::Def)\o -> def.{ops = o}}
+    fixity operators        { \(def::FixDcl)\o -> def.{ops = o}}
     ;
 
 annotation:
@@ -772,7 +780,7 @@ annoitems:
 
 
 nativedef:
-    PURE impurenativedef        { \_\(d::Def) -> d.{isPure = true} }
+    PURE impurenativedef        { \_\(d::NatDcl) -> d.{isPure = true} }
     | impurenativedef
     ;
 
@@ -839,16 +847,16 @@ mbdot:
 rho:
     tapp EARROW rhofun               { \tau\t\rho -> do
                                         context <- tauToCtx tau
-                                        YYM.pure (Rho.{context} rho)
+                                        YYM.pure $ set RhoT._context context rho
                                      }
     | rhofun              
     ;
 
 rhofun:
-    tapp                            { RhoTau [] }
+    tapp                            { RhoT.Tau . RhoTau [] }
     | tapp  ARROW rhofun            { \a\_\b     -> case a of
-                                            TSig s -> RhoFun [] s b 
-                                            _ -> RhoFun [] (ForAll [] (RhoTau [] a)) b }
+                                            TSig s -> RhoT.Fun $ RhoFun [] s b
+                                            _ -> RhoT.Fun $ RhoFun [] (ForAll [] (RhoT.Tau $ RhoTau [] a)) b }
     ;
 
 /*
@@ -861,8 +869,8 @@ tau:
     tapp                 
     | forall             { TSig }
     | tapp ARROW tau     { \a\f\b ->  case a of
-                            TSig s -> TSig (ForAll [] (RhoFun [] s (RhoTau [] b))) 
-                            _      -> TApp (TApp (TCon (yyline f) (fromBase f.{tokid=CONID, value="->"})) a) b 
+                            TSig s -> TSig (ForAll [] (RhoT.Fun $ RhoFun [] s (RhoT.Tau $ RhoTau [] b)))
+                            _      -> TApp (TApp (TauT.Con TCon{pos=yyline f, name=fromBase f.{tokid=CONID, value="->"}}) a) b
                          }
     ;
 
@@ -881,8 +889,8 @@ tapp:
     ;
 
 simpletype:
-    tyvar
-    | tyname            { \(tn::SName) -> TCon (yyline tn.id) tn}
+    tyvar               {TauT.Var}
+    | tyname            { \(tn::SName) -> TauT.Con TCon{pos=yyline tn.id, name=tn} }
     | '(' tau ')'       { \_\t\_ -> t }
     | '(' tau ',' tauSC ')'
                         {\_\t\(c::Token)\ts\_ ->
@@ -890,22 +898,20 @@ simpletype:
                                 tus = t:ts;
                                 i = length tus;
                                 tname = fromBase c.{tokid=CONID, value=tuple i}
-                            in  (TCon (yyline c) tname).mkapp tus
+                            in  (TauT.Con TCon{pos=yyline c, name=tname}).mkapp tus
                         }
     | '(' tau '|' tauSB ')' { \_\t\e\ts\_ -> mkEither (yyline e) t ts }
-    | '[' tau ']'      {\a\t\_ -> TApp (TCon (yyline a)
-                                             (fromBase a.{tokid=CONID, value="[]"}))
-                                        t }
+    | '[' tau ']'      {\a\t\_ -> TApp (TauT.Con TCon{pos=yyline a, name=fromBase a.{tokid=CONID, value="[]"} }) t }
     ;
 
 
 
 tyvar:
-    VARID                           { \n          -> TVar (yyline n) KVar (Token.value n)  }
-    | '('  VARID DCOLON kind ')'    { \_\n\_\k\_  -> TVar (yyline n) k    (Token.value n)  }
-    | '('  VARID EXTENDS tauSC ')'  { \_\v\x\ks\_ -> TVar (yyline v) (KGen ks) (v.value)   } 
-    | '('  EXTENDS tauSC ')'        { \_\x\ks\_   -> TVar (yyline x) (KGen ks) ("<")       }
-    | '('  SUPER tapp ')'           { \_\x\k\_    -> TVar (yyline x) (KGen [k]) (">")      }
+    VARID                           { \n          -> TVar{pos=yyline n, kind=KVar, var=Token.value n} }
+    | '('  VARID DCOLON kind ')'    { \_\n\_\k\_  -> TVar{pos=yyline n, kind=k,    var=Token.value n} }
+    | '('  VARID EXTENDS tauSC ')'  { \_\v\x\ks\_ -> TVar{pos=yyline v, kind=KGen ks, var=v.value} }
+    | '('  EXTENDS tauSC ')'        { \_\x\ks\_   -> TVar{pos=yyline x, kind=KGen ks, var="<"} }
+    | '('  SUPER tapp ')'           { \_\x\k\_    -> TVar{pos=yyline x, kind=KGen [k], var=">"} }
     ;
 
 
@@ -934,7 +940,7 @@ simplekind:
     ;
 
 scontext: 
-    qconid tyvar                { \c\v -> Ctx {pos=Pos (SName.id c) v.pos.last, cname=c, tau=v} }
+    qconid tyvar                { \c\v -> Ctx {pos=Pos (SName.id c) v.pos.last, cname=c, tau=TauT.Var v} }
     ;
 
 
@@ -953,7 +959,7 @@ ccontext:
 classdef:
     CLASS ccontext EARROW CONID tyvar wheredef {
         \_\ctxs\_\c\v\defs -> do
-            sups <- classContext (Token.value c) ctxs (v::TauS).var
+            sups <- classContext ctxs v.var
             pure ClaDcl{
                     pos = yyline c, 
                     vis = Public,
@@ -970,8 +976,16 @@ classdef:
                     (yyerror (yyline kw) "classname missing after contexts")
                 when (SName.{ty?} cname)
                     (yyerror (yyline cname.id) "classname must not be qualified") 
+                clvar <- case tau of
+                    TauT.Var v -> pure v
+                    _ -> do
+                        -- actually, this case never happens because of the 'scontext' rule
+                        yyerror (yyline cname.id)
+                           $ "class declaration must be in the form of  C t  "
+                          ++ "where C is a class name and t is a type variable"
+                        pure $ TVar {pos=Position.null, kind=KVar, var="bad"}
                 pure ClaDcl {pos, vis = Public, name=cname.id.value,
-                               clvar = tau, supers = [],
+                               clvar, supers = [],
                                defs, doc = Nothing}
             _ -> Prelude.error "fatal: empty ccontext (cannot happen)" 
     }
@@ -998,7 +1012,7 @@ insthead:
             pos = yyline ea,
             vis = Public,
             clas = cls,
-            typ = ForAll [] (RhoTau ctxs tau),
+            typ = ForAll [] (RhoT.Tau $ RhoTau ctxs tau),
             defs = [],
             doc = Nothing}
     }
@@ -1009,7 +1023,7 @@ insthead:
                         (yyerror pos "classname missing after instance contexts")
                 pure InsDcl {
                     pos, vis = Public, clas = cname,
-                    typ = ForAll [] (RhoTau [] tau),
+                    typ = ForAll [] (RhoT.Tau $ RhoTau [] tau),
                     defs = [],
                     doc = Nothing,
                     }
@@ -1019,20 +1033,23 @@ insthead:
 
 instdef:
     INSTANCE insthead wheredef {
-        \ins\head\defs -> (head::Def).{defs, pos = yyline ins}
+        \ins\head\defs -> (head::InsDcl).{defs, pos = yyline ins}
     }
     ;
 
 
 derivedef:
-    DERIVE insthead     { 
-        \d\(i::Def) -> DrvDcl {pos = yyline d, vis = Public, clas=i.clas, typ=i.typ, doc=Nothing}
+    DERIVE insthead     {
+        \d\(i::InsDcl) -> DrvDcl {pos = yyline d, vis = Public, clas=i.clas, typ=i.typ, doc=Nothing}
     }
     ;
 
 datadef:
-    datainit wheredef       { \def\defs -> (def::Def).{defs = defs} }
+    datainit wheredef       { \def\defs -> (def::DatDcl).{defs = defs} }
     ;
+
+datajavadef:
+    datajavainit wheredef   { \def\defs -> (def::JavDcl).{defs = defs} }
 
 nativepur:
     PURE NATIVE         { \_\_ -> true  }
@@ -1044,28 +1061,18 @@ nativespec:
     | nativename gargs          { \x\gs  ->  (x, Just gs) }
     ;
 
+gargvars:
+      tyvar               { single }
+    | tyvar ',' gargvars  { \h\_\t -> h:t }
+    ;
+
 gargs:
-      '{' tauSC '}'             { \_\ts\_   -> ts }
+      '{' gargvars '}'          { \_\ts\_   -> ts }
     | '{' '}'                   { \_\_      -> [] }
     ;
 
-
 datainit:
-    DATA CONID '=' nativepur nativespec {
-        \dat\d\docu\pur\(jt,gargs) -> JavDcl {pos=yyline d, vis=Public, name=Token.value d,
-                                    jclas=jt, vars=[], defs=[],
-                                    gargs,  
-                                    isPure = pur, 
-                                    doc=Nothing}
-    }
-    | DATA CONID dvars '=' nativepur nativespec {
-        \dat\d\ds\docu\pur\(jt,gargs) -> JavDcl {pos=yyline d, vis=Public, name=Token.value d,
-                                    jclas=jt, vars=ds, defs=[],
-                                    gargs, 
-                                    isPure = pur,
-                                    doc=Nothing}
-    }
-    | DATA CONID dvars '=' dalts {
+    DATA CONID dvars '=' dalts {
         \dat\d\ds\docu\alts -> DatDcl {pos=yyline d, vis=Public, name=Token.value d,
                                         newt = false,
                                         vars=ds, ctrs=alts, defs=[], doc=Nothing}
@@ -1089,6 +1096,23 @@ datainit:
         \dat\d\docu\alt -> DatDcl {pos=yyline d, vis=Public, name=Token.value d,
                                         newt = true,
                                         vars=[], ctrs=[alt], defs=[], doc=Nothing}
+    }
+    ;
+
+datajavainit:
+    DATA CONID '=' nativepur nativespec {
+        \dat\d\docu\pur\(jt,gargs) -> JavDcl {pos=yyline d, vis=Public, name=Token.value d,
+                                    jclas=jt, vars=[], defs=[],
+                                    gargs,  
+                                    isPure = pur, 
+                                    doc=Nothing}
+    }
+    | DATA CONID dvars '=' nativepur nativespec {
+        \dat\d\ds\docu\pur\(jt,gargs) -> JavDcl {pos=yyline d, vis=Public, name=Token.value d,
+                                    jclas=jt, vars=ds, defs=[],
+                                    gargs, 
+                                    isPure = pur,
+                                    doc=Nothing}
     }
     ;
 
@@ -1147,7 +1171,7 @@ contype:
     simpletype                  { \tau -> case tau of 
                                     TSig s -> Field Position.null Nothing Nothing Public false s
                                     _      -> Field Position.null Nothing Nothing Public false 
-                                                (ForAll [] (RhoTau [] tau))
+                                                (ForAll [] (RhoT.Tau $ RhoTau [] tau))
                                 }
     ;
 
@@ -1221,13 +1245,7 @@ wherelet:
 fundef:
     funhead '=' expr        { \(ex,pats)\eq\expr -> fundef ex pats expr }
     | funhead guards        { \(ex,pats)\gds -> fungds ex pats gds }
-    | fundef wherelet       { \fdefs\defs ->
-        case fdefs of
-            [fd] | FunDcl {expr=x} <- fd = YYM.pure [fd.{expr = Let defs x}]
-            _ = do
-                yyerror (head fdefs).pos ("illegal function definition, where { ... } after annotation?")
-                YYM.pure fdefs
-    }
+    | fundef wherelet       { \(fd::FunDcl)\defs -> YYM.pure $ fd.{expr = Let defs fd.expr} }
     ;
 
 
@@ -1262,7 +1280,9 @@ aeq: ARROW | '=';
 
 lcqual:
     gqual
-    | expr '=' expr                { \e\t\x -> do { (ex,pat) <- funhead e; YYM.pure (Right (fundef ex pat x)) }}
+    | expr '=' expr                { \e\t\x -> do
+                                         (ex,pat) <- funhead e
+                                         YYM.pure $ Right $ single $ LetMemberS.Fun $ fundef ex pat x }
     | LET '{' letdefs '}'           { \_\_\ds\_ -> Right ds }
     ;
 

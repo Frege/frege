@@ -81,7 +81,7 @@ type Def = DefinitionS
 type Exp = ExprS
 type Pat = ExprS
 type Item = Token
-type Qual = Either (Maybe Pat, Exp) [Def]
+type Qual = Either (Maybe Pat, Exp) [LetMemberS]
 type Guard = (Position, [Qual], Exp)
 type SigTau = Either SigmaS TauS
 
@@ -160,8 +160,20 @@ opSname t = case t.qual of
 {--
     change the visibility of a definition
     -}
-updVis :: Visibility -> DefinitionS  -> DefinitionS
-updVis v d = d.{vis = v}
+updVis :: Visibility -> DefinitionS -> DefinitionS
+updVis _ (d@DefinitionS.Imp _) = d
+updVis _ (d@DefinitionS.Fix _) = d
+updVis _ (d@DefinitionS.Doc _) = d
+updVis v (DefinitionS.Typ d) = DefinitionS.Typ $ d.{vis = v}
+updVis v (DefinitionS.Cla d) = DefinitionS.Cla $ d.{vis = v}
+updVis v (DefinitionS.Ins d) = DefinitionS.Ins $ d.{vis = v}
+updVis v (DefinitionS.Drv d) = DefinitionS.Drv $ d.{vis = v}
+updVis v (DefinitionS.Ann d) = DefinitionS.Ann $ d.{vis = v}
+updVis v (DefinitionS.Nat d) = DefinitionS.Nat $ d.{vis = v}
+updVis v (DefinitionS.Fun d) = DefinitionS.Fun $ d.{vis = v}
+updVis v (DefinitionS.Dat d) = DefinitionS.Dat $ d.{vis = v}
+updVis v (DefinitionS.Jav d) = DefinitionS.Jav $ d.{vis = v}
+updVis _ (d@DefinitionS.Mod _) = d
 
 {--
     set the visibility of a constructor to 'Private'
@@ -172,7 +184,7 @@ updCtr dc = dc.{vis = Private}
 {--
     create an annotation
     -}
-annotation :: SigmaS -> Token -> Def
+annotation :: SigmaS -> Token -> AnnDcl
 annotation sig it = AnnDcl { pos=yyline it, vis=Public, name=it.value, typ=sig, doc=Nothing}
 
 -- exprToPat :: Exp -> YYM Global Pat
@@ -321,13 +333,15 @@ funhead ex = do
 
 
 {--
- * construct a function definition as list
+ * construct a function definition
  -}
-fundef lhs pats expr = [FunDcl {vis=Public, lhs, pats, expr, positions=[], doc=Nothing}];
+fundef :: ExprS -> [ExprS] -> ExprS -> FunDcl
+fundef lhs pats expr = FunDcl {vis=Public, lhs, pats, expr, positions=[], doc=Nothing}
 
 {--
  * construct a function with guards
  -}
+fungds :: ExprS -> [ExprS] -> [Guard] -> FunDcl
 fungds lhs pats gds = let
                 expr = gdsexpr gds
                 -- (gdln,_,_)   = head gds
@@ -424,6 +438,7 @@ refutable _              = true
  * > TQ [e | ]  L
  * > = e : L
  -}
+listComprehension :: Position -> ExprS -> [Qual] -> ExprS -> StG ExprS
 listComprehension pos e [] l2 = YYM.pure (cons `nApp` e `nApp` l2)
      where
         f = Position.first pos
@@ -469,7 +484,7 @@ listComprehension pos e (q:qs) l2 = case q of
             calts = if refutable pat then [calt2, calt1, calt3] else [calt2, calt1]
             ecas = Case CNormal usvar calts
             hdef = FunDcl {vis = Private, lhs=hvar, pats=[uspat], expr=ecas, positions = [], doc = Nothing}
-        YYM.pure (Let [hdef] (App hvar (App tlvar xs)))
+        YYM.pure (Let [LetMemberS.Fun hdef] (App hvar (App tlvar xs)))
   where
         rest = listComprehension pos e qs l2
 
@@ -511,7 +526,7 @@ mkEnumFromTo t1 es t2 ex t3
 mkEither :: Position -> TauS -> [TauS] -> TauS
 mkEither pos tau taus = fold mkE tau taus
     where
-        mkE left right = TApp (TApp e left) right
+        mkE left right = TApp (TApp (TauT.Con e) left) right
         tok = pos.first.{tokid=CONID, value="Either"}
         name = With1 (baseTokenAt tok) tok
         e = TCon{pos=Pos{first=tok, last=tok}, name}
@@ -675,12 +690,21 @@ litdec tok = case parseDecimal val of
         val = (Token.value tok).replaceAll ´[_Zz]´ ""       -- just the digits, plz
         dec x y = pure (Lit (yyline tok) LDec x y) 
 
-classContext :: String -> [ContextS] -> String -> StG [SName]
-classContext clas ctxs cvar = do
+{--
+   @classContext ctxs cvar@ raises an error if the super classes (contexts) mention unknown type variables.
+
+   Parameters:
+   - definitions of super classes
+   - type variables of the class
+   Returns:
+   - names of the super classes
+ -}
+classContext :: [ContextS] -> String -> StG [SName]
+classContext ctxs cvar = do
         g <- getST
         mapSt (sup g) ctxs
     where
-        sup g (Ctx {pos, cname, tau = TVar {var}}) | var == cvar = stio cname
+        sup g (Ctx {pos, cname, tau=TauT.Var v}) | v.var == cvar = stio cname
         sup g (Ctx {pos, cname, tau}) = do
             yyerror pos
                 ("illegal constraint on `" ++ nice tau g ++ "`, only `" ++ cvar ++ "` may be constrained here")
@@ -760,8 +784,9 @@ withTau f (Left sig)  = do
 expectTau = withTau return
 
 --- promote 'Left' 'TauS' to 'SigmaS'
-asSigma = either (ForAll [] . RhoTau []) id    
-    
+asSigma :: Either (TauT a) (SigmaT a) -> SigmaT a
+asSigma = either (ForAll [] . RhoT.Tau . RhoTau []) id
+
 
 {--
  * @tauToCtx pos tau@ tries to convert a tau to a context list.
@@ -777,7 +802,7 @@ asSigma = either (ForAll [] . RhoTau []) id
 tauToCtx :: TauS -> StG [ContextS]
 tauToCtx tau
     | TApp _ _ <- tau = case tau.flat of
-        (TCon {name = With1{ty, id}} : subtaus)
+        TauT.Con TCon{name = With1{ty, id}} : subtaus
           | ty.value==(baseTokenAt id).value, id.value ~ ´^\(,+\)$´ = do
             ctxss <- mapSt tauCtx subtaus
             let ctxs = [ ctx | ctxs <- ctxss, ctx <- ctxs ]
@@ -792,7 +817,7 @@ tauToCtx tau
                     ++ " and t is a type variable or a type application involving only "
                     ++ "type variables."))
             stio []
-        tauCtx (TApp (TCon {pos=tpos, name}) tvapp)
+        tauCtx (TApp (TauT.Con TCon{pos=tpos, name}) tvapp)
             | isTvApp tvapp = do
                 let pos = tpos.merge (getpos tvapp)
                 stio [Ctx {pos, cname=name, tau = tvapp}]

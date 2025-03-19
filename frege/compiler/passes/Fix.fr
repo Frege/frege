@@ -51,10 +51,14 @@ pass = do
  -}
 fixdefs :: [DefinitionS] -> StG [DefinitionS]
 fixdefs defs = do
-    ds <- unDoc defs >>= mapM unlet >>= pure . concat
+    ds <- unDoc defs >>= mapM (forFunDcl unlet) >>= pure . concat
     fs <- funJoin ds
-    checkUniq [ name | dcl@FunDcl {lhs} <- fs, name <- funbinding dcl ]
+    checkUniq [ name | DefinitionS.Fun dcl <- fs, name <- funbinding dcl ]
     return fs
+  where
+    forFunDcl :: (FunDcl -> StG [FunDcl]) -> DefinitionS -> StG [DefinitionS]
+    forFunDcl f (DefinitionS.Fun x) = map DefinitionS.Fun <$> f x
+    forFunDcl _ d = pure [d]
 
 
 checkUniq [] = return ()
@@ -76,7 +80,7 @@ checkUniq (name:as) = do
     > a = case let of (a,b) -> a
     > b = case let of (a,b) -> b
     -}
-unlet :: DefinitionS -> StG [DefinitionS]
+unlet :: FunDcl -> StG [FunDcl]
 unlet f
     | FunDcl{vis, lhs, pats, expr, doc} <- f,
       patbinding f = do
@@ -127,30 +131,56 @@ unlet f
 unDoc :: [DefinitionS] -> StG [DefinitionS]
 unDoc [] = stio []
 unDoc (defs@(d:ds))
-    | DocDcl {} <- d         = do r <- apply doc rest; unDoc r
-    | d.{defs?}              = do ndefs <- fixdefs d.defs
-                                  liftM2 (:) (stio d.{defs=ndefs}) (unDoc ds)
-    | otherwise              = liftM2 (:) (stio d) (unDoc ds)
+    | DefinitionS.Doc d' <- d
+                 = do r <- apply doc d'.pos rest
+                      unDoc r
+    | DefinitionS.Cla d' <- d
+                 = do defs <- fixdefs d'.defs
+                      (DefinitionS.Cla (d'.{defs}) :) <$> unDoc ds
+    | DefinitionS.Ins d' <- d
+                 = do defs <- fixdefs d'.defs
+                      (DefinitionS.Ins (d'.{defs}) :) <$> unDoc ds
+    | DefinitionS.Dat d' <- d
+                 = do defs <- fixdefs d'.defs
+                      (DefinitionS.Dat (d'.{defs}) :) <$> unDoc ds
+    | DefinitionS.Jav d' <- d
+                 = do defs <- fixdefs d'.defs
+                      (DefinitionS.Jav (d'.{defs}) :) <$> unDoc ds
+    | otherwise  = (d:) <$> unDoc ds
     where
-        pos  = d.pos
-        docs = takeWhile isDoc defs
+        docs = [ x | DefinitionS.Doc x <- takeWhile isDoc defs ]
         rest = dropWhile isDoc defs
-        isDoc (DocDcl {}) = true
-        isDoc _           = false
-        doc  = joined "\n\n" (map DefinitionS.text docs)
-        apply :: String -> [DefinitionS] -> StG [DefinitionS]
-        apply str []     = do E.warn pos (msgdoc ("documentation at end of file")); stio []
-        apply str (d:ds) = case d of
-            ImpDcl {pos=p} -> do
-                E.warn p (msgdoc ("there is no point in documenting an import, documentation from line "
+        isDoc (DefinitionS.Doc _) = true
+        isDoc _                   = false
+        doc  = joined "\n\n" (map _.text docs)
+        apply :: String -> Position -> [DefinitionS] -> StG [DefinitionS]
+        apply str pos []   = do E.warn pos (msgdoc ("documentation at end of file")); stio []
+        apply str pos (d:ds) = case d of
+            DefinitionS.Imp def -> do
+                E.warn def.pos (msgdoc ("there is no point in documenting an import, documentation from line "
                     ++ show pos ++ " ignored."))
                 stio (d:ds)
-            FixDcl {pos=p} -> do
-                E.warn p (msgdoc ("there is no point in documenting a fixity declaration, documentation from line "
+            DefinitionS.Fix def -> do
+                E.warn def.pos (msgdoc ("there is no point in documenting a fixity declaration, documentation from line "
                     ++ show pos ++ " ignored."))
                 stio (d:ds)
-            def | Just s <- def.doc = stio (def.{doc = Just (str ++ "\n\n" ++ s)}  : ds)
-                | otherwise         = stio (def.{doc = Just str} : ds)
+            DefinitionS.Mod def -> do
+                E.warn def.pos (msgdoc ("documenting a native module declaration is not supported. documentation from line "
+                    ++ show pos ++ " ignored."))
+                stio (d:ds)
+            DefinitionS.Doc def -> do
+                E.warn def.pos (msgdoc ("should not happen, this is a bug of the compiler. documentation from line "
+                    ++ show pos ++ " ignored."))
+                stio (d:ds)
+            DefinitionS.Typ def -> pure $ (DefinitionS.Typ $ def.{doc = Just $ str ++ maybe "" ("\n\n" ++) def.doc}) : ds
+            DefinitionS.Cla def -> pure $ (DefinitionS.Cla $ def.{doc = Just $ str ++ maybe "" ("\n\n" ++) def.doc}) : ds
+            DefinitionS.Ins def -> pure $ (DefinitionS.Ins $ def.{doc = Just $ str ++ maybe "" ("\n\n" ++) def.doc}) : ds
+            DefinitionS.Drv def -> pure $ (DefinitionS.Drv $ def.{doc = Just $ str ++ maybe "" ("\n\n" ++) def.doc}) : ds
+            DefinitionS.Ann def -> pure $ (DefinitionS.Ann $ def.{doc = Just $ str ++ maybe "" ("\n\n" ++) def.doc}) : ds
+            DefinitionS.Nat def -> pure $ (DefinitionS.Nat $ def.{doc = Just $ str ++ maybe "" ("\n\n" ++) def.doc}) : ds
+            DefinitionS.Fun def -> pure $ (DefinitionS.Fun $ def.{doc = Just $ str ++ maybe "" ("\n\n" ++) def.doc}) : ds
+            DefinitionS.Dat def -> pure $ (DefinitionS.Dat $ def.{doc = Just $ str ++ maybe "" ("\n\n" ++) def.doc}) : ds
+            DefinitionS.Jav def -> pure $ (DefinitionS.Jav $ def.{doc = Just $ str ++ maybe "" ("\n\n" ++) def.doc}) : ds
 
 {--
  * look for adjacent function definitions with same name and join them
@@ -158,30 +188,30 @@ unDoc (defs@(d:ds))
 funJoin :: [DefinitionS] -> StG [DefinitionS]
 funJoin [] = return []
 funJoin (defs@(d:ds))
-    | FunDcl {lhs} <- d, Just name <- funbinding d 
-    = do 
+    | (DefinitionS.Fun f) <- d, Just name <- funbinding f
+    = do
         joined <- joinFuns (Pos name name) (funs name)
         rest   <- funJoin  (next name)
-        return (joined:rest)
+        return (DefinitionS.Fun joined:rest)
     | otherwise = do
         rest   <- funJoin ds
         return (d:rest)
     where
-        funs name = takeWhile (sameFun name) defs
+        funs name = [f | DefinitionS.Fun f <- takeWhile (sameFun name) defs]
         next name = dropWhile (sameFun name) defs
-        sameFun name fundcl | Just n <- funbinding fundcl = n.value == name.value
+        sameFun name (DefinitionS.Fun fundcl) | Just n <- funbinding fundcl = n.value == name.value
         sameFun name _ = false
-        joinFuns :: Position -> [DefinitionS] -> StG DefinitionS
+        joinFuns :: Position -> [FunDcl] -> StG FunDcl
         joinFuns pos [f] = return f.{positions=[pos.first]}
         joinFuns pos (fs@(f:_))
             | null f.pats = do
                     E.error pos (msgdoc "function binding without patterns must have only a single equation")
                     return f
-            | (g:_) <- filter (\x -> DefinitionS.vis x != f.vis) fs = do
-                    E.error (getpos g.lhs) (msgdoc ("the visibility of " ++ g.name ++
+            | (g:_) <- filter (\x -> FunDcl.vis x != f.vis) fs = do
+                    E.error (getpos g.lhs) (msgdoc ("the visibility of the functions" ++
                                     " must match that of the equation in line " ++ show pos))
                     stio f
-            | (g:_) <- filter (\x -> length (DefinitionS.pats x) != length f.pats) fs = do
+            | (g:_) <- filter (\x -> length (FunDcl.pats x) != length f.pats) fs = do
                     E.error (getpos g.lhs) (msgdoc ("number of patterns (" ++ show (length g.pats) ++
                                    ") must be the same as in previous equations (" ++
                                    show (length f.pats)))
@@ -196,8 +226,8 @@ funJoin (defs@(d:ds))
                 -- newpats = [ PVar (pos.change VARID ("_"++i)) 0 ("_" ++ i) | i <- take arity allAsciiBinders]
                 newexpr = Case CNormal (mkTuple Con pos newvars) alts 
                 alts    = [ CAlt {pat=mkpTuple (getpos g.lhs) g.pats, ex = g.expr} |
-                             (g::DefinitionS) <- fs ]
-                olddoc  = [ s | Just s <- map DefinitionS.doc fs ]
+                             (g::FunDcl) <- fs ]
+                olddoc  = [ s | Just s <- map FunDcl.doc fs ]
                 newdoc  = if null olddoc then Nothing else Just (joined "\n\n" olddoc)
         joinFuns _ [] = error "fatal compiler error: joinFuns []"
 

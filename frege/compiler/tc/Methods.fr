@@ -127,7 +127,7 @@ niKind _                = NIStatic
     - A pure native function may not return mutable data.
 
     -}
-sanity (symv@SymV{pos, name, typ, nativ = Just item, pur, throwing, over})
+sanity (SymbolT.V (symv@SymV{pos, name, typ, nativ = Just item, pur, throwing, over}))
     | not (null over) = return ()       -- 
     | otherwise = do
         unconstrained typ.rho
@@ -167,9 +167,9 @@ sanity (symv@SymV{pos, name, typ, nativ = Just item, pur, throwing, over})
         nargs = length args
 
         stiotyp phantom tau = TApp (TApp st phantom) tau
-        tv s = TVar {pos, var = s, kind = KType}
-        st   = TCon {pos, name = TName pPreludeBase "ST"}
-        mt   = TCon {pos, name = mutableName}
+        tv s = TauT.Var TVar{pos, var = s, kind = KType}
+        st   = TauT.Con TCon{pos, name = TName pPreludeBase "ST"}
+        mt   = TauT.Con TCon{pos, name = mutableName}
                 
         sttyp tau
             | [s] <- keys (U.freeTauTVars [] empty tau) = stiotyp (tv s) tau
@@ -183,7 +183,7 @@ sanity (symv@SymV{pos, name, typ, nativ = Just item, pur, throwing, over})
             g <- getST
             let ctxs = case name of 
                     MName{tynm, base} 
-                        | Just SymC{} <- g.findit tynm 
+                        | Just (SymbolT.C _) <- g.findit tynm
                         = filter ((!= tynm) . Context.cname) (Rho.context r)
                     _   = r.context
             case ctxs of
@@ -258,7 +258,7 @@ sanity (symv@SymV{pos, name, typ, nativ = Just item, pur, throwing, over})
                                 goodMutable g phantom p r tau
                                 case phantom of
                                     -- warn if we have a mutable result of a non-function
-                                    Nothing | null args = U.symWarning E.warn symv (msgdoc("note that the java expression  "
+                                    Nothing | null args = U.symWarning E.warn (SymbolT.V symv) (msgdoc("note that the java expression  "
                                                         ++ item ++ "  is supposed to be constant."
                                                         ++ " Consider using IO or ST if the native implementation"
                                                         ++ " could modify it."))
@@ -309,10 +309,10 @@ sanity (symv@SymV{pos, name, typ, nativ = Just item, pur, throwing, over})
         commonValidArg first phantom arg = do 
             g <- getST
             case tauRho arg.rho of
-              RhoFun{} -> E.error (getpos arg) (msgdoc (
-                            "Higher rank polymorphic function"
-                            ++ " cannot appear as argument for a native function."))
-              RhoTau{tau} 
+              Nothing -> E.error (getpos arg) $ msgdoc
+                           $ "Higher rank polymorphic function"
+                          ++ " cannot appear as argument for a native function."
+              Just (argRhoTau@RhoTau{tau})
                 | Just _ <- U.isUnit tau
                 = if length args == 1 && (nki == NINew || nki == NIStatic) then return ()
                   else E.error (getpos arg) (msgdoc (
@@ -323,7 +323,7 @@ sanity (symv@SymV{pos, name, typ, nativ = Just item, pur, throwing, over})
                     Just _ -> E.error (getpos tau) (msgdoc (
                             "The type  Maybe ()  does not make sense in the native interface."))
                     _ | first -> if nki == NINew || nki == NIStatic 
-                            then validFirstArg phantom arg.{rho <- Rho.{tau = r}}
+                            then validFirstArg phantom arg.{rho=RhoT.Tau argRhoTau.{tau=r}}
                             else E.error (getpos tau) (msgdoc (
                                     nicer tau g ++ " makes no sense for  " ++ item
                                     ++ ", as `null` cannot be passed as first argument." ))
@@ -361,7 +361,7 @@ sanity (symv@SymV{pos, name, typ, nativ = Just item, pur, throwing, over})
                         | first, nki == NINewArray = E.error (getpos tau) (msgdoc 
                                 ("`Int` expected."))
                         | first, nki == NIMember || nki == NIMethod = case tau of
-                            TVar{} -> return ()
+                            TauT.Var _ -> return ()
                             _ -> E.error (getpos tau) (msgdoc (
                                     "Instance method or getter must be applied to java reference type."))
                         | otherwise = return ()                   
@@ -407,7 +407,7 @@ sanity (symv@SymV{pos, name, typ, nativ = Just item, pur, throwing, over})
                                 <+> text " is not a native type.")
                         return Nothing
                     -- it is at least a native one
-                    _ | sym.pur = do
+                    _ | sym.pur -> do
                         E.error (getpos r) (
                                 text "The type "
                                 <+> text (nicer tau g) 
@@ -417,8 +417,7 @@ sanity (symv@SymV{pos, name, typ, nativ = Just item, pur, throwing, over})
                         return Nothing
                     _ -> case phantom of
                         Nothing 
-                            -- Nothing <- mp = return (Just r)       -- mutable only in value
-                            | TCon{} <- mp = return (Just r)   -- Mutable RealWorld xxx 
+                            | TauT.Con _ <- mp = return (Just r)   -- Mutable RealWorld xxx
                             | otherwise -> do
                                 -- use of mutable type in non IO?
                                 E.error (getpos tau) (
@@ -469,29 +468,26 @@ sanity sym = do
 
 --- structural equality of 'Tau' types, variables are not unified, but compared by name
 matches :: Tau -> Tau -> Bool
-matches (TApp a b) (TApp c d)      = (a `matches` c) && (b `matches` d)
-matches TCon{name=a} TCon{name=b}  = a == b
-matches TVar{var=a} TVar{var=b}    = a == b
-matches _ _ = false
+matches = TauT.textualEq
 
 
 mutableName = TName pPreludeIO   "Mutable"
 eitherName  = TName pPreludeBase "Either"
-realWorld   = TCon{pos=Position.null, name = TName pPreludeBase "RealWorld"}
-unitTau     = TCon{pos=Position.null, name = TName pPreludeBase "()"}
+realWorld   = TauT.Con TCon{pos=Position.null, name = TName pPreludeBase "RealWorld"}
+unitTau     = TauT.Con TCon{pos=Position.null, name = TName pPreludeBase "()"}
 
 -- was the 'RealWorld' originating form a mutable only type?
 -- mutableOnly tcon = tcon `matches` realWorld && tcon.pos.first.tokid == MUTABLE
 
 --- check if _tau_ is (Either a b) and return Just (a,b) if this is so.
 isEither t = case Tau.flat t of
-    [TCon{name}, a, b] | name == eitherName = Just (a, b)
+    [TauT.Con c, a, b] | c.name == eitherName = Just (a, b)
     _ -> Nothing
 
 --- > isMutable g tau
 --- Checks if _tau_ is @(Mutable a b)@ and return @Just (a,b)@ if this is so.
 isMutable g t = case Tau.flat t of
-    [TCon{name}, a, b] | name == mutableName = Just (a, b)
+    [TauT.Con c, a, b] | c.name == mutableName = Just (a, b)
     _ ->  Nothing
 
 

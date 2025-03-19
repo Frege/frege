@@ -33,7 +33,6 @@ import  Compiler.common.Errors as E()
 import  Compiler.common.Types as CT
 import  Compiler.common.JavaName
 
-
 import  Compiler.classes.Nice
 
 import  Compiler.enums.Flags(TRACEG)
@@ -108,7 +107,7 @@ match assert (PVar {pos,uid,var}) bind cont binds = do
          (rbind, code) <- if strict then realize (jname g) sbind else pure (sbind, [])
          let stmt
                     | var == "_" = code
-                    | otherwise  = sComment ("bind " ++ sls ++ " var " ++ nice (Symbol.name vsym) g
+                    | otherwise  = sComment ("bind " ++ sls ++ " var " ++ nice vsym.name g
                                          ++ "  to  " ++ show rbind) : code
              nbinds = insert uid rbind binds
          rest <- cont nbinds
@@ -164,11 +163,11 @@ match assert (pat@PLit {kind=LBool, value}) bind cont binds = do
 match assert (pat@PCon {pos,qname,pats}) bind  cont binds = do
          -- g <- getST
          symd <- U.findD qname                   -- forall a.a -> List a -> List a
-         symt <- U.findT symd.name.tynm          -- forall a.List a 
-         if symt.enum then matchEnum symd symt
+         symt <- U.findT symd.name.tynm          -- forall a.List a
+         if symt.enum then matchEnum symd
              else if symt.product
                  then if symt.newt
-                     then matchNew     symd symt 
+                     then matchNew     symd symt
                      else matchProd    symd symt -- pat bind cont binds
                  else matchVariant symd symt -- pat bind cont binds
      where
@@ -178,24 +177,25 @@ match assert (pat@PCon {pos,qname,pats}) bind  cont binds = do
                         other    → kbnd
          comment g = sComment ("match  " ++ nice pat g
                                  ++ "  with  " ++ show bind)
-         -- matchNewt :: Symbol -> Symbol -> StG (Binding, [JStmt])
-         -- matchNewt symd symt = match (head pats) bind cont binds
-         matchEnum :: Symbol -> Symbol -> StG (Binding, [JStmt])
-         matchEnum symd symt = do
+         matchEnum :: SymD Global -> StG (Binding, [JStmt])
+         matchEnum symd = do
              g <- getST
              let sbnd = unKindedStrict g bind
              -- (bind, code1) <- realize "$" sbnd
              body  <- cont binds
-             let comp = JBin sbnd.jex "==" (JX.staticMember (symJavaName g symd)) 
+             let comp = JBin sbnd.jex "==" (JX.staticMember (symJavaName g $ SymbolT.D symd))
                  ifc  = if assert then JAssert comp : body else [JCond "if" comp body]
              stio (sbnd, comment g : ifc)
  
-         matchNew :: Symbol -> Symbol -> StG (Binding, [JStmt])
+         -- @symd@ must be a constructor of a newtype
+         matchNew :: SymD Global -> SymT Global -> StG (Binding, [JStmt])
          matchNew symd symt = do
             g <- getST
             let -- box0    = adaptSigma g bind
-                arg     = symd.typ.rho.sigma                  -- first arg of data con
-                tree    = unifySigma g symt.typ bind.ftype    -- instantiate type args a -> Int
+                arg     = case symd.typ.rho of
+                              RhoT.Fun RhoFun{sigma} -> sigma -- first arg of data con
+                              _ -> error "cannot happen; a newtype must have one argument"
+                tree    = unifySigma symt.typ bind.ftype      -- instantiate type args a -> Int
                 sig     = substSigma tree arg                 -- substitute in arg
             E.logmsg TRACEG (getpos pat) (
                     text "matchNew:" <+> text (nicer pat g) </> PP.nest 4 (
@@ -208,7 +208,7 @@ match assert (pat@PCon {pos,qname,pats}) bind  cont binds = do
             let  box1 = (newBind g sig bind.jex).{jtype = bind.jtype}
             match assert (head pats) box1 cont binds
 
-         matchVariant :: Symbol -> Symbol -> StG (Binding, [JStmt])
+         matchVariant :: SymD Global -> SymT Global -> StG (Binding, [JStmt])
          matchVariant symd symt = do
             g <- getST
             E.logmsg TRACEG (getpos pat) (text "match pattern "
@@ -216,7 +216,7 @@ match assert (pat@PCon {pos,qname,pats}) bind  cont binds = do
                 <+> text " with "
                 <+> (text . show) bind) 
             let box1 = unKindedStrict g bind                  -- List Int
-                tree = unifySigma g symt.typ bind.ftype       -- a -> Int 
+                tree = unifySigma symt.typ bind.ftype         -- a -> Int
                 rho  = substRho tree symd.typ.rho             -- Int -> List Int -> List Int
             (boxd, code1) <- realize "$" box1                 -- TList $1 = .....
  
@@ -224,7 +224,7 @@ match assert (pat@PCon {pos,qname,pats}) bind  cont binds = do
                  cname = if symt.product then "" else conGetter qname   -- _DCons
                  vbind = if symt.product then boxd else
                             Bind boxd.stype boxd.ftype
-                                (variantType g boxd.jtype symd) 
+                                (variantType g boxd.jtype $ SymbolT.D symd)
                                 (JInvoke (JX.jexmem boxd.jex cname) [])
  
             (varb, code2) <- if symt.product then return (boxd, [])
@@ -264,7 +264,7 @@ match assert (pat@PCon {pos,qname,pats}) bind  cont binds = do
 
             stio (boxd, (comment g : code1) ++ code2 ++ ifn)
  
-         matchProd :: Symbol -> Symbol -> StG (Binding, [JStmt])
+         matchProd :: SymD Global -> SymT Global -> StG (Binding, [JStmt])
          matchProd symd symt = matchVariant symd symt   -- for the time being
          
  
@@ -370,10 +370,11 @@ match _ pat b c bs = do
   * @pat@ must be a constructor application whose constructor is the same
   * as given in @con@
   -}
+matchCon :: Bool -> Pattern -> Symbol -> [Binding] -> (TreeMap Int Binding -> StG [JStmt]) -> TreeMap Int Binding -> StG [JStmt]
 matchCon assert (PCon {pos,qname, pats}) con bexs cont binds = do
          g <- getST
          sym <- U.findD qname
-         if sym.sid != Symbol.sid con
+         if sym.sid != con.sid
              then do
                  E.fatal pos (text ("matchCon: " ++ nice qname g ++ " against " ++ nice con g))
              else do

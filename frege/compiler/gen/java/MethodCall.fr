@@ -4,16 +4,20 @@ module frege.compiler.gen.java.MethodCall where
 import Data.TreeMap(TreeMap, values)
 import Data.List(elemBy)
 
+import frege.data.Monoid (First)
+import frege.compiler.common.Lens (Getting, _Just, preview)
+
 import Compiler.Utilities as U()
 
 import Compiler.classes.Nice(nice, nicer)
 
 import Compiler.types.AbstractJava
-import Compiler.types.Types(unST, Sigma, Tau, TauT, ForAll, RhoTau, RhoFun)
-import Compiler.types.Symbols(SymbolT)
+import Compiler.types.Types(unST, Sigma, TVar, Tau, TauT, ForAll, RhoT, RhoTau, RhoFun)
+import Compiler.types.Symbols(SymD, SymV, SymVal, SymbolT)
 import Compiler.types.Global
 import Compiler.types.JNames(JName, memberOf)
 import Compiler.types.Strictness()
+import Compiler.types.QNames(QName)
 
 import Compiler.common.Types as CT
 import Compiler.common.JavaName
@@ -22,11 +26,6 @@ import frege.compiler.tc.Methods (NIKind, niKind)
 
 import Compiler.gen.java.Common
 import Compiler.gen.java.Bindings 
-
-returnTau sigma = (fst • U.returnType) (Sigma.rho sigma)
-sigmaTau f (ForAll [] (RhoTau [] ty)) = f ty
-sigmaTau f (ForAll [] rhofun) = sigmaTau f (ForAll [] (tauRho rhofun))
-sigmaTau f _ = Nothing
 
 niSpecial g ty
      | Just _ <- U.isUnit ty        = true
@@ -37,39 +36,38 @@ niSpecial g ty
  
 
 --- Tells if a native symbol is wrapped 
-wrapped g (sym@SymV {nativ = Just item, throwing}) = not (null throwing) 
-                                                        || niSpecial g rty
-                                                        || not (null (wildReturn g sym))
+wrapped :: Global -> SymV Global -> Bool
+wrapped g (sym@SymV{nativ = Just item, throwing}) =
+    not (null throwing)
+    || niSpecial g rty
+    || not (null (wildReturn g sym))
      where
          (rty, _) = U.returnType sym.typ.rho
-wrapped g SymV {} = false
-wrapped g SymD {} = false
-wrapped g _ = error "wrapped: no symv"
- 
+wrapped _ _ = false
+
 {--
     Tell if a native function must be called through its wrapper.
   
     This is the case when it is wrapped for some other reason
     than that the return type is 'Maybe'.
   -}
-wrappedOnly g (sym@SymV {nativ = Just _, throwing}) 
+wrappedOnly g (SymbolT.V (symv@SymV {nativ = Just _, throwing}))
         = not (null throwing) 
             || niSpecial g rty && isNothing (U.isMaybe rty)
-            || not (null (wildReturn g sym))
+            || not (null (wildReturn g symv))
     where
-        (rty, _) = U.returnType sym.typ.rho
-wrappedOnly g sym = error "wrappedOnly - no native function"
--- 
--- 
+        (rty, _) = U.returnType symv.typ.rho
+wrappedOnly _ sym = error "wrappedOnly - no native function"
+
 --- returns a binding for a direct call of a native method
-nativeCall ∷ Global → Symbol → TreeMap String Tau → [JExpr] → Binding
-nativeCall g (sym@SymV {nativ = Just item, gargs}) subst aexs = newBind g bsig (call jrty args)
+nativeCall :: Global -> SymV Global -> TreeMap String Tau -> [JExpr] -> Binding
+nativeCall g (symv@SymV{nativ = Just item, gargs}) subst aexs = newBind g bsig (call jrty args)
     where
-        (rty, sigmas) = U.returnType sym.typ.rho
+        (rty, sigmas) = U.returnType symv.typ.rho
         taus  = [ tau | Just tau <- map U.sigmaAsTau sigmas ]
         brty  = substTau subst (baserty rty)
         bsig  = U.tauAsSigma brty
-        targs = map (boxed . tauJT g . substTau subst) gargs 
+        targs = map (boxed . tauJT g . substTau subst . TauT.Var) gargs
         args | [tau] <- taus, Just _ <- U.isUnit tau = []   -- no arguments
              | otherwise = zipWith (argEx g)  aexs taus
         bjt  = tauJT g brty
@@ -104,17 +102,20 @@ nativeCall g (sym@SymV {nativ = Just item, gargs}) subst aexs = newBind g bsig (
                let evalStG :: Global -> StG a -> a
                    evalStG g st = fst $ st.run g
                    x = do g <- getST
-                          si <- symInfo sym
-                          let name  = (head si.argSigs).rho.tau.name
+                          si <- symInfo $ SymVal.V symv
+                          -- this part is an unfinished, prototyped one. See PR #361, #363
+                          let unsafePartialView :: Getting (First a) s a -> s -> a
+                              unsafePartialView l = unJust . preview l
+                          let name  = (unsafePartialView TauT._Con (unsafePartialView RhoT._Tau (head si.argSigs).rho).tau).name
                               irsym = unJust $ g.findit name
-                              nms = mapMaybe (_.name) [ fld | x@SymD{} <- values irsym.env, fld <- x.flds ]
+                              nms = mapMaybe (_.name) [ fld | SymbolT.D x <- values (unsafePartialView _Just irsym.env'), fld <- x.flds ]
                           return $ flip mapMaybe nms $ \fldnm -> do
-                              nativrsym <- g.findit $ si.retSig.rho.tau.name
-                              nativsym <- TreeMap.lookup fldnm nativrsym.env
-                              nativnm <- nativsym.nativ
-                              let nativsi = evalStG g $ symInfo nativsym
-                              fldsym <- TreeMap.lookup fldnm irsym.env
-                              pure $ wrapIRMethod g (head args) (head si.argJTs) nativsi nativnm fldnm fldsym
+                              nativrsym <- g.findit $ (unsafePartialView TauT._Con (unsafePartialView RhoT._Tau si.retSig.rho).tau).name
+                              nativsym <- TreeMap.lookup fldnm (unsafePartialView _Just nativrsym.env')
+                              nativnm <- unsafePartialView SymbolT._nativ nativsym
+                              let nativsi = evalStG g $ symInfo $ unsafePartialView SymbolT._Val nativsym
+                              fldsym <- TreeMap.lookup fldnm (unsafePartialView _Just irsym.env')
+                              pure $ wrapIRMethod g (head args) (head si.argJTs) nativsi nativnm fldnm (unsafePartialView Symbol._Val fldsym)
                in JNewClass jrty [] (evalStG g x)
              NICast -> case args of
                  [a] -> JInvoke (JAtom item) args    -- was: JCast (Ref (JName "" item) []) a
@@ -147,15 +148,16 @@ nativeCall g (sym@SymV {nativ = Just item, gargs}) subst aexs = newBind g bsig (
              NIArraySet -> case args of
                 [a,b,c] -> JBin (JArrayGet a b) "=" c
                 _     -> JAtom "bad array set"      -- error was flagged before 
-nativeCall g sym subst aexs = error ("nativeCall: no function " 
+nativeCall g sym subst aexs = error ("nativeCall: no function "
     ++ show sym.pos.first.line
     ++ ", " ++ nicer sym g)
--- 
+
+wrapCode :: Global -> (JExpr -> JStmt) -> Tau -> SymV Global -> TreeMap String Tau -> [JExpr] -> [JStmt]
 wrapCode g jreturn rtau (sym@SymV {nativ = Just item, throwing}) subst aexs
     | Just (stau, atau) <- unST rtau = let
             sjt     = tauJT g stau          -- type #1 for parameterization of ST s a
             ajt     = tauJT g atau          -- return type of the ST action
-            ssig    = ForAll [] (RhoTau [] stau)
+            ssig    = ForAll [] $ RhoT.Tau $ RhoTau [] stau
             mktup x = JReturn (mkpure sjt ajt x)
             code    = wrapCode g mktup atau sym subst aexs 
             try     = JBlockX "try" code
@@ -217,42 +219,42 @@ wrapCode g jreturn rtau (sym@SymV {nativ = Just item, throwing}) subst aexs
         catch rty = case tauJT g rty of
                         Nativ{typ, gargs} -> "catch (" ++ typ ++ " ex)"
                         other -> error ("bad exception type " ++ show other)        
-wrapCode g jreturn rtau sym _ _ = error "wrapCode: no SymV"
- 
- 
+wrapCode _ _ _ _ _ _ = error "wrapCode - no native function"
+
+
 {--
     code for native functions and/or members
   -}
-methCode :: Global -> Symbol -> SymInfo8 -> [JDecl]
-methCode g (sym@SymV {nativ = Just item}) si = [
-        JComment ((nice sym g) ++ "  " ++ show sym.strsig ++ "  " ++ show sym.rkind),
-        JComment (nicer sym.typ g),
+methCode :: Global -> SymV Global -> SymInfo8 -> [JDecl]
+methCode g (symv@SymV {nativ = Just item}) si = [
+        JComment ((nice symv g) ++ "  " ++ show symv.strsig ++ "  " ++ show symv.rkind),
+        JComment (nicer symv.typ g),
         JComment ("the following type variables are probably wildcards: " ++ joined ", " (map _.var wildr)),
         JComment item] ++
                 (if arity then defs 
-                 else if wrapped g sym || niKind item != NIStatic 
+                 else if wrapped g symv || niKind item != NIStatic
                     then [member]
                     else [])
     where
         rjt         = tauJT g rty
         rArgs       = lambdaArgDef g attrFinal si.argSigs (getArgs g)
         wArgs       = argDefs attrFinal si (getArgs g)
-        wildr       = wildReturn g sym
-        name        = symJavaName g sym                        -- X.foo
-        ftargs      = targs g sym.typ                                -- <a,b,c>
+        wildr       = wildReturn g symv
+        name        = symJavaName g (SymbolT.V symv)                  -- X.foo
+        ftargs      = targs g symv.typ                                -- <a,b,c>
         args        = if haswrapper then wArgs else rArgs
-        haswrapper  = arity && wrapped g sym -- (not (null bnds))
+        haswrapper  = arity && wrapped g symv -- (not (null bnds))
         jreturn     = if arity  then JReturn else JEx
-        bndWcode  x = newBind g (ForAll [] (RhoTau [] rty))  x
+        bndWcode    = newBind g $ ForAll [] $ RhoT.Tau $ RhoTau [] rty
         attr
-            | not (null wildr) = attrs [JUnchecked, JPublic, JStatic, JFinal]
-            | unsafeCast g sym = attrs [JUnchecked, JPublic, JStatic, JFinal]
-            | otherwise        = attrTop
+            | not (null wildr)  = attrs [JUnchecked, JPublic, JStatic, JFinal]
+            | unsafeCast g symv = attrs [JUnchecked, JPublic, JStatic, JFinal]
+            | otherwise         = attrTop
  
-        wcode       = if wrapped g sym
-                        then wrapCode g jreturn rty sym TreeMap.empty (map (_.jex . instArg g) args)
+        wcode       = if wrapped g symv
+                        then wrapCode g jreturn rty symv TreeMap.empty (map (_.jex . instArg g) args)
                         else let
-                                bind = nativeCall g sym TreeMap.empty (map (_.jex . instArg g) args)
+                                bind = nativeCall g symv TreeMap.empty (map (_.jex . instArg g) args)
                             in [jreturn bind.jex]
         wrappers    = if haswrapper then [{- inst, -} wrapper] else [{-inst-}]
         wrapper     = JMethod {attr,
@@ -264,13 +266,13 @@ methCode g (sym@SymV {nativ = Just item}) si = [
          
         member = JMember {attr = attrTop,
                           jtype = rjt,
-                          name = (symJavaName g sym).base,
+                          name = (symJavaName g (SymbolT.V symv)).base,
                           init = Just (unex wcode)}
  
-        (rty, atys) = U.returnType sym.typ.rho
-        arity       = not (null atys) || not (null sym.typ.bound)
- 
-methCode g sym _ = Prelude.error ("line " ++ show sym.pos.first.line 
+        (rty, atys) = U.returnType symv.typ.rho
+        arity       = not (null atys) || not (null symv.typ.bound)
+
+methCode g sym _ = Prelude.error ("line " ++ show sym.pos.first.line
                     ++ ": can not compile " ++ nice sym g)
 
 {--
@@ -283,24 +285,24 @@ methCode g sym _ = Prelude.error ("line " ++ show sym.pos.first.line
 
     and we need to cast the result. 
 -}
-wildReturn ∷ Global → Symbol → [Tau]
-wildReturn g (symv@SymV{})  = [ v | v@TVar{} ← values (U.freeTauTVars [] TreeMap.empty ret),
-                                    not (stvar v.var),
-                                    not (elemBy (using _.var) v sigvars),
-                                    not (elemBy (using _.var) v itemvars)
-                            ]
+wildReturn :: Global -> SymV Global -> [TVar QName]
+wildReturn g symv =
+    [ v | v <- values (U.freeTauTVars [] TreeMap.empty ret)
+    , not (stvar v.var)
+    , not (elemBy (using _.var) v sigvars)
+    , not (elemBy (using _.var) v itemvars)
+    ]
     where
         (ret, sigs) = U.returnType symv.typ.rho
         -- identify ST phantom type variable, if any
         stvar = case unST ret of
-            Just (tv@TVar{}, _) → (tv.var ==)
+            Just (TauT.Var tv, _) → (tv.var ==)
             other → const false
         sigvars  = concatMap (values . U.freeRhoTVars [] TreeMap.empty . _.rho) sigs
-        itemvars = concatMap (values . U.freeTauTVars [] TreeMap.empty) symv.gargs
-wildReturn _ _ = []
+        itemvars = concatMap (values . U.freeTauTVars [] TreeMap.empty . TauT.Var) symv.gargs
 
 
-wrapIRMethod :: Global -> JExpr -> JType -> SymInfo8 -> String -> String -> Symbol -> JDecl
+wrapIRMethod :: Global -> JExpr -> JType -> SymInfo8 -> String -> String -> SymVal Global -> JDecl
 wrapIRMethod g this irjt nativsi nativnm fldnm fldsym =
   let nativargs = argDefs attrFinal (nativsi.{ argSigs <- tail, argJTs <- tail }) (getArgs g)
       fldstri = case fldsym.strsig of

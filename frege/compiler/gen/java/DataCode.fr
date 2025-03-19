@@ -20,8 +20,7 @@ import Compiler.gen.java.Bindings(assign)
 import Compiler.enums.Flags(TRACEG)
 
 --- Generate code for @data@ definitions
-dataCode :: Symbol → StG [JDecl]
--- dataCode (sym@SymT{}) = return []
+dataCode :: SymT Global -> StG [JDecl]
 {--
     Enumerations 
     (that is, data types where no constructor has any fields) 
@@ -45,7 +44,7 @@ dataCode (sym@SymT{enum = true}) = do
         constrs = [JMember{attr = attrTop, 
                     jtype = jtEnum, 
                     name = (javaName g s.name).base, 
-                    init = Just (JAtom (show s.cid))} | s@SymD{}  ← values sym.env]
+                    init = Just (JAtom (show s.cid))} | SymbolT.D s <- values sym.env]
         comment = JComment ("data " ++ sym.name.base ++ " :: " ++ show sym.kind)
     pure [comment, result]
 
@@ -80,7 +79,7 @@ dataCode (sym@SymT{ product = true }) = do
     g ← getST 
     E.logmsg TRACEG sym.pos (text ("dataCode for product " ++ nicer sym g))
     
-    con <- conDecls $ head [ con | con@SymD{} ← values sym.env ] 
+    con <- conDecls $ head [ con | SymbolT.D con <- values sym.env ]
     sub <- subDecls sym
 
     let jtype = rhoJT g sym.typ.rho
@@ -134,10 +133,10 @@ dataCode (sym@SymT{ nativ = Nothing, product = false, newt = false }) = do
     E.logmsg TRACEG sym.pos (text ("dataCode for native " ++ nicer sym g))
     
     -- constructors
-    let csyms = [ con | con@SymD{} ← values sym.env ]
+    let csyms = [ con | SymbolT.D con <- values sym.env ]
     
-    sub     ←   subDecls sym
-    cons    ←   mapM conDecls csyms
+    sub  <- subDecls sym
+    cons <- mapM conDecls csyms
     
     let jtype = rhoJT g sym.typ.rho
         kindeds = map (asKinded jtype) [1..kArity sym.kind]
@@ -148,7 +147,7 @@ dataCode (sym@SymT{ nativ = Nothing, product = false, newt = false }) = do
         -- public isXXX() { return null; }
         asMethod what con = JMethod{attr=attrs [JPublic], 
                                 gvars=[], 
-                                jtype = variantType g jtype con, 
+                                jtype = variantType g jtype (SymbolT.D con),
                                 name = conGetter con.name, 
                                 args = [], 
                                 body = JBlock{stmts = [JReturn (JAtom what)]}} 
@@ -182,7 +181,7 @@ dataCode (sym@SymT{ nativ = Just _ }) = do                               -- nati
      g  ←   getST
      E.logmsg TRACEG sym.pos (text ("dataCode for native " ++ nicer sym g))
      
-     sub    ← subDecls sym
+     sub <- subDecls sym
      
      -- lazyDefs <- lazyDeclarations vals
      let result 
@@ -223,7 +222,7 @@ dataCode sym = do
     Of course, Java forbids this cast. It works by first casting to @Object@,
     yet it raises the "unchecked" warning. Hence we do it with magic.
 -}
-simsalabim ∷ Global → Symbol → JType → [JTVar] → JDecl
+simsalabim :: Global -> SymT Global -> JType -> [JTVar] -> JDecl
 simsalabim g sym jt gvars = JMethod{attr = attrs [JUnchecked, JPublic, JFinal], 
                         gvars = unusedvars, 
                         jtype = newtyp, 
@@ -235,9 +234,9 @@ simsalabim g sym jt gvars = JMethod{attr = attrs [JUnchecked, JPublic, JFinal],
         newtyp = jt.{gargs=map (TArg . _.var) unusedvars}
         -- just give the type variables different names for the return type,
         -- as this is an instance method
-        unusedvars = targs g sym.typ.{bound = zipWith _.{var=} 
+        unusedvars = targs g sym.typ.{bound = zipWith _.{var=}
                                     sym.typ.bound
-                                    (filter (`notElem` sym.typ.vars) (allBinders g)) 
+                                    (filter (`notElem` sym.typ.vars) (allBinders g))
                                     }
 {--
     Generate the method that coerces from a 'Kinded' representation
@@ -263,10 +262,10 @@ coerceDecl gvars jt =
     - a private java constructor that initializes the arguments 
     - a public "mk" method with the same argument list as the constructor 
 -}
-conDecls ∷ Symbol → StG [JDecl]
-conDecls (sym@SymD{}) = do
-    si  ←   symInfo sym
-    g   ←   getST
+conDecls :: SymD Global -> StG [JDecl]
+conDecls sym = do
+    si <- symInfo (SymVal.D sym)
+    g  <- getST
     let arity   = length sym.flds
         decls   = [comment, constr, constructorMethod sym.cid]
                     ++ (if arity == 0 then [single, singleton] else [make])
@@ -274,7 +273,7 @@ conDecls (sym@SymD{}) = do
                     ++ members
         comment     = JComment (nice sym g)
         ttype       = si.returnJT
-        ctype       = variantType g si.returnJT sym
+        ctype       = variantType g si.returnJT (SymbolT.D sym)
         constrargs  = argDefs attrFinal si (getArgs g)
         args        = take arity (map JAtom (getArgs g))
         constr      = JConstr {attr = attrs [JPrivate], 
@@ -305,7 +304,6 @@ conDecls (sym@SymD{}) = do
             body = JBlock [JReturn JCast{jt=ttype, jex=JAtom single.name}]}
         members = zipWith mkMember namedfields constrargs
     return decls
-conDecls _ = error "no SymD"
 
 --- generate
 --- >final public int constructor() { return n; }
@@ -333,15 +331,9 @@ asThunkMethod t = atomMethod "asThunk" (inThunk t) "null"
     Generate the code for everything in a namespace of a type
     that is not a constructor.
 --}
-subDecls ∷ Symbol → StG [JDecl]
-subDecls (sym@SymT{}) = do
-    g ← getST
-    E.logmsg TRACEG sym.pos (text ("subDecls for " ++ nicer sym g))
-    let subdefs = filter (not . _.{flds?}) (values sym.env)   -- no constructors
-    concat <$> mapM (varCode emptyTree) subdefs 
+subDecls :: SymT Global -> StG [JDecl]
 subDecls sym = do
     g ← getST
-    E.fatal sym.pos (
-            text "subDecls: argument is "
-            <+> text (nice sym g) 
-        )    
+    E.logmsg TRACEG sym.pos (text ("subDecls for " ++ nicer sym g))
+    let subdefs = mapMaybe SymMeth.fromSymbol (values sym.env)   -- no constructors
+    concat <$> mapM (varCode emptyTree) subdefs 
