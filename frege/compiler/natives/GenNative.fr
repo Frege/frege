@@ -1,0 +1,194 @@
+module frege.compiler.natives.GenNative where
+
+import Data.TreeMap as TM()
+import Compiler.types.Symbols
+import Compiler.types.Global
+import Compiler.types.Positions
+import Compiler.common.SymbolTable(changeSym, enter)
+import Compiler.types.QNames
+import Compiler.types.Types
+import Compiler.types.Packs
+import Compiler.enums.Visibility
+import Compiler.enums.SymState
+import Compiler.types.Strictness
+import Compiler.enums.RFlag
+import Compiler.enums.TokenID
+import Compiler.natives.Utilities(ovlsigma, unusedASCIIName)
+import Data.Traversable(traverse)
+import frege.compiler.common.Errors  as  E()
+import frege.compiler.enums.Flags
+import  frege.lib.PP as PP()
+
+{-- Generates methods for the AST-node at the position of the symbol and adds
+it to the global
+-}
+generateMethodForSymbol :: String -> Symbol -> Position -> StG ([Symbol])
+generateMethodForSymbol name sym pos = 
+  generateStandaloneFunction name sym pos
+
+generateStandaloneFunction :: String -> Symbol -> Position -> StG ([Symbol])
+generateStandaloneFunction name sym pos = do
+    g <- getST
+    let parentname = sym.name
+    let baseName = parentname.base ++ "$" ++ name
+    let qname    = VName { pack = g.thisPack, base = baseName }
+    -- did we already generate the symbol?
+    case g.find qname of
+      (Just s) -> pure [s]
+      Nothing -> do
+       let ts         = typ parentname name pos g.thisPack
+       let methodSyms = map (vSym sym qname name pos) ts
+       let exceptions = createSymbolsForExceptions [ex | (_, _, exs) <- ts, ex <- exs]
+       enterExceptions exceptions 
+       enterSymbols methodSyms
+    where 
+      createSymbolsForExceptions :: [(String, Tau)] -> [Symbol]
+      createSymbolsForExceptions = map (exSym pos)
+      enterExceptions = mapM_ enterSingleException
+      enterSingleException exception = do
+        g <- getST
+        let res = g.find exception.name
+        case res of 
+          Nothing -> do
+            case exception of
+              SymT{nativ=Just(nat)} -> do
+                enter exception
+                changeST Global.{javaEnv <- TM.TreeMap.insertkvS nat ([],[])}
+              _ -> E.fatal pos $ PP.fill [ PP.text "Excpected a type-symbol, got something different", PP.text "This is a compiler error"]
+          (Just _) -> pure ()
+
+enterSymbols :: [Symbol] -> StG [Symbol]
+enterSymbols ([])      = pure []
+enterSymbols (sym:[])  = enter sym >> pure [sym]
+enterSymbols (overloads@(h:rest)) = do
+            let h' = h.{typ = ovlsigma, throwing=[]}
+            enter h'
+            renamed <- traverse renameAndEnterSymbol overloads
+            g <- getST
+            changeSym h'.{over = map Symbol.name renamed}
+            E.logmsg TRACE3 h.pos (PP.fill [PP.text "generated symbol: in table", PP.text $ show (h.nice g)])
+            pure renamed
+        where 
+          addSuffix g sym = sym.{name <- (flip unusedASCIIName g)}
+          renameAndEnterSymbol o = do
+                g <- getST
+                let renamed = addSuffix g o
+                enter renamed
+                pure renamed
+
+
+
+-- TODO: change typ (sigma) of methodSym based on reflection
+--                                    (arity, typ)
+typ :: QName -> String -> Position -> Pack -> [(Int, Sigma, [(String, Tau)])]
+typ tname mname pos pack = typ' tname.base mname
+  where 
+    unit = TName pPreludeBase "()"
+    str  = TApp (TCon pos (TName pPreludeBase "StringJ")) (TCon pos (TName pPreludeBase "Char"))
+    strRho  = RhoTau [] str
+    s = TVar Position.null KType "s"
+    io = TCon Position.null (TName pPreludeBase "RealWorld")
+    mutIO = mut io 
+    mutS = mut s
+    mut s a = TApp (TApp (TCon pos mut') s) a where
+      mut' = (TName pPreludeIO "Mutable")
+    stIO = st io
+    stS = st s
+    st s a = RhoTau [] $ ((TCon pos (st')) `TApp` s) `TApp` a
+      where st' = (TName pPreludeBase "ST")
+    tcon name = TCon pos name
+    strMap = strMap' where 
+      strMap' =  TApp (TApp mapCtr str) str
+      mapCtr = TCon pos mapName
+      mapName = TName (Pack.new "Java.Util") "Map"
+    tconRho name = RhoTau [] (tcon name)
+    eitherTau e = TApp (TApp eitherCon e) where
+        eitherCon   = TCon pos (TName pPreludeBase "Either")
+    invalidPersonNameEx = ("examples.ntvdeclstypes.person.InvalidPersonNameException", TCon pos (TName pack "InvalidPersonNameException"))
+    ex = ("java.lang.Exception", TCon pos (TName pPreludeIO "Exception"))
+    typ' "ImmPerson" "new" = [
+        (2, ForAll [] (RhoFun [] (ForAll [] strRho         ) (RhoFun [] (ForAll [] strRho         ) (tconRho tname))), [])
+      , (1, ForAll [] (RhoFun [] (ForAll [] strRho         ) (tconRho tname))                                        , [])
+      , (1, ForAll [] (RhoFun [] (ForAll [] (tconRho unit) ) (tconRho tname))                                        , [])
+      ]
+    typ' "ImmPerson" "toString" = 
+      [
+        (1, ForAll [] (RhoFun [] (ForAll [] (tconRho tname)) strRho), [])
+      ]
+    typ' "ImmPerson" "greet" = 
+      [
+        (2, ForAll [] (RhoFun [] (ForAll [] (tconRho tname)) (RhoFun [] (ForAll [] (tconRho tname)) strRho)), [])
+      ]
+    typ' "Person" "new" = 
+      [
+        (2, ForAll [s] (RhoFun [] (ForAll [] strRho) (RhoFun [] (ForAll [] strRho) (stS (eitherTau (snd ex) (mutS $ tcon tname))))), [ex])
+      , (1, ForAll [s] (RhoFun [] (ForAll [] strRho) (stS (eitherTau (snd ex) (mutS $ tcon tname)))), [ex])
+      , (1, ForAll [s] (RhoFun [] (ForAll [] (tconRho unit) ) (stS (eitherTau (snd ex) (mutS $ tcon tname)))), [ex])
+      ]
+    typ' "Person" "toString" = 
+      [
+        (1, ForAll [s] (RhoFun [] (ForAll [] (RhoTau [] (mutS (tcon tname)))) (stS str)), [])
+      ]
+    typ' "Person" "greet" = 
+      [
+        (2, ForAll [s] (RhoFun [] (ForAll [] (RhoTau [] (mutS (tcon tname)))) (RhoFun [] (ForAll [] (RhoTau [] (mutS (tcon tname)))) (stS str))), [])
+      ]
+    typ' "Person" "setLastName" = 
+      [
+        (2, ForAll [s] (RhoFun [] (ForAll [] (RhoTau [] (mutS (tcon tname)))) (RhoFun [] (ForAll [] strRho) (stS $ eitherTau (snd ex) (tcon unit)))), [ex])
+      ]
+    typ' "Person" "setFirstName" = 
+      [
+        (2, ForAll [s] (RhoFun [] (ForAll [] (RhoTau [] (mutS (tcon tname)))) (RhoFun [] (ForAll [] strRho) (stS $ eitherTau (snd ex) (tcon unit)))), [ex])
+      ]
+    typ' "Person" "getFirstName" = 
+      [
+        (2, ForAll [s] (RhoFun [] (ForAll [] (RhoTau [] (mutS (tcon tname)))) (stS str)), [])
+      ]
+    typ' "Person" "getLastName" = 
+      [
+        (2, ForAll [s] (RhoFun [] (ForAll [] (RhoTau [] (mutS (tcon tname)))) (stS str)), [])
+      ]
+    typ' "ConfigLoader" "new" = 
+      [
+        (1, ForAll [s] (RhoFun [] (ForAll [] (tconRho unit) ) (stS (mutS $ tcon tname))), [])
+      ]
+    typ' "ConfigLoader" "load" = 
+      [
+        (2, ForAll [] (RhoFun [] (ForAll [] (RhoTau [] (mutIO (tcon tname)))) (RhoFun [] (ForAll [] strRho) (stIO $ eitherTau (snd ex) (mutIO strMap)))), [ex])
+      ]
+    typ' _ _ = []
+
+vSym :: Symbol -> QName -> String -> Position -> (Int, Sigma, [(String, Tau)]) -> SymbolT global
+vSym (SymT{pur}) name nativeName pos (arity, typ, excs) = SymV {
+                        pos=pos,
+                        sid= if QName.{uid?} name then name.uid else 0,
+                        name, vis=Private, doc=Just ("Generated function resolving to " ++ nativeName),
+                        typ=typ, expr=Nothing, nativ=(Just nativeName),
+                        pur=pur, anno=false, exported=true, 
+                        state=Unchecked,
+                        strsig = Strictness.U, 
+                        depth = 0, 
+                        rkind = RState.empty,
+                        throwing = [], 
+                        over = [], gargs = [],
+                        op = defaultInfix 
+                      } 
+
+exSym :: Position -> (String, Tau) -> SymbolT global
+exSym pos (nat, (typ@TCon{name})) = SymT {
+                        sid= 0,
+                        pos=pos,
+                        vis=Public,
+                        doc=Just ("Generated exception definition resolving to " ++ name.base),
+                        name,
+                        kind = KType,
+                        typ=(ForAll [] (RhoTau [] typ)),
+                        env = empty,
+                        nativ=(Just nat),
+                        gargs = [],
+                        product = False,
+                        enum = False,
+                        pur=True, 
+                        newt = False
+                      } 
