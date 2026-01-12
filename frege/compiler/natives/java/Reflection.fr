@@ -1,0 +1,177 @@
+module frege.compiler.natives.java.Reflection where
+
+import frege.Prelude hiding(Class)
+import Compiler.types.QNames(QName(VName))
+import Compiler.types.Positions(Position())
+import Compiler.types.Packs(Pack())
+import Compiler.types.Global(Symbol, StG, StIO, getST, getSTT, liftIO, liftStG)
+import Compiler.natives.types.JTypes(JType, JTypeT(JType), JMethod, JMethodT(JMethod), NativeName(NativeName), Env(Pure, EnvS, EnvIO))
+import frege.compiler.common.Errors  as  E()
+import frege.lib.PP as PP()
+import Compiler.types.QNames
+import Compiler.types.Packs
+
+-- TODO: move native declarations to frege.java.lang.Reflect
+
+{--
+[https://docs.oracle.com/en/java/javase/11/docs/api/java.base/java/lang/reflect/Type.html](https://docs.oracle.com/en/java/javase/11/docs/api/java.base/java/lang/reflect/Type.html)
+`Type` has the sub interfaces: `GenericArrayType, ParameterizedType, TypeVariable<D>, WildcardType`
+`Type` has the sub class: `Class`
+-}
+data Type = pure native java.lang.reflect.Type where
+  pure native getTypeName :: Type -> String
+  
+derive ArrayElement Type
+
+data GenericArrayType = pure native java.lang.reflect.GenericArrayType where
+  -- pure native getGenericComponentType :: GenericArrayType -> Type
+  -- pure native getClass "java.lang.reflect.GenericArrayType.class" :: Class GenericArrayType
+  
+data ParameterizedType = pure native java.lang.reflect.ParameterizedType where
+  -- pure native getActualTypeArguments :: ParameterizedType -> JArray Type
+  -- pure native getOwnerType :: ParameterizedType -> Maybe Type
+  -- pure native getRawType :: ParameterizedType -> Type
+  -- pure native getClass "java.lang.reflect.ParameterizedType.class" :: Class ParameterizedType
+
+data TypeVariable = pure native java.lang.reflect.TypeVariable where
+  -- pure native getBounds :: TypeVariable -> JArray Type
+  -- pure native getGenericDeclaration :: TypeVariable -> GenericDeclaration
+  -- pure native getName :: TypeVariable -> String
+  -- pure native getClass "java.lang.reflect.TypeVariable.class" :: Class TypeVariable
+
+-- derive ArrayElement TypeVariable
+
+data WildcardType = pure native java.lang.reflect.WildcardType where
+  -- pure native getLowerBounds :: WildcardType -> JArray Type
+  -- pure native getUpperBounds :: WildcardType -> JArray Type
+  -- pure native getClass "java.lang.reflect.WildcardType.class" :: Class WildcardType
+
+data GenericDeclaration = pure native java.lang.reflect.GenericDeclaration where
+  -- pure native getTypeParameters :: GenericDeclaration -> JArray TypeVariable
+  
+data Constructor = pure native java.lang.reflect.Constructor where
+  pure native getParameterTypes{} :: Constructor -> JArray (Class a)
+  pure native getExceptionTypes{} :: Constructor -> JArray (Class a)
+  
+data Method = pure native java.lang.reflect.Method where
+  pure native getName  :: Method -> String
+  pure native getGenericReturnType  :: Method -> Type
+  pure native getReturnType{} :: Method -> Class a
+  pure native getParameterTypes{} :: Method -> JArray (Class a)
+  pure native getGenericParameterTypes  :: Method -> JArray Type
+  pure native getExceptionTypes{}  :: Method -> JArray (Class a)
+
+data Class a = pure native java.lang.Class where
+  native forName java.lang.Class.forName{}  -- returns Class<?>
+                        :: String -> IO (ClassNotFoundException|Class a)
+  pure native getMethods :: Class a -> JArray Method
+  pure native getSimpleName :: Class a -> String
+  pure native getPackageName :: Class a -> String
+  pure native getConstructors :: Class a -> JArray Constructor
+
+data PlaceholderSym = PlaceholderSym { nativeName :: String, parentName :: QName, pos :: Position }
+
+methodExists :: Class a -> String -> Bool
+methodExists clazz "new"  = length clazz.getConstructors.toList > 0
+methodExists clazz method = length (filter (\m -> m.getName == method) clazz.getMethods.toList) > 0
+
+methods :: Class a -> PlaceholderSym -> [JMethodT NativeName]
+methods clazz sym 
+  | sym.nativeName == "new" = map (fromCtor clazz) clazz.getConstructors.toList
+  | otherwise = map (toJMethod clazz) $ filter (\m -> m.getName == sym.nativeName) clazz.getMethods.toList
+
+typReflection :: PlaceholderSym -> Pack -> StIO [JMethodT NativeName]
+typReflection (sym@(PlaceholderSym mname tname pos)) pack = do
+  g <- getSTT
+  clazz <- maybe
+    nonNative
+    (liftIO . g.sub.loader.loadClass)
+    (g.findit tname >>= \t -> t.nativ)
+  case clazz of
+    Right cl -> 
+      if methodExists cl mname then do
+        pure $ methods cl sym
+      else do
+        liftStG $ 
+          E.error pos $ PP.fill [ PP.text $ "Could not resolve method with name: " ++ mname]
+        pure []
+    Left ex -> liftStG $ E.fatal pos $ PP.fill [ PP.text $ "Could not load class: " ++ ex.getMessage, PP.text "This is a compiler error"]
+  where
+    nonNative = liftStG $ E.fatal pos $ PP.fill [ PP.text $ "this is not a native declaration!", PP.text "This is a compiler error"]
+
+-- TODO: combine similar stuff with toJMethod
+fromCtor :: (Class a) -> Constructor -> JMethodT NativeName
+fromCtor receiver ctr = JMethod params returnVal exs where
+  params =  params' ctr.getParameterTypes.toList where
+    params' [] = [JType (NativeName "java.lang" "void") []]
+    params' as = map classToJType as
+  returnVal = classToJType receiver
+  exs       = map classToJType ctr.getExceptionTypes.toList
+  classToJType clazz = JType (NativeName clazz.getPackageName clazz.getSimpleName) []
+
+toJMethod :: (Class a) ->  Method -> JMethodT NativeName
+toJMethod receiver method = JMethod params returnVal exs where
+  params      = map classToJType (receiver : method.getParameterTypes.toList)
+  returnVal   = classToJType method.getReturnType
+  exs         = map classToJType method.getExceptionTypes.toList
+  classToJType clazz = JType (NativeName clazz.getPackageName clazz.getSimpleName) []
+
+-- typ :: QName -> String -> Position -> Pack -> [JMethodT QName]
+-- typ tname mname pos pack = typ' tname.base mname
+--   where 
+--     unit      = TName pPreludeBase "()"
+--     mapName   = TName (Pack.new "Java.Util") "Map"
+--     strQName  = (TName (Pack.new "Java.lang") "String")
+--     exQName   = TName pPreludeIO "Exception"
+--     typ' "ImmPerson" "new" = [
+--         JMethod [(JType.jpure strQName), (JType.jpure strQName)] (JType.jpure tname) []
+--       , JMethod [(JType.jpure strQName)] (JType.jpure tname) []
+--       , JMethod [(JType.jpure unit)] (JType.jpure tname) []
+--       ]
+--     typ' "ImmPerson" "toString" = 
+--       [
+--         JMethod [JType.jpure tname] (JType.jpure strQName) []
+--       ]
+--     typ' "ImmPerson" "greet" = 
+--       [
+--         JMethod [JType.jpure tname, JType.jpure tname] (JType.jpure strQName) []
+--       ]
+--     typ' "Person" "new" = 
+--       [
+--         JMethod [JType.jpure unit] (JType tname EnvS []) [JType.jpure exQName]
+--       , JMethod [JType.jpure strQName] (JType tname EnvS []) [JType.jpure exQName]
+--       , JMethod [JType.jpure strQName, JType.jpure strQName] (JType tname EnvS []) [JType.jpure exQName]
+--       ]
+--     typ' "Person" "toString" = 
+--       [
+--         JMethod [JType tname EnvS []] (JType.jpure strQName) []
+--       ]
+--     typ' "Person" "greet" = 
+--       [
+--         JMethod [JType tname EnvS [], JType tname EnvS []] (JType.jpure strQName) []
+--       ]
+--     typ' "Person" "setLastName" = 
+--       [
+--         JMethod [JType tname EnvS [], JType.jpure strQName] (JType.jpure unit) [JType.jpure exQName]
+--       ]
+--     typ' "Person" "setFirstName" = 
+--       [
+--         JMethod [JType tname EnvS [], JType.jpure strQName] (JType.jpure unit) [JType.jpure exQName]
+--       ]
+--     typ' "Person" "getFirstName" = 
+--       [
+--         JMethod [JType tname EnvS []] (JType.jpure strQName) []
+--       ]
+--     typ' "Person" "getLastName" = 
+--       [
+--         JMethod [JType tname EnvS []] (JType.jpure strQName) []
+--       ]
+--     typ' "ConfigLoader" "new" = 
+--       [
+--         JMethod [JType.jpure unit] (JType tname EnvS []) []
+--       ]
+--     typ' "ConfigLoader" "load" = 
+--       [
+--         JMethod [JType tname EnvIO [], JType.jpure strQName] (JType mapName EnvIO [JType.jpure strQName, JType.jpure strQName]) [JType.jpure exQName]
+--       ]
+--     typ' _ _ = []

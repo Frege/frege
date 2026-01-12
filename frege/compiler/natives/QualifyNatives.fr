@@ -1,0 +1,82 @@
+module Compiler.natives.QualifyNatives where
+
+import Compiler.types.Global(StIO, getSTT)
+
+import Data.TreeMap as TM()
+import Compiler.types.Symbols
+import Compiler.types.Global
+import Compiler.types.Positions
+import Compiler.common.SymbolTable(changeSym, enter)
+import Compiler.types.QNames
+import Compiler.types.Types
+import Compiler.enums.Visibility
+import Compiler.types.Packs
+import Compiler.natives.types.JTypes
+import Data.Traversable(traverse)
+
+qualify :: JMethodT NativeName -> StG (JMethod)
+qualify JMethod{params, returnVal, exs} = do
+    g <- getST
+    params'    <- traverse (traverse qualifySingleNative) params
+    returnVal' <- traverse qualifySingleNative returnVal
+    exs'       <- traverse (traverse qualifySingleNative) exs
+    pure $ JMethod params' returnVal' exs'
+
+qualifySingleNative :: NativeName -> StG QualifiedName
+qualifySingleNative ntvName 
+  | ntvName.fqn == "java.lang.void" = 
+      pure $ QualifiedName.pureName (TName pPreludeBase "()")
+  | ntvName.fqn == "java.lang.String" = 
+      pure $ QualifiedName.pureName (TName (Pack.new "Java.lang") "String")
+  | otherwise = do
+      g <- getST
+      let pack = g.thisPack
+      existing <- nativeExists ntvName
+      case existing of 
+        Nothing -> do
+              enter $ nativeSym Position.null ntvName pack
+              changeST Global.{javaEnv <- TM.TreeMap.insertkvS ntvName.fqn ([],[])}
+              let symbol = nativeSym Position.null ntvName pack
+              pure $ QualifiedName symbol.name (Env.fromSym symbol.pur)
+        (Just s) -> pure s
+
+{--
+Returns the qualified name of the given @NativeName@ if it exists
+
+TODO: verify this is fast enough. It traverses a big set of elements. Maybe we
+need a better implementation
+-}
+nativeExists :: NativeName -> StG (Maybe QualifiedName)
+nativeExists ntvName = do
+  g <- getST
+  let symtabs = TM.values g.packages
+  
+  pure . listToMaybe . findNative $ symtabs
+
+  where 
+    findNative :: [Symtab] -> [QualifiedName]
+    findNative symtabs = [
+      (QualifiedName name (Env.fromSym pur))
+      | symtab <- symtabs
+      , SymT{name,nativ=(Just ntv), pur} <- TM.values symtab
+      , ntv == ntvName.fqn
+      ]
+
+nativeSym :: Position -> NativeName -> Pack -> SymbolT global
+nativeSym pos ntvName pack = SymT {
+                        name    = qname,
+                        sid     = 0,
+                        pos     = pos,
+                        vis     = Public,
+                        doc     = Just ("Generated exception definition resolving to " ++ ntvName.name),
+                        kind    = KType,
+                        typ     = (ForAll [] (RhoTau [] $ TCon pos qname)),
+                        env     = empty,
+                        nativ   = (Just $ ntvName.fqn),
+                        gargs   = [],
+                        product = False,
+                        enum    = False,
+                        pur     = False, 
+                        newt    = False
+                        -- TODO: change this name
+                      } where qname = VName pack ntvName.name

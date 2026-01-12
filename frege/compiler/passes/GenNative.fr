@@ -6,69 +6,58 @@ import Compiler.natives.Utilities(placeholderSigma)
 import Data.TreeMap as TM()
 import Compiler.types.Symbols
 import Compiler.types.Global
-import Compiler.types.Positions
 import Compiler.common.SymbolTable(changeSym, enter)
-import Compiler.types.QNames
 import Compiler.types.Types
-import Compiler.types.Packs
 import Compiler.enums.SymState(Unchecked, MarkedForNativeGeneration)
 import Compiler.natives.Utilities(ovlsigma, unusedASCIIName)
-import Compiler.natives.types.JTypes
+import Compiler.natives.QualifyNatives(qualify)
+import Compiler.natives.java.Reflection(typReflection, PlaceholderSym(PlaceholderSym))
 import Data.Traversable(traverse)
-import frege.compiler.common.Errors  as  E()
-import frege.compiler.enums.Flags
-import frege.lib.PP as PP()
 import Compiler.natives.types.TransformTypes(getSigma)
 
 pass :: StIO (String,Int)
 pass = do
-  g <- getSTT
-  symtab <- pkgSymTab g.thisPack
-  let symbols = symbolsToUpdate symtab
-  generated <- liftStG $ mapM generateNativeDeclaration symbols
+  g           <- getSTT
+  let symbols  = symbolsToUpdate g.thisTab
+  generated   <- mapM (uncurry generateNativeDeclaration) symbols
   pure ("generated symbols", length generated)
 
---- get the symtab of the current package
-pkgSymTab :: Pack -> StIO (Symtab)
-pkgSymTab p = do
-  g <- getSTT
-  let currentPack = g.packages.lookup p
-  case currentPack of
-    Nothing -> do
-      liftStG $ E.fatal Position.null $ 
-        PP.fill [ PP.text "No symbol table for current package found", PP.text "This is a compiler error"]
-    (Just s) -> pure s
-
-symbolsToUpdate :: Symtab -> [(String, Symbol, QName)]
-symbolsToUpdate tab = [ (nativeName, sym, name)
+symbolsToUpdate :: Symtab -> [(PlaceholderSym, Symbol)]
+symbolsToUpdate tab = [((PlaceholderSym nativeName name pos), sym)
                             | sym@(SymV{ 
                                           nativ=(Just nativeName) 
                                         , typ=ForAll{rho=RhoFun{sigma=ForAll{rho=RhoTau{tau=TCon{name}}}}}
                                         , state
+                                        , pur
+                                        , pos
                                         }) <- TM.values tab
                             , state == MarkedForNativeGeneration
-                            ]
+                            ] 
+                              
+                              
 
-{-- Generates methods for the AST-node at the position of the symbol and adds
+{--
+Generates methods for the AST-node at the position of the symbol and adds
 it to the global
 -}
-generateNativeDeclaration :: (String, Symbol, QName) -> StG ([Symbol])
-generateNativeDeclaration (nativeName, placeholderSymbol, parentname) = do
-    g <- getST
-    let pos        = placeholderSymbol.pos
-    let types      = typ parentname nativeName pos g.thisPack
-    let sigmas     = map (getSigma pos) types
-    let methodSyms = map (\s -> placeholderSymbol.{typ = s, state = Unchecked}) sigmas
-    updateSymbols methodSyms
+generateNativeDeclaration :: PlaceholderSym -> Symbol -> StIO ([Symbol])
+generateNativeDeclaration plcSym originalSym = do
+    g                <- getSTT
+    jmethods         <- typReflection plcSym g.thisPack
+    qualifiedMethods <- liftStG $ mapM qualify jmethods
+    let sigmas        = map (getSigma plcSym.pos) qualifiedMethods
+    let methodSyms    = map (\s -> originalSym.{typ = s, state = Unchecked}) sigmas
+    liftStG $ updateSymbols methodSyms
 
 updateSymbols :: [Symbol] -> StG [Symbol]
 updateSymbols ([])      = pure []
 updateSymbols (sym:[])  = changeSym sym >> pure [sym]
-updateSymbols (overloads@(h:rest)) = do
+updateSymbols (overloads@(h:_)) = do
             renamed <- traverse renameAndEnterSymbol overloads
-            g <- getST
+            g       <- getST
+            -- we need to enter an additional symbol which will link all overloads
+            -- this will change placeholder symbol inserted in the resolve pass
             changeSym h.{typ = ovlsigma, throwing=[], over = map Symbol.name renamed}
-            E.logmsg TRACE3 h.pos (PP.fill [PP.text "generated symbol: in table", PP.text $ show (h.nice g)])
             pure renamed
         where 
           addSuffix g sym = sym.{name <- (flip unusedASCIIName g), sid = 0}
@@ -78,63 +67,3 @@ updateSymbols (overloads@(h:rest)) = do
                 enter renamed
                 pure renamed
     
--- TODO: change typ based on reflection
-typ :: QName -> String -> Position -> Pack -> [JMethod]
-typ tname mname pos pack = typ' tname.base mname
-  where 
-    unit      = TName pPreludeBase "()"
-    mapName   = TName (Pack.new "Java.Util") "Map"
-    strQName  = (TName (Pack.new "Java.lang") "String")
-    exQName   = TName pPreludeIO "Exception"
-    typ' "ImmPerson" "new" = [
-        JMethod [(JType.jpure strQName), (JType.jpure strQName)] (JType.jpure tname) []
-      , JMethod [(JType.jpure strQName)] (JType.jpure tname) []
-      , JMethod [(JType.jpure unit)] (JType.jpure tname) []
-      ]
-    typ' "ImmPerson" "toString" = 
-      [
-        JMethod [JType.jpure tname] (JType.jpure strQName) []
-      ]
-    typ' "ImmPerson" "greet" = 
-      [
-        JMethod [JType.jpure tname, JType.jpure tname] (JType.jpure strQName) []
-      ]
-    typ' "Person" "new" = 
-      [
-        JMethod [JType.jpure unit] (JType tname EnvS []) [JType.jpure exQName]
-      , JMethod [JType.jpure strQName] (JType tname EnvS []) [JType.jpure exQName]
-      , JMethod [JType.jpure strQName, JType.jpure strQName] (JType tname EnvS []) [JType.jpure exQName]
-      ]
-    typ' "Person" "toString" = 
-      [
-        JMethod [JType tname EnvS []] (JType.jpure strQName) []
-      ]
-    typ' "Person" "greet" = 
-      [
-        JMethod [JType tname EnvS [], JType tname EnvS []] (JType.jpure strQName) []
-      ]
-    typ' "Person" "setLastName" = 
-      [
-        JMethod [JType tname EnvS [], JType.jpure strQName] (JType.jpure unit) [JType.jpure exQName]
-      ]
-    typ' "Person" "setFirstName" = 
-      [
-        JMethod [JType tname EnvS [], JType.jpure strQName] (JType.jpure unit) [JType.jpure exQName]
-      ]
-    typ' "Person" "getFirstName" = 
-      [
-        JMethod [JType tname EnvS []] (JType.jpure strQName) []
-      ]
-    typ' "Person" "getLastName" = 
-      [
-        JMethod [JType tname EnvS []] (JType.jpure strQName) []
-      ]
-    typ' "ConfigLoader" "new" = 
-      [
-        JMethod [JType.jpure unit] (JType tname EnvS []) []
-      ]
-    typ' "ConfigLoader" "load" = 
-      [
-        JMethod [JType tname EnvIO [], JType.jpure strQName] (JType mapName EnvIO [JType.jpure strQName, JType.jpure strQName]) [JType.jpure exQName]
-      ]
-    typ' _ _ = []
