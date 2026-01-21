@@ -3,13 +3,14 @@ module Compiler.natives.conversion.TypeExtraction where
 import frege.Prelude hiding(Class)
 import Compiler.types.Packs(Pack())
 import Compiler.types.Global(Symbol, StG, StIO, getST, getSTT, liftIO, liftStG)
-import Compiler.natives.types.JTypes(JType, JTypeT(JType), JMethod, JMethodT(JMethod), NativeName(NativeName), Env(Pure, EnvS, EnvIO))
+import Compiler.natives.types.JTypes(JType, JTypeT(JType), JMethod, JMethodT(JMethod), NativeName(NativeName), Env(Pure, EnvS, EnvIO), JVarRef)
 import frege.compiler.common.Errors  as  E()
 import frege.lib.PP as PP()
 import Compiler.types.Packs
 import Compiler.natives.java.Reflect(Type, Constructor,Method, Class, asInstanceOf)
-import Compiler.natives.conversion.JTypeConversion(toJType)
+import Compiler.natives.conversion.JTypeConversion(toJType, typeParamsOfClass, typeParamsOfMethod, typeParamsOfConstructor, classToJType)
 import Compiler.natives.types.PlaceholderSymbol(PlaceholderSymbol)
+import Data.HashMap(HashMap())
 
 methodExists :: Class a -> String -> Bool
 methodExists clazz "new"  = length clazz.getConstructors.toList > 0
@@ -18,7 +19,7 @@ methodExists clazz method = length (filter (\m -> m.getName == method) clazz.get
 methods :: Class a -> PlaceholderSymbol -> [JMethodT NativeName]
 methods clazz sym 
   | sym.nativeName == "new" = map (fromCtor clazz) clazz.getConstructors.toList
-  | otherwise = map (toJMethod clazz) $ filter (\m -> m.getName == sym.nativeName) clazz.getMethods.toList
+  | otherwise               = map (fromMethod clazz) $ filter (\m -> m.getName == sym.nativeName) clazz.getMethods.toList
 
 extract :: PlaceholderSymbol -> Pack -> StIO [JMethodT NativeName]
 extract (sym@(PlaceholderSymbol mname tname pos)) pack = do
@@ -26,7 +27,7 @@ extract (sym@(PlaceholderSymbol mname tname pos)) pack = do
   clazz <- maybe
     nonNative
     (liftIO . g.sub.loader.loadClass)
-    (g.findit tname >>= \t -> t.nativ)
+    (g.findit tname >>= _.nativ)
   case clazz of
     Right cl -> 
       if methodExists cl mname then do
@@ -39,17 +40,33 @@ extract (sym@(PlaceholderSymbol mname tname pos)) pack = do
   where
     nonNative = liftStG $ E.fatal pos $ PP.fill [ PP.text $ "this is not a native declaration!", PP.text "This is a compiler error"]
 
--- TODO: combine similar stuff with toJMethod
+-- TODO: combine similar stuff with fromMethod
 fromCtor :: (Class a) -> Constructor -> JMethodT NativeName
-fromCtor receiver ctr = JMethod params returnVal exs where
+fromCtor receiver ctr = JMethod params returnVal exs bound where
   params =  params' ctr.getGenericParameterTypes.toList where
-    params' [] = [JType (NativeName "void") []]
+    params' [] = [JType (NativeName "void" []) []]
     params' as = map toJType as
-  returnVal = toJType $ receiver `asInstanceOf` Type.classRef
+  returnVal = receiverToJType receiver
   exs       = map toJType ctr.getGenericExceptionTypes.toList
+  bound       = HashMap.fromList $ map toMapEntry boundTypeParams where
+    boundTypeParams = typeParamsOfClass receiver ++ typeParamsOfConstructor ctr
+    toMapEntry jvar = (jvar.name, jvar)
 
-toJMethod :: (Class a) ->  Method -> JMethodT NativeName
-toJMethod receiver method = JMethod params returnVal exs where
-  params      = map toJType ((receiver `asInstanceOf` Type.classRef) : method.getGenericParameterTypes.toList)
+fromMethod :: (Class a) ->  Method -> JMethodT NativeName
+fromMethod receiver method = JMethod params returnVal exs bound where
+  params      = (receiverToJType receiver) : map toJType (method.getGenericParameterTypes.toList)
   returnVal   = toJType method.getGenericReturnType
   exs         = map toJType method.getGenericExceptionTypes.toList
+  bound       = HashMap.fromList $ map toMapEntry boundTypeParams where
+    boundTypeParams = typeParamsOfClass receiver ++ typeParamsOfMethod method
+    toMapEntry jvar = (jvar.name, jvar)
+
+{--
+We need to add the receiver as separate argument to the JMethod. Since `Class a`
+only has information about defined type parameters (and not the actually used type
+arguments), we need to derive the arguments from the type parameters.
+-}
+private receiverToJType :: (Class a) -> JTypeT NativeName
+private receiverToJType clazz = (classToJType clazz).{typeArgs = typeArgs}
+    where
+      typeArgs     = map (\t -> JVarRef t.name) (typeParamsOfClass clazz)

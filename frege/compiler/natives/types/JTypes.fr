@@ -2,6 +2,7 @@ module Compiler.natives.types.JTypes where
 
 import Compiler.types.QNames(QName)
 import Data.Traversable(Traversable)
+import Data.HashMap(HashMap(), values)
 
 data Env = Pure | EnvS | EnvIO where
   -- TODO: currently the compiler only stores the purity information of a
@@ -10,42 +11,71 @@ data Env = Pure | EnvS | EnvIO where
   fromSym False = EnvS
 
 derive Eq Env
+derive Show Env
+
+--- Specifies bounds for a wildcard type
+data WildcardBounds n = Lower { bounds :: [JTypeT n] }| Upper { bounds :: [JTypeT n] } where
+  isUpper (Upper _) = True
+  isUpper _         = False
+  elems   (Upper b) = b
+  elems   (Lower b) = b
+  sign    (Upper _) = "<"
+  sign    _         = ">"
 
 --- Native names as returned from reflection
-data NativeName = NativeName { fqn :: String } 
+data NativeName = NativeName { fqn :: String, typeParams :: [JVarT NativeName] }
                 | Array
 
 --- A fully qualified name including the purity information of the type
 data QualifiedName = QualifiedName { name :: QName, env :: Env } where
   pureName = flip QualifiedName Pure
 
-data JTypeT n = JType { typeRef :: n, generics :: [JTypeT n]} | JVar { identifier :: String } where
-  -- TODO: maybe rename jpure to something more meaningful
-  jpure name = JType name []
-  ---True if the type or any of its generics has the given @Env@.
+data JVarT n = JVar { name :: String, bounds :: [JTypeT n] } where
+  hasEnv :: Env -> JVar -> Bool
+  hasEnv env (JVar _ bounds) =  fold (||) False anyBoundHasEnv where
+    anyBoundHasEnv = map (JTypeT.hasEnv env) bounds
+
+data JTypeT n = JType { typeRef :: n, typeArgs :: [JTypeT n]} | JVarRef { ref :: String } | JWildcard { bounds :: WildcardBounds n } where
+  ---True if the type or any of its type arguments has the given @Env@.
   hasEnv :: Env -> JType -> Bool
-  hasEnv envi (JType{typeRef, generics}) = fold (||) (typeRef.env == envi) genericEnvs 
-    where genericEnvs = map (hasEnv envi) generics
-  hasEnv _    _            = False
+  hasEnv env (JType{typeRef, typeArgs}) = fold (||) (typeRef.env == env) typeArgsEnvs
+    where typeArgsEnvs = map (hasEnv env) typeArgs
+  hasEnv env   (JWildcard bs) = fold (||) False (map (JTypeT.hasEnv env) bs.bounds)
+  hasEnv _    _                   = False
 
 instance Functor JTypeT where
   fmap :: (a -> b) -> JTypeT a -> JTypeT b
-  fmap f (JType{typeRef, generics}) = JType (f typeRef) (map (fmap f) generics)
-  fmap _ (JVar{identifier}) = JVar identifier
+  fmap f (JType{typeRef, typeArgs}) = JType (f typeRef) (map (fmap f) typeArgs)
+  fmap _ (JVarRef{ref}) = JVarRef ref
+  fmap f (JWildcard (Lower lower)) = JWildcard $ Lower (map (fmap f) lower)
+  fmap f (JWildcard (Upper upper)) = JWildcard $ Upper (map (fmap f) upper)
 
 instance Traversable JTypeT where
   traverse :: Applicative c => (a -> c b) -> JTypeT a -> c (JTypeT b)
-  traverse f (JType{typeRef, generics}) = 
+  traverse f (JType{typeRef, typeArgs}) = 
         (\n gs -> JType n gs) 
     <$> f typeRef 
-    <*> traverse (traverse f) generics
-  traverse _ (JVar{identifier}) = pure JVar{identifier}
+    <*> traverse (traverse f) typeArgs
+  traverse _ (JVarRef{ref}) = pure JVarRef{ref}
+  traverse f (JWildcard (Lower lower)) = (JWildcard . Lower) <$> traverse (traverse f) lower
+  traverse f (JWildcard (Upper upper)) = (JWildcard . Upper) <$> traverse (traverse f) upper
 
--- TODO: I think we need to add generics on method level as well
-data JMethodT n = JMethod { params :: [JTypeT n], returnVal :: JTypeT n, exs :: [JTypeT n] } where
-  --- the return value + all params
+instance Functor JVarT where
+  fmap :: (a -> b) -> JVarT a -> JVarT b
+  fmap f (JVar{name, bounds}) = JVar name (map (fmap f) bounds)
+
+instance Traversable JVarT where 
+  traverse :: Applicative c => (a -> c b) -> JVarT a -> c (JVarT b)
+  traverse f JVar{name, bounds} = JVar name <$> traverse (traverse f) bounds
+
+data JMethodT n = JMethod { params :: [JTypeT n]
+                          , returnVal :: JTypeT n
+                          , exs :: [JTypeT n]
+                          , vars :: HashMap String (JVarT n) 
+                          } where
+  --- the return value, all params & all exceptions
   all :: JMethodT n -> [JTypeT n]
-  all j = returnVal j : params j
+  all j = returnVal j : params j ++ exs j
   env :: JMethod -> Maybe Env
   env method 
     | anyIO     -> Just EnvIO
@@ -53,10 +83,8 @@ data JMethodT n = JMethod { params :: [JTypeT n], returnVal :: JTypeT n, exs :: 
     | otherwise -> Nothing
     where
       containsEnv :: Env -> Bool
-      containsEnv env = any (JTypeT.hasEnv env) method.all
-      -- TODO: We need to check if there are any muts in any generic
+      containsEnv env = any (JTypeT.hasEnv env) method.all || any (JVar.hasEnv env) (values method.vars)
       anyMutS          = containsEnv EnvS
-      -- TODO: We need to check if there are any IOs in any generic
       anyIO            = containsEnv EnvIO
 
   hasMutEnv :: JMethod -> Bool
@@ -66,3 +94,4 @@ data JMethodT n = JMethod { params :: [JTypeT n], returnVal :: JTypeT n, exs :: 
 
 type JType    = JTypeT    QualifiedName
 type JMethod  = JMethodT  QualifiedName
+type JVar     = JVarT QualifiedName

@@ -13,32 +13,39 @@ import Compiler.enums.Visibility
 import Compiler.types.Packs
 import Compiler.natives.types.JTypes
 import Data.Traversable(traverse)
+import Compiler.common.Binders(allAsciiBinders)
+import Compiler.natives.conversion.SigmaConversion(runJReader, bindTypeParam)
 
 qualify :: JMethodT NativeName -> StG (JMethod)
-qualify JMethod{params, returnVal, exs} = do
+qualify JMethod{params, returnVal, exs, vars} = do
     g <- getST
     params'    <- traverse (traverse qualifySingleNative) params
     returnVal' <- traverse qualifySingleNative returnVal
     exs'       <- traverse (traverse qualifySingleNative) exs
-    pure $ JMethod params' returnVal' exs'
+    vars'      <- traverse (traverse qualifySingleNative) vars
+    pure $ JMethod params' returnVal' exs' vars'
 
 qualifySingleNative :: NativeName -> StG QualifiedName
 qualifySingleNative Array = 
   pure $ QualifiedName (TName pPreludeArrays "JArray") EnvS
-qualifySingleNative (NativeName fqn)
+qualifySingleNative (NativeName fqn typeParams)
   | fqn == "void" = 
       pure $ QualifiedName.pureName (TName pPreludeBase "()")
   | fqn == "java.lang.String" = 
       pure $ QualifiedName.pureName (TName (Pack.new "Java.lang") "String")
+  -- `JArray` is also bound to `java.lang.Object`. For the compiler not to get
+  -- confused, we qualify it explicitly here
+  | fqn == "java.lang.Object" = 
+      pure $ QualifiedName.pureName (TName pPreludeBase "Object")
   | otherwise = do
       g <- getST
       let pack = g.thisPack
       existing <- nativeExists fqn
       case existing of 
         Nothing -> do
-              enter $ nativeSym Position.null fqn pack
+              symbol <- nativeSym Position.null (fqn, typeParams) pack
+              enter symbol
               changeST Global.{javaEnv <- TM.TreeMap.insertkvS fqn ([],[])}
-              let symbol = nativeSym Position.null fqn pack
               pure $ QualifiedName symbol.name (Env.fromSym symbol.pur)
         (Just s) -> pure s
 
@@ -64,20 +71,25 @@ nativeExists ntvName = do
       , ntv == ntvName
       ]
 
-nativeSym :: Position -> String -> Pack -> SymbolT global
-nativeSym pos fqn pack = SymT {
+nativeSym :: Position -> (String, [JVarT NativeName]) -> Pack -> StG Symbol
+nativeSym pos (fqn, typeParams) pack = do
+                    qualified <- traverse (traverse qualifySingleNative) typeParams
+                    pure SymT {
                         name    = qname,
                         sid     = 0,
                         pos     = pos,
                         vis     = Public,
                         doc     = Just ("Generated exception definition resolving to " ++ fqn),
-                        kind    = KType,
+                        kind    = KindT.kind typeParams.length,
                         typ     = (ForAll [] (RhoTau [] $ TCon pos qname)),
                         env     = empty,
-                        nativ   = (Just $ fqn),
-                        gargs   = [],
+                        nativ   = (Just fqn),
+                        gargs   = map garg qualified,
                         product = False,
                         enum    = False,
                         pur     = False, 
                         newt    = False
-                      } where qname = VName pack fqn
+                      } where 
+                          qname = VName pack fqn
+                          garg :: JVar -> Tau
+                          garg jvar = runJReader (bindTypeParam jvar) pos
