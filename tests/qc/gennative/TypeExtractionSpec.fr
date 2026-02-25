@@ -3,22 +3,22 @@ module tests.qc.gennative.TypeExtractionSpec where
 import Test.QuickCheck
 import Compiler.common.CompilerOptions(standardGlobal)
 import frege.Prelude hiding(Class)
-import Compiler.natives.java.Reflect(Constructor, Method, Class)
-import Compiler.natives.conversion.TypeExtraction(fromCtor, fromMethod)
-import Compiler.natives.types.JTypes(JMethodT(JMethod), NativeKind(Method, StaticMethod), JTypeT(JVarRef))
+import Compiler.natives.java.Reflect(Constructor, Method, Field, Class)
+import Compiler.natives.conversion.TypeExtraction(fromCtor, fromMethod, fromField, memberToJMethod)
+import Compiler.natives.types.JTypes(JMethodT(JMethod), MemberType(InstanceMethod, InstanceField, StaticMember), JTypeT(JVarRef))
 import Data.HashMap(values)
 
 p_ShouldConvertMethodToJMethod :: Property
-p_ShouldConvertMethodToJMethod = withExampleMethod "processParameterizedType" $ \(clazz, method) ->
+p_ShouldConvertMethodToJMethod = withExampleClass $ \clazz ->
   once $
     let 
-      (JMethod params returnVal exs vars nativeKind) = fromMethod clazz method
+      (JMethod params returnVal exs vars memberType) = head $ memberToJMethod clazz "processParameterizedType" 
     in conjoin [
         returnVal.typeRef.fqn ==? "void"
       , conjoin (map assertParam params) 
       , conjoin (map assertVar (values vars))
       , conjoin (map assertExs exs)
-      , nativeKind ==? Method
+      , memberType ==? InstanceMethod
       ] where 
         assertParam jtype = case jtype.typeRef.fqn of
           "tests.qc.gennative.ExampleClass" -> jtype.typeArgs.head.ref ==? "T"
@@ -36,27 +36,27 @@ p_ShouldConvertMethodToJMethod = withExampleMethod "processParameterizedType" $ 
         assertExs ex = ex.typeRef.fqn ==? "java.lang.Exception"
 
 p_ShouldConvertStaticMethodToJMethod :: Property
-p_ShouldConvertStaticMethodToJMethod = withExampleMethod "getInt" $ \(clazz, method) ->
+p_ShouldConvertStaticMethodToJMethod = withExampleClass $ \clazz ->
   once $
     let 
-      (JMethod params returnVal _ _2 nativeKind) = fromMethod clazz method
+      (JMethod params returnVal _ _2 memberType) = head $ memberToJMethod clazz "getInt" 
     in conjoin [
         returnVal.typeRef.fqn   ==? "int"
       , params.head.typeRef.fqn ==? "void"
-      , nativeKind ==? (StaticMethod "tests.qc.gennative.ExampleClass")
+      , memberType ==? (StaticMember "tests.qc.gennative.ExampleClass")
       ]
 
 p_ShouldConvertCtorToJMethod :: Property
-p_ShouldConvertCtorToJMethod = withCtor $ \(clazz, ctor) ->
+p_ShouldConvertCtorToJMethod = withExampleClass $ \clazz ->
   once $
     let 
-      (JMethod params returnVal exs vars nativeKind) = fromCtor clazz ctor
+      (JMethod params returnVal exs vars memberType) = head $ memberToJMethod clazz "new"
     in conjoin [
         returnVal.typeRef.fqn ==? "tests.qc.gennative.ExampleClass"
       , conjoin (map assertParam params) 
       , conjoin (map assertVar (values vars))
       , conjoin (map assertExs exs)
-      , nativeKind ==? Method
+      , memberType ==? InstanceMethod
       ] where 
         assertParam (JVarRef "T") = property True
         assertParam _             = property False
@@ -68,30 +68,53 @@ p_ShouldConvertCtorToJMethod = withCtor $ \(clazz, ctor) ->
           otherwise -> property False
         assertExs ex = ex.typeRef.fqn ==? "java.lang.Exception"
 
+p_ShouldConvertStaticFieldToJMethod :: Property
+p_ShouldConvertStaticFieldToJMethod = withExampleClass $ \clazz ->
+  once $
+    let 
+      (JMethod params returnVal exs vars memberType) = head $ memberToJMethod clazz "staticField" 
+    in conjoin [
+        returnVal.typeRef.fqn ==? "java.lang.String"
+      , params      ==? []
+      , exs         ==? []
+      , values vars ==? []
+      , memberType  ==? (StaticMember "tests.qc.gennative.ExampleClass")
+      ]
+
+p_ShouldConvertInstanceFieldToJMethod :: Property
+p_ShouldConvertInstanceFieldToJMethod = withExampleClass $ \clazz ->
+  once $
+    let 
+      (JMethod params returnVal exs vars memberType) = head $ memberToJMethod clazz "memberField" 
+      receiverRef = params.head.typeRef.fqn
+    in conjoin [
+        returnVal.typeRef.fqn ==? "int"
+      , length params ==? 1
+      , receiverRef   ==? "tests.qc.gennative.ExampleClass"
+      , exs           ==? []
+      , assertVar $ head (values vars)
+      , length (values vars) ==? 1
+      , memberType    ==? InstanceField
+      ]  where
+        assertVar var = case var.name of
+          "T" -> conjoin [ 
+              comparable.typeRef.fqn ==? "java.lang.Comparable"
+            , comparable.typeRef.typeParams.head.name ==? "T"
+            ] where comparable = var.bounds.head
+          otherwise -> property False
+
 --- Gives us access to the example class
 withExampleClass :: Testable t => (Class a -> t) -> Property
 withExampleClass test  = 
   morallyDubiousIOProperty $ do
-    g       <- standardGlobal
-    (Right clazz) <- g.sub.loader.loadClass "tests.qc.gennative.ExampleClass"
-    pure $ test clazz
-
---- Gives us access to a method in ExampleClass
-withExampleMethod :: Testable t =>  String -> ((Class a, Method) -> t) -> Property
-withExampleMethod methodName test = 
-  morallyDubiousIOProperty $ do
+    let exampleClassFqn = "tests.qc.gennative.ExampleClass"
     g             <- standardGlobal
-    (Right clazz) <- g.sub.loader.loadClass "tests.qc.gennative.ExampleClass"
-    let method = head $ filter (\m -> m.getName == methodName) clazz.getMethods.toList
-    pure $ test (clazz, method)
-
-withCtor :: Testable t => ((Class a, Constructor) -> t) -> Property
-withCtor test = 
-  morallyDubiousIOProperty $ do
-    g             <- standardGlobal
-    (Right clazz) <- g.sub.loader.loadClass "tests.qc.gennative.ExampleClass"
-    let method = head clazz.getConstructors.toList
-    pure $ test (clazz, method)
+    loadedClass   <- g.sub.loader.loadClass exampleClassFqn
+    pure $ case loadedClass of
+      (Left ex)     -> printTestCase 
+                        ("Couldn't load class: " ++ exampleClassFqn ++ " required by a test case. Is it on the classpath?")
+                        False
+      (Right clazz) -> property $ test clazz
 
 {-- nowarn: unused
 We reference this class using reflection and add here an explicit dependency

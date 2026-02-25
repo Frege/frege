@@ -13,16 +13,17 @@ import Compiler.natives.types.JTypes(
   , EnvS
   , EnvIO)
   , JVarRef
-  , NativeKind(StaticMethod, Method)
+  , MemberType(InstanceMethod, InstanceField, StaticMember)
   )
 import frege.compiler.common.Errors  as  E()
 import frege.lib.PP as PP()
 import Compiler.types.Packs
 import Compiler.natives.java.Reflect(
     asInstanceOf
-  , methodIsStatic
+  , isStatic
   , Constructor
   , Type
+  , Field
   , Method
   , Class
   )
@@ -36,14 +37,22 @@ import Compiler.natives.conversion.JTypeConversion(
 import Compiler.natives.types.PlaceholderSymbol(PlaceholderSymbol)
 import Data.HashMap(HashMap())
 
-methodExists :: Class a -> String -> Bool
-methodExists clazz "new"  = length clazz.getConstructors.toList > 0
-methodExists clazz method = length (filter (\m -> m.getName == method) clazz.getMethods.toList) > 0
+data NativeMember = MemberConstructor | MemberMethod [Method] | MemberField Field
 
-methods :: Class a -> String -> [JMethodT NativeName]
-methods clazz methodName 
-  | methodName == "new" = map (fromCtor clazz) clazz.getConstructors.toList
-  | otherwise           = map (fromMethod clazz) $ filter (\m -> m.getName == methodName) clazz.getMethods.toList
+memberToJMethod :: Class a -> String -> [JMethodT NativeName]
+memberToJMethod clazz name | name == "new"                = ctor
+                        | (_:_)    <- isMethod clazz name = methods
+                        | (Just _) <- isField clazz name  = fields
+                        | otherwise = [] where
+  methods = map (fromMethod clazz) $ filter (\m -> m.getName == name) clazz.getMethods.toList
+  ctor    = map (fromCtor clazz) clazz.getConstructors.toList
+  fields  = map (fromField clazz) $ filter (\f -> f.getName == name) clazz.getFields.toList
+
+  isMethod :: Class a -> String -> [Method]
+  isMethod clazz method = filter (\m -> m.getName == method) clazz.getMethods.toList
+
+  isField :: Class a -> String -> Maybe Field
+  isField clazz field = listToMaybe $ filter (\f -> f.getName == field) clazz.getFields.toList
 
 extract :: PlaceholderSymbol -> Pack -> StIO [JMethodT NativeName]
 extract (sym@(PlaceholderSymbol mname tname pos)) pack = do
@@ -54,19 +63,19 @@ extract (sym@(PlaceholderSymbol mname tname pos)) pack = do
     (g.findit tname >>= _.nativ)
   case clazz of
     Right cl -> 
-      if methodExists cl mname then do
-        pure $ methods cl sym.nativeName
-      else do
-        liftStG $ 
-          E.error pos $ PP.fill [ PP.text $ "Could not resolve method with name: " ++ mname]
-        pure []
+      case memberToJMethod cl mname of
+        [] -> do
+          liftStG $ 
+            E.error pos $ PP.text $ "Could not resolve method with name: " ++ mname
+          pure []
+        as -> pure as
     Left ex -> liftStG $ E.fatal pos $ PP.fill [ PP.text $ "Could not load class: " ++ ex.getMessage, PP.text "This is a compiler error"]
   where
     nonNative = liftStG $ E.fatal pos $ PP.fill [ PP.text $ "this is not a native declaration!", PP.text "This is a compiler error"]
 
--- TODO: combine similar stuff with fromMethod
+-- TODO: combine similar stuff with fromMethod/fromField
 fromCtor :: (Class a) -> Constructor -> JMethodT NativeName
-fromCtor receiver ctr = JMethod params returnVal exs bound Method where
+fromCtor receiver ctr = JMethod params returnVal exs bound InstanceMethod where
   params =  params' ctr.getGenericParameterTypes.toList where
     params' [] = [JType (NativeName "void" []) []]
     params' as = map toJType as
@@ -76,24 +85,44 @@ fromCtor receiver ctr = JMethod params returnVal exs bound Method where
     boundTypeParams = typeParamsOfClass receiver ++ typeParamsOfConstructor ctr
     toMapEntry jvar = (jvar.name, jvar)
 
-fromMethod :: (Class a) ->  Method -> JMethodT NativeName
-fromMethod receiver method = JMethod params returnVal exs bound nativeKind where
-  params      = case nativeKind of
-                (StaticMethod _) ->
-                  case params' of 
-                    -- if a static method does not have a param, it *must* have a unit param
-                    [] -> [JType (NativeName "void" []) []]
-                    _  -> params' 
-                otherwise -> (receiverToJType receiver) : params'
+fromField :: (Class a) -> Field -> JMethodT NativeName
+fromField receiver field = JMethod params returnVal [] bound memberType' where
+  returnVal   = toJType field.getGenericType
+  params      = case memberType' of
+                  (StaticMember _) -> []
+                  _  -> [receiverToJType receiver]
+  memberType' = memberType receiver field.getModifiers
+  bound       = case memberType' of
+                  (StaticMember _) -> HashMap.empty
+                  _  -> HashMap.fromList $ map toMapEntry boundTypeParams where
+                          boundTypeParams = typeParamsOfClass receiver
+                          toMapEntry jvar = (jvar.name, jvar)
+
+  memberType :: Class a -> Int -> MemberType
+  memberType receiver modifiers = 
+    if isStatic modifiers then StaticMember receiver.getName else InstanceField
+
+fromMethod :: (Class a) -> Method -> JMethodT NativeName
+fromMethod receiver method = JMethod params returnVal exs bound memberType' where
+  params = case memberType' of
+           (StaticMember _) ->
+             case params' of 
+               -- if a static method does not have a param, it *must* have a unit param
+               [] -> [JType (NativeName "void" []) []]
+               _  -> params' 
+           otherwise -> (receiverToJType receiver) : params'
     where 
       params' = map toJType (method.getGenericParameterTypes.toList)
-  nativeKind  = if isStatic then StaticMethod receiver.getName else Method
+  memberType' = memberType receiver method.getModifiers
   returnVal   = toJType method.getGenericReturnType
   exs         = map toJType method.getGenericExceptionTypes.toList
-  isStatic    = methodIsStatic method.getModifiers 
   bound       = HashMap.fromList $ map toMapEntry boundTypeParams where
     boundTypeParams = typeParamsOfClass receiver ++ typeParamsOfMethod method
     toMapEntry jvar = (jvar.name, jvar)
+
+memberType :: Class a -> Int -> MemberType
+memberType receiver modifiers = 
+  if isStatic modifiers then StaticMember receiver.getName else InstanceMethod where
 
 {--
 We need to add the receiver as separate argument to the JMethod. Since `Class a`

@@ -6,6 +6,9 @@ public class ExampleClass<T extends java.lang.Comparable<T>> {
 
   public ExampleClass(T value) throws Exception {}
 
+  public static final String staticField = "";
+  public final int memberField = 0;
+
   public String getValue() {
     return "";
   }
