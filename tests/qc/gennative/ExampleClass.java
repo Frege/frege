@@ -13,6 +13,10 @@ public class ExampleClass<T extends java.lang.Comparable<T>> {
     return "";
   }
 
+  public int primitive() {
+    return 0;
+  }
+
   public List<? extends Number> getWildcardList() {
     return List.of();
   }
