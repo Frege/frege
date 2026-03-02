@@ -4,9 +4,8 @@ import Compiler.types.QNames(QName)
 import Data.Traversable(Traversable)
 import Data.HashMap(HashMap(), values)
 
-data Env = Pure | EnvS | EnvIO where
-  -- TODO: currently the compiler only stores the purity information of a
-  -- symbol within its state (as boolean). We need to somehow allow IO as well.
+-- TODO remove `EnvIO` as we can express this as Env `RealWorld`
+data Env = Pure | EnvS | EnvIO | Env QName where
   fromSym True = Pure
   fromSym False = EnvS
 
@@ -40,6 +39,8 @@ derive Eq QualifiedName
 derive Show QualifiedName
 
 data JVarT n = JVar { name :: String, bounds :: [JTypeT n] } where
+  envs :: JVar -> [Env]
+  envs v = v.bounds >>= _.envs
   hasEnv :: Env -> JVar -> Bool
   hasEnv env (JVar _ bounds) =  fold (||) False anyBoundHasEnv where
     anyBoundHasEnv = map (JTypeT.hasEnv env) bounds
@@ -48,6 +49,10 @@ derive Eq n   => Eq (JVarT n)
 derive Show n => Show (JVarT n)
 
 data JTypeT n = JType { typeRef :: n, typeArgs :: [JTypeT n]} | JVarRef { ref :: String } | JWildcard { bounds :: WildcardBounds n } where
+  envs :: JType -> [Env]
+  envs (JType{typeRef, typeArgs}) = typeRef.env : (typeArgs >>= _.envs)
+  envs (JWildcard{bounds})        = bounds.bounds >>= _.envs
+  envs _ = []
   ---True if the type or any of its type arguments has the given @Env@.
   hasEnv :: Env -> JType -> Bool
   hasEnv env (JType{typeRef, typeArgs}) = fold (||) (typeRef.env == env) typeArgsEnvs
@@ -98,6 +103,10 @@ data MemberType = InstanceMethod
 derive Show MemberType
 derive Eq MemberType
 
+-- TODO: maybe it would be much better to not store the envs in the types, but
+-- store just an env for the method. For types we only store mutability
+-- information. This would make the illegal state unrepresentable. But I am not
+-- sure if this will scale with inheritance
 data JMethodT n = JMethod { params      :: [JTypeT n]
                           , returnVal   :: JTypeT n
                           , exs         :: [JTypeT n]
@@ -109,19 +118,29 @@ data JMethodT n = JMethod { params      :: [JTypeT n]
   all j = returnVal j : params j ++ exs j
   env :: JMethod -> Maybe Env
   env method 
-    | anyIO     -> Just EnvIO
+    | anyIO     -> Just EnvIO -- TODO: this is not 100% correct. We cannot combine RealWorld with e.g. JFXWorld
+    | (Just i)  <- anyMutIdx -> case i of
+                                Right idx -> Just (Env idx) 
+                                _ ->  Nothing -- TODO: this is invalid state. We must somehow report this
     | anyMutS   -> Just EnvS
     | otherwise -> Nothing
     where
       containsEnv :: Env -> Bool
-      containsEnv env = any (JTypeT.hasEnv env) method.all || any (JVar.hasEnv env) (values method.vars)
+      containsEnv env  = any (JTypeT.hasEnv env) method.all || any (JVar.hasEnv env) (values method.vars)
       anyMutS          = containsEnv EnvS
+      anyMutIdx        = findIdx (mapMaybe toQName ((method.all >>= _.envs) ++ ((values method.vars) >>= (\a -> a.envs)))) where
+          -- Nothing means there is no state index at all
+          -- Just Right idx means there was one distinct idx (which could have appeared several times)
+          -- Just Left () means there were multiple different idx, this is an error in the native declarations the user gave us
+          findIdx :: [QName] -> Maybe (Either () QName)
+          findIdx []     = Nothing
+          findIdx (a:[]) = Just . Right $ a
+          findIdx (a:as) = if foldr (\cur acc -> a == cur && acc) True as then 
+            Just . Right $ a 
+          else Just . Left $ () -- TODO: there are valid combinations with several environments which are not the same. (class relationships)
+          toQName (Env q) = Just q
+          toQName _ = Nothing
       anyIO            = containsEnv EnvIO
-
-  hasMutEnv :: JMethod -> Bool
-  hasMutEnv j = case j.env of
-      Just EnvS   -> True
-      _           -> False
 
 type JType    = JTypeT    QualifiedName
 type JMethod  = JMethodT  QualifiedName

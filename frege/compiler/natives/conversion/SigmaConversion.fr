@@ -17,49 +17,71 @@ import Compiler.types.Packs(pPreludeBase, pPreludeIO)
 import Control.monad.Reader
 import Data.HashMap(values)
 
-data JEnv = JEnv { pos :: Position }
+data JEnv = JEnv { pos :: Position         ---We generate taus at `pos` position 
+                   unifiedIdx :: Maybe Tau ---Replace every occurrence of `s` with `unifiedIdx` if it exists
+                  }
 type JReader b = Reader JEnv b 
 
-runJReader :: JReader a -> Position -> a
-runJReader reader pos = (JReader.run reader env).run where
-  env = JEnv pos
+runJReader :: JReader a -> JEnv -> a
+runJReader reader env = (JReader.run reader env).run where
 
 askPos :: JReader Position
-askPos = JEnv.pos <$> ask
+askPos = JEnv.pos <$> Reader.ask
+
+askIdx :: JReader (Maybe Tau)
+askIdx = JEnv.unifiedIdx <$> Reader.ask
 
 {-- 
 Returns a Sigma for a @JMethod@ at the given @Position@
 -}
 toSigma :: Position -> JMethod -> Sigma
-toSigma pos method = runJReader (toSigma' method) pos
+toSigma pos method = runJReader (toSigma' method) (JEnv pos methodEnv) where
+  methodEnv = case method.env of
+    (Just EnvS)      -> Just (mkS pos) 
+    (Just EnvIO)     -> Just (mkIO pos)
+    (Just (Env idx)) -> Just (TCon pos idx)
+    otherwise        -> Nothing
+  mkIO pos = TCon pos (TName pPreludeBase "RealWorld")
+  mkS  pos = TVar pos KType "s"
 
 private toSigma' :: JMethod -> JReader Sigma
 private toSigma' method = do
   returnRho <- mkReturnRho method
   methodRho <- foldrM mkRhoFun returnRho method.params
-  (flip ForAll methodRho) <$> bound
+  bound     <- boundVars
+  
+  pure $ ForAll bound methodRho 
   where
-    bound :: JReader [Tau]
-    bound = do 
+    boundVars :: JReader [Tau]
+    boundVars = do 
       typeVars <- mapM bindTypeParam (values method.vars)
-      pure $ if method.hasMutEnv then s : typeVars else typeVars
+      idx <- askIdx
+      pure $ case idx of
+      -- if the method idx is a TVar, we must bind it
+        Just (i@TVar{}) -> i : typeVars
+        _  -> typeVars
 
 {--
 Builds the return type @Rho@ for a @JMethod@:
 
 1. Converts return type to @Tau@
 2. Wraps in @Either@ for each exception
-3. Wraps in @ST s@ or @ST IO@ if method has env context
+3. Wraps in @ST s@ or @ST idx@ if method has env context
 -}
 private mkReturnRho :: JMethod -> JReader Rho
 private mkReturnRho method = do
   returnTau  <- mkTau method.returnVal
   wrappedTau <- buildExsTau method.exs returnTau 
-  
-  case method.env of
-    (Just EnvS)   -> RhoTau [] <$> (stS wrappedTau)
-    (Just EnvIO)  -> RhoTau [] <$> (stIO wrappedTau)
-    otherwise     -> return $ RhoTau [] wrappedTau
+  idx        <- askIdx
+  case idx of
+    (Just i) -> RhoTau [] <$> (mkST i) wrappedTau
+    Nothing  -> pure $ RhoTau [] wrappedTau
+  where
+    mkST :: Tau -> Tau -> JReader Tau
+    mkST s a = do 
+      pos <- askPos
+      pure $ ((TCon pos st) `TApp` s) `TApp` a
+        where st = TName pPreludeBase "ST"
 
 {--
 Transforms a @JType@ to a @Rho@
@@ -82,13 +104,12 @@ private mkTau (JVarRef{ref})      = jvarRef ref
 private mkTau (JWildcard{bounds}) = wildcard where
   wildcard = do
     pos <- askPos
-    bs <- mkBounds
+    bs  <- mkBounds
     pure $
       TVar pos (KGen bs) bounds.sign
   mkBounds :: JReader [Tau]
-  mkBounds = 
-    mapM mkTau bounds.elems
-private mkTau (JType{typeRef, typeArgs}) = mkTau' >>= applyEnvWrapper typeRef.env
+  mkBounds = mapM mkTau bounds.elems
+private mkTau (JType{typeRef, typeArgs}) = mkTau' >>= mutabilityWrapper typeRef.env
   where
     -- apply type arguments to the taus if there are any
     mkTau' = do
@@ -96,9 +117,21 @@ private mkTau (JType{typeRef, typeArgs}) = mkTau' >>= applyEnvWrapper typeRef.en
       foldM applyTypeArgs tcon typeArgs
     applyTypeArgs t arg = 
       TApp t <$> mkTau arg
-    applyEnvWrapper Pure  = pure
-    applyEnvWrapper EnvS  = mutS
-    applyEnvWrapper EnvIO = mutIO
+    mutabilityWrapper env t = do
+      idx <- askIdx
+      -- the method idx dictates the idx of all `Mutable` references
+      case idx of
+        (Just i) -> case env of
+                      Pure -> pure t
+                      _    -> mut i t
+        -- if the method has no env, we cannot have a `Mutable` reference
+        Nothing  -> pure t
+    mut :: Tau -> Tau -> JReader Tau
+    mut idx a = do
+      pos <- askPos
+      pure $ TApp (TApp (TCon pos mut') idx) a where
+      mut' = (TName pPreludeIO "Mutable")
+
 
 {-- 
 Transform a given @QName@ to a @TCon@ at the current position.
@@ -146,9 +179,6 @@ private buildExsTau = flip $ foldrM (\ex acc -> do
       mkEitherTau exTau acc
     ) 
 
-private s :: Tau
-private s = TVar Position.null KType "s"
-
 bindTypeParam :: JVar -> JReader Tau
 bindTypeParam tvar 
                   | tvar.bounds.length == 0 = (\p -> TVar p KType tvar.name) <$> askPos
@@ -157,33 +187,6 @@ bindTypeParam tvar
                       pos    <- askPos
                       pure $ TVar pos (KGen bounds) tvar.name
                     where mkBounds = mapM mkTau tvar.bounds
-
-private stS, stIO :: Tau -> JReader Tau
-private stS  = mkST s
-private stIO = mkST io
-
-private io = TCon Position.null (TName pPreludeBase "RealWorld")
-
-private mkST :: Tau -> Tau -> JReader Tau
-private mkST s a = do 
-  pos <- askPos
-  pure $ ((TCon pos (st')) `TApp` s) `TApp` a
-    where st' = (TName pPreludeBase "ST")
-
-{-- 
-Create a @Tau@ for a @Mutable s a@
--}
-private mut :: Tau -> Tau -> JReader Tau
-private mut s a = do
-  pos <- askPos
-  pure $ TApp (TApp (TCon pos mut') s) a where
-  mut' = (TName pPreludeIO "Mutable")
-
-private mutIO, mutS :: Tau -> JReader Tau
---- Create a @Tau@ for a @Mutable IO a@
-private mutIO = mut io
---- Create a @Tau@ for a @Mutable s a@
-private mutS  = mut s
 
 private foldrM :: (Applicative a,Bind a) => (c->b->a b) -> b -> [c] -> a b
 private foldrM f a bs = fm f bs a

@@ -4,10 +4,10 @@ module frege.compiler.passes.Enter where
 import frege.Prelude hiding (<+>)
 
 import  frege.data.TreeMap as TM(TreeMap, keys, values, insert)
-import  frege.data.List  as  DL(uniqBy, sort, sortBy)
+import  frege.data.List  as  DL(uniqBy, sort, sortBy, find)
 import  frege.compiler.enums.Flags  as  Compilerflags(TRACE3, TRACE4, 
                                 isOn, isOff)
-import  frege.compiler.enums.TokenID(defaultInfix)
+import  frege.compiler.enums.TokenID(defaultInfix, NATIVE)
 import  frege.compiler.enums.Visibility
 import  frege.compiler.types.Positions
 import  frege.compiler.types.Tokens
@@ -21,12 +21,13 @@ import  frege.compiler.types.ConstructorField
 import  frege.compiler.types.Symbols
 import  frege.compiler.types.Global  as  G
 import  frege.compiler.common.Errors  as  E()
-import  frege.compiler.common.Resolve  as  R(defaultXName)
+import  frege.compiler.common.Resolve  as  R(defaultXName, weUse)
 import  frege.compiler.common.SymbolTable  as  ST(linkq)
 import  frege.compiler.classes.Nice
 import  frege.lib.PP(text, msgdoc, <+>)
 import  frege.compiler.Utilities  as  U(vSym)
 import  frege.compiler.instances.NiceExprS
+import  frege.data.Traversable(traverse)
 
 {--
  * In this pass, we insert placeholders in the symbol table
@@ -254,7 +255,7 @@ enter1 fname (d@DatDcl {pos}) = do
                             enum = null d.vars && all (0==) (map (length • DCon.flds) d.ctrs),
                             nativ = Nothing, pur = false, kind, gargs = [],
                             newt = d.newt && length d.ctrs == 1 && 1 == (length • DCon.flds • head) d.ctrs,
-                            env=empty}
+                            env=empty, stateIdx=Nothing}
         when (d.newt && (length d.ctrs != 1
                             || (length • DCon.flds • head) d.ctrs != 1)) do
             E.error d.pos (text "There must be exactly one field in the constructor of a newtype")
@@ -312,15 +313,46 @@ enter1 fname (d@JavDcl {pos}) = do
             ktype = KType :: Kind -- if primitive then KType else KGen
             kind  = foldr KApp ktype dsig.kinds 
             dsig  = ForAll vars (RhoTau [] dtau)
-            jname = d.jclas 
+            tok  =  errorToken g.sub.toks.toList
+            errPos = pos.{first = tok, last = tok}
+        (stateIdx, jname) <- parseJclas errPos d.jclas
+        stateIdx <- traverse (qualifyStateIndex errPos) stateIdx 
         ST.enter (SymT {sid=0, pos=d.pos, vis=d.vis, doc=d.doc, name=dname,
                        product = false, enum = false, newt = false, pur = d.isPure,
                        typ=dsig, gargs=[],
-                       kind, nativ = Just jname, env=empty})
+                       kind, nativ = Just jname, env=empty, stateIdx=stateIdx >>= id})
         changeST Global.{
             sub <- SubSt.{
                 idKind <- insert (KeyTk pos.first) (Right dname)}}
         enter (MName dname) d.defs
+          where
+            -- lets find the correct token for error reporting
+            errorToken = head . drop 1 -- drop the native as well
+                       . dropWhile (\t -> t.tokid != NATIVE)
+                       . dropWhile (\t -> t != pos.first) -- find current token
+            parseJclas :: Position -> String -> StG (Maybe String, String)
+            parseJclas errPos jclas = case words jclas of
+              (stateIdx:jname:[]) -> pure (Just stateIdx, jname)
+              (jname:[])          -> pure (Nothing, jname) -- illegal java names are retrieved later
+              _                   -> E.error errPos (
+                                      PP.fill [
+                                        PP.text "Illegal Java class reference."
+                                      , PP.text $ "Add an optional type to index the state thread" 
+                                          ++ " followed by the fully qualified class name."
+                                      ])
+                                    >> pure (Nothing, jclas)
+            
+            
+            qualifyStateIndex :: Position -> String -> StG (Maybe QName)
+            qualifyStateIndex errPos idx = do
+                g <- getST
+                -- look through all packages if we can find the specified type
+                -- let candidates = map (flip TName idx) (keys g.packages)
+                let sym =  g.findit (TName g.thisPack idx)
+                -- let x = join (find (\s -> s != Nothing) syms)
+                case sym of
+                  (Just s) -> weUse s.name >> pure (Just s.name)
+                  Nothing  -> E.error errPos (PP.text $ "Could not find a type with name: " ++ nice idx g) >> pure Nothing
 
 enter1 fname (d@TypDcl {pos}) = do
         g <- getST
@@ -338,7 +370,6 @@ enter1 fname (ImpDcl {pos})   = stio ()
 enter1 fname (FixDcl {pos})   = stio ()
 enter1 fname (DocDcl {pos})   = stio ()
 enter1 fname (ModDcl {pos})   = stio ()
-
 
 insName :: DefinitionS -> String
 insName idcl | idcl.{clas?}, idcl.{typ?} = clas ++ "_" ++ tcon idcl.typ where

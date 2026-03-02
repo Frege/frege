@@ -3,7 +3,6 @@ module tests.qc.gennative.SigmaConversionSpec where
 import Test.QuickCheck
 
 import Compiler.types.QNames(QName(VName))
-
 import Compiler.types.Positions(Position)
 import Compiler.types.QNames(QName(TName))
 import Compiler.types.Types(
@@ -19,6 +18,7 @@ import Compiler.types.Types(
   , TauT(TApp, TCon, TVar)
   , walkRho
   , unST
+  , MetaTvT
   )
 import Compiler.types.Packs(
     Pack()
@@ -26,7 +26,7 @@ import Compiler.types.Packs(
   , pPreludeIO
   )
 import Compiler.natives.types.JTypes(
-    Env(Pure, EnvS, EnvIO)
+    Env(Pure, EnvS, EnvIO, Env)
   , JMethodT(JMethod)
   , JTypeT(JType, JVarRef, JWildcard)
   , JVarT(JVar)
@@ -36,6 +36,8 @@ import Compiler.natives.types.JTypes(
   )
 import Compiler.natives.conversion.SigmaConversion(toSigma)
 import Data.HashMap(HashMap)
+
+import tests.qc.gennative.JTypesSpec(stIdx, testWorld, mkJMethod, inferEnv)
 
 -- some generally used stuff
 pos     = Position.null
@@ -64,6 +66,12 @@ derive Eq Kind
 derive Eq Tau
 derive Eq Rho
 derive Eq Sigma
+
+envToTau :: Env -> Maybe Tau
+envToTau EnvIO   = Just io
+envToTau (Env _) = Just testWorld
+envToTau EnvS    = Just s
+envToTau _       = Nothing
 
 p_ShouldGenerateSimpleSigma :: Property
 p_ShouldGenerateSimpleSigma = once $
@@ -94,7 +102,23 @@ p_ShouldGenerateSigmaForSTType = once $
     res       = toSigma pos jtype
     resEnv    = sigmaEnv res
   in
-    resEnv == Just s
+    resEnv == Just s && head res.bound == (TVar pos KType "s")
+
+p_ShouldGenerateSigmaAndUnifyStateIdxType :: Property
+p_ShouldGenerateSigmaAndUnifyStateIdxType = once $
+  let 
+    tname     = TName pack "IAmMutable"
+    tname'    = TName pack "IHaveMyOwnIdx"
+    param     = JType (QualifiedName tname EnvS) [] -- should be overwritten
+    returnVal = JType (QualifiedName tname' (Env stIdx)) []
+    bound     = HashMap.empty
+    jtype     = JMethod [param] returnVal [] bound InstanceMethod
+    res       = toSigma pos jtype
+  in 
+    case res.rho.rho.tau of
+      -- Compare the state index of the `Mutable` of the return type with the expected
+      (TApp _ (TApp (TApp _' stIdx') _'')) -> stIdx'.name == stIdx
+      otherwise                            -> False
 
 p_ShouldGenerateSigmaForIOType :: Property
 p_ShouldGenerateSigmaForIOType = once $
@@ -108,35 +132,35 @@ p_ShouldGenerateSigmaForIOType = once $
   in
     resEnv == Just io
 
-instance Arbitrary Env where
-  arbitrary =
-     oneof $ map pure [Pure, EnvS, EnvIO]
-  shrink Pure = []
-  shrink EnvS = [Pure]
-  shrink EnvIO = [EnvS, Pure]
-
 p_ShouldGenerateSigmaWhenMixingEnvS :: Property
 p_ShouldGenerateSigmaWhenMixingEnvS = property $ do
-  returnEnv    <- arbitrary
-  paramEnvs    <- choose (0,5) >>= flip vectorOf arbitrary
-  exsEnvs      <- choose (0,3) >>= flip vectorOf arbitrary
-  genericEnvs  <- choose (0,3) >>= flip vectorOf arbitrary -- also bounds of generics can have an Env
-  let params    = map fromEnv paramEnvs
-  let exs       = map fromEnv exsEnvs
-  let bounds    = map fromEnv genericEnvs
-  let typevars  = HashMap.singleton "e" (JVar "e" bounds)
-  let jtype     = JMethod params (fromEnv returnEnv) exs typevars InstanceMethod
-  let res       = toSigma pos jtype
+  (envs, jmethod) <- mkJMethod
+  let res       = toSigma pos jmethod
   let resEnv    = fst <$> unST (walkRho res.rho)
+  pure $ resEnv == (inferEnv >=> envToTau) envs
 
-  pure $ resEnv == inferEnv ((returnEnv : paramEnvs) ++ exsEnvs ++ genericEnvs)
+p_ShouldUnifyMutableSToMethodEnv :: Property
+p_ShouldUnifyMutableSToMethodEnv = property $ do
+  (envs, jmethod) <- mkJMethod `suchThat` (\(_, m) -> m.env == Just (Env stIdx))
+  let res       = toSigma pos jmethod
+  let withoutST = map dropST (toTaus res.rho)
+  let muts      = withoutST >>= dropMut 
+  pure $ all (\m -> m == testWorld) muts 
+
   where
-    fromEnv env   = JType (QualifiedName (TName pack "AType") env) []
-    inferEnv :: [Env] -> Maybe Tau
-    inferEnv envs 
-      | EnvIO `elem` envs = Just io
-      | EnvS  `elem` envs = Just s
-      | otherwise = Nothing
+    toTaus :: Rho -> [Tau]
+    toTaus (RhoFun{sigma, rho}) = toTaus sigma.rho ++ toTaus rho
+    toTaus (RhoTau{tau}) = [tau]
+    
+    dropST :: Tau -> Tau
+    dropST (TApp (TApp (TCon {name = TName p "ST"}) st ) ty)
+        | p == pPreludeBase = ty
+    dropST t = t
+    
+    dropMut :: Tau -> [Tau]
+    dropMut (TApp (TApp (TCon {name = TName p "Mutable"}) idx) r) = idx: dropMut r
+    dropMut (TApp a b) = dropMut a ++ dropMut b
+    dropMut _ = []
 
 p_ShouldGenerateSigmaForExceptionType :: Property
 p_ShouldGenerateSigmaForExceptionType = once $
@@ -160,7 +184,7 @@ p_ShouldGenerateSigmaForExceptionInMutSType = once $
     bound     = HashMap.empty
     jtype     = JMethod [] typ [exTyp] bound InstanceMethod
     expected  = ForAll [] (stIO (eitherTau (tcon ex) (mutIO $ tcon unit)))
-    res = toSigma pos jtype
+    res       = toSigma pos jtype
   in
     res == expected
 
@@ -174,7 +198,7 @@ p_ShouldGenerateSigmaForGenericType = once $
     returnVal = JType (QualifiedName unit Pure) []
     jtype     = JMethod [param] returnVal [] bound InstanceMethod
     expected  = ForAll [e] (RhoFun [] (ForAll [] (RhoTau [] (TApp (tcon tname) e))) unitRho)
-    res = toSigma pos jtype
+    res       = toSigma pos jtype
   in
     res == expected
 
@@ -221,6 +245,6 @@ p_ShouldGenerateSigmaForMultiBoundedWildcardType = once $
     returnVal = JType (QualifiedName unit Pure) []
     jtype     = JMethod [param] returnVal [] HashMap.empty InstanceMethod
     expected  = ForAll [] (RhoFun [] (ForAll [] (RhoTau [] (TApp (tcon tname) wildcard))) unitRho)
-    res = toSigma pos jtype
+    res       = toSigma pos jtype
   in
     res == expected
