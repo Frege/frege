@@ -8,6 +8,8 @@ import Data.HashMap(HashMap(), values)
 data Env = Pure | EnvS | EnvIO | Env QName where
   fromSym True = Pure
   fromSym False = EnvS
+  isPure Pure = True 
+  isPure _    = False
 
 derive Eq Env
 derive Show Env
@@ -24,24 +26,33 @@ data WildcardBounds n = Lower { bounds :: [JTypeT n] } | Upper { bounds :: [JTyp
 derive Eq n => Eq (WildcardBounds n)
 derive Show n => Show  (WildcardBounds n)
 
---- Native names as returned from reflection
+--- Native names as returned from introspection
 data NativeName = NativeName { fqn :: String, typeParams :: [JVarT NativeName] }
                 | Array
 
 derive Eq NativeName
 derive Show NativeName
 
---- A fully qualified name including the purity information of the type
+--- A fully qualified name including the environment information of the type
 data QualifiedName = QualifiedName { name :: QName, env :: Env } where
   pureName = flip QualifiedName Pure
 
 derive Eq QualifiedName
 derive Show QualifiedName
 
+{-- 
+A fully qualified name including the mutability information of the type
+without an environment
+-}
+data ResolvedName = ResolvedName { name :: QName, isPure :: Bool }
+
+derive Eq ResolvedName
+derive Show ResolvedName
+
 data JVarT n = JVar { name :: String, bounds :: [JTypeT n] } where
-  envs :: JVar -> [Env]
+  envs :: QualifiedJVar -> [Env]
   envs v = v.bounds >>= _.envs
-  hasEnv :: Env -> JVar -> Bool
+  hasEnv :: Env -> QualifiedJVar -> Bool
   hasEnv env (JVar _ bounds) =  fold (||) False anyBoundHasEnv where
     anyBoundHasEnv = map (JTypeT.hasEnv env) bounds
 
@@ -49,12 +60,12 @@ derive Eq n   => Eq (JVarT n)
 derive Show n => Show (JVarT n)
 
 data JTypeT n = JType { typeRef :: n, typeArgs :: [JTypeT n]} | JVarRef { ref :: String } | JWildcard { bounds :: WildcardBounds n } where
-  envs :: JType -> [Env]
+  envs :: QualifiedJType -> [Env]
   envs (JType{typeRef, typeArgs}) = typeRef.env : (typeArgs >>= _.envs)
   envs (JWildcard{bounds})        = bounds.bounds >>= _.envs
   envs _ = []
   ---True if the type or any of its type arguments has the given @Env@.
-  hasEnv :: Env -> JType -> Bool
+  hasEnv :: Env -> QualifiedJType -> Bool
   hasEnv env (JType{typeRef, typeArgs}) = fold (||) (typeRef.env == env) typeArgsEnvs
     where typeArgsEnvs = map (hasEnv env) typeArgs
   hasEnv env   (JWildcard bs) = fold (||) False (map (JTypeT.hasEnv env) bs.bounds)
@@ -116,32 +127,30 @@ data JMethodT n = JMethod { params      :: [JTypeT n]
   --- the return value, all params & all exceptions
   all :: JMethodT n -> [JTypeT n]
   all j = returnVal j : params j ++ exs j
-  env :: JMethod -> Maybe Env
-  env method 
-    | anyIO     -> Just EnvIO -- TODO: this is not 100% correct. We cannot combine RealWorld with e.g. JFXWorld
-    | (Just i)  <- anyMutIdx -> case i of
-                                Right idx -> Just (Env idx) 
-                                _ ->  Nothing -- TODO: this is invalid state. We must somehow report this
-    | anyMutS   -> Just EnvS
-    | otherwise -> Nothing
-    where
-      containsEnv :: Env -> Bool
-      containsEnv env  = any (JTypeT.hasEnv env) method.all || any (JVar.hasEnv env) (values method.vars)
-      anyMutS          = containsEnv EnvS
-      anyMutIdx        = findIdx (mapMaybe toQName ((method.all >>= _.envs) ++ ((values method.vars) >>= (\a -> a.envs)))) where
-          -- Nothing means there is no state index at all
-          -- Just Right idx means there was one distinct idx (which could have appeared several times)
-          -- Just Left () means there were multiple different idx, this is an error in the native declarations the user gave us
-          findIdx :: [QName] -> Maybe (Either () QName)
-          findIdx []     = Nothing
-          findIdx (a:[]) = Just . Right $ a
-          findIdx (a:as) = if foldr (\cur acc -> a == cur && acc) True as then 
-            Just . Right $ a 
-          else Just . Left $ () -- TODO: there are valid combinations with several environments which are not the same. (class relationships)
-          toQName (Env q) = Just q
-          toQName _ = Nothing
-      anyIO            = containsEnv EnvIO
 
-type JType    = JTypeT    QualifiedName
-type JMethod  = JMethodT  QualifiedName
-type JVar     = JVarT     QualifiedName
+derive Show a => Show (JMethodT a)
+derive Eq a => Eq (JMethodT a)
+
+instance Functor JMethodT where
+  fmap f JMethod{params, returnVal, exs, vars, memberType} = 
+    JMethod params' returnVal' exs' vars' memberType where
+      params'    = fmap (fmap f) params
+      returnVal' = fmap f returnVal
+      exs'       = fmap (fmap f) exs
+      vars'      = fmap (fmap f) vars
+
+instance Traversable JMethodT where
+  traverse f JMethod{params, returnVal, exs, vars, memberType} =
+    JMethod <$> params' <*> returnVal' <*> exs' <*> vars' <*> pure memberType where
+      params'    = traverse (traverse f) params
+      returnVal' = traverse f returnVal
+      exs'       = traverse (traverse f) exs
+      vars'      = traverse (traverse f) vars
+
+type JType    = JTypeT    ResolvedName
+type JMethod  = JMethodT  ResolvedName
+type JVar     = JVarT     ResolvedName
+
+type QualifiedJType    = JTypeT    QualifiedName
+type QualifiedJMethod  = JMethodT  QualifiedName
+type QualifiedJVar     = JVarT     QualifiedName
