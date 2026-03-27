@@ -13,7 +13,7 @@ import Compiler.types.Positions(Position)
 import Compiler.types.QNames(QName(TName))
 import Compiler.types.Packs(pPreludeBase)
 
-stIdx   = TName pPreludeBase "TestWorld"
+stIdx     = TName pPreludeBase "TestWorld"
 testWorld = TCon Position.null stIdx
 
 allEnvs = [Pure Nothing, Pure (Just stIdx), EnvS, Env stIdx]
@@ -23,98 +23,103 @@ instance Arbitrary Env where
      oneof $ map pure allEnvs
   shrink (Pure Nothing) = []
   shrink EnvS = [Pure Nothing]
+  shrink (Pure (Just i)) = [Pure Nothing, EnvS]
   shrink (Env i) = [EnvS, Pure (Just i)]
 
-mkQualifiedNameInEnv :: [Env] -> Gen (Env, QualifiedName)
+instance Arbitrary QualifiedName where
+  arbitrary = mkQualifiedNameInEnv allEnvs
+
+instance Arbitrary a => Arbitrary (JTypeT a) where
+  arbitrary = mkJType arbitrary 
+
+instance Arbitrary a => Arbitrary (JVarT a) where
+  arbitrary = do
+    name <- arbitrary
+    mkJVar arbitrary name
+
+instance Arbitrary a => Arbitrary (JMethodT a) where
+  arbitrary = mkJMethod arbitrary 
+
+mkQualifiedNameInEnv :: [Env] -> Gen QualifiedName
 mkQualifiedNameInEnv allEnvs = do
    name <- arbitrary `suchThat` (not . null)
    env  <- oneof (map pure allEnvs)
    let qname = TName pPreludeBase name
-   pure (env, QualifiedName qname env)
+   pure $ QualifiedName qname env
 
-mkJTypeInEnv :: [Env] -> Gen ([Env], QualifiedJType)
-mkJTypeInEnv allEnvs = 
+mkJType :: Gen a -> Gen (JTypeT a)
+mkJType genA = 
     oneof [jtype, jWildcard, jVarRef]
       where
         jtype = do
-          (env, name) <- mkQualifiedNameInEnv allEnvs
-          (envs, args) <- unzip <$> (choose (0,2) >>= flip vectorOf (mkJTypeInEnv allEnvs))
-          pure $ (env : concat envs, JType name args)
+          name <- genA
+          args <- choose (0,2) >>= flip vectorOf (mkJType genA)
+          pure $ JType name args
         jWildcard = do
-          (envs, args) <- unzip <$> (choose (0,2) >>= flip vectorOf (mkJTypeInEnv allEnvs))
+          args <- choose (0,2) >>= flip vectorOf (mkJType genA)
           bounds <- oneof [pure $ Upper args, pure $ Lower args]
-          pure (concat envs, JWildcard bounds)
+          pure $ JWildcard bounds
         jVarRef = do 
           name <- arbitrary `suchThat` (not . null)
-          pure ([], JVarRef name)
+          pure $ JVarRef name
 
-mkJMethodInEnv :: [Env] -> Gen ([Env], QualifiedJMethod)
-mkJMethodInEnv allEnvs = do
-  (envs, args)   <- unzip <$> (choose (0,5) >>= flip vectorOf (mkJTypeInEnv allEnvs))
-  (exsEnvs, exs) <- unzip <$> (choose (0,2) >>= flip vectorOf (mkJTypeInEnv allEnvs))
-  (e, returnVal) <- (mkJTypeInEnv allEnvs)
+mkJMethod :: Gen a -> Gen (JMethodT a)
+mkJMethod genA = do
+  args <- choose (0,5) >>= flip vectorOf (mkJType genA)
+  exs  <- choose (0,2) >>= flip vectorOf (mkJType genA)
+  returnVal <- mkJType genA
 
-  (varEnvs, vars) <- bindVars (returnVal : (args ++ exs))
-  pure (e ++ varEnvs ++ (join envs) ++ (join exsEnvs), JMethod args returnVal exs vars InstanceMethod)
+  vars <- bindVars (returnVal : (args ++ exs))
+  pure $ JMethod args returnVal exs vars InstanceMethod
     where
-      bindVars :: [QualifiedJType] -> Gen ([Env], HashMap String QualifiedJVar)
       bindVars types =  do
         vars <- mapM createJVar (filterJVarRefNames types)
-        pure $ (join (map fst vars), fromList (map snd vars))
+        pure $ fromList vars
           where
-            filterJVarRefNames :: [QualifiedJType] -> [String]
             filterJVarRefNames types = mapMaybe (\a -> case a of
                       (JVarRef n) -> Just n
                       _           -> Nothing) types
-            createJVar :: String -> Gen ([Env], (String, QualifiedJVar))
             createJVar n = do 
-              (es, j) <- (mkJVarInEnv allEnvs n)
-              pure (es, (n, j))
+              j <- (mkJVar genA n)
+              pure (n, j)
  
-mkJVarInEnv :: [Env] -> String -> Gen ([Env], QualifiedJVar)
-mkJVarInEnv allEnvs name = do
-        (envs, bounds) <- unzip <$> (choose (0,2) >>= flip vectorOf (mkJTypeInEnv allEnvs))
-        pure (concat envs, JVar name bounds)
+mkJVar :: Gen a -> String -> Gen (JVarT a)
+mkJVar genA name = do
+        bounds <- choose (0,2) >>= flip vectorOf (mkJType genA)
+        pure $ JVar name bounds
 
-mkJVar    = mkJVarInEnv allEnvs
-mkJType   = mkJTypeInEnv allEnvs
-mkJMethod = mkJMethodInEnv allEnvs
+extractEnvs :: ListSource b => b QualifiedName -> [Env]
+extractEnvs b = map _.env (toList b)
 
 p_ShouldReturnAllEnvsOfJVar :: Property
-p_ShouldReturnAllEnvsOfJVar = property $ do
-    (envs, jvar) <- arbitrary >>= mkJVar
-    pure $
-      and $ map (flip elem jvar.envs) envs 
+p_ShouldReturnAllEnvsOfJVar = property $ \(jvar :: QualifiedJVar) ->
+      and $ map (flip elem jvar.envs) (extractEnvs jvar)
 
 p_ShouldReturnAllEnvsOfJType :: Property
-p_ShouldReturnAllEnvsOfJType = property $ do
-    (envs, jtype) <- mkJType
-    pure $
-      and $ map (flip elem jtype.envs) envs 
+p_ShouldReturnAllEnvsOfJType = property $ \(jtype :: QualifiedJType) ->
+      and $ map (flip elem jtype.envs) (extractEnvs jtype) 
 
 p_ShouldFindEnvOfJVar :: Property
-p_ShouldFindEnvOfJVar = property $ do
-    (env, jvar) <- arbitrary >>= mkJVar
-    length env > 0 ==>
-      JVarT.hasEnv (head env) jvar
+p_ShouldFindEnvOfJVar = property $ \jvar -> do
+    let envs = extractEnvs jvar
+    length envs > 0 ==>
+      JVarT.hasEnv (head envs) jvar
 
 p_ShouldFindEnvOfJType :: Property
-p_ShouldFindEnvOfJType = property $ do
-    (env, jtype) <- mkJType
-    length env > 0 ==>
-      JTypeT.hasEnv (head env) jtype
+p_ShouldFindEnvOfJType = property $ \jtype -> do
+    let envs = extractEnvs jtype
+    length envs > 0 ==>
+      JTypeT.hasEnv (head envs) jtype
 
 -- Functor laws JVar (https://wiki.haskell.org/index.php?title=Functor)
 
 p_JVarShouldNotChangeWhenMappingId :: Property
-p_JVarShouldNotChangeWhenMappingId = property $ do
-  (_, jvar) <- arbitrary >>= mkJVar
-  pure $ fmap id jvar == jvar
+p_JVarShouldNotChangeWhenMappingId = property $ \(jvar :: QualifiedJVar) ->
+  fmap id jvar == jvar
   
 p_JVarShouldPreserveCompositionOfMorphisms :: Property
-p_JVarShouldPreserveCompositionOfMorphisms = property $ do
-  (_, jvar) <- arbitrary >>= mkJVar
-  pure $ fmap (f . g) jvar ==  (fmap f . fmap g) jvar
+p_JVarShouldPreserveCompositionOfMorphisms = property $ \(jvar :: QualifiedJVar) ->
+  fmap (f . g) jvar ==  (fmap f . fmap g) jvar
     where 
       f :: QName -> String
       f n = n.base
@@ -124,14 +129,12 @@ p_JVarShouldPreserveCompositionOfMorphisms = property $ do
 -- Functor laws JType (https://wiki.haskell.org/index.php?title=Functor)
 
 p_JTypeShouldNotChangeWhenMappingId :: Property
-p_JTypeShouldNotChangeWhenMappingId = property $ do
-  (_, jtype) <- mkJType
-  pure $ fmap id jtype == jtype
+p_JTypeShouldNotChangeWhenMappingId = property $ \(jtype :: QualifiedJType) ->
+  fmap id jtype == jtype
   
 p_JTypeShouldPreserveCompositionOfMorphisms :: Property
-p_JTypeShouldPreserveCompositionOfMorphisms = property $ do
-  (_, jtype) <- mkJType
-  pure $ fmap (f . g) jtype ==  (fmap f . fmap g) jtype
+p_JTypeShouldPreserveCompositionOfMorphisms = property $ \(jtype :: QualifiedJType) ->
+  fmap (f . g) jtype ==  (fmap f . fmap g) jtype
     where 
       f :: QName -> String
       f n = n.base
@@ -141,9 +144,8 @@ p_JTypeShouldPreserveCompositionOfMorphisms = property $ do
 -- Traversable laws JType (https://hackage-content.haskell.org/package/base-4.22.0.0/docs/Data-Traversable.html#g:20)
 
 p_JTypeShouldHoldNaturalityLawWhenTraversing :: Property
-p_JTypeShouldHoldNaturalityLawWhenTraversing = property $ do
-  (_, jtype) <- mkJType
-  pure ((t . (traverse f)) jtype == (traverse (t . f)) jtype)
+p_JTypeShouldHoldNaturalityLawWhenTraversing = property $ \(jtype :: QualifiedJType) ->
+  ((t . (traverse f)) jtype == (traverse (t . f)) jtype)
     where 
       f :: QualifiedName -> Identity QName
       f n = pure n.name
@@ -151,17 +153,15 @@ p_JTypeShouldHoldNaturalityLawWhenTraversing = property $ do
       t a = id a
 
 p_JTypeShouldHoldIdentityLawWhenTraversing :: Property
-p_JTypeShouldHoldIdentityLawWhenTraversing = property $ do
-  (_, jtype) <- mkJType
-  pure $ (traverse identity) jtype == identity jtype
+p_JTypeShouldHoldIdentityLawWhenTraversing = property $ \(jtype :: QualifiedJType) ->
+  (traverse identity) jtype == identity jtype
     where 
       identity :: a -> Identity a
       identity a = pure a
   
 p_JTypeShouldHoldCompositionLawWhenTraversing :: Property
-p_JTypeShouldHoldCompositionLawWhenTraversing = property $ do
-  (_, jtype) <- mkJType
-  pure $ (lhs jtype).run == (rhs jtype).run
+p_JTypeShouldHoldCompositionLawWhenTraversing = property $ \(jtype :: QualifiedJType) ->
+  (lhs jtype).run == (rhs jtype).run
     where 
       f :: QualifiedName -> Identity QName
       f n = pure $ n.name
@@ -175,9 +175,8 @@ p_JTypeShouldHoldCompositionLawWhenTraversing = property $ do
 -- Traversable laws JVar (https://hackage-content.haskell.org/package/base-4.22.0.0/docs/Data-Traversable.html#g:20)
 
 p_JVarShouldHoldNaturalityLawWhenTraversing :: Property
-p_JVarShouldHoldNaturalityLawWhenTraversing = property $ do
-  (_, jvar) <- arbitrary >>= mkJVar
-  pure ((t . (traverse f)) jvar == (traverse (t . f)) jvar)
+p_JVarShouldHoldNaturalityLawWhenTraversing = property $ \(jvar :: QualifiedJVar) ->
+  ((t . (traverse f)) jvar == (traverse (t . f)) jvar)
     where 
       f :: QualifiedName -> Identity QName
       f n = pure n.name
@@ -185,17 +184,15 @@ p_JVarShouldHoldNaturalityLawWhenTraversing = property $ do
       t a = id a
 
 p_JVarShouldHoldIdentityLawWhenTraversing :: Property
-p_JVarShouldHoldIdentityLawWhenTraversing = property $ do
-  (_, jvar) <- arbitrary >>= mkJVar
-  pure $ (traverse identity) jvar == identity jvar
+p_JVarShouldHoldIdentityLawWhenTraversing = property $ \(jvar :: QualifiedJVar) ->
+  (traverse identity) jvar == identity jvar
     where 
       identity :: a -> Identity a
       identity a = pure a
   
 p_JVarShouldHoldCompositionLawWhenTraversing :: Property
-p_JVarShouldHoldCompositionLawWhenTraversing = property $ do
-  (_, jvar) <- arbitrary >>= mkJVar
-  pure $ (lhs jvar).run == (rhs jvar).run
+p_JVarShouldHoldCompositionLawWhenTraversing = property $ \(jvar :: QualifiedJVar) ->
+  (lhs jvar).run == (rhs jvar).run
     where 
       f :: QualifiedName -> Identity QName
       f n = pure $ n.name
