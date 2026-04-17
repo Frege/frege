@@ -20,9 +20,10 @@ import  frege.compiler.common.Types  as  CT
 import  frege.compiler.classes.Nice
 import  frege.lib.PP(msgdoc, text, </>)
 import  frege.compiler.Utilities  as  U(allourvars, allvars)
-import  frege.compiler.Typecheck  as  TC(checkRho, substInst, zonkExpr, zonkRigid)
+import  frege.compiler.Typecheck  as  TC( checkRho, substInst, zonkExpr, zonkRigid)
 import  frege.compiler.tc.Util  as  TCU()
 import  frege.compiler.common.Trans
+
 {--
  * In this pass, we make sure that all expressions are in
  * a form we need for code generation. We say that an expression is, or is not /easy/.
@@ -59,31 +60,33 @@ import  frege.compiler.common.Trans
  * This pass should run before strictness analysis so that local definitions
  * we need to introduce get strictness info.
  -}
+pass :: (HasClassLoader m, HasGlobalState m) => m (String,Int)
 pass = do
     g <- getST
     -- set lambdadepth for each symbol
     let collectedvars = allourvars g
-    foreach collectedvars depthSym
+    liftGlobalState $ foreach collectedvars depthSym
     
     -- check instance member's depth
     g <- getST
     let imembers = [ imem | inst@SymI{} <- values g.thisTab,
                             g.our inst.name, 
                             imem <- values inst.env ]
-    foreach imembers checkDepth 
+    liftGlobalState $ foreach imembers checkDepth 
     -- make all expressions easy
     g <- getST
     let collectedvars = allourvars g
     foreach collectedvars easySym
     
-    stio ("expressions", length collectedvars)
+    pure ("expressions", length collectedvars)
 
 
+easySym :: (HasClassLoader m, HasGlobalState m) => Symbol -> m ()
 easySym (vsym@SymV {pos})
     
     | Just dx <- vsym.expr = do
         g <- getST
-        x <- dx
+        x <- liftGlobalState dx
         if isOn g.options.flags INLINE && not (defaultMethod vsym.name g) then do
             ux <- inlined x >>= easyExpression
             changeSym vsym.{expr = Just (return ux)}
@@ -91,7 +94,7 @@ easySym (vsym@SymV {pos})
             nx <- easyExpression x
             changeSym vsym.{expr = Just (return nx)}
     
-    | otherwise = stio ()
+    | otherwise = pure ()
     
     where
         defaultMethod name g = case name of
@@ -192,20 +195,21 @@ depthSym sym = do
 
 
 --- copy expr and re-establish type
+recycle :: (HasClassLoader m, HasGlobalState m) => Position -> ExprT -> Rho -> m ExprT
 recycle newpos expr rho = do
         g <- getST
-        expr <- U.copyExpr (Just newpos) empty expr
-        expr <- U.untypeExpr expr
+        expr <- liftGlobalState $ U.copyExpr (Just newpos) empty expr
+        expr <- liftGlobalState $ U.untypeExpr expr
         let freevars =  U.freeTVars [] rho
             tvnames  =  map _.var freevars
-        (metas, rho) <- TCU.skolemise (ForAll freevars rho)
+        (metas, rho) <- liftGlobalState $ TCU.skolemise (ForAll freevars rho)
         x <- checkRho expr rho
         -- foreach (zip metas freevars) (uncurry unInst)
-        x <- zonkExpr x
-        x <- zonkRigid tvnames x    -- true (unRigid tvnames) x 
-        x <- U.mapEx true substInst x
+        x <- liftGlobalState $ zonkExpr x
+        x <- liftGlobalState $ zonkRigid tvnames x    -- true (unRigid tvnames) x 
+        x <- liftGlobalState $ U.mapEx true substInst x
         E.logmsg TRACE9 (newpos) (text ("recycled  " ++ nice x g))
-        stio x
+        pure x
     --where
     --    unRigid ∷ [String] → ExprT→StG (ExprT | ExprT)
     --    unRigid b = pure . Left . Expr.{typ <- fmap (TCU.substRigidSigma b)}
@@ -221,14 +225,15 @@ recycle newpos expr rho = do
         --unInst _ _ = return ()  
 
 
-recyclex :: Expr -> StG Expr
-recyclex expr = U.copyExpr Nothing empty expr {- case expr.typ of
+recyclex :: HasGlobalState m => Expr -> m Expr
+recyclex expr = liftGlobalState $ U.copyExpr Nothing empty expr {- case expr.typ of
     Just sigma -> recycle expr sigma
     _ -> do
         g <- getST
         E.fatal (getpos expr) (text("recyclex untyped: " ++ nicer expr g)) -}
 
 
+mkSimple :: (HasClassLoader m, HasGlobalState m) => ExprT -> m ExprT
 mkSimple (x@Vbl {pos})     = return x
 mkSimple (x@Lit {pos})     = return x
 mkSimple (x@Con {pos})     = return x
@@ -253,7 +258,7 @@ mkSimple x = do
     
     where @ux@ is the result of @f@ applied to the fresh pattern @p@
     -}
-mkLet :: Expr -> (Expr -> Expr) -> StG Expr
+mkLet :: HasGlobalState m => Expr -> (Expr -> Expr) -> m Expr
 mkLet ex f = do
     uid    <- uniqid
     let pos = getpos ex
@@ -262,11 +267,12 @@ mkLet ex f = do
         var = Vbl{pos, name=sym.name, typ=ex.typ}
         aex = f var
         sym = patsym.{typ = fromMaybe pSigma ex.typ, expr = Just (return ex)} 
-    enter sym
+    liftGlobalState $ enter sym
     return $! Let{env=[sym.name], ex=aex, typ=aex.typ}
 
 
 --- any expression x can be made simple through (\_ -> easy x) ()
+mkS :: (HasClassLoader m, HasGlobalState m) => ExprT -> m ExprT
 mkS x = do
     e <- mkEasy x
     let lam = Lam {pat = PCon {pos, qname=unitName, pats=[]}, 
@@ -335,8 +341,11 @@ superOpt = [VName pPreludeBase "•",
 {--
     inline all functions appropriate for inlining
     -}
+
+inlined :: (HasGlobalState m, HasClassLoader m) => ExprT -> m ExprT
 inlined = U.mapEx true inline
     where
+        inline :: (HasGlobalState m, HasClassLoader m) => ExprT -> m (ExprT | ExprT)
         inline (app@App{})
           | (fun,t):rest <- flatx app,
             Vbl {pos = newpos, name, typ = Just sig} <- fun,
@@ -359,7 +368,7 @@ inlined = U.mapEx true inline
                             d >= sym.depth-1 && sym.name `elem` superOpt = do
                                 E.logmsg TRACE9 (getpos fun) (text ("replace " 
                                     ++ nice fun g  ++ " :: " ++ nicer sig g))
-                                x <- dx
+                                x <- liftGlobalState dx
                                 x <- recycle newpos x sig.rho
                                 return . Left . unflatx $ (x,t):rest
                     _ -> return (Left app)
@@ -373,7 +382,7 @@ inlined = U.mapEx true inline
                             | sym.exported, sym.depth == 0 = do
                                 E.logmsg TRACE9 pos (text ("replace " 
                                     ++ nice vbl g  ++ " :: " ++ nicer sig g))
-                                x <- dx
+                                x <- liftGlobalState dx
                                 x <- recycle pos x sig.rho
                                 return . Left $ x
                     nothing -> return (Left vbl)
@@ -407,7 +416,7 @@ inlined = U.mapEx true inline
     5. Function application removes @let@, @case@ and @if@ from both function and 
        argument. 
     -}
-mkEasy :: Expr -> StG Expr    
+mkEasy :: (HasClassLoader m, HasGlobalState m) => Expr -> m Expr    
 mkEasy (x@Lit{})    = return x
 mkEasy (x@Vbl{})    = return x
 mkEasy (x@Con{})    = return x
@@ -470,7 +479,6 @@ mkEasy (x@App f arg t) = do
                     mkEasy trans
                 where
                     mod f t x = App f x t
-                    adapt :: CAlt -> StG CAlt
                     adapt calt = do
                         f' <- recyclex f
                         return calt.{ex <- mod f' t}
@@ -509,7 +517,6 @@ mkEasy (x@App f arg t) = do
                         mkEasy trans
                       where
                             mod a t x = App x a t
-                            adapt :: CAlt -> StG CAlt
                             adapt calt = do
                                 r' <- recyclex arg
                                 return calt.{ex <- mod r' t}
@@ -577,7 +584,6 @@ mkEasy  (outer@Case{}) = do
                 E.logmsg TRACE9 (getpos outer) (text ("mkEasy CASE CASE after:  " ++ nice trans g))
                 mkEasy trans                
             where
-                adapt :: CAlt -> StG CAlt
                 adapt calt = do
                     ex <- recyclex outer.{ex = calt.ex}
                     E.logmsg TRACE9 (getpos outer) (text ("duplication because of  CASE/CASE" ++ nice ex g))
@@ -587,7 +593,7 @@ mkEasy  (outer@Case{}) = do
                 let alt1 = head outer.alts
                     match = sMatch alt1.pat ea empty
                     sxs = maybe [] each match
-                substOk <- forM sxs (checkSubst alt1.ex) 
+                substOk <- forM sxs  (liftGlobalState . checkSubst alt1.ex) 
                 case match of
                     Just tree | and substOk,
                                 length outer.alts == 1 = do
@@ -616,7 +622,7 @@ mkEasy  (outer@Case{}) = do
                     | otherwise = do
                         n <- references [uid] ex
                         return (n < 2)
-                doSubst ex (uid, x) = replSid uid x ex
+                doSubst ex (uid, x) = liftGlobalState $ replSid uid x ex
                 
                     
         
@@ -660,7 +666,6 @@ mkEasy  (Ifte a x y t) = do
                 E.logmsg TRACE9 (getpos before) (text ("mkEasy IF CASE after:  " ++ nice trans g))
                 mkEasy trans 
             where
-                adapt :: CAlt -> StG CAlt
                 adapt calt = do
                     ex <- recyclex (Ifte calt.ex x y t)
                     return calt.{ex}
