@@ -1,26 +1,29 @@
 module frege.compiler.natives.Utilities where
 
 import Compiler.types.Positions(Position())
-import Compiler.types.QNames(QName(VName))
+import Compiler.types.QNames(QName(VName, MName, TName))
 import Compiler.types.Types(
     Sigma
   , SigmaT(ForAll)
   , RhoT(RhoTau, RhoFun)
-  , TauT(TVar, TCon)
+  , TauT(TVar, TCon, TApp, Meta)
+  , Tau
   , KindT(KType)
   )
-import Compiler.types.Global(Global())
+import Compiler.types.Global(Global(), HasGlobalState, liftGlobalState, Symbol, StG, getST, primitiveTypes)
 import Compiler.common.Binders(allAsciiBinders)
-import Compiler.types.Global(Symbol, StG, getST)
+import Compiler.common.Errors as E()
 import Compiler.common.SymbolTable(enter)
-import Compiler.types.Symbols(SymbolT(SymT, SymV))
+import Compiler.types.Symbols(SymbolT(SymT, SymV, SymL))
 import Compiler.enums.RFlag(RState)
-import Compiler.enums.Visibility(Private)
+import Compiler.enums.Visibility(Private, Public)
 import Compiler.types.Strictness(Strictness)
 import Compiler.enums.SymState(MarkedForNativeGeneration)
 import Compiler.enums.TokenID(defaultInfix)
+import Compiler.types.Expression(ExprT)
+import Lib.PP(text, <>)
 
-generatePlaceholderSymbol :: String -> Symbol -> Position -> StG Symbol
+generatePlaceholderSymbol :: HasGlobalState m => String -> Symbol -> Position -> m Symbol
 generatePlaceholderSymbol name tsym pos = do 
     g <- getST
     let parentname = tsym.name
@@ -30,15 +33,20 @@ generatePlaceholderSymbol name tsym pos = do
     case g.find qname of
       (Just s) -> pure s
       Nothing -> do
-        let s = placeholderSym tsym qname name pos
-        enter s
-        pure s
+        let s     = placeholderSym tsym qname name pos
+        let alias = MName { tynm = parentname, base = name }
+        let syml  = aliasSym s alias pos
+        liftGlobalState $ 
+          enter s >> enter syml
+        pure syml
   where
+    aliasSym :: Symbol -> QName -> Position -> SymbolT global
+    aliasSym symbol alias pos = SymL 0 pos Public alias symbol.name
     placeholderSym :: Symbol -> QName -> String -> Position -> SymbolT global
     placeholderSym (SymT{pur, name=parentname}) name nativeName pos = SymV {
                             pos = pos,
                             sid = 0,
-                            name, vis = Private, doc = Just ("Generated function resolving to " ++ nativeName),
+                            name, vis = Public, doc = Just ("Generated function resolving to " ++ nativeName),
                             typ = placeholderSigma pos parentname, expr = Nothing, nativ = (Just nativeName),
                             pur = pur, anno = false, exported = true, 
                             state = MarkedForNativeGeneration,
@@ -71,3 +79,75 @@ unusedASCIIName qn g
     | Nothing <- Global.find g qn  = qn
     | otherwise = head [ m | b <- map _.toUpperCase allAsciiBinders,
                                 let m = qn.qual (qn.base ++ b), isNothing (g.find m)]
+
+{--
+True if the native symbol with the given QName (or any symbols of its super classes) have a member with the given name.
+-}
+isMemberOf :: HasGlobalState m => String -> QName -> m Bool
+isMemberOf member qname = do
+  g <- getST
+  case g.findit qname of
+    Just (SymT{nativ=Just(nativName)}) -> 
+      case g.javaEnv.lookupS nativName of
+        Nothing -> E.fatal Position.null (text "Couldn't find class definition for " <> text nativName <> text " in the java env. This is a compiler error")
+        (Just (supers,_)) -> let 
+            superQNames = map (fmap snd . g.javaEnv.lookupS) supers
+            allQNames   = qname:join (catMaybes superQNames)
+            found       = map (\s -> g.findm s member) allQNames 
+          in 
+            pure $ maybes found
+    _ -> pure False
+    where
+      maybes [] = False
+      maybes ((Just a):_) = True
+      maybes (_:as) = maybes as
+
+{--
+Checks if the given expression needs native generation and returns the symbol of the receiver if so.
+-}
+exprNeedsNativeGen :: HasGlobalState m => ExprT -> m (Maybe Symbol)
+exprNeedsNativeGen (x@Mem{ex, member, typ = Just sigma}) = do
+  recvSymbol <- findRecvSymbol x
+  case recvSymbol of
+    Just s | isNonPrimitiveNative s -> do
+      isMem <- member.value `isMemberOf` s.name
+      if isMem then pure Nothing else pure (Just s)
+    _     -> pure Nothing
+exprNeedsNativeGen _ = pure Nothing 
+
+findRecvSymbol :: HasGlobalState m => ExprT -> m (Maybe Symbol)
+findRecvSymbol expression =
+  case expression of
+    Mem{ex, member}
+        | Just sigma  <- ex.typ,
+          RhoTau{tau} <- sigma.rho ->  do
+            maybeRecv <- unwrapReceiver tau
+            g         <- getST
+            let recvSymbol = maybeRecv >>= findSymbol g
+            case recvSymbol of
+              Just recvSymbol -> pure $ Just recvSymbol
+              _ -> pure Nothing
+    _ -> pure Nothing
+    where 
+        -- finds the symbol belonging to the given tau
+        findSymbol :: Global -> Tau -> Maybe Symbol
+        findSymbol g (TCon{name}) | 
+          (Just (sym@(SymT{}))) <- g.findit name = Just sym
+        findSymbol _ _ = Nothing
+
+unwrapReceiver :: HasGlobalState m => Tau -> m (Maybe Tau)
+unwrapReceiver tau = do
+  g <- getST
+  case tau of
+    -- get rid off the mutable prefix
+    (TApp (TApp (TCon _ (TName pPreludeIO "Mutable")) _ ) tau) -> unwrapReceiver tau
+    (TApp tau _)     -> unwrapReceiver tau
+    (tau@(TCon _ _)) -> pure $ Just tau
+    -- bind unresolved type variables
+    (Meta m) -> case g.bound m of
+      Just tau -> unwrapReceiver tau
+      Nothing -> pure Nothing
+    tau -> pure Nothing
+
+isNonPrimitiveNative (SymT{nativ=(Just name)}) = not (name `elem` primitiveTypes)
+isNonPrimitiveNative _ = False
