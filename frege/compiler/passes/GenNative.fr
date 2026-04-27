@@ -1,17 +1,21 @@
+
 module Compiler.passes.GenNative where
 
 import Compiler.types.Global(StIO, getSTT)
 
-import Compiler.natives.Utilities(placeholderSigma)
+import Compiler.natives.Utilities(placeholderSigma, nativeSymbolShell)
 import Data.TreeMap as TM()
 import Compiler.types.Symbols
 import Compiler.types.Global
+import Compiler.types.QNames(QName(MName))
 import Compiler.common.SymbolTable(changeSym, enter)
 import Compiler.types.Types
+
+import Compiler.enums.Visibility(Public)
 import Compiler.enums.SymState(Typechecked, MarkedForNativeGeneration)
-import Compiler.natives.Utilities(ovlsigma, unusedASCIIName)
+import Compiler.natives.Utilities(ovlsigma, addSuffix)
 import Compiler.natives.conversion.JTypeQualification(qualify)
-import Compiler.natives.types.PlaceholderSymbol(PlaceholderSymbol(PlaceholderSymbol))
+import Compiler.natives.types.NativeMethodProps(NativeMethodProps(NativeMethodProps))
 import Data.Traversable(traverse)
 import Compiler.natives.conversion.TypeExtraction(extract)
 import Compiler.natives.conversion.SigmaConversion(toSigma)
@@ -21,65 +25,94 @@ import Compiler.common.Errors  as  E()
 
 pass :: StIO (String,Int)
 pass = do
-  g           <- getSTT
-  let symbols  = symbolsToUpdate g.thisTab
-  generated   <- mapM (uncurry generateNativeDeclaration) symbols
+  g            <- getSTT
+  let symbols   = symbolsToUpdate g.thisTab
+  cleanupPlaceholderSymbols (map fst symbols)
+
+  generated   <- mapM generateNativeDeclaration (map snd symbols)
+
   pure ("generated symbols", length generated)
 
-symbolsToUpdate :: Symtab -> [(PlaceholderSymbol, Symbol)]
-symbolsToUpdate tab = [((PlaceholderSymbol nativeName name pos), sym)
+--- Remove the smybols belonging to the given QNames
+cleanupPlaceholderSymbols :: (HasGlobalState m) => [QName] -> m ()
+cleanupPlaceholderSymbols names = do
+  g            <- getST
+  let oldQNames = map _.key names
+
+  let symTab = fold _.delete g.thisTab oldQNames
+  changeST Global.{packages <- TM.replace g.thisPack symTab}
+
+--- Find all symbols inserted during the Resolve Pass to generate native definitions for
+symbolsToUpdate :: Symtab -> [(QName, NativeMethodProps)]
+symbolsToUpdate tab = [(previousName, (NativeMethodProps nativeName name pos pur))
                             | sym@(SymV{ 
-                                          nativ=(Just nativeName)
+                                          name=previousName
+                                        , nativ=(Just nativeName)
                                         , typ=ForAll{rho=RhoFun{sigma=ForAll{rho=RhoTau{tau=TCon{name}}}}}
                                         , state
                                         , pur
                                         , pos
                                         }) <- TM.values tab
                             , state == MarkedForNativeGeneration
-                            ] 
+                            ]
 
 {--
 Generates methods for the AST-node at the position of the symbol and adds
 it to the global
 -}
-generateNativeDeclaration :: (HasClassLoader m, HasGlobalState m) => PlaceholderSymbol -> Symbol -> m ([Symbol])
-generateNativeDeclaration plcSym originalSym = do
-    g                <- getST
-    jmethods         <- extract plcSym g.thisPack
-    qualifiedMethods <- mapM qualify jmethods
+generateNativeDeclaration :: (HasClassLoader m, HasGlobalState m) => NativeMethodProps -> m ([Symbol])
+generateNativeDeclaration props = do
+    g                  <- getST
+    jmethods           <- extract props g.thisPack
+    qualifiedMethods   <- mapM qualify jmethods
     let resolvedMethods = mapM (resolveEnv g.javaEnv) qualifiedMethods
     case resolvedMethods of
       Left err ->  do
-        E.error originalSym.pos err
+        E.error props.pos err
         pure []
       Right methods -> do
-          let typedMethods  = map (\(e, m) -> (toSigma plcSym.pos e m, m)) methods
-          let methodSyms    = map (\(typ, jmethod) -> originalSym.{
+          let typedMethods = map (\(e, m) -> (toSigma props.pos e m, m.memberType)) methods
+          let methodSyms   = map (\(typ, jmethod) -> createMethodSym typ jmethod g) typedMethods
+          enteredSyms     <- enterSymbols methodSyms
+          let overloadLink = head enteredSyms -- the symbol that links the overloads is the "root".
+          let member       = createMember overloadLink props.parentName props.nativeName
+          liftGlobalState  $ enter member
+          pure (member: methodSyms)
+      where
+        pur = maybe True (const False) . unST . walkRho
+        nativeName (StaticMember{classFqn}) = classFqn ++ "." ++ props.nativeName
+        nativeName InstanceMethod           = props.nativeName
+        nativeName InstanceField            = "." ++ props.nativeName
+        createMethodSym :: Sigma -> MemberType -> Global -> Symbol
+        createMethodSym typ memberType g = symbolShell.{
               typ
             , state = Typechecked
             , pur   = pur typ.rho
-            , nativ = Just $ nativeName jmethod.memberType}) typedMethods
-          liftGlobalState $ updateSymbols methodSyms 
-      where
-        pur s = maybe True (const False) . unST . walkRho $ s
-        nativeName (StaticMember{classFqn}) = classFqn ++ "." ++ plcSym.nativeName
-        nativeName InstanceMethod           = plcSym.nativeName
-        nativeName InstanceField            = "." ++ plcSym.nativeName
+            , nativ = Just $ nativeName memberType} 
+          where
+            symbolShell = nativeSymbolShell (props.parentName, props.pur) props.nativeName props.pos g.thisPack
 
-updateSymbols :: [Symbol] -> StG [Symbol]
-updateSymbols ([])      = pure []
-updateSymbols (sym:[])  = changeSym sym >> pure [sym]
-updateSymbols (overloads@(h:_)) = do
+createMember :: Symbol -> QName -> String -> Symbol
+createMember realSym parentName name = SymL 0 realSym.pos Public memberName realSym.name
+  where memberName    = MName { tynm = parentName, base = name }
+
+{--
+Enter the given overloaded symbols and link them in an additional symbol
+-}
+enterSymbols :: HasGlobalState m => [Symbol] -> m [Symbol]
+enterSymbols []       = pure []
+enterSymbols (sym:[]) = liftGlobalState $ enter sym >> pure [sym]
+enterSymbols (overloads@(h:_)) = do
             renamed <- traverse renameAndEnterSymbol overloads
-            g       <- getST
             -- we need to enter an additional symbol which will link all overloads
-            -- this will change placeholder symbol inserted in the resolve pass
-            changeSym h.{typ = ovlsigma, throwing=[], over = map Symbol.name renamed}
-            pure renamed
+            let overloadLink = h.{typ = ovlsigma, throwing=[], over = map Symbol.name renamed}
+            liftGlobalState $ enter overloadLink
+            pure (overloadLink:renamed)
         where 
-          addSuffix g sym = sym.{name <- (flip unusedASCIIName g), sid = 0}
+          addSuffixToSymbol g sym = sym.{name <- (flip addSuffix g), sid = 0}
           renameAndEnterSymbol overloaded = do
                 g <- getST
-                let renamed = addSuffix g overloaded
-                enter renamed
+                let renamed = addSuffixToSymbol g overloaded
+                liftGlobalState $ enter renamed
                 pure renamed
+               pure renamed
