@@ -12,6 +12,9 @@ public class ExampleClass<T extends java.lang.Comparable<T>> {
   public String getValue() {
     return "";
   }
+  public String getValue(String s) {
+    return s;
+  }
 
   public int primitive() {
     return 0;

@@ -3,7 +3,7 @@ module Compiler.passes.GenNative where
 
 import Compiler.types.Global(StIO, getSTT)
 
-import Compiler.natives.Utilities(placeholderSigma, nativeSymbolShell)
+import Compiler.natives.Utilities(nativeSymbolShell, findClassForQName)
 import Data.TreeMap as TM()
 import Compiler.types.Symbols
 import Compiler.types.Global
@@ -22,16 +22,25 @@ import Compiler.natives.conversion.SigmaConversion(toSigma)
 import Compiler.natives.types.JTypes(MemberType(InstanceMethod, InstanceField, StaticMember))
 import Compiler.natives.conversion.EnvResolver(resolveEnv)
 import Compiler.common.Errors  as  E()
+import Lib.PP as PP()
 
 pass :: StIO (String,Int)
 pass = do
-  g            <- getSTT
-  let symbols   = symbolsToUpdate g.thisTab
+  g       <- getSTT
+  symbols  = symbolsToUpdate g.thisTab
   cleanupPlaceholderSymbols (map fst symbols)
 
-  generated   <- mapM generateNativeDeclaration (map snd symbols)
+  props    = map snd symbols
+  results <- mapM (\p -> first ((,) p) <$> findClassForQName p.parentName) props
 
-  pure ("generated symbols", length generated)
+  case sequence results of
+    Left (p, ex)       -> do
+        let message = "Could not load class: " ++ ex.getMessage
+        E.error p.pos $ PP.text message
+        pure (message, 0)
+    Right classes -> do
+      generated  <- zipWithM generateNativeDeclaration props classes
+      pure ("generated symbols", length generated)
 
 --- Remove the smybols belonging to the given QNames
 cleanupPlaceholderSymbols :: (HasGlobalState m) => [QName] -> m ()
@@ -60,10 +69,10 @@ symbolsToUpdate tab = [(previousName, (NativeMethodProps nativeName name pos pur
 Generates methods for the AST-node at the position of the symbol and adds
 it to the global
 -}
-generateNativeDeclaration :: (HasClassLoader m, HasGlobalState m) => NativeMethodProps -> m ([Symbol])
-generateNativeDeclaration props = do
+generateNativeDeclaration :: HasGlobalState m => NativeMethodProps -> Class a -> m ([Symbol])
+generateNativeDeclaration props clazz = do
     g                  <- getST
-    jmethods           <- extract props g.thisPack
+    jmethods           <- extract props clazz g.thisPack 
     qualifiedMethods   <- mapM qualify jmethods
     let resolvedMethods = mapM (resolveEnv g.javaEnv) qualifiedMethods
     case resolvedMethods of
@@ -77,7 +86,7 @@ generateNativeDeclaration props = do
           let overloadLink = head enteredSyms -- the symbol that links the overloads is the "root".
           let member       = createMember overloadLink props.parentName props.nativeName
           liftGlobalState  $ enter member
-          pure (member: methodSyms)
+          pure (member: enteredSyms)
       where
         pur = maybe True (const False) . unST . walkRho
         nativeName (StaticMember{classFqn}) = classFqn ++ "." ++ props.nativeName
@@ -115,4 +124,12 @@ enterSymbols (overloads@(h:_)) = do
                 let renamed = addSuffixToSymbol g overloaded
                 liftGlobalState $ enter renamed
                 pure renamed
-               pure renamed
+
+{--
+As we find in Haskells Bifunctor instance for Either.
+-}
+private first :: (a -> c) -> Either a b -> Either c b
+private first f (Left a)  = Left (f a)
+private first f (Right b) = Right b
+
+

@@ -1,0 +1,261 @@
+module tests.qc.gennative.UtilitiesSpec where
+
+import Test.QuickCheck
+
+import tests.qc.gennative.JTypeQualificationSpec(compileGlobal)
+import Compiler.common.SymbolTable(changeSym, enter)
+import Compiler.enums.Visibility(Public)
+import Compiler.enums.SymState(MarkedForNativeGeneration)
+import Compiler.enums.TokenID(STRCONST)
+import Compiler.natives.Utilities(generatePlaceholderSymbol, isMemberOf, exprNeedsNativeGen, unwrapReceiver)
+import Compiler.types.Packs(Pack, pPreludeBase, pPreludeIO)
+import Compiler.types.Positions(Position())
+import Compiler.types.Symbols(SymbolT(SymT))
+import Compiler.types.Types(KindT(KType), SigmaT(ForAll), RhoT(RhoTau), TauT(TVar, TCon, TApp, Meta), MetaTvT(Flexi), Tau)
+import Compiler.types.QNames(QName(TName))
+  
+import Compiler.types.Tokens(Token(Token))
+import Compiler.types.Expression(ExprT(Mem, Con))
+import Compiler.types.Global(Global, putST, changeST, HasGlobalState)
+
+import Control.monad.State(State(run))
+
+import Data.TreeMap(TreeMap, insert, contains)
+
+---- generatePlaceholderSymbol spec
+
+p_ShouldGeneratePlaceholderSymbol :: Property
+p_ShouldGeneratePlaceholderSymbol = once $ let 
+    g       = compileGlobal
+    name    = "helloWorld"
+    qname   = TName g.thisPack "ParentType"
+    sym     = mkSymT qname
+    (s, g') = run (generatePlaceholderSymbol name sym pos) g
+  in
+    conjoin [
+        -- the returned symbol must be part of the table
+        property $ contains g'.thisTab "ParentType$helloWorld"
+        -- the symbol must be native
+      , s.nativ ==? Just name
+        -- the symbol must be ready to be picked up
+      , s.state ==? MarkedForNativeGeneration
+      ]
+
+p_ShouldGeneratePlaceholderSymbolOnlyOnce :: Property
+p_ShouldGeneratePlaceholderSymbolOnlyOnce = once $
+  let 
+    g        = compileGlobal
+    name     = "helloWorld"
+    qname    = TName g.thisPack "ParentType"
+    sym      = mkSymT qname
+    testCase = (do
+        s <- generatePlaceholderSymbol name sym pos
+        changeSym s.{doc = Just "old one"} -- we change the symbol to make sure it is not overridden
+        -- generating the same place holder twice, should do nothing but return the previously generated placeholder
+        generatePlaceholderSymbol name sym pos
+      )
+    (s, _) = run testCase g
+  in
+    s.doc ==? Just "old one"
+
+---- isMemberOf spec
+
+p_ShouldBeAMemberOfTheGivenSymbol :: Property
+p_ShouldBeAMemberOfTheGivenSymbol = once $ let
+    g          = compileGlobal
+    parentName = TName g.thisPack "ParentType"
+    symName    = "mySymbol"
+    testCase   = do
+      let sym = mkSymT parentName
+      addSymToJavaEnv sym
+      enter $ sym.{env <- (insert symName undefined)}
+      isMemberOf symName parentName
+    (found, _) = run testCase g
+  in 
+    property found
+
+p_ShouldBeAMemberOfASuperClassOfTheGivenSymbol :: Property
+p_ShouldBeAMemberOfASuperClassOfTheGivenSymbol = once $ let
+    g              = compileGlobal
+    parentName     = TName g.thisPack "ParentType"
+    superTypeName  = TName g.thisPack "SuperType"
+    symName        = "mySymbol"
+    testCase       = do
+      let sym      = mkSymT parentName
+      let superSym = mkSymT superTypeName
+      let g' = case (sym.nativ, superSym.nativ) of
+                 (Just parentN, Just superN) -> 
+                   -- we insert both: the symbol and its super class and link them
+                   g.{javaEnv = (TreeMap.fromList [(superN, ([], [superTypeName])), (parentN, ([superN], [parentName]))])}
+                 _  -> g
+      putST g'
+      enter sym
+      enter superSym.{env <- (insert symName undefined)}
+      isMemberOf symName parentName
+
+    (found, _) = run testCase g
+  in 
+    property found
+
+p_ShouldNotBeAMember :: Property
+p_ShouldNotBeAMember = once $ let
+    g          = compileGlobal
+    parentName = TName g.thisPack "ParentType"
+    symName    = "mySymbol"
+    testCase   = do
+      let sym = mkSymT parentName
+      addSymToJavaEnv sym
+      enter sym
+      isMemberOf symName parentName
+
+    (found, _) = run testCase g
+  in 
+    property $ not found
+
+---- exprNeedsNativeGen spec
+
+p_ShouldNeedNativeGen :: Property
+p_ShouldNeedNativeGen = once $ let
+    g        = compileGlobal
+    name     = TName g.thisPack "ParentType"
+    sym      = mkSymT name
+    expr     = mkMemberExpression name sym.typ "member"
+    testCase = do
+      addSymToJavaEnv sym
+      enter sym
+      exprNeedsNativeGen expr
+
+    (r, _) = run testCase g
+  in
+    case  r of
+      Nothing -> property False
+      Just s  -> s.name ==? name
+
+p_ShouldNotNeedNativeGenIfMemberExists :: Property
+p_ShouldNotNeedNativeGenIfMemberExists = once $ let
+    g          = compileGlobal
+    name       = TName g.thisPack "ParentType"
+    sym        = mkSymT name
+    memberName = "member"
+    expr       = mkMemberExpression name sym.typ memberName
+    testCase   = do
+      addSymToJavaEnv sym
+      enter sym.{env <- (insert memberName undefined)}
+      exprNeedsNativeGen expr
+
+    (r, _) = run testCase g
+  in
+    case r of
+      Nothing -> property True
+      Just _  -> property False
+
+p_ShouldNotNeedNativeGenForPrimitives :: Property
+p_ShouldNotNeedNativeGenForPrimitives = once $ let
+    g        = compileGlobal
+    name     = TName pPreludeBase "int"
+    sym      = mkSymT name
+    expr     = mkMemberExpression name sym.typ "member" 
+    testCase = exprNeedsNativeGen expr
+    (r, _)   = run testCase g
+  in
+    case r of
+      Nothing -> property True
+      Just _  -> property False
+
+---- unwrapReceiver spec
+
+p_ShouldGetRidOffMutablePrefix :: Property
+p_ShouldGetRidOffMutablePrefix = once $ let
+    g          = compileGlobal
+    parentName = TName g.thisPack "Parent"
+    receiver   = mkTCon parentName
+    tau        = TApp (TApp (TCon pos (TName pPreludeIO "Mutable")) s) receiver
+    testCase   = unwrapReceiver tau
+    (t, _)     = run testCase g
+  in
+    fmap _.name t ==? Just parentName
+  where
+    s = TVar pos KType "s"
+
+p_ShouldResolveTCon :: Property
+p_ShouldResolveTCon = once $ let
+    g          = compileGlobal
+    parentName = TName g.thisPack "Parent"
+    receiver   = mkTCon parentName
+    testCase   = unwrapReceiver receiver
+    (t, _)     = run testCase g
+  in
+    fmap _.name t ==? Just parentName
+
+p_ShouldUnwrapTApp :: Property
+p_ShouldUnwrapTApp = once $ let
+    g          = compileGlobal
+    parentName = TName g.thisPack "Parent"
+    receiver   = mkTCon parentName
+    tau        = TApp receiver s
+    testCase   = unwrapReceiver tau
+    (t, _)     = run testCase g
+  in
+    fmap _.name t ==? Just parentName
+  where
+    s = TVar pos KType "s"
+
+p_ShouldNotUnwrapTVar :: Property
+p_ShouldNotUnwrapTVar = once $ let
+    tvar     = TVar pos KType "s"
+    testCase = unwrapReceiver tvar
+    (t, _)   = run testCase compileGlobal
+  in
+    fmap _.name t ==? Nothing
+
+p_ShouldBindFlexibleMeta :: Property
+p_ShouldBindFlexibleMeta = once $ let
+    g          = compileGlobal
+    id         = 0
+    tvar       = Meta (Flexi id "" KType)
+    parentName = TName g.thisPack "Parent"
+    parent     = mkTCon parentName
+    testCase   = do
+      tamperTySubst id parent
+      unwrapReceiver tvar
+    (t, _)   = run testCase compileGlobal
+  in
+    fmap _.name t ==? Just parentName
+  where
+    tamperTySubst :: HasGlobalState m => Int -> Tau -> m ()
+    tamperTySubst i tau = 
+      changeST _.{ tySubst = (TreeMap.fromList [(i, tau)]) }
+
+---- helpers
+
+{--
+Creates a simple SymT with the given QName
+-}
+mkSymT :: QName -> SymbolT Global
+mkSymT qname = SymT 0 pos Public Nothing qname KType (parentSigma qname) TreeMap.empty (Just qname.base) [] False False False False Nothing 
+  where parentSigma qname = ForAll [] (RhoTau [] (mkTCon qname))
+
+mkTCon = TCon pos
+
+{--
+Uses the `QName` to create a `Con` expression and wraps it in a `Mem` expression 
+with the given `String` as member name.
+-}
+mkMemberExpression :: QName -> SigmaT QName -> String -> ExprT
+mkMemberExpression name typ member = Mem 
+            (Con pos name (Just typ))
+            (mkStrToken member) Nothing
+  where
+    mkStrToken :: String -> Token
+    mkStrToken value = Token STRCONST value 0 0 0 []
+
+{--
+Adds the given symbol to the javaEnv
+-}
+addSymToJavaEnv :: HasGlobalState m => SymbolT Global -> m ()
+addSymToJavaEnv sym = case sym.nativ of
+                  Just nativeName -> 
+                    changeST _.{javaEnv = (TreeMap.fromList [(nativeName, ([], [sym.name]))])}
+                  _  -> pure ()
+
+pos = Position.null

@@ -10,10 +10,10 @@ import Compiler.types.Types(
   , Tau
   , KindT(KType)
   )
-import Compiler.types.Global(Global(), HasGlobalState, liftGlobalState, Symbol, StG, getST, primitiveTypes)
+import Compiler.types.Global(Global(), HasClassLoader, HasGlobalState, liftGlobalState, Symbol, StG, getST, primitiveTypes)
 import Compiler.types.Symbols(SymbolT(SymT, SymV, SymL))
 import Compiler.types.Expression(ExprT)
-import Compiler.types.Packs(Pack)
+import Compiler.types.Packs(Pack, pPreludeIO)
 import Compiler.types.Strictness(Strictness)
 import Compiler.common.Binders(allAsciiBinders)
 import Compiler.common.Errors as E()
@@ -50,15 +50,14 @@ nativeSymbolShell (parentName, purity) name pos pack = let
                         rkind    = RState.empty,
                         throwing = [], over = [], gargs = [],
                         op       = defaultInfix 
-                      } 
-
--- we encode the source type of the method into the temporary placeholder sigma, 
--- so that we can grab it later
-placeholderSigma :: Position -> QName -> Sigma
-placeholderSigma pos name = ForAll { bound=[], rho = RhoFun [] sigma rho }
-            where 
-              sigma = (ForAll [] (RhoTau [] (TCon pos name)))
-              rho   = RhoTau [] TVar{pos=Position.null, kind=KType, var="placeholder"}
+                      } where
+                        -- we encode the source type of the method into the temporary placeholder sigma, 
+                        -- so that we can grab it later
+                        placeholderSigma :: Position -> QName -> Sigma
+                        placeholderSigma pos name = ForAll { bound=[], rho = RhoFun [] sigma rho }
+                                    where 
+                                      sigma = (ForAll [] (RhoTau [] (TCon pos name)))
+                                      rho   = RhoTau [] TVar{pos=Position.null, kind=KType, var="placeholder"}
 
 --- Type for overloaded functions
 ovlsigma :: Sigma
@@ -76,6 +75,23 @@ unusedASCIIName qn g
 addSuffix :: QName -> Global -> QName
 addSuffix qn g = head [ m | b <- map _.toUpperCase allAsciiBinders,
                                 let m = qn.qual (qn.base ++ b), isNothing (g.find m)]
+
+{--
+Checks if the given expression needs native generation and returns the symbol of the receiver if so.
+-}
+exprNeedsNativeGen :: HasGlobalState m => ExprT -> m (Maybe Symbol)
+exprNeedsNativeGen (x@Mem{member}) = do
+  recvSymbol <- findRecvSymbol x
+  case recvSymbol of
+    Just s | isNonPrimitiveNative s -> do
+      isMem <- member.value `isMemberOf` s.name
+      if isMem then pure Nothing else pure (Just s)
+    _     -> pure Nothing
+  where
+    isNonPrimitiveNative (SymT{nativ=(Just name)}) = not (name `elem` primitiveTypes)
+    isNonPrimitiveNative _ = False
+exprNeedsNativeGen _ = pure Nothing 
+
 {--
 True if the native symbol with the given QName (or any symbols of its super classes) have a member with the given name.
 -}
@@ -97,22 +113,6 @@ isMemberOf member qname = do
       maybes [] = False
       maybes ((Just a):_) = True
       maybes (_:as) = maybes as
-
-{--
-Checks if the given expression needs native generation and returns the symbol of the receiver if so.
--}
-exprNeedsNativeGen :: HasGlobalState m => ExprT -> m (Maybe Symbol)
-exprNeedsNativeGen (x@Mem{ex, member, typ = Just sigma}) = do
-  recvSymbol <- findRecvSymbol x
-  case recvSymbol of
-    Just s | isNonPrimitiveNative s -> do
-      isMem <- member.value `isMemberOf` s.name
-      if isMem then pure Nothing else pure (Just s)
-    _     -> pure Nothing
-  where
-    isNonPrimitiveNative (SymT{nativ=(Just name)}) = not (name `elem` primitiveTypes)
-    isNonPrimitiveNative _ = False
-exprNeedsNativeGen _ = pure Nothing 
 
 findRecvSymbol :: HasGlobalState m => ExprT -> m (Maybe Symbol)
 findRecvSymbol expression =
@@ -138,9 +138,10 @@ unwrapReceiver :: HasGlobalState m => Tau -> m (Maybe Tau)
 unwrapReceiver tau = 
   case tau of
     -- get rid off the mutable prefix
-    (TApp (TApp (TCon _ (TName pPreludeIO "Mutable")) _ ) tau) -> unwrapReceiver tau
-    (TApp tau _)     -> unwrapReceiver tau
-    (tau@(TCon _ _)) -> pure $ Just tau
+    (TApp (TApp (TCon _ (TName p "Mutable")) _ ) tau) 
+      | p == pPreludeIO -> unwrapReceiver tau
+    (TApp tau _)        -> unwrapReceiver tau
+    (tau@(TCon _ _))    -> pure $ Just tau
     -- bind unresolved type variables
     (Meta m) -> do
       g <- getST
@@ -149,3 +150,18 @@ unwrapReceiver tau =
         Nothing -> pure Nothing
     tau -> pure Nothing
 
+{--
+Loads the class for the native declaration this `QName` belongs to.
+-}
+findClassForQName :: (HasClassLoader m, HasGlobalState m) => QName -> m (ClassNotFoundException | Class a)
+findClassForQName name = do
+  g <- getST
+  maybe
+    nonNative -- this case should never occur
+    loadClass
+    do 
+      s <- g.findit name
+      n <- s.nativ
+      pure n
+  where
+   nonNative = E.fatal Position.null $ PP.fill [ PP.text $ show name, PP.text " is not a native declaration!", PP.text "This is a compiler error"]
