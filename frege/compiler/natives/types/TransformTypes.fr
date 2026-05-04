@@ -1,0 +1,170 @@
+module Compiler.natives.types.TransformTypes where
+
+import frege.Prelude hiding (Reader)
+import Compiler.natives.types.JTypes
+import Compiler.types.Positions(Position())
+import Compiler.types.QNames(QName(TName))
+import Compiler.types.Types(
+    Sigma
+  , Tau
+  , Rho
+  , SigmaT(ForAll)
+  , TauT(TCon, TVar, TApp)
+  , RhoT(RhoTau, RhoFun)
+  , KindT(KVar, KType)
+  )
+import Compiler.types.Packs(pPreludeBase, pPreludeIO)
+import Control.monad.Reader
+
+data JEnv = JEnv { pos :: Position }
+type JReader b = Reader JEnv b
+
+askPos :: JReader Position
+askPos = JEnv.pos <$> ask
+
+
+{-- 
+Returns a Sigma for a @JMethod@ at the given @Position@
+-}
+getSigma :: Position -> JMethod -> Sigma
+getSigma pos method = (JReader.run (getSigma' method) env).run
+  where env = JEnv pos
+
+private getSigma' :: JMethod -> JReader Sigma
+private getSigma' method = do
+  returnRho <- mkReturnRho method
+  methodRho <- foldrM mkRhoFun returnRho method.params
+  pure $ ForAll bound methodRho
+  where
+    bound = if method.hasMutEnv then [s] else []
+
+{--
+Builds the return type @Rho@ for a @JMethod@:
+
+1. Converts return type to @Tau@
+2. Wraps in @Either@ for each exception
+3. Wraps in @ST s@ or @ST IO@ if method has env context
+-}
+mkReturnRho :: JMethod -> JReader Rho
+mkReturnRho method = do
+  returnTau  <- mkTau method.returnVal
+  wrappedTau <- buildExsTau method.exs returnTau 
+  
+  case method.env of
+    (Just EnvS)   -> RhoTau [] <$> (stS wrappedTau)
+    (Just EnvIO)  -> RhoTau [] <$> (stIO wrappedTau)
+    otherwise     -> return $ RhoTau [] returnTau
+
+{--
+Transforms a @JType@ to a @Rho@
+-}
+mkRhoTau :: JType -> JReader Rho
+mkRhoTau t = RhoTau [] <$> mkTau t
+
+{--
+Creates a @RhoFun@, thereby uses the given @JType@ as parameter and the given
+@Rho@ as return value.
+-}
+mkRhoFun :: JType -> Rho -> JReader Rho
+mkRhoFun jtype rho = do
+  rhoTau <- mkRhoTau jtype
+  pure $ RhoFun [] (ForAll [] rhoTau) rho
+
+--- Transform a `@Type@ to a @Tau@
+mkTau :: JType -> JReader Tau
+mkTau (JVar{identifier})           = tvar identifier
+mkTau (JType{name, env, generics}) = mkTau' >>= applyEnvWrapper env
+  where
+    -- apply generics to the taus if there are any
+    -- apply generics to the taus if there are any
+    mkTau' = do 
+      tcon <- mkTcon name
+      foldM applyGeneric tcon generics
+    applyGeneric t generic = 
+      TApp t <$> mkTau generic
+    applyEnvWrapper Pure  = pure
+    applyEnvWrapper EnvS  = mutS
+    applyEnvWrapper EnvIO = mutIO
+
+{-- 
+Transform a given @QName@ to a @TCon@ at the current position.
+-}
+mkTcon :: QName -> JReader Tau
+mkTcon name = case name.base of
+      "String" -> mkStr
+      _        -> flip TCon name <$> askPos
+  where
+    mkStr = do
+      pos <- askPos
+      pure $ TApp (TCon pos preludeBaseString) (TCon pos preludeBaseChar)
+
+    preludeBaseString = TName pPreludeBase "StringJ"
+    preludeBaseChar   = TName pPreludeBase "Char"
+
+{-- 
+Create a variable denoting a generic type with the given name at the
+current position.
+-}
+tvar :: String -> JReader Tau
+tvar var = do
+  pos <- askPos
+  pure $ TVar pos KVar var
+
+{-- 
+Create a Tau for an @Either@ with an Exception at the left position, still
+expecting a @Tau@ for the @Right@ case
+-}
+mkEitherTau :: Tau -> Tau -> JReader Tau
+mkEitherTau exception success = do 
+  either <- mkEitherCon
+  pure $ TApp (TApp either exception) success where
+    mkEitherCon = do 
+      pos <- askPos
+      pure $ TCon pos preludeBaseEither
+    preludeBaseEither = TName pPreludeBase "Either"
+    
+
+{-- 
+Builds a @Tau@ for an @Either@ using the list of @JType@ as exceptions.
+-}
+buildExsTau :: [JType] -> Tau -> JReader Tau
+buildExsTau = flip $ foldrM (\ex acc -> do 
+      exTau <- mkTau ex
+      mkEitherTau exTau acc
+    ) 
+
+s :: Tau
+s = TVar Position.null KType "s"
+
+stS, stIO :: Tau -> JReader Tau
+stS  = mkST s
+stIO = mkST io
+
+io = TCon Position.null (TName pPreludeBase "RealWorld")
+
+mkST :: Tau -> Tau -> JReader Tau
+mkST s a = do 
+  pos <- askPos
+  pure $ ((TCon pos (st')) `TApp` s) `TApp` a
+    where st' = (TName pPreludeBase "ST")
+
+{-- 
+Create a @Tau@ for a @Mutable s a@
+-}
+mut :: Tau -> Tau -> JReader Tau
+mut s a = do
+  pos <- askPos
+  pure $ TApp (TApp (TCon pos mut') s) a where
+  mut' = (TName pPreludeIO "Mutable")
+
+mutIO, mutS :: Tau -> JReader Tau
+--- Create a @Tau@ for a @Mutable IO a@
+mutIO = mut io
+--- Create a @Tau@ for a @Mutable s a@
+mutS  = mut s
+
+foldrM :: (Applicative a,Bind a) => (c->b->a b) -> b -> [c] -> a b
+foldrM f a bs = fm f bs a
+    where
+        fm f (b:bs) a = fm f bs a >>= f b
+        fm f []     a = pure a
