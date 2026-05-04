@@ -1,53 +1,63 @@
 module tests.qc.gennative.SigmaConversionSpec where
 
-import Test.QuickCheck as Q public
+import Test.QuickCheck
 
 import Compiler.types.QNames(QName(VName))
 
+import Compiler.types.Positions(Position)
+import Compiler.types.QNames(QName(TName))
 import Compiler.types.Types(
-    Sigma
-  , SigmaT(ForAll)
+    Context
+  , ContextT()
+  , Kind
+  , KindT(KGen, KType)
+  , Rho
   , RhoT(RhoTau, RhoFun)
-  , TauT(TVar, TCon)
-  , KindT(KType)
+  , Sigma
+  , SigmaT(ForAll)
+  , Tau
+  , TauT(TApp, TCon, TVar)
+  , walkRho
+  , unST
   )
-import Compiler.types.Positions
-import Compiler.types.QNames
-import Compiler.types.Types
-import Compiler.types.Packs
-import Compiler.natives.types.JTypes
+import Compiler.types.Packs(
+    Pack()
+  , pPreludeBase
+  , pPreludeIO
+  )
+import Compiler.natives.types.JTypes(
+    Env(Pure, EnvS, EnvIO)
+  , JMethodT(JMethod)
+  , JTypeT(JType, JVarRef, JWildcard)
+  , JVarT(JVar)
+  , QualifiedName(QualifiedName)
+  , WildcardBounds(Upper, Lower)
+  , NativeKind(Method)
+  )
 import Compiler.natives.conversion.SigmaConversion(toSigma)
-import Data.HashMap
-
-
+import Data.HashMap(HashMap)
 
 -- some generally used stuff
-pos = Position.null
-pack = Pack.new "SigmaConversionSpec"
-unit = TName pPreludeBase "()"
-str  = TApp (TCon pos (TName pPreludeBase "StringJ")) (TCon pos (TName pPreludeBase "Char"))
-strRho  = RhoTau [] str
-s = TVar Position.null KType "s"
-io = TCon Position.null (TName pPreludeBase "RealWorld")
-mutIO = mut io 
-mutS = mut s
+pos     = Position.null
+pack    = Pack.new "SigmaConversionSpec"
+unit    = TName pPreludeBase "()"
+unitRho = RhoTau [] (tcon unit)
+s       = TVar Position.null KType "s"
+io      = TCon Position.null (TName pPreludeBase "RealWorld")
+mutIO   = mut io 
+mutS    = mut s
 mut s a = TApp (TApp (TCon pos mut') s) a where
-  mut' = (TName pPreludeIO "Mutable")
-stIO = st io
-stS = st s
-st s a = RhoTau [] $ ((TCon pos (st')) `TApp` s) `TApp` a
-  where st' = (TName pPreludeBase "ST")
-tcon name = TCon pos name
-strMap = strMap' where 
-  strMap' =  TApp (TApp mapCtr str) str
-  mapCtr = TCon pos mapName
-  mapName = TName (Pack.new "Java.Util") "Map"
-tconRho name = RhoTau [] (tcon name)
+  mut'  = (TName pPreludeIO "Mutable")
+stIO    = st io
+stS     = st s
+st s a  = RhoTau [] $ ((TCon pos (st')) `TApp` s) `TApp` a where 
+  st'   = (TName pPreludeBase "ST")
+tcon name   = TCon pos name
 eitherTau e = TApp (TApp eitherCon e) where
-    eitherCon   = TCon pos (TName pPreludeBase "Either")
-invalidPersonNameEx = ("examples.ntvdeclstypes.person.InvalidPersonNameException", TCon pos (TName pack "InvalidPersonNameException"))
-ex = ("java.lang.Exception", TCon pos (TName pPreludeIO "Exception"))
-strQName  = (TName (Pack.new "Java.lang") "String")
+ eitherCon  = TCon pos (TName pPreludeBase "Either")
+
+sigmaEnv :: Sigma -> Maybe Tau
+sigmaEnv sigma = fst <$> (unST $ walkRho sigma.rho)
 
 derive Eq Context
 derive Eq Kind
@@ -55,79 +65,162 @@ derive Eq Tau
 derive Eq Rho
 derive Eq Sigma
 
-derive Show Context
-derive Show MetaTv
-derive Show Tau
-derive Show Rho
-derive Show Sigma
-
 p_ShouldGenerateSimpleSigma :: Property
 p_ShouldGenerateSimpleSigma = once $
   let 
-    jtype     = JMethod [(JType (QualifiedName strQName Pure) [])] (JType (QualifiedName strQName Pure) []) [] HashMap.empty
-
-    expected = ForAll [] (RhoFun [] (ForAll [] strRho) strRho)
+    jtype     = JMethod [(JType (QualifiedName unit Pure) [])] (JType (QualifiedName unit Pure) []) [] HashMap.empty Method
+    expected  = ForAll [] (RhoFun [] (ForAll [] unitRho) unitRho)
   in
     toSigma pos jtype == expected
+
+p_ShouldGenerateMultiParamSigma :: Property
+p_ShouldGenerateMultiParamSigma = once $
+  let 
+    jtype    = JMethod [
+                 (JType (QualifiedName unit Pure) [])
+               , (JType (QualifiedName unit Pure) [])
+               ] (JType (QualifiedName unit Pure) []) [] HashMap.empty Method
+    expected = ForAll [] (RhoFun [] (ForAll [] unitRho) (RhoFun [] (ForAll [] unitRho) unitRho))
+  in
+    toSigma pos jtype == expected
+
+p_ShouldGenerateSigmaForSTType :: Property
+p_ShouldGenerateSigmaForSTType = once $
+  let 
+    tname     = TName pack "IAmMutable"
+    typ       = JType (QualifiedName tname EnvS) []
+    bound     = HashMap.empty
+    jtype     = JMethod [] typ [] bound Method
+    res       = toSigma pos jtype
+    resEnv    = sigmaEnv res
+  in
+    resEnv == Just s
+
+p_ShouldGenerateSigmaForIOType :: Property
+p_ShouldGenerateSigmaForIOType = once $
+  let 
+    tname  = TName pack "LetsDoIO"
+    typ    = JType (QualifiedName tname EnvIO) []
+    bound  = HashMap.empty
+    jtype  = JMethod [] typ [] bound Method
+    res    = toSigma pos jtype
+    resEnv = sigmaEnv res
+  in
+    resEnv == Just io
+
+instance Arbitrary Env where
+  arbitrary =
+     oneof $ map pure [Pure, EnvS, EnvIO]
+  shrink Pure = []
+  shrink EnvS = [Pure]
+  shrink EnvIO = [EnvS, Pure]
+
+p_ShouldGenerateSigmaWhenMixingEnvS :: Property
+p_ShouldGenerateSigmaWhenMixingEnvS = property $ do
+  returnEnv    <- arbitrary
+  paramEnvs    <- choose (0,5) >>= flip vectorOf arbitrary
+  exsEnvs      <- choose (0,3) >>= flip vectorOf arbitrary
+  genericEnvs  <- choose (0,3) >>= flip vectorOf arbitrary -- also bounds of generics can have an Env
+  let params    = map fromEnv paramEnvs
+  let exs       = map fromEnv exsEnvs
+  let bounds    = map fromEnv genericEnvs
+  let typevars  = HashMap.singleton "e" (JVar "e" bounds)
+  let jtype     = JMethod params (fromEnv returnEnv) exs typevars Method
+  let res       = toSigma pos jtype
+  let resEnv    = fst <$> unST (walkRho res.rho)
+
+  pure $ resEnv == inferEnv ((returnEnv : paramEnvs) ++ exsEnvs ++ genericEnvs)
+  where
+    fromEnv env   = JType (QualifiedName (TName pack "AType") env) []
+    inferEnv :: [Env] -> Maybe Tau
+    inferEnv envs 
+      | EnvIO `elem` envs = Just io
+      | EnvS  `elem` envs = Just s
+      | otherwise = Nothing
+
+p_ShouldGenerateSigmaForExceptionType :: Property
+p_ShouldGenerateSigmaForExceptionType = once $
+  let 
+    ex        = TName pack "Exception"
+    typ       = JType (QualifiedName unit Pure) []
+    exTyp     = JType (QualifiedName ex Pure) []
+    bound     = HashMap.empty
+    jtype     = JMethod [] typ [exTyp] bound Method
+    expected  = ForAll [] (RhoTau [] (eitherTau (tcon ex) (tcon unit)))
+    res       = toSigma pos jtype
+  in 
+    res == expected
+
+p_ShouldGenerateSigmaForExceptionInMutSType :: Property
+p_ShouldGenerateSigmaForExceptionInMutSType = once $ 
+  let 
+    ex        = TName pack "Exception"
+    typ       = JType (QualifiedName unit EnvIO) []
+    exTyp     = JType (QualifiedName ex Pure) []
+    bound     = HashMap.empty
+    jtype     = JMethod [] typ [exTyp] bound Method
+    expected  = ForAll [] (stIO (eitherTau (tcon ex) (mutIO $ tcon unit)))
+    res = toSigma pos jtype
+  in
+    res == expected
 
 p_ShouldGenerateSigmaForGenericType :: Property
 p_ShouldGenerateSigmaForGenericType = once $
   let 
-    tname     = TName pack "ArrayList"
+    tname     = TName pack "Parameterized"
     e         = TVar Position.null KType "e"
-    param     = JType (QualifiedName tname EnvS) [JVarRef "e"]
+    param     = JType (QualifiedName tname Pure) [JVarRef "e"]
     bound     = HashMap.singleton "e" (JVar "e" [])
     returnVal = JType (QualifiedName unit Pure) []
-    jtype     = JMethod [param] returnVal [] bound
-    expected  = ForAll [s, e] (RhoFun [] (ForAll [] (RhoTau [] (mutS (TApp (tcon tname) e)))) (stS (tcon unit)))
+    jtype     = JMethod [param] returnVal [] bound Method
+    expected  = ForAll [e] (RhoFun [] (ForAll [] (RhoTau [] (TApp (tcon tname) e))) unitRho)
     res = toSigma pos jtype
   in
     res == expected
 
-p_ShouldGenerateSigmaForBoundedGenericType :: Property
-p_ShouldGenerateSigmaForBoundedGenericType = once $
+p_ShouldGenerateSigmaForMethodWithBoundedTypeParam :: Property
+p_ShouldGenerateSigmaForMethodWithBoundedTypeParam = once $
   let 
-    tname     = TName pack "ArrayList"
-    bound     = TName pack "Number"
+    tname     = TName pack "Parameterized"
+    bound     = TName pack "Bound"
     e         = TVar Position.null (KGen [TCon Position.null bound]) "e"
     eRef      = TVar Position.null KType "e"
-    param     = JType (QualifiedName tname EnvS) [JVarRef "e"]
+    param     = JType (QualifiedName tname Pure) [JVarRef "e"]
     typevars  = HashMap.singleton "e" (JVar "e" [(JType (QualifiedName bound Pure) [])])
     returnVal = JType (QualifiedName unit Pure) []
-    jtype     = JMethod [param] returnVal [] typevars
-    expected  = ForAll [s, e] (RhoFun [] (ForAll [] (RhoTau [] (mutS (TApp (tcon tname) eRef)))) (stS (tcon unit)))
-    res = toSigma pos jtype
+    jtype     = JMethod [param] returnVal [] typevars Method
+    expected  = ForAll [e] (RhoFun [] (ForAll [] (RhoTau [] (TApp (tcon tname) eRef))) unitRho)
+    res       = toSigma pos jtype
   in 
     res == expected
 
-p_ShouldGenerateSigmaForMultiBoundedGenericType :: Property
-p_ShouldGenerateSigmaForMultiBoundedGenericType = once $
+p_ShouldGenerateSigmaForMethodWithFBoundedTypeParam :: Property
+p_ShouldGenerateSigmaForMethodWithFBoundedTypeParam = once $
   let 
-    tname     = TName pack "ArrayList"
-    bound1    = TName pack "Number"
-    bound2    = TName pack "Comparable"
-    e         = TVar Position.null (KGen [TCon Position.null bound1, TCon Position.null bound2]) "e"
+    tname     = TName pack "Parameterized"
+    bound     = TName pack "FBound"
+    e         = TVar Position.null (KGen [TApp (TCon Position.null bound) eRef]) "e"
     eRef      = TVar Position.null KType "e"
-    param     = JType (QualifiedName tname EnvS) [JVarRef "e"]
-    typevars  = HashMap.singleton "e" (JVar "e" [JType (QualifiedName bound1 Pure) [],JType (QualifiedName bound2 Pure) []])
+    param     = JType (QualifiedName tname Pure) [JVarRef "e"]
+    typevars  = HashMap.singleton "e" (JVar "e" [JType (QualifiedName bound Pure) [JVarRef "e"]])
     returnVal = JType (QualifiedName unit Pure) []
-    jtype     = JMethod [param] returnVal [] typevars
-    expected  = ForAll [s, e] (RhoFun [] (ForAll [] (RhoTau [] (mutS (TApp (tcon tname) eRef)))) (stS (tcon unit)))
+    jtype     = JMethod [param] returnVal [] typevars Method
+    expected  = ForAll [e] (RhoFun [] (ForAll [] (RhoTau [] (TApp (tcon tname) eRef))) unitRho)
     res       = toSigma pos jtype
   in do
     res == expected
 
-p_ShouldGenerateSigmaForWildcardType :: Property
-p_ShouldGenerateSigmaForWildcardType = once $
+p_ShouldGenerateSigmaForMultiBoundedWildcardType :: Property
+p_ShouldGenerateSigmaForMultiBoundedWildcardType = once $
   let 
-    tname     = TName pack "ArrayList"
-    bound1    = TName pack "Number"
-    bound2    = TName pack "Comparable"
+    tname     = TName pack "Parameterized"
+    bound1    = TName pack "Bound1"
+    bound2    = TName pack "Bound2"
     wildcard  = TVar Position.null (KGen [TCon Position.null bound1, TCon Position.null bound2]) "<"
-    param     = JType (QualifiedName tname EnvS) [JWildcard (Upper [JType (QualifiedName bound1 Pure) [], JType (QualifiedName bound2 Pure) []])]
+    param     = JType (QualifiedName tname Pure) [JWildcard (Upper [JType (QualifiedName bound1 Pure) [], JType (QualifiedName bound2 Pure) []])]
     returnVal = JType (QualifiedName unit Pure) []
-    jtype     = JMethod [param] returnVal [] HashMap.empty
-    expected  = ForAll [s] (RhoFun [] (ForAll [] (RhoTau [] (mutS (TApp (tcon tname) wildcard)))) (stS (tcon unit)))
+    jtype     = JMethod [param] returnVal [] HashMap.empty Method
+    expected  = ForAll [] (RhoFun [] (ForAll [] (RhoTau [] (TApp (tcon tname) wildcard))) unitRho)
     res = toSigma pos jtype
   in
     res == expected

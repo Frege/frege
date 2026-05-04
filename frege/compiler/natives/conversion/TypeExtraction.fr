@@ -3,12 +3,36 @@ module Compiler.natives.conversion.TypeExtraction where
 import frege.Prelude hiding(Class)
 import Compiler.types.Packs(Pack())
 import Compiler.types.Global(Symbol, StG, StIO, getST, getSTT, liftIO, liftStG)
-import Compiler.natives.types.JTypes(JType, JTypeT(JType), JMethod, JMethodT(JMethod), NativeName(NativeName), Env(Pure, EnvS, EnvIO), JVarRef)
+import Compiler.natives.types.JTypes(
+    JType
+  , JTypeT(JType)
+  , JMethod
+  , JMethodT(JMethod)
+  , NativeName(NativeName)
+  , Env(Pure
+  , EnvS
+  , EnvIO)
+  , JVarRef
+  , NativeKind(StaticMethod, Method)
+  )
 import frege.compiler.common.Errors  as  E()
 import frege.lib.PP as PP()
 import Compiler.types.Packs
-import Compiler.natives.java.Reflect(Type, Constructor,Method, Class, asInstanceOf)
-import Compiler.natives.conversion.JTypeConversion(toJType, typeParamsOfClass, typeParamsOfMethod, typeParamsOfConstructor, classToJType)
+import Compiler.natives.java.Reflect(
+    asInstanceOf
+  , methodIsStatic
+  , Constructor
+  , Type
+  , Method
+  , Class
+  )
+import Compiler.natives.conversion.JTypeConversion(
+    classToJType
+  , toJType
+  , typeParamsOfClass
+  , typeParamsOfConstructor
+  , typeParamsOfMethod
+  )
 import Compiler.natives.types.PlaceholderSymbol(PlaceholderSymbol)
 import Data.HashMap(HashMap())
 
@@ -16,14 +40,14 @@ methodExists :: Class a -> String -> Bool
 methodExists clazz "new"  = length clazz.getConstructors.toList > 0
 methodExists clazz method = length (filter (\m -> m.getName == method) clazz.getMethods.toList) > 0
 
-methods :: Class a -> PlaceholderSymbol -> [JMethodT NativeName]
-methods clazz sym 
-  | sym.nativeName == "new" = map (fromCtor clazz) clazz.getConstructors.toList
-  | otherwise               = map (fromMethod clazz) $ filter (\m -> m.getName == sym.nativeName) clazz.getMethods.toList
+methods :: Class a -> String -> [JMethodT NativeName]
+methods clazz methodName 
+  | methodName == "new" = map (fromCtor clazz) clazz.getConstructors.toList
+  | otherwise           = map (fromMethod clazz) $ filter (\m -> m.getName == methodName) clazz.getMethods.toList
 
 extract :: PlaceholderSymbol -> Pack -> StIO [JMethodT NativeName]
 extract (sym@(PlaceholderSymbol mname tname pos)) pack = do
-  g <- getSTT
+  g     <- getSTT
   clazz <- maybe
     nonNative
     (liftIO . g.sub.loader.loadClass)
@@ -31,7 +55,7 @@ extract (sym@(PlaceholderSymbol mname tname pos)) pack = do
   case clazz of
     Right cl -> 
       if methodExists cl mname then do
-        pure $ methods cl sym
+        pure $ methods cl sym.nativeName
       else do
         liftStG $ 
           E.error pos $ PP.fill [ PP.text $ "Could not resolve method with name: " ++ mname]
@@ -42,21 +66,31 @@ extract (sym@(PlaceholderSymbol mname tname pos)) pack = do
 
 -- TODO: combine similar stuff with fromMethod
 fromCtor :: (Class a) -> Constructor -> JMethodT NativeName
-fromCtor receiver ctr = JMethod params returnVal exs bound where
+fromCtor receiver ctr = JMethod params returnVal exs bound Method where
   params =  params' ctr.getGenericParameterTypes.toList where
     params' [] = [JType (NativeName "void" []) []]
     params' as = map toJType as
   returnVal = receiverToJType receiver
   exs       = map toJType ctr.getGenericExceptionTypes.toList
-  bound       = HashMap.fromList $ map toMapEntry boundTypeParams where
+  bound     = HashMap.fromList $ map toMapEntry boundTypeParams where
     boundTypeParams = typeParamsOfClass receiver ++ typeParamsOfConstructor ctr
     toMapEntry jvar = (jvar.name, jvar)
 
 fromMethod :: (Class a) ->  Method -> JMethodT NativeName
-fromMethod receiver method = JMethod params returnVal exs bound where
-  params      = (receiverToJType receiver) : map toJType (method.getGenericParameterTypes.toList)
+fromMethod receiver method = JMethod params returnVal exs bound nativeKind where
+  params      = case nativeKind of
+                (StaticMethod _) ->
+                  case params' of 
+                    -- if a static method does not have a param, it *must* have a unit param
+                    [] -> [JType (NativeName "void" []) []]
+                    _  -> params' 
+                otherwise -> (receiverToJType receiver) : params'
+    where 
+      params' = map toJType (method.getGenericParameterTypes.toList)
+  nativeKind  = if isStatic then StaticMethod receiver.getName else Method
   returnVal   = toJType method.getGenericReturnType
   exs         = map toJType method.getGenericExceptionTypes.toList
+  isStatic    = methodIsStatic method.getModifiers 
   bound       = HashMap.fromList $ map toMapEntry boundTypeParams where
     boundTypeParams = typeParamsOfClass receiver ++ typeParamsOfMethod method
     toMapEntry jvar = (jvar.name, jvar)
