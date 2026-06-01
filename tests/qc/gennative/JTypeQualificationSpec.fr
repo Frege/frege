@@ -1,8 +1,9 @@
 module tests.qc.gennative.JTypeQualificationSpec where
 
+import Compiler.classes.HasClassLoader(HasClassLoader)
 import Compiler.common.CompilerOptions(standardGlobal)
 import Compiler.common.SymbolTable(enter)
-import Compiler.types.Global(Global)
+import Compiler.types.Global(Global, HasGlobalState(getST))
 import Compiler.types.Packs(Pack)
 import Compiler.types.Positions(Position)
 import Compiler.types.QNames(VName, TName)
@@ -12,6 +13,7 @@ import Control.monad.State(State(run))
 import Test.QuickCheck
 import Data.TreeMap(contains, TreeMap(), singleton, keys)
 import Compiler.types.Packs(pPreludeBase)
+import frege.data.HashMap(HashMap)
 
 import tests.qc.gennative.JTypesSpec()
 
@@ -20,19 +22,20 @@ p_ShouldQualifySpecialTypes = once $ let
     tpls = [("void", "()"), ("java.lang.String", "String"), ("java.lang.Object", "Object")]
     g = compileGlobal
     ntvs = map ((flip NativeName []) . fst) tpls
-    (qs, _) = run (mapM qualifySingleNative ntvs) g
+    (qs, _) = run (mapM (qualifySingleNative emptyJMethod) ntvs) g
   in
       (map (\q -> q.name.base) qs) ==? (map snd tpls)
 
 p_ShouldQualifyNonExistingSingleNative :: Property
 p_ShouldQualifyNonExistingSingleNative = once $ do
   pack <- fmap Pack.new $ arbitrary
-  let g = compileGlobal.{ sub <- (_.{ thisPack = pack }) }
+  let g = compileGlobal.{ sub <- (_.{ thisPack = pack}), javaEnv = TreeMap.empty }
   let ntv = NativeName "simple.Name" []
-  let (q, g') = (run (qualifySingleNative ntv) g)
+  let (q, g') = (run ((qualifySingleNative emptyJMethod) ntv) g)
+  let env = g'.javaEnv.lookupS ntv.fqn
   pure $
-    q.name == (TName pack ntv.fqn) &&
-    contains g'.javaEnv ntv.fqn
+    q.name ==? (TName pack ntv.fqn) .&&.
+    fmap fst env ==? Just ["java.lang.Object"]
 
 p_shouldFindExistingNative :: Property
 p_shouldFindExistingNative = once $ do
@@ -45,18 +48,19 @@ p_shouldFindExistingNative = once $ do
                   , packages <- (_.insert pack TreeMap.empty)
                   }
   -- create a symbol & look for it
-  let mkSymAction = mkSym ntv pack
-  let action  =  mkSymAction >> qualifySingleNative ntv
+  let mkSymAction = mkSym ntv pack emptyJMethod
+  let action  =  mkSymAction >> qualifySingleNative emptyJMethod ntv
   let (fqn, _)  = (run action g')
   (fqn.name ==? qName) .&&. (fqn.env ==? (Env stateIdx))
   where
-    mkSym ntv pack = 
-      fmap addIdx (nativeSym Position.null (ntv.fqn, []) pack) >>= enter
+    mkSym ntv pack jMethod = 
+      fmap addIdx (nativeSym Position.null (ntv.fqn, []) pack jMethod) >>= enter
     addIdx sym = sym.{ stateIdx = Just stateIdx }
     stateIdx = (TName pPreludeBase "TestWorld")
 
 p_ShouldQualifyJMethod :: Property
-p_ShouldQualifyJMethod = property $ \(jMethod :: (JMethodT NativeName)) -> let 
+p_ShouldQualifyJMethod = property $ \(jMethod' :: (JMethodT NativeName)) -> let 
+    jMethod = jMethod'.{exs <- (filter keepJTypes)}
     names = toList jMethod
     pack  = Pack.new "package"
     -- we qualify missing symbols in the current package
@@ -73,10 +77,39 @@ p_ShouldQualifyJMethod = property $ \(jMethod :: (JMethodT NativeName)) -> let
     allQualified []            = True
     allQualified ((Just _):as) = allQualified as
     allQualified _             = False
+    keepJTypes JType{} = True
+    keepJTypes _ = False
+
+p_ShouldQualifyExceptionsAsPure :: Property
+p_ShouldQualifyExceptionsAsPure = property $ \(jMethod' :: (JMethodT NativeName)) -> 
+  length jMethod'.exs > 0 ==>
+  let 
+    jMethod    = jMethod'.{exs <- (filter keepJTypes)}
+    exceptions = map JTypeT.typeRef jMethod.exs
+    pack  = Pack.new "package"
+    -- we qualify missing symbols in the current package
+    startingGlobal = compileGlobal.{
+        sub      <- (_.{thisPack = pack})
+      , packages <- (_.insert pack TreeMap.empty)
+      }
+    -- If we qualify the method ...
+    (_ ,g) = run (qualify jMethod) startingGlobal
+    
+    -- ... All exceptions should be qualified as pure types
+    (r, _1) = run (mapM nativeExists (map NativeName.fqn exceptions)) g
+    exceptions' = filter (\e -> e.name.base `elem` (map NativeName.fqn exceptions)) (catMaybes r)
+  in allPure exceptions' where
+    allPure []            = True
+    allPure (a:as) = a.env.isPure && allPure as
+    allPure _             = False
+    keepJTypes JType{} = True
+    keepJTypes _ = False
 
 
 -- Generators, we return each generated native name alongside so that we can
 -- assert on them
+
+emptyJMethod = JMethod [] (JType (NativeName "test" []) []) [] HashMap.empty InstanceMethod
 
 alphaChars :: Gen Char
 alphaChars = elements ['a'..'z']
@@ -99,6 +132,27 @@ instance Arbitrary NativeName where
     params <- choose (0,1) >>= flip vectorOf arbitrary -- using more params makes the tests too slow
     f      <- fqn
     pure (NativeName f params)
+
+
+{--
+This is a dummy instance for testing purposes only.
+-}
+instance HasClassLoader (State Global) where
+  loadClass name = 
+    -- we always return our example class here
+    pure $ Right exampleClass
+  findInterfaces clazz = pure []
+  {--
+  We simply return java.lang.Object as super type
+  -}
+  -- Break endless recursion
+  findSuperclass clazz | clazz.getName == "java.lang.Object" = pure Nothing
+  findSuperclass _ = 
+    pure $ Just objectClass
+  forName name _ = loadClass name
+
+pure native objectClass "java.lang.Object.class" :: Class a
+pure native exampleClass "tests.qc.gennative.ExampleClass.class" :: Class a
 
 {-- 
 nowarn: performUnsafe
