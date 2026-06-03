@@ -1,0 +1,164 @@
+module Compiler.natives.types.JTypes where
+
+import Compiler.types.QNames(QName)
+import Data.Traversable(Traversable)
+import Data.HashMap(HashMap(), values)
+
+data Env = Pure (Maybe QName) | EnvS | Env QName where
+  isPure (Pure _) = True 
+  isPure _    = False
+
+derive Eq Env
+derive Show Env
+
+--- Specifies bounds for a wildcard type
+data WildcardBounds n = Lower { bounds :: [JTypeT n] } | Upper { bounds :: [JTypeT n] } where
+  isUpper (Upper _) = True
+  isUpper _         = False
+  elems   (Upper b) = b
+  elems   (Lower b) = b
+  sign    (Upper _) = "<"
+  sign    _         = ">"
+
+derive Eq n => Eq (WildcardBounds n)
+derive Show n => Show  (WildcardBounds n)
+
+--- Native names as returned from introspection
+data NativeName = NativeName { fqn :: String, typeParams :: [JVarT NativeName] }
+                | Array
+
+derive Eq NativeName
+derive Show NativeName
+
+--- A fully qualified name including the environment information of the type
+data QualifiedName = QualifiedName { name :: QName, env :: Env } where
+  pureName = flip QualifiedName (Pure Nothing)
+
+derive Eq QualifiedName
+derive Show QualifiedName
+
+{-- 
+A fully qualified name including the mutability information of the type
+without an environment
+-}
+data ResolvedName = ResolvedName { name :: QName, isPure :: Bool }
+
+derive Eq ResolvedName
+derive Show ResolvedName
+
+data JVarT n = JVar { name :: String, bounds :: [JTypeT n] } where
+  envs :: QualifiedJVar -> [Env]
+  envs v = v.bounds >>= _.envs
+  hasEnv :: Env -> QualifiedJVar -> Bool
+  hasEnv env (JVar _ bounds) =  fold (||) False anyBoundHasEnv where
+    anyBoundHasEnv = map (JTypeT.hasEnv env) bounds
+
+derive Eq n   => Eq (JVarT n)
+derive Show n => Show (JVarT n)
+
+data JTypeT n = JType { typeRef :: n, typeArgs :: [JTypeT n]} | JVarRef { ref :: String } | JWildcard { bounds :: WildcardBounds n } where
+  envs :: QualifiedJType -> [Env]
+  envs (JType{typeRef, typeArgs}) = typeRef.env : (typeArgs >>= _.envs)
+  envs (JWildcard{bounds})        = bounds.bounds >>= _.envs
+  envs _ = []
+  ---True if the type or any of its type arguments has the given @Env@.
+  hasEnv :: Env -> QualifiedJType -> Bool
+  hasEnv env (JType{typeRef, typeArgs}) = fold (||) (typeRef.env == env) typeArgsEnvs
+    where typeArgsEnvs = map (hasEnv env) typeArgs
+  hasEnv env   (JWildcard bs) = fold (||) False (map (JTypeT.hasEnv env) bs.bounds)
+  hasEnv _    _                   = False
+
+derive Eq n => Eq (JTypeT n)
+derive Show n => Show  (JTypeT n)
+
+instance ListSource JVarT where
+  toList (JVar{bounds}) = join (map toList bounds)
+
+instance ListSource JTypeT where
+  toList (JType{typeRef, typeArgs}) = typeRef : join (map toList typeArgs)
+  toList (JVarRef _) = []
+  toList (JWildcard (Lower bs)) = join (map toList bs)
+  toList (JWildcard (Upper bs)) = join (map toList bs)
+
+instance ListSource JMethodT where
+  toList (JMethod{params, returnVal, exs, vars}) = 
+    toList' params ++ toList returnVal ++ toList' exs ++ (toList' (values vars)) where
+      toList' :: ListSource b => [b a] -> [a]
+      toList' sources = join (map toList sources)
+
+instance Functor JTypeT where
+  fmap :: (a -> b) -> JTypeT a -> JTypeT b
+  fmap f (JType{typeRef, typeArgs}) = JType (f typeRef) (map (fmap f) typeArgs)
+  fmap _ (JVarRef{ref}) = JVarRef ref
+  fmap f (JWildcard (Lower lower)) = JWildcard $ Lower (map (fmap f) lower)
+  fmap f (JWildcard (Upper upper)) = JWildcard $ Upper (map (fmap f) upper)
+
+instance Traversable JTypeT where
+  traverse :: Applicative c => (a -> c b) -> JTypeT a -> c (JTypeT b)
+  traverse f (JType{typeRef, typeArgs}) = 
+        (\n gs -> JType n gs) 
+    <$> f typeRef 
+    <*> traverse (traverse f) typeArgs
+  traverse _ (JVarRef{ref}) = pure JVarRef{ref}
+  traverse f (JWildcard (Lower lower)) = (JWildcard . Lower) <$> traverse (traverse f) lower
+  traverse f (JWildcard (Upper upper)) = (JWildcard . Upper) <$> traverse (traverse f) upper
+
+instance Functor JVarT where
+  fmap :: (a -> b) -> JVarT a -> JVarT b
+  fmap f (JVar{name, bounds}) = JVar name (map (fmap f) bounds)
+
+
+
+instance Traversable JVarT where 
+  traverse :: Applicative c => (a -> c b) -> JVarT a -> c (JVarT b)
+  traverse f JVar{name, bounds} = JVar name <$> traverse (traverse f) bounds
+
+--- Labels member types of Java classes
+data MemberType = InstanceMethod 
+                | InstanceField
+                | StaticMember { 
+                    {-- Encodes the fully qualified name of the receiver class,
+                    which is used to properly create symbol referencing static
+                    methods/fields -}
+                    classFqn :: String
+                  }
+
+derive Show MemberType
+derive Eq MemberType
+
+data JMethodT n = JMethod { params      :: [JTypeT n]
+                          , returnVal   :: JTypeT n
+                          , exs         :: [JTypeT n]
+                          , vars        :: HashMap String (JVarT n) 
+                          , memberType  :: MemberType
+                          } where
+  --- the return value, all params & all exceptions
+  all :: JMethodT n -> [JTypeT n]
+  all j = returnVal j : params j ++ exs j
+
+derive Show a => Show (JMethodT a)
+derive Eq a => Eq (JMethodT a)
+
+instance Functor JMethodT where
+  fmap f JMethod{params, returnVal, exs, vars, memberType} = 
+    JMethod params' returnVal' exs' vars' memberType where
+      params'    = fmap (fmap f) params
+      returnVal' = fmap f returnVal
+      exs'       = fmap (fmap f) exs
+      vars'      = fmap (fmap f) vars
+
+instance Traversable JMethodT where
+  traverse f JMethod{params, returnVal, exs, vars, memberType} =
+    JMethod <$> params' <*> returnVal' <*> exs' <*> vars' <*> pure memberType where
+      params'    = traverse (traverse f) params
+      returnVal' = traverse f returnVal
+      exs'       = traverse (traverse f) exs
+      vars'      = traverse (traverse f) vars
+
+type JType    = JTypeT    ResolvedName
+type JMethod  = JMethodT  ResolvedName
+type JVar     = JVarT     ResolvedName
+
+type QualifiedJType    = JTypeT    QualifiedName
+type QualifiedJMethod  = JMethodT  QualifiedName
+type QualifiedJVar     = JVarT     QualifiedName

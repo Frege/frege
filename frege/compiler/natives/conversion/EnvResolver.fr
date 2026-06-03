@@ -1,0 +1,83 @@
+module Compiler.natives.conversion.EnvResolver where
+
+import Compiler.types.QNames(QName)
+import Compiler.natives.types.JTypes(
+    ResolvedName
+  , Env
+  , JMethodT
+  , QualifiedName
+  , JTypeT(JType, JWildcard)
+  , JVar
+  , QualifiedJVar
+  , QualifiedJType
+  , QualifiedJMethod
+  , JMethod
+  )
+import frege.Prelude hiding (Reader)
+import Data.HashMap(HashMap(), values)
+import Data.List(nub, find)
+import Data.TreeMap(TreeMap, each)
+import Lib.PP(DOCUMENT, msgdoc)
+
+type JavaEnv = TreeMap String ([String],[QName])
+
+{-- 
+Unifies all environments of `QualifiedJMethod` to a single environment and only
+keeps the purity information of the types.
+-}
+resolveEnv :: JavaEnv -> QualifiedJMethod -> Either DOCUMENT (Env, JMethod)
+resolveEnv javaEnv jmethod = do
+      env <- jMethodEnv javaEnv jmethod
+      pure (env, fmap toResolvedName jmethod) where
+        toResolvedName (QualifiedName name env) = ResolvedName name env.isPure
+
+private jMethodEnv :: JavaEnv -> QualifiedJMethod -> Either DOCUMENT Env
+private jMethodEnv javaEnv method 
+  | (ids@(a:_))  <- allEnvIndices -> unifyIndices javaEnv ids
+  | containsEnv EnvS              -> pure EnvS
+  | otherwise                     -> pure (Pure Nothing)
+  where
+    containsEnv :: Env -> Bool
+    containsEnv env  = any (JTypeT.hasEnv env) method.all || any (JVar.hasEnv env) (values method.vars)
+    allEnvIndices :: [QName]
+    allEnvIndices = mapMaybe toQName allEnvs
+    allEnvs :: [Env]
+    allEnvs = ((method.all >>= _.envs) ++ ((values method.vars) >>= _.envs))
+    toQName (Env q)         = Just q
+    toQName (Pure (Just q)) = Just q
+    toQName _ = Nothing
+
+--- We try to unify different state indices to one index based on inheritance
+private unifyIndices :: JavaEnv -> [QName] -> Either DOCUMENT Env
+private unifyIndices javaEnv as = case nub as of
+  []     -> pure (Pure Nothing)
+  (a:[]) -> pure (Env a)
+  as     -> do 
+    let hierarchies = map (inheritanceHierarchy javaEnv) as 
+    -- if we can find any intersections in super classes we will use it as
+    -- state idx of the method.
+    case intersections hierarchies of
+      [] -> Left . msgdoc $ "Could not unify the state indices used in the signature " 
+                  ++ "of the method, because they don't share a common base class." 
+      (a:as) -> case (lookupJavaEnv javaEnv a) of
+                  Just qname -> Right $ Env qname
+                  Nothing    -> Left $ msgdoc ""
+
+--- Returns the Java FQN this QName belongs to along with all its base classes
+private inheritanceHierarchy :: JavaEnv -> QName -> [String]
+private inheritanceHierarchy javaEnv name = case findEntry name of 
+  Nothing -> []
+  (Just (actual, (supers, _))) -> actual: supers
+  where
+    findEntry name = find (\(_, (_, qnames)) -> any ((==) name) qnames) (each javaEnv)
+
+--- Finds the elements which appears in all lists
+private intersections :: [[String]] -> [String]
+private intersections (a:as) = foldr (\cur acc -> filter (`elem` cur) acc) a as
+private intersections [] = []
+
+--- Returns the QName for the given FQN (if it exists)
+private lookupJavaEnv :: JavaEnv -> String -> Maybe QName
+private lookupJavaEnv javaEnv fqn = do
+  (_, qnames) <- javaEnv.lookup fqn
+  listToMaybe qnames 

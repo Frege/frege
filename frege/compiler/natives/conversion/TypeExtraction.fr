@@ -1,0 +1,161 @@
+module Compiler.natives.conversion.TypeExtraction where
+
+import Compiler.types.Packs(Pack())
+import Compiler.types.Global(getST, HasGlobalState)
+import Compiler.natives.types.JTypes(
+    JType
+  , JTypeT(JType)
+  , JMethod
+  , JMethodT(JMethod)
+  , NativeName(NativeName)
+  , JVarRef
+  , MemberType(InstanceMethod, InstanceField, StaticMember)
+  )
+import frege.compiler.common.Errors  as  E()
+import frege.lib.PP as PP()
+import Compiler.types.Packs
+import Java.lang.Reflect(
+    isStatic
+  , Constructor
+  , Type
+  , Field
+  , Method
+  , TypeVariable
+  , getTypeParameters
+  , getMethods       
+  , getFields        
+  , getConstructors
+  )
+import Compiler.natives.conversion.JTypeConversion(
+    classToJType
+  , toJType
+  , typeParamsOfClass
+  , typeParamToJVar
+  , typeParamsOfConstructor
+  , typeParamsOfMethod
+  )
+import Compiler.natives.types.NativeMethodProps(NativeMethodProps)
+import Data.HashMap(HashMap())
+
+data NativeMember = MemberConstructor | MemberMethod [Method] | MemberField Field
+
+memberToJMethod :: Class a -> String -> [JMethodT NativeName]
+memberToJMethod clazz name 
+          | name == "new" = 
+            map (fromMember clazz) (getConstructors clazz).toList
+          | (as@(_:_)) <- methodsByName clazz name =
+            map (fromMember clazz) as
+          | (Just f) <- fieldByName clazz name = 
+            map (fromMember clazz) [f]
+          | otherwise = [] where
+  methodsByName :: Class a -> String -> [Method]
+  methodsByName clazz method = filter (\m -> m.getName == method) (getMethods clazz).toList
+
+  fieldByName :: Class a -> String -> Maybe Field
+  fieldByName clazz field = listToMaybe $ filter (\f -> f.getName == field) (getFields clazz).toList
+
+extract :: HasGlobalState m => NativeMethodProps -> Class a -> Pack -> m [JMethodT NativeName]
+extract (NativeMethodProps mname _ pos _) clazz pack = do
+  g     <- getST
+  case memberToJMethod clazz mname of
+    [] -> do
+      E.error pos $ PP.text $ "Could not resolve method with name: " ++ mname
+      pure []
+    as -> pure as
+
+fromMember :: JavaMember m => (Class a) -> m -> JMethodT NativeName
+fromMember receiver member = JMethod params returnType exs bound typ where
+  toJType' :: SignatureComponent -> JTypeT NativeName
+  toJType' Receiver = receiverToJType receiver
+  toJType' Void     = JType (NativeName "void" []) []
+  toJType' (T typ) = toJType typ
+  params =  map toJType' (member.params)  
+  returnType = toJType' (member.returnType)
+  exs       = map toJType member.exceptions
+  typ       = member.memberType receiver
+  bound     = HashMap.fromList $ map toMapEntry boundTypeParams where
+    boundTypeParams = map typeParamToJVar (member.typeVariables receiver)
+    toMapEntry jvar = (jvar.name, jvar)
+
+{--
+We need to add the receiver as separate argument to the JMethod. Since `Class a`
+only has information about defined type parameters (and not the actually used type
+arguments), we need to derive the arguments from the type parameters.
+-}
+private receiverToJType :: (Class a) -> JTypeT NativeName
+private receiverToJType clazz = (classToJType clazz).{typeArgs = typeArgs}
+    where
+      typeArgs     = map (\t -> JVarRef t.name) (typeParamsOfClass clazz)
+
+---Provides a common interface for Method, Constructor and Field.
+private class JavaMember a where
+  private params        :: a -> [SignatureComponent]
+  private returnType    :: a -> SignatureComponent
+  private typeVariables :: a -> Class b -> [TypeVariable]
+  private exceptions    :: a -> [Type]
+  private memberType    :: a -> (Class b) -> MemberType
+
+private data SignatureComponent = T Type | Receiver | Void
+
+instance JavaMember Constructor where
+  params :: Constructor -> [SignatureComponent]
+  params ctr = if  ctr.getGenericParameterTypes.toList.length == 0 then 
+                [Void] else map T ctr.getGenericParameterTypes.toList
+
+  returnType :: Constructor -> SignatureComponent
+  returnType _ = Receiver
+
+  typeVariables :: Constructor -> Class b -> [TypeVariable]
+  typeVariables ctr clazz = (getTypeParameters clazz).toList ++ ctr.getTypeParameters.toList
+
+  exceptions :: Constructor -> [Type]
+  exceptions ctr = ctr.getGenericExceptionTypes.toList
+
+  memberType :: Constructor -> (Class a) -> MemberType
+  memberType ctr _ = InstanceMethod
+
+instance JavaMember Method where
+  params :: Method -> [SignatureComponent]
+  params method 
+        | isStatic method.getModifiers -> 
+            if method.getGenericParameterTypes.toList.length > 0 then 
+                map T method.getGenericParameterTypes.toList
+            else [Void]
+        | otherwise -> Receiver : map T method.getGenericParameterTypes.toList
+
+  returnType :: Method -> SignatureComponent
+  returnType method = T method.getGenericReturnType
+
+  typeVariables :: Method -> Class b -> [TypeVariable]
+  typeVariables method clazz = 
+    (getTypeParameters clazz).toList ++ method.getTypeParameters.toList
+
+  exceptions :: Method -> [Type]
+  exceptions method = method.getGenericExceptionTypes.toList
+
+  memberType :: Method -> (Class a) -> MemberType
+  memberType method clazz 
+    | isStatic method.getModifiers -> StaticMember clazz.getName 
+    | otherwise -> InstanceMethod
+
+instance JavaMember Field where
+  params      :: Field -> [SignatureComponent]
+  params field = if isStatic field.getModifiers then [] else [Receiver]
+
+  returnType   :: Field -> SignatureComponent
+  returnType field = T field.getGenericType
+
+  typeVariables  :: Field -> Class b -> [TypeVariable]
+  typeVariables field clazz = case field.memberType clazz of
+                  (StaticMember{}) -> []
+                  _ -> (getTypeParameters clazz).toList
+
+  exceptions  :: Field -> [Type]
+  exceptions _ = []
+
+  memberType         :: Field -> (Class a) -> MemberType
+  memberType field clazz = memberType clazz field.getModifiers where
+    memberType :: Class a -> Int -> MemberType
+    memberType receiver modifiers = 
+      if isStatic modifiers then StaticMember receiver.getName else InstanceField
+

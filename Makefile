@@ -162,8 +162,8 @@ test: compiler
 	$(FREGECC) -make frege/StandardLibrary.fr
 	$(RM) -rf $(BUILD_TEST)
 	$(MKDIR) $(BUILD_TEST)
-	$(FREGECC) -d $(BUILD_TEST) tests/qc
-	$(JAVA) -Xss4m -cp $(BUILD) frege.tools.Quick -v $(BUILD_TEST)
+	$(FREGECC) -d $(BUILD_TEST) -fp $(BUILD_TEST) -make tests/qc
+	$(JAVA) -Xss4m -cp $(BUILD)$(PATHSEP)$(BUILD_TEST) frege.tools.Quick -v $(BUILD_TEST) 
 
 regression: 
 	@echo We assume we have a compiler.

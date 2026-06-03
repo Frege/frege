@@ -1,0 +1,194 @@
+module Compiler.natives.conversion.SigmaConversion where
+
+import frege.Prelude hiding (Reader)
+import Compiler.natives.types.JTypes
+import Compiler.types.Positions(Position())
+import Compiler.types.QNames(QName(TName))
+import Compiler.types.Types(
+    Sigma
+  , Tau
+  , Rho
+  , SigmaT(ForAll)
+  , TauT(TCon, TVar, TApp)
+  , RhoT(RhoTau, RhoFun)
+  , KindT(KVar, KType, KGen)
+  )
+import Compiler.types.Packs(pPreludeBase, pPreludeIO)
+import Control.monad.Reader
+import Data.HashMap(values)
+
+data JEnv = JEnv { pos :: Position         ---We generate taus at `pos` position 
+                   unifiedIdx :: Maybe Tau ---use unifiedIdx as state index for the return value and mutable references
+                  }
+type JReader b = Reader JEnv b 
+
+runJReader :: JReader a -> JEnv -> a
+runJReader reader env = (JReader.run reader env).run
+
+askPos :: JReader Position
+askPos = JEnv.pos <$> Reader.ask
+
+askIdx :: JReader (Maybe Tau)
+askIdx = JEnv.unifiedIdx <$> Reader.ask
+
+{-- 
+Returns a Sigma for a @JMethod@ at the given @Position@
+-}
+toSigma :: Position -> Env -> JMethod -> Sigma
+toSigma pos env method = runJReader (toSigma' method) (JEnv pos methodEnv) where
+  methodEnv = case env of
+    EnvS      -> Just (mkS pos) 
+    (Env idx) -> Just (TCon pos idx)
+    Pure idx  -> fmap (TCon pos) idx
+  mkS  pos = TVar pos KType "s"
+
+private toSigma' :: JMethod -> JReader Sigma
+private toSigma' method = do
+  returnRho <- mkReturnRho method
+  methodRho <- foldrM mkRhoFun returnRho method.params
+  bound     <- boundVars
+  
+  pure $ ForAll bound methodRho 
+  where
+    boundVars :: JReader [Tau]
+    boundVars = do 
+      typeVars <- mapM bindTypeParam (values method.vars)
+      idx <- askIdx
+      pure $ case idx of
+      -- if the method idx is a TVar, we must bind it
+        Just (i@TVar{}) -> i : typeVars
+        _  -> typeVars
+
+{--
+Builds the return type @Rho@ for a @JMethod@:
+
+1. Converts return type to @Tau@
+2. Wraps in @Either@ for each exception
+3. Wraps in @ST s@ or @ST idx@ if method has env context
+-}
+private mkReturnRho :: JMethod -> JReader Rho
+private mkReturnRho method = do
+  returnTau  <- mkTau method.returnVal
+  wrappedTau <- buildExsTau method.exs returnTau 
+  idx        <- askIdx
+  case idx of
+    (Just i) -> RhoTau [] <$> (mkST i) wrappedTau
+    Nothing  -> pure $ RhoTau [] wrappedTau
+  where
+    mkST :: Tau -> Tau -> JReader Tau
+    mkST s a = do 
+      pos <- askPos
+      pure $ ((TCon pos st) `TApp` s) `TApp` a
+        where st = TName pPreludeBase "ST"
+
+{--
+Transforms a @JType@ to a @Rho@
+-}
+private mkRhoTau :: JType -> JReader Rho
+private mkRhoTau t = RhoTau [] <$> mkTau t
+
+{--
+Creates a @RhoFun@, thereby uses the given @JType@ as parameter and the given
+@Rho@ as return value.
+-}
+private mkRhoFun :: JType -> Rho -> JReader Rho
+private mkRhoFun jtype rho = do
+  rhoTau <- mkRhoTau jtype
+  pure $ RhoFun [] (ForAll [] rhoTau) rho
+
+--- Transform a `@JType@ to a @Tau@
+private mkTau :: JType -> JReader Tau
+private mkTau (JVarRef{ref})      = jvarRef ref
+private mkTau (JWildcard{bounds}) = wildcard where
+  wildcard = do
+    pos <- askPos
+    bs  <- mkBounds
+    pure $
+      TVar pos (KGen bs) bounds.sign
+  mkBounds :: JReader [Tau]
+  mkBounds = mapM mkTau bounds.elems
+private mkTau (JType{typeRef, typeArgs}) = mkTau' >>= mutabilityWrapper typeRef
+  where
+    -- apply type arguments to the taus if there are any
+    mkTau' = do
+      tcon <- mkTcon typeRef.name
+      foldM applyTypeArgs tcon typeArgs
+    applyTypeArgs t arg = 
+      TApp t <$> mkTau arg
+    mutabilityWrapper typeref t = do
+      idx <- askIdx
+      -- the method idx dictates the idx of all `Mutable` references
+      case idx of
+        (Just i) -> if typeRef.isPure then
+                      pure t
+                    else 
+                       mut i t
+        -- if the method has no env, we cannot have a `Mutable` reference
+        Nothing  -> pure t
+    mut :: Tau -> Tau -> JReader Tau
+    mut idx a = do
+      pos <- askPos
+      pure $ TApp (TApp (TCon pos mut') idx) a where
+      mut' = (TName pPreludeIO "Mutable")
+
+
+{-- 
+Transform a given @QName@ to a @TCon@ at the current position.
+-}
+private mkTcon :: QName -> JReader Tau
+private mkTcon name = case name.base of
+      "String" -> mkStr
+      _        -> flip TCon name <$> askPos
+  where
+    mkStr = do
+      pos <- askPos
+      pure $ TApp (TCon pos preludeBaseString) (TCon pos preludeBaseChar)
+
+    preludeBaseString = TName pPreludeBase "StringJ"
+    preludeBaseChar   = TName pPreludeBase "Char"
+
+{-- 
+Create a variable denoting a generic type with the given name at the
+current position.
+-}
+private jvarRef :: String -> JReader Tau
+private jvarRef var = do
+  pos <- askPos
+  pure $ TVar pos KType var
+
+{-- 
+Create a Tau for an @Either@ with an Exception at the left position, still
+expecting a @Tau@ for the @Right@ case
+-}
+private mkEitherTau :: Tau -> Tau -> JReader Tau
+private mkEitherTau exception success = do 
+  either <- mkEitherCon
+  pure $ TApp (TApp either exception) success where
+    mkEitherCon = do 
+      pos <- askPos
+      pure $ TCon pos preludeBaseEither
+    preludeBaseEither = TName pPreludeBase "Either"
+
+{-- 
+Builds a @Tau@ for an @Either@ using the list of @JType@ as exceptions.
+-}
+private buildExsTau :: [JType] -> Tau -> JReader Tau
+private buildExsTau = flip $ foldrM (\ex acc -> do 
+      exTau <- mkTau ex
+      mkEitherTau exTau acc
+    ) 
+
+bindTypeParam :: JVar -> JReader Tau
+bindTypeParam tvar 
+                  | tvar.bounds.length == 0 = (\p -> TVar p KType tvar.name) <$> askPos
+                  | otherwise               = do
+                      bounds <- mkBounds
+                      pos    <- askPos
+                      pure $ TVar pos (KGen bounds) tvar.name
+                    where mkBounds = mapM mkTau tvar.bounds
+
+private foldrM :: (Applicative a,Bind a) => (c->b->a b) -> b -> [c] -> a b
+private foldrM f a bs = fm f bs a
+    where
+        fm f (b:bs) a = fm f bs a >>= f b
+        fm f []     a = pure a

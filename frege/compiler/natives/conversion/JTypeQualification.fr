@@ -1,0 +1,95 @@
+module Compiler.natives.conversion.JTypeQualification where
+
+import Compiler.classes.HasClassLoader(HasClassLoader)
+
+import Compiler.common.SymbolTable(enter)
+import Compiler.enums.Visibility
+import Compiler.Javatypes(findAllSupers)
+import Compiler.natives.types.JTypes
+import Compiler.natives.conversion.SigmaConversion(runJReader, bindTypeParam, JEnv)
+import Compiler.types.Symbols
+import Compiler.types.Global(HasGlobalState, liftGlobalState, Global, Symbol)
+import Compiler.types.Types
+import Compiler.types.Packs(Pack, pPreludeBase, pPreludeArrays)
+import Compiler.types.QNames
+import Compiler.types.Positions(Position)
+import Compiler.Utilities(nativeType)
+
+import Data.Traversable(traverse)
+
+qualify :: (HasClassLoader m, HasGlobalState m) => JMethodT NativeName -> m QualifiedJMethod
+qualify jmethod = traverse (qualifySingleNative jmethod) jmethod
+
+qualifySingleNative :: (HasClassLoader m, HasGlobalState m) => JMethodT NativeName -> NativeName -> m QualifiedName
+qualifySingleNative _ Array = 
+  pure $ QualifiedName (TName pPreludeArrays "JArray") EnvS
+qualifySingleNative jmethod (NativeName fqn typeParams)
+  | fqn == "void" = 
+      pure $ QualifiedName.pureName (TName pPreludeBase "()")
+  -- make sure we use the Frege String type alias
+  | fqn == "java.lang.String" = 
+      pure $ QualifiedName.pureName (TName pPreludeBase "String")
+  -- `JArray` is also bound to `java.lang.Object`. For the compiler not to get
+  -- confused, we qualify it explicitly here
+  | fqn == "java.lang.Object" = 
+      pure $ QualifiedName.pureName (TName pPreludeBase "Object")
+  | otherwise = do
+      g <- getST
+      let pack = g.thisPack
+      existing <- nativeExists fqn
+      case existing of 
+        Nothing -> do
+          symbol <- nativeSym Position.null (fqn, typeParams) pack jmethod
+          liftGlobalState $ enter symbol
+          nativeType fqn symbol.name
+          findAllSupers fqn
+          pure $ QualifiedName symbol.name (if symbol.pur then (Pure Nothing) else EnvS)
+        Just s -> pure s
+
+{--
+Returns the qualified name of the given @NativeName@ if it exists
+-}
+nativeExists :: HasGlobalState m => String -> m (Maybe QualifiedName)
+nativeExists ntvName = fmap findNative getST 
+  where 
+    findNative :: Global -> Maybe QualifiedName
+    findNative global = do
+      (_, symNames) <- global.javaEnv.lookupS ntvName
+      qname         <- listToMaybe symNames
+      sym           <- global.find qname
+      pure $ 
+        QualifiedName qname (envFromSym sym)
+
+envFromSym :: Symbol -> Env
+envFromSym (SymT{stateIdx, pur=True}) = Pure stateIdx
+envFromSym sym = case sym.stateIdx of
+                   Nothing -> EnvS
+                   (Just idx) -> Env idx
+
+nativeSym :: (HasClassLoader m, HasGlobalState m ) => Position -> (String, [JVarT NativeName]) -> Pack -> JMethodT NativeName -> m Symbol
+nativeSym pos (fqn, typeParams) pack jmethod = do
+                    qualified <- traverse (traverse (qualifySingleNative jmethod)) typeParams
+                    let resolved  = map (\a -> fmap resolve a) qualified
+                    pure SymT {
+                        name    = qname,
+                        sid     = 0,
+                        pos     = pos,
+                        vis     = Public,
+                        doc     = Just ("Generated definition resolving to " ++ fqn),
+                        kind    = KindT.kind typeParams.length,
+                        typ     = (ForAll [] (RhoTau [] $ TCon pos qname)),
+                        env     = empty,
+                        nativ   = (Just fqn),
+                        gargs   = map garg resolved,
+                        product = False,
+                        enum    = False,
+                        pur     = isException, 
+                        newt    = False,
+                        stateIdx = Nothing
+                      } where 
+                          qname = TName pack fqn
+                          garg :: JVar -> Tau
+                          garg jvar = runJReader (bindTypeParam jvar) (JEnv pos Nothing)
+                          resolve (QualifiedName n _) = ResolvedName n True
+                          isException = fqn `elem` allExceptions where
+                            allExceptions = map (\e -> e.typeRef.fqn) jmethod.exs

@@ -1,0 +1,96 @@
+module tests.qc.gennative.EnvInferenceSpec where
+
+import Test.QuickCheck
+
+import Compiler.natives.types.JTypes(Env)
+import tests.qc.gennative.JTypesSpec(stIdx, mkJMethod, extractEnvs, mkQualifiedNameInEnv) 
+import Compiler.types.QNames(QName(TName))
+import Compiler.types.Packs(Pack())
+import Compiler.natives.types.JTypes(
+    Env(Pure, EnvS, Env)
+  , JMethodT(JMethod)
+  , JTypeT(JType, JVarRef, JWildcard)
+  , JVarT(JVar)
+  , QualifiedName(QualifiedName)
+  , WildcardBounds(Upper, Lower)
+  , MemberType(InstanceMethod)
+  , QualifiedJMethod
+  , ResolvedName
+  )
+import Compiler.natives.conversion.EnvResolver(resolveEnv)
+import Data.List(nub)
+import Data.HashMap(HashMap)
+import Data.TreeMap(TreeMap, fromList)
+
+pack = Pack.new "EnvResolverSpec"
+
+mkJMethodInEnv :: [Env] -> Gen QualifiedJMethod
+mkJMethodInEnv es = mkJMethod (mkQualifiedNameInEnv es)
+
+p_ShouldResolveToPureEnv :: Property
+p_ShouldResolveToPureEnv = once $ 
+  let 
+    tname     = TName pack "IAmPure"
+    tname'    = TName pack "IAmAlsoPure"
+    param     = JType (QualifiedName tname (Pure Nothing)) []
+    returnVal = JType (QualifiedName tname' (Pure Nothing)) []
+    bound     = HashMap.empty
+    jmethod     = JMethod [param] returnVal [] bound InstanceMethod
+  in 
+    case resolveEnv TreeMap.empty jmethod of
+      (Right (env, _)) -> env ==? (Pure Nothing)
+      (Left _)       -> property False
+
+p_ShouldResolveResolvePureTypeWithEnv :: Property
+p_ShouldResolveResolvePureTypeWithEnv = once $ 
+  let 
+    tname     = TName pack "IAmPure"
+    tname'    = TName pack "IAmAlsoPure"
+    param     = JType (QualifiedName tname (Pure (Just stIdx))) []
+    returnVal = JType (QualifiedName tname' (Pure Nothing)) []
+    bound     = HashMap.empty
+    jmethod   = JMethod [param] returnVal [] bound InstanceMethod
+  in 
+    case resolveEnv TreeMap.empty jmethod of
+      (Right (env, jmethod')) -> 
+            env ==? (Env stIdx) .&&. 
+            jmethod'.params.head.typeRef.isPure ==? True
+      (Left _)         -> property False
+
+p_ShouldUnifySAndPureToIndexedEnv :: Property
+p_ShouldUnifySAndPureToIndexedEnv = property $ do
+  jmethod <- mkJMethodInEnv [(Pure (Just stIdx)), (Pure Nothing), EnvS, (Env stIdx)]
+    `suchThat` (\j -> any ((==) (Env stIdx)) (extractEnvs j))
+  case resolveEnv TreeMap.empty jmethod of
+    (Right (env, _)) -> env ==? (Env stIdx)
+    (Left _)       -> property False
+
+p_ShouldPreserveMutability :: Property
+p_ShouldPreserveMutability = property $ do
+  jmethod <- mkJMethodInEnv [Pure (Just stIdx), (Pure Nothing), EnvS, (Env stIdx)]
+  case resolveEnv TreeMap.empty jmethod of
+    (Right (_, resolved)) -> (fmap (\n -> n.isPure) resolved) ==? (fmap (\n -> n.env.isPure) jmethod)
+    (Left _)            -> property False
+
+p_ShouldFailWithMultipleDifferentEnvs :: Property
+p_ShouldFailWithMultipleDifferentEnvs = do
+  let stIdx  = TName pack "TestWorld"
+  let stIdx2 = TName pack "TestWorld2"
+  jmethod <- mkJMethodInEnv [(Env stIdx), (Env stIdx2)] `suchThat` hasMultipleDifferentEnvs
+  case resolveEnv TreeMap.empty jmethod of
+    (Right _) -> property False
+    (Left _)  -> property True
+  where
+    hasMultipleDifferentEnvs j = length (nub (extractEnvs j)) > 1
+
+p_ShouldUnifyInheritanceHierarchy :: Property
+p_ShouldUnifyInheritanceHierarchy = do
+  let base     = TName pack "Base"
+  let special1 = TName pack "Special1"
+  let special2 = TName pack "Special2"
+  let javaEnv =  fromList [("Base", ([], [base])), ("Special1", (["Base"], [special1])), ("Special2", (["Base"], [special2]))]
+  jmethod <- mkJMethodInEnv [(Pure (Just base)), (Pure Nothing), EnvS, (Env base), (Env special1), (Env special2)] 
+    `suchThat` (\j -> any ((==) (Env base)) (extractEnvs j))
+  case resolveEnv javaEnv jmethod of
+    (Right (env, _)) -> env ==? (Env base)
+    (Left _)         -> property False

@@ -1,0 +1,129 @@
+module Compiler.passes.GenNativeSpec where
+
+import Test.QuickCheck
+import tests.qc.gennative.UtilitiesSpec(mkSymT, pos)
+import tests.qc.gennative.JTypeQualificationSpec(compileGlobal)
+
+import Compiler.natives.Utilities(nativeSymbolShell)
+import Compiler.types.Global(Global)
+import Compiler.passes.GenNative(cleanupPlaceholderSymbols, enterSymbols, generateNativeDeclaration)
+import Compiler.types.QNames(QName(TName, VName, MName))
+import Compiler.types.Symbols(SymbolT(SymV))
+import Compiler.common.SymbolTable(enter)
+import Compiler.types.Global(getST)
+import Control.monad.State(State(run))
+import Data.List(partition)
+
+import Data.TreeMap(TreeMap)
+
+import Compiler.types.Global(Global, putST, changeST, HasGlobalState)
+import Compiler.natives.types.NativeMethodProps(NativeMethodProps(NativeMethodProps))
+import tests.qc.gennative.TypeExtractionSpec(ExampleClass, withExampleClass)
+
+---- generateNativeDeclaration spec
+
+{--
+This is an integration test testing the process of generating a native
+declaration.
+It uses the overloaded method `getValue` of the `ExampleClass` (in the same
+package as this test file).
+
+If this runs through we know native generation works on a high level. However,
+it tests no details (like sigma). Those things are subjects to dedicated tests. 
+-}
+p_shouldGeneratenativeDeclaration :: Property
+p_shouldGeneratenativeDeclaration = withExampleClass $ \clazz -> once $ let
+    g               = compileGlobal
+    parentName      = TName g.thisPack "ExampleClass"
+    memberName      = "getValue" 
+    exampleClassSym = mkSymT parentName
+    testCase = do
+      enter exampleClassSym
+      changeST _.{javaEnv = (TreeMap.fromList [("tests.qc.gennative.ExampleClass", ([], [parentName]))])}
+      let props = NativeMethodProps memberName parentName pos False
+      generateNativeDeclaration props clazz
+    (result, g') = run testCase g
+    member       = head result
+    symV         = head . tail $ result 
+  in
+         -- getValue is overloaded - we need a member, a linking symbol and 2 concrete symbols 
+         length result ==? 4 
+         -- the first element must be a member of the parent symbol
+    .&&. member.name ==? MName parentName memberName
+         -- the member is actually an alias that refers to the generated symbol
+    .&&. member.alias ==? symV.name 
+         -- all symbols must be part of the symbol table
+    .&&. mapM (g'.find . SymbolT.name) result != Nothing
+
+---- cleanupPlaceholderSymbols spec
+
+p_shouldCleanupPlaceholderSymbols :: Property
+p_shouldCleanupPlaceholderSymbols = do
+    qnames     <- choose (1,10) >>= flip vectorOf mkTName
+    limit      <- choose (0, length qnames)
+    (toDelete, rest) = partition (\(i,_) -> i < limit) (zip [0..] qnames)
+    syms = map mkSymT qnames
+    testCase = do
+      -- enter all symbols
+      mapM enter syms
+      -- delete some
+      cleanupPlaceholderSymbols (map snd toDelete)
+      g <- getST
+      -- every non deleted must still be present
+      nonDeletedPresent =  allPresent g (map snd rest)
+      -- every deleted must be gone
+      deletedNotPresent = fold 
+                            (\acc cur -> maybe (acc && True) (const False) (g.find cur)) 
+                            True 
+                            (map snd toDelete)
+
+      pure $ nonDeletedPresent && deletedNotPresent
+    (result, _) = run testCase compileGlobal
+    property result
+
+---- enterSymbols spec
+
+p_shouldEnterNonOverloadedSymbol :: Property
+p_shouldEnterNonOverloadedSymbol = once $ do
+  qname   <- mkVName
+  sym      = mkSymV qname "native"
+
+  testCase = enterSymbols [sym]
+  (insertedSyms, g) = run testCase compileGlobal
+
+  property $ allPresent g (map _.name insertedSyms)
+
+p_shouldEnterOverloadedSymbols :: Property
+p_shouldEnterOverloadedSymbols = do
+  qname       <- mkVName
+  amt         <- choose (2,5)
+  let syms     = replicate amt (mkSymV qname "native")
+
+  let testCase = enterSymbols syms
+  (insertedSyms, g) = run testCase compileGlobal
+  let linkSymbol = head insertedSyms
+  let rest       = tail insertedSyms
+
+  property $ 
+        allPresent g (map _.name insertedSyms)
+     .&&. length insertedSyms ==? amt + 1
+     .&&. length linkSymbol.over == length rest
+     .&&. fold (\acc cur -> acc && (cur.name `elem` linkSymbol.over) ) True rest
+
+---- helpers
+
+mkTName = TName compileGlobal.thisPack 
+        <$> arbitrary `suchThat` (not . null) 
+
+mkVName = VName compileGlobal.thisPack 
+        <$> arbitrary `suchThat` (not . null) 
+
+
+allPresent :: Global -> [QName] -> Bool
+allPresent g = fold 
+                  (\acc cur -> maybe False (const (acc && True)) (g.find cur)) 
+                  True 
+
+mkSymV :: QName -> String -> SymbolT Global
+mkSymV parent nativeName = nativeSymbolShell (parent, True) nativeName pos compileGlobal.thisPack
+
