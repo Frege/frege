@@ -2,7 +2,7 @@
 module frege.compiler.gen.java.MethodCall where
 
 import Data.TreeMap(TreeMap, values)
-import Data.List(elemBy)
+import Data.List(elemBy, zip4)
 
 import Compiler.Utilities as U()
 
@@ -13,7 +13,6 @@ import Compiler.types.Types(unST, Sigma, Tau, TauT, ForAll, RhoTau, RhoFun)
 import Compiler.types.Symbols(SymbolT)
 import Compiler.types.Global
 import Compiler.types.JNames(JName, memberOf)
-import Compiler.types.Strictness()
 
 import Compiler.common.Types as CT
 import Compiler.common.JavaName
@@ -66,16 +65,23 @@ nativeCall ∷ Global → Symbol → TreeMap String Tau → [JExpr] → Binding
 nativeCall g (sym@SymV {nativ = Just item, gargs}) subst aexs = newBind g bsig (call jrty args)
     where
         (rty, sigmas) = U.returnType sym.typ.rho
+        -- The types of the arguments
         taus  = [ tau | Just tau <- map U.sigmaAsTau sigmas ]
+        -- The base return type of the method
+        -- e.g. @b@ in @ST s (a|Maybe b)@
         brty  = substTau subst (baserty rty)
         bsig  = U.tauAsSigma brty
+        -- The java type arguments (generics arguments)
         targs = map (boxed . tauJT g . substTau subst) gargs 
         args | [tau] <- taus, Just _ <- U.isUnit tau = []   -- no arguments
              | otherwise = zipWith (argEx g)  aexs taus
         bjt  = tauJT g brty
+        -- The java type of the result
         jrty = strict  bjt
         -- retmode = maxStrict jrty         
         
+        -- a Java expression for an argument e.g. putting @.call()@, marshalling @Maybe@, etc.
+        argEx :: Global -> JExpr -> Tau -> JExpr
         argEx g arg tau
              | Just x <- U.isMaybe tau = JQC checknothing (JAtom "null") evex
              -- Just x <- arrayTau g tau = JCast x bind.jex
@@ -101,21 +107,18 @@ nativeCall g (sym@SymV {nativ = Just item, gargs}) subst aexs = newBind g bsig (
                  _     -> JAtom "null"           -- error was flagged before
              NINew -> JNew jrty args
              NIExtends ->
-               let evalStG :: Global -> StG a -> a
-                   evalStG g st = fst $ st.run g
-                   x = do g <- getST
-                          si <- symInfo sym
-                          let name  = (head si.argSigs).rho.tau.name
-                              irsym = unJust $ g.findit name
-                              nms = mapMaybe (_.name) [ fld | x@SymD{} <- values irsym.env, fld <- x.flds ]
-                          return $ flip mapMaybe nms $ \fldnm -> do
-                              nativrsym <- g.findit $ si.retSig.rho.tau.name
-                              nativsym <- TreeMap.lookup fldnm nativrsym.env
-                              nativnm <- nativsym.nativ
-                              let nativsi = evalStG g $ symInfo nativsym
-                              fldsym <- TreeMap.lookup fldnm irsym.env
-                              pure $ wrapIRMethod g (head args) (head si.argJTs) nativsi nativnm fldnm fldsym
-               in JNewClass jrty [] (evalStG g x)
+               let x = -- IR stands for an Implementation Record
+                       let irsym = unJust $ g.findit irname where
+                             irname = (head irtau.flat).name
+                             irtau  = (head sigmas).rho.tau
+                           nms = mapMaybe (_.name) [ fld | x@SymD{} <- values irsym.env, fld <- x.flds ]
+                       in
+                       flip mapMaybe nms $ \fldnm -> do
+                           nativrsym <- g.findit $ (head rty.flat).name
+                           nativsym <- TreeMap.lookup fldnm nativrsym.env
+                           fldsym <- TreeMap.lookup fldnm irsym.env
+                           pure $ wrapIRMethod g (head args) (tauJT g $ head taus) fldsym fldnm nativsym
+               in JNewClass jrty (tail args) x
              NICast -> case args of
                  [a] -> JInvoke (JAtom item) args    -- was: JCast (Ref (JName "" item) []) a
                  _   -> JAtom "null"
@@ -300,39 +303,90 @@ wildReturn g (symv@SymV{})  = [ v | v@TVar{} ← values (U.freeTauTVars [] TreeM
 wildReturn _ _ = []
 
 
-wrapIRMethod :: Global -> JExpr -> JType -> SymInfo8 -> String -> String -> Symbol -> JDecl
-wrapIRMethod g this irjt nativsi nativnm fldnm fldsym =
-  let nativargs = argDefs attrFinal (nativsi.{ argSigs <- tail, argJTs <- tail }) (getArgs g)
-      fldstri = case fldsym.strsig of
-        Strictness.S xs -> tail xs
-        _               -> []
-      -- how to detect strictness of result value?
-      retstrict = all (_.isStrict) fldstri
-      -- retlazy = if not (null fldstri) then (last fldstri).isStrict else False
-      callit jex = JInvoke { args = [], jex = JExMem { jex, name = "call", targs = [] } }
-      call = if retstrict then id else callit
+--- Generates a method that overrides an interface method and wraps a call to an IR method.
+---
+--- Parameters:
+--- - global
+--- - The expression of the instance of the IR (i.e. the receiver).
+--- - The Java type of the IR.
+--- - The symbol of the invoked IR method.
+--- - The name of the invoked IR method.
+--- - The symbol of the native member function.
+-- TODO make sure that the every field of an IR is 1-or-more arity functions beforehand
+wrapIRMethod :: Global -> JExpr -> JType -> Symbol -> String -> Symbol -> JDecl
+wrapIRMethod g this irjt fldsym fldnm nativsym =
+  let nativnm = unJust nativsym.nativ
+      -- the generalization of @argDefs@
+      argDefs' :: Attributes -> [Sigma] -> [JType] -> [String] -> [FormalArg]
+      argDefs' attr argSigs argJTs argNms = zip4 (repeat attr) argSigs argJTs argNms
+      -- collect the FormalArgs of the native member function, excluding the receiver
+      nativargs = argDefs' attrFinal argSigs argJTs (getArgs g) where
+        argSigs = case U.returnType nativsym.typ.rho of (_, (_:xs)) -> xs
+        argJTs = map (sigmaJT g) argSigs
+      -- the tau of the result type of the IR field
+      fldrettau = fst $ U.returnType fldsym.typ.rho
+      -- the return type of the overridden method
+      methretjt = case unST fldrettau of
+        Just (_, a)
+          | isJust $ U.isUnit a -> nativ "void" []
+          | otherwise           -> tauJT g a
+        Nothing -> tauJT g $ fst (U.returnType nativsym.typ.rho)
+      -- force an expression. if it is an ST, run it after that
+      call = (if isST then tstRun (boxedv methretjt) else id) . callit where
+        isST = isJust $ unST fldrettau
+        -- add ".call()" after jex
+        callit jex = JInvoke { args = [], jex = JExMem { jex, name = "call", targs = [] } }
+        -- box JType, but box void into Short
+        boxedv (v@Nativ{typ="void"}) = boxed (v.{typ = "short"})
+        boxedv jt = boxed jt
+      -- "return" if the return type is not the primitive void
+      ret = if isVoid methretjt then JEx else JReturn where
+        isVoid Nativ{typ="void"} = true
+        isVoid _                 = false
   in
   JMethod
   { attr = attrs [JPublic]
   , gvars = []
-  , jtype = nativsi.returnJT
+  , jtype = methretjt
   , name = nativnm
   , args = nativargs
-  , body = JBlock $ pure $ JReturn $ call $ invokeIR irjt fldnm this $
-      zipWith (\(_, _, _, x) s -> StriArg x s.isStrict) nativargs fldstri
+  , body = JBlock $ pure $ ret $ call $ invokeIR irjt fldnm this $
+      map (\(_, _, _, x) -> x) nativargs
   }
 
-data StriArg = StriArg { name :: String, strict :: Bool }
-
-striArgExpr :: StriArg -> JExpr
-striArgExpr (StriArg{name, strict}) =
-  let thunkjt = Ref { jname = JName { qual = "", base = "Thunk" }, gargs = [] }  -- TODO use the proper JType
-      lazy s = JInvoke { args = [JAtom s], jex = JStMem { jt = thunkjt, name = "lazy", targs = [] } }
+--- Wraps an expression into Thunk.lazy, without generics arguments:
+--- > Thunk.lazy(expr)
+asLazy :: JExpr -> JExpr
+asLazy expr =
+  let thunkjt = Ref { jname = JName { qual = "", base = "Thunk" }, gargs = [] }
+      lazy = JInvoke { args = [expr], jex = JStMem { jt = thunkjt, name = "lazy", targs = [] } }
   in
-  if strict then JAtom name else lazy name
+  lazy
 
-invokeIR :: JType -> String -> JExpr -> [StriArg] -> JExpr
-invokeIR jt name this args = JInvoke
-  { args = this : map striArgExpr args
-  , jex = JStMem { jt, name, targs = [] }
+--- Invokes a method of an implementation record.
+---
+--- Parameters:
+--- - The Java type of the IR.
+--- - The name of the invoked IR method.
+--- - The expression of the instance of the IR.
+--- - The arguments of the invoked IR method, excluding the receiver of the implemented Java class.
+invokeIR :: JType -> String -> JExpr -> [String] -> JExpr
+invokeIR jt name irthis args = JInvoke
+  { args = irthis : asLazy (JAtom "this") : map (asLazy . JAtom) args
+  , jex = JStMem { jt = rawType jt, name, targs = [] }
   }
+
+--- Runs an expression of type ST/IO.
+---
+--- Generated code should look like:
+--- > PreludeBase.TST.<retjt>performUnsafe(jex).call()
+tstRun :: JType -> JExpr -> JExpr
+tstRun retjt jex =
+  let call jex = JInvoke { args = [], jex = JExMem { jex, name = "call", targs = [] } }
+      run retjt = JStMem
+        { jt = Ref { jname = JName { qual = "PreludeBase", base = "TST" }, gargs = [] }
+        , name = "performUnsafe"
+        , targs = [retjt]
+        }
+  in
+  call $ JInvoke { jex = run retjt, args = [jex] }
